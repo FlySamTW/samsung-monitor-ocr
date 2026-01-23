@@ -1,0 +1,1383 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Samsung OCR 整合監控台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #ffffff;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            aspect-ratio: 8/9;
+        }
+
+        .container {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh;
+            padding: 16px;
+            gap: 16px;
+        }
+
+        /* 標題列 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 12px 20px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-running { background: #00ff88; }
+        .status-idle { background: #ffaa00; }
+        .status-error { background: #ff4444; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* 主要內容區 */
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr 2fr;
+            gap: 16px;
+            height: 100%;
+            min-height: 0;
+        }
+
+        /* 左側：系統狀態 */
+        .system-status {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            padding: 16px;
+            backdrop-filter: blur(5px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid #00ff88;
+        }
+
+        .stat-title {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        /* 中間：圖片監控 */
+        .image-monitor {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            height: 100%;
+        }
+
+        .current-image {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 6px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            min-height: 0;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .current-image img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: all 0.3s ease;
+        }
+
+        .current-image:hover img {
+            transform: scale(1.02);
+        }
+
+        /* 1:1 照片彈窗 */
+        .image-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            position: relative;
+            max-width: 90vw;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .modal-image-container {
+            position: relative;
+            overflow: auto;
+            border: 2px solid #00ff88;
+            border-radius: 8px;
+            background: #000;
+            max-width: 80vw;
+            max-height: 70vh;
+        }
+
+        .modal-image {
+            max-width: none;
+            max-height: none;
+            cursor: move;
+            user-select: none;
+        }
+
+        .modal-controls {
+            margin-top: 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            color: white;
+        }
+
+        .zoom-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .zoom-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zoom-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .close-modal {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .upload-area {
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            border-radius: 6px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .upload-area:hover {
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .upload-area.drag-over {
+            border-color: #00ff88;
+            background: rgba(0, 255, 136, 0.1);
+        }
+
+        /* 右側：辨識結果卡片 */
+        .manual-review {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            padding: 16px;
+            backdrop-filter: blur(5px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+        }
+
+        .recognition-card {
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 123, 255, 0.1));
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .recognition-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 255, 136, 0.2);
+            border-color: rgba(0, 255, 136, 0.6);
+        }
+
+        .recognition-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #00ff88, #007bff);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #00ff88;
+        }
+
+        .confidence-badge {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+        }
+
+        .card-content {
+            display: grid;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            align-items: center;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .field-label {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.75rem;
+        }
+
+        .field-value {
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        .correction-form {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: none;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 4px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 0.9rem;
+        }
+
+        .form-group input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #1e7e34;
+        }
+
+        /* 底部：日誌 */
+        .log-area {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            padding: 16px;
+            backdrop-filter: blur(5px);
+            height: 120px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            font-size: 0.8rem;
+            margin: 2px 0;
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .log-entry.success { color: #00ff88; }
+        .log-entry.error { color: #ff4444; }
+        .log-entry.warning { color: #ffaa00; }
+
+        .results-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .result-item {
+            background: rgba(255, 255, 255, 0.1);
+            margin: 4px 0;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .result-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .result-item.selected {
+            background: rgba(0, 123, 255, 0.3);
+            border-left: 4px solid #007bff;
+        }
+
+        .file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 圖片1:1彈窗 -->
+        <div class="image-modal" id="imageModal">
+            <div class="modal-content">
+                <button class="close-modal" onclick="closeImageModal()">✕ 關閉</button>
+                <div class="modal-image-container" id="modalImageContainer">
+                    <img class="modal-image" id="modalImage" draggable="false">
+                </div>
+                <div class="modal-controls">
+                    <div class="zoom-controls">
+                        <button class="zoom-btn" onclick="zoomImage(-0.1)">−</button>
+                        <span id="zoomLevel">100%</span>
+                        <button class="zoom-btn" onclick="zoomImage(0.1)">+</button>
+                        <button class="zoom-btn" onclick="resetZoom()">🔍</button>
+                    </div>
+                    <span style="margin-left: 16px; font-size: 0.9rem;">拖拽移動圖片位置</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 標題列 -->
+        <div class="header">
+            <h1>Samsung OCR 整合監控台</h1>
+            <div class="status-indicator">
+                <div class="status-dot status-idle" id="status-dot"></div>
+                <span id="status-text">連線中...</span>
+            </div>
+        </div>
+
+        <!-- 主要內容區 -->
+        <div class="main-content">
+            <!-- 左側：系統狀態 -->
+            <div class="system-status">
+                <h3>系統狀態</h3>
+                <div class="stat-card">
+                    <div class="stat-title">處理總數</div>
+                    <div class="stat-value" id="total-processed">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-title">成功率</div>
+                    <div class="stat-value" id="success-rate">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-title">目前狀態</div>
+                    <div class="stat-value" id="current-status">待機</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-title">API連線</div>
+                    <div class="stat-value" id="api-status">檢查中...</div>
+                </div>
+
+                <h4 style="margin-top: 16px;">最新結果</h4>
+                <div class="results-list" id="results-list">
+                    <!-- 動態載入結果 -->
+                </div>
+            </div>
+
+            <!-- 中間：圖片監控 -->
+            <div class="image-monitor">
+                <div class="upload-area" onclick="document.getElementById('file-input').click()">
+                    <p>📁 點擊批量上傳圖片或直接拖拽到此處</p>
+                    <p style="font-size: 0.8rem; opacity: 0.7;">支援 PNG, JPG, JPEG (可選擇多張)</p>
+                    <div style="margin-top: 8px;">
+                        <button style="background: #007bff; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 8px;" onclick="event.stopPropagation(); document.getElementById('folder-input').click()">📂 選擇資料夾</button>
+                        <span style="font-size: 0.7rem; opacity: 0.6;">或選擇整個資料夾上傳</span>
+                    </div>
+                    <div id="upload-progress" style="margin-top: 8px; font-size: 0.8rem; display: none;">
+                        <div id="progress-text">處理中: 0/0</div>
+                        <div style="width: 100%; background: rgba(255,255,255,0.2); border-radius: 4px; height: 4px; margin-top: 4px;">
+                            <div id="progress-bar" style="width: 0%; background: #00ff88; height: 100%; border-radius: 4px; transition: width 0.3s;"></div>
+                        </div>
+                    </div>
+                </div>
+                <input type="file" id="file-input" class="file-input" accept="image/*" multiple onchange="handleImageUpload(event)">
+                <input type="file" id="folder-input" class="file-input" webkitdirectory multiple onchange="handleFolderUpload(event)">
+                
+                <div class="current-image" id="current-image" onclick="openImageModal(event)">
+                    <p style="opacity: 0.6;">圖片預覽區域</p>
+                </div>
+
+                <!-- LLM思考過程 -->
+                <div style="background: rgba(0, 0, 0, 0.6); border-radius: 6px; padding: 12px; height: 150px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.8rem;" id="llm-thinking">
+                    <div style="color: #00ff88; margin-bottom: 4px;">🧠 LLM思考過程：</div>
+                    <div id="thinking-content" style="color: #e0e0e0; line-height: 1.4;">等待處理...</div>
+                </div>
+            </div>
+
+            <!-- 右側：辨識結果卡片 -->
+            <div class="manual-review">
+                <h3>🔍 辨識結果</h3>
+                <div id="recognition-results">
+                    <!-- 動態載入辨識結果卡片 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部：日誌 -->
+        <div class="log-area" id="log-area">
+            <div class="log-entry">系統啟動，等待連線...</div>
+        </div>
+    </div>
+
+    <script>
+        let currentData = {};
+        let selectedResultId = null;
+        let updateInterval = null;
+        let currentZoom = 1;
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            startPolling();
+            addLogEntry('📡 開始監控OCR系統...', 'info');
+            setupDragAndDrop();
+            setupImageModal();
+        });
+
+        // 設置圖片彈窗
+        function setupImageModal() {
+            const modalImage = document.getElementById('modalImage');
+            const container = document.getElementById('modalImageContainer');
+
+            // 拖拽功能
+            modalImage.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                dragStart = { x: e.clientX, y: e.clientY };
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                
+                const dx = e.clientX - dragStart.x;
+                const dy = e.clientY - dragStart.y;
+                
+                container.scrollLeft -= dx;
+                container.scrollTop -= dy;
+                
+                dragStart = { x: e.clientX, y: e.clientY };
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        }
+
+        // 打開圖片彈窗
+        function openImageModal(event) {
+            const imageElement = document.querySelector('#current-image img');
+            if (!imageElement) return;
+
+            const modal = document.getElementById('imageModal');
+            const modalImage = document.getElementById('modalImage');
+            
+            modalImage.src = imageElement.src;
+            modal.style.display = 'flex';
+            
+            currentZoom = 1;
+            updateZoomLevel();
+            
+            // 阻止事件冒泡
+            event.stopPropagation();
+        }
+
+        // 關閉圖片彈窗
+        function closeImageModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        // 縮放圖片
+        function zoomImage(delta) {
+            currentZoom = Math.max(0.1, Math.min(3, currentZoom + delta));
+            updateZoomLevel();
+        }
+
+        // 重置縮放
+        function resetZoom() {
+            currentZoom = 1;
+            updateZoomLevel();
+            
+            // 重置位置
+            const container = document.getElementById('modalImageContainer');
+            container.scrollLeft = 0;
+            container.scrollTop = 0;
+        }
+
+        // 更新縮放等級
+        function updateZoomLevel() {
+            const modalImage = document.getElementById('modalImage');
+            const zoomLevel = document.getElementById('zoomLevel');
+            
+            modalImage.style.transform = `scale(${currentZoom})`;
+            zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
+        }
+
+        // 創建辨識結果卡片
+        function createRecognitionCard(result, index) {
+            const confidence = Math.round((result.confidence || 0.8) * 100);
+            
+            return `
+                <div class="recognition-card" onclick="selectResult('${result.filename}', ${index})">
+                    <div class="card-header">
+                        <div class="card-title">🖼️ ${result.filename}</div>
+                        <div class="confidence-badge">${confidence}%</div>
+                    </div>
+                    <div class="card-content">
+                        <div class="field-row">
+                            <span class="field-label">型號</span>
+                            <span class="field-value">${result.model || 'N/A'}</span>
+                        </div>
+                        <div class="field-row">
+                            <span class="field-label">價格</span>
+                            <span class="field-value">${result.price || 'N/A'}</span>
+                        </div>
+                        <div class="field-row">
+                            <span class="field-label">黑屏</span>
+                            <span class="field-value">${result.blackscreen ? '是' : '否'}</span>
+                        </div>
+                        <div class="field-row">
+                            <span class="field-label">時間</span>
+                            <span class="field-value">${new Date(result.timestamp || Date.now()).toLocaleTimeString()}</span>
+                        </div>
+                    </div>
+                    <div class="correction-form" id="correction-form-${index}">
+                        <div class="form-group">
+                            <label>修正型號</label>
+                            <input type="text" id="correct-model-${index}" value="${result.model || ''}" placeholder="輸入正確型號">
+                        </div>
+                        <div class="form-group">
+                            <label>修正價格</label>
+                            <input type="text" id="correct-price-${index}" value="${result.price || ''}" placeholder="輸入正確價格">
+                        </div>
+                        <div class="form-group">
+                            <label>修正黑屏狀況</label>
+                            <select id="correct-blackscreen-${index}">
+                                <option value="false" ${!result.blackscreen ? 'selected' : ''}>正常</option>
+                                <option value="true" ${result.blackscreen ? 'selected' : ''}>黑屏</option>
+                            </select>
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn-correct" onclick="submitCorrection('${result.filename}', ${index})">💾 提交修正</button>
+                            <button class="btn-feedback good" onclick="submitFeedback('${result.filename}', 'good', ${index})">👍</button>
+                            <button class="btn-feedback bad" onclick="submitFeedback('${result.filename}', 'bad', ${index})">👎</button>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end;">
+                        <button class="btn" style="background: rgba(255,255,255,0.1); color: white; border: none; padding: 4px 8px; font-size: 0.7rem; border-radius: 4px;" 
+                                onclick="toggleCorrectionForm(${index})">✏️ 訂正</button>
+                        <button class="btn" style="background: rgba(0,255,136,0.2); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); padding: 4px 8px; font-size: 0.7rem; border-radius: 4px;" 
+                                onclick="loadImagePreview('${result.filename}')">🔍 檢視</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 切換訂正表單顯示
+        function toggleCorrectionForm(index) {
+            const form = document.getElementById(`correction-form-${index}`);
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // 選擇結果
+        function selectResult(filename, index) {
+            selectedResultId = filename;
+            
+            // 更新視覺效果
+            document.querySelectorAll('.recognition-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            event.target.closest('.recognition-card').classList.add('selected');
+            
+            // 載入對應圖片
+            loadImagePreview(filename);
+            
+            addLogEntry(`📋 已選擇結果: ${filename}`, 'info');
+        }
+
+        // 提交修正
+        async function submitCorrection(filename, index) {
+            const model = document.getElementById(`correct-model-${index}`).value;
+            const price = document.getElementById(`correct-price-${index}`).value;
+            const blackscreen = document.getElementById(`correct-blackscreen-${index}`).value === 'true';
+
+            try {
+                const response = await fetch('http://localhost:5000/api/correct', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename,
+                        corrections: { model, price, blackscreen }
+                    })
+                });
+
+                if (response.ok) {
+                    addLogEntry(`✅ 修正已提交: ${filename}`, 'success');
+                    toggleCorrectionForm(index);
+                    fetchData(); // 刷新數據
+                } else {
+                    throw new Error('修正提交失敗');
+                }
+            } catch (error) {
+                addLogEntry(`❌ 修正提交失敗: ${error.message}`, 'error');
+            }
+        }
+
+        // 提交回饋
+        async function submitFeedback(filename, feedback, index) {
+            try {
+                const response = await fetch('http://localhost:5000/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, feedback })
+                });
+
+                if (response.ok) {
+                    const emoji = feedback === 'good' ? '👍' : '👎';
+                    addLogEntry(`${emoji} 回饋已提交: ${filename}`, 'success');
+                } else {
+                    throw new Error('回饋提交失敗');
+                }
+            } catch (error) {
+                addLogEntry(`❌ 回饋提交失敗: ${error.message}`, 'error');
+            }
+        }
+            startPolling();
+            addLogEntry('📡 開始監控OCR系統...', 'info');
+            setupDragAndDrop();
+        });
+
+        // 設置拖拽上傳
+        function setupDragAndDrop() {
+            const uploadArea = document.querySelector('.upload-area');
+            
+            // 防止默認拖拽行為
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // 高亮拖拽區域
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, unhighlight, false);
+            });
+
+            // 處理文件放置
+            uploadArea.addEventListener('drop', handleDrop, false);
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            document.querySelector('.upload-area').classList.add('drag-over');
+        }
+
+        function unhighlight(e) {
+            document.querySelector('.upload-area').classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            // 模擬file input的事件
+            const fakeEvent = {
+                target: { files: files, value: '' }
+            };
+            handleImageUpload(fakeEvent);
+        }
+
+        // 開始輪詢
+        function startPolling() {
+            fetchData();
+            updateInterval = setInterval(fetchData, 2000);
+        }
+
+        // 停止輪詢
+        function stopPolling() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+        }
+
+        // 獲取資料
+        async function fetchData() {
+            try {
+                const response = await fetch('http://localhost:5000/api/status');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const data = await response.json();
+                currentData = data;
+                updateUI(data);
+                
+                // 更新狀態指示器
+                document.getElementById('status-dot').className = 'status-dot ' + 
+                    (data.stats?.is_running ? 'status-running' : 'status-idle');
+                document.getElementById('status-text').textContent = 
+                    data.stats?.is_running ? '處理中...' : '待機中';
+                document.getElementById('api-status').textContent = '正常';
+                
+            } catch (error) {
+                console.error('獲取狀態失敗:', error);
+                document.getElementById('status-dot').className = 'status-dot status-error';
+                document.getElementById('status-text').textContent = '連線失敗';
+                document.getElementById('api-status').textContent = '連線失敗';
+                addLogEntry(`❌ 連線失敗: ${error.message}`, 'error');
+            }
+        }
+
+        // 更新UI
+        function updateUI(data) {
+            if (data.stats) {
+                document.getElementById('total-processed').textContent = data.stats.total_processed || 0;
+                document.getElementById('success-rate').textContent = data.stats.success_rate ? `${data.stats.success_rate}%` : '-%';
+                document.getElementById('current-status').textContent = data.stats.current_file || '待機';
+            }
+
+            // 更新辨識結果卡片
+            if (data.recent_results && Array.isArray(data.recent_results)) {
+                const container = document.getElementById('recognition-results');
+                container.innerHTML = data.recent_results.map((result, index) => 
+                    createRecognitionCard(result, index)
+                ).join('');
+            }
+
+            // 更新LLM思考過程
+            if (data.llm_thinking) {
+                updateThinkingProcess(data.llm_thinking);
+            }
+        }
+                document.getElementById('current-status').textContent = data.stats.is_running ? '處理中' : '待機';
+            }
+
+            // 更新結果列表
+            if (data.recent_results) {
+                updateResultsList(data.recent_results);
+            }
+
+            // 載入最新圖片
+            if (data.current_image) {
+                loadImagePreview(data.current_image);
+            }
+        }
+
+        // 更新結果列表
+        function updateResultsList(results) {
+            const container = document.getElementById('results-list');
+            container.innerHTML = '';
+            
+            results.slice(0, 8).forEach(result => {
+                const item = document.createElement('div');
+                item.className = 'result-item';
+                if (result.id === selectedResultId) {
+                    item.classList.add('selected');
+                }
+                
+                item.innerHTML = `
+                    <div style="font-weight: 600;">${result.filename}</div>
+                    <div>型號: ${result.model || '未知'}</div>
+                    <div>價格: ${result.price || '未知'}</div>
+                    <div style="color: ${result.confidence > 0.8 ? '#00ff88' : '#ffaa00'}">
+                        信心度: ${(result.confidence * 100).toFixed(1)}%
+                    </div>
+                `;
+                
+                item.addEventListener('click', () => selectResult(result));
+                container.appendChild(item);
+            });
+        }
+
+        // 選擇結果
+        function selectResult(result) {
+            selectedResultId = result.id;
+            document.getElementById('review-filename').value = result.filename;
+            document.getElementById('review-model').value = result.model || '';
+            document.getElementById('review-price').value = result.price || '';
+            document.getElementById('review-blackscreen').value = result.black_screen ? 'true' : 'false';
+            
+            // 更新視覺選擇
+            document.querySelectorAll('.result-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            event.target.classList.add('selected');
+            
+            // 載入對應圖片
+            loadImagePreview(result.filename);
+            
+            addLogEntry(`📋 已選擇結果: ${result.filename}`, 'info');
+        }
+
+        // 載入圖片預覽
+        async function loadImagePreview(filename) {
+            if (!filename) return;
+            
+            try {
+                const imageUrl = `http://localhost:5000/api/image/${encodeURIComponent(filename)}`;
+                const img = new Image();
+                img.onload = () => {
+                    const imageContainer = document.getElementById('current-image');
+                    imageContainer.innerHTML = '';
+                    img.style.maxWidth = '100%';
+                    img.style.maxHeight = '100%';
+                    img.style.objectFit = 'contain';
+                    imageContainer.appendChild(img);
+                };
+                img.onerror = () => {
+                    addLogEntry(`❌ 圖片載入失敗: ${filename}`, 'error');
+                };
+                img.src = imageUrl;
+            } catch (error) {
+                addLogEntry(`❌ 圖片載入錯誤: ${error.message}`, 'error');
+            }
+        }
+
+        // 處理資料夾上傳
+        async function handleFolderUpload(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+
+            // 過濾非圖片文件
+            const imageFiles = files.filter(file => file.type.startsWith('image/'));
+            
+            addLogEntry(`📂 資料夾上傳: 找到 ${files.length} 個檔案，其中 ${imageFiles.length} 個圖片`, 'info');
+            
+            if (imageFiles.length === 0) {
+                addLogEntry('❌ 資料夾中沒有圖片檔案', 'error');
+                return;
+            }
+
+            // 使用相同的批量上傳邏輯
+            const fakeEvent = {
+                target: { files: imageFiles, value: '' }
+            };
+            await handleImageUpload(fakeEvent);
+        }
+        async function handleImageUpload(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+
+            // 過濾非圖片文件
+            const imageFiles = files.filter(file => file.type.startsWith('image/'));
+            if (imageFiles.length !== files.length) {
+                addLogEntry('❌ 部分檔案不是圖片格式，已自動過濾', 'warning');
+            }
+
+            if (imageFiles.length === 0) {
+                addLogEntry('❌ 請選擇圖片檔案', 'error');
+                return;
+            }
+
+            addLogEntry(`📤 開始批量上傳: ${imageFiles.length} 張圖片`, 'info');
+            
+            // 顯示進度條
+            const progressDiv = document.getElementById('upload-progress');
+            const progressText = document.getElementById('progress-text');
+            const progressBar = document.getElementById('progress-bar');
+            
+            progressDiv.style.display = 'block';
+            progressText.textContent = `處理中: 0/${imageFiles.length}`;
+            progressBar.style.width = '0%';
+
+            let successCount = 0;
+            let failCount = 0;
+
+            for (let i = 0; i < imageFiles.length; i++) {
+                const file = imageFiles[i];
+                
+                try {
+                    addLogEntry(`📄 處理第 ${i + 1}/${imageFiles.length} 張: ${file.name}`, 'info');
+                    
+                    // 開始思考過程
+                    showThinkingProcess('📸 正在分析圖片...', 'info');
+                    
+                    // 顯示當前處理的圖片
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const imageContainer = document.getElementById('current-image');
+                            imageContainer.innerHTML = '';
+                            img.style.maxWidth = '100%';
+                            img.style.maxHeight = '100%';
+                            img.style.objectFit = 'contain';
+                            imageContainer.appendChild(img);
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+
+                    // 上傳到API並監聽思考過程
+                    const formData = new FormData();
+                    formData.append('image', file);
+                    
+                    // 開始處理前顯示思考狀態
+                    showThinkingProcess(`🔍 正在進行第一階段分析: ${file.name}`, 'processing');
+                    
+                    const response = await fetch('http://localhost:5000/api/image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        successCount++;
+                        addLogEntry(`✅ 完成: ${result.filename || file.name}`, 'success');
+                        
+                        // 顯示最終思考結果
+                        if (result.model || result.price) {
+                            showThinkingProcess(`💡 識別結果: 型號「${result.model || '未識別'}」, 價格「${result.price || '未識別'}」`, 'success');
+                        }
+                        
+                        // 監聽後端日誌
+                        startListeningForLogs(result.filename || file.name);
+                        
+                    } else {
+                        failCount++;
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    
+                } catch (error) {
+                    failCount++;
+                    addLogEntry(`❌ 處理失敗 ${file.name}: ${error.message}`, 'error');
+                    showThinkingProcess(`❌ 處理失敗: ${error.message}`, 'error');
+                }
+                
+                // 更新進度
+                const processed = i + 1;
+                progressText.textContent = `處理中: ${processed}/${imageFiles.length}`;
+                progressBar.style.width = `${(processed / imageFiles.length) * 100}%`;
+                
+                // 短暫延遲避免API過載
+                if (i < imageFiles.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 800));
+                }
+            }
+
+            // 隱藏進度條
+            setTimeout(() => {
+                progressDiv.style.display = 'none';
+            }, 2000);
+
+            // 總結報告
+            const summary = `📊 批量上傳完成 - 成功: ${successCount}, 失敗: ${failCount}`;
+            addLogEntry(summary, successCount === imageFiles.length ? 'success' : 'warning');
+            
+            // 更新數據
+            setTimeout(fetchData, 1000);
+            
+            // 清除選擇
+            event.target.value = '';
+        }
+
+        // 顯示思考過程
+        function showThinkingProcess(message, type = 'info') {
+            const thinkingContent = document.getElementById('thinking-content');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            const colors = {
+                'info': '#e0e0e0',
+                'processing': '#ffaa00',
+                'success': '#00ff88',
+                'error': '#ff4444'
+            };
+            
+            const color = colors[type] || '#e0e0e0';
+            
+            // 添加新的思考條目
+            const newEntry = document.createElement('div');
+            newEntry.innerHTML = `<span style="color: #666; font-size: 0.7rem;">[${timestamp}]</span> <span style="color: ${color};">${message}</span>`;
+            newEntry.style.marginBottom = '2px';
+            
+            thinkingContent.appendChild(newEntry);
+            
+            // 自動滾動到底部
+            const llmThinking = document.getElementById('llm-thinking');
+            llmThinking.scrollTop = llmThinking.scrollHeight;
+            
+            // 限制條目數量
+            const entries = thinkingContent.children;
+            if (entries.length > 20) {
+                thinkingContent.removeChild(entries[0]);
+            }
+        }
+
+        // 監聽後端日誌（模擬LLM思考過程）
+        function startListeningForLogs(filename) {
+            // 模擬LLM的兩階段推理過程
+            showThinkingProcess('🔍 第一階段：定位商品資訊區域...', 'processing');
+            
+            setTimeout(() => {
+                showThinkingProcess('✓ 找到商品標籤區域，準備詳細分析', 'success');
+                showThinkingProcess('🧠 第二階段：提取型號和價格資訊...', 'processing');
+                
+                setTimeout(() => {
+                    showThinkingProcess('📊 正在分析文字內容和位置關係', 'info');
+                    
+                    setTimeout(() => {
+                        showThinkingProcess('💡 推理完成，正在驗證結果', 'success');
+                    }, 800);
+                }, 600);
+            }, 400);
+        }
+
+        // 提交回饋
+        async function submitFeedback(rating) {
+            if (!selectedResultId) {
+                addLogEntry('❌ 請先選擇一個結果項目', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:5000/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ result_id: selectedResultId, rating })
+                });
+
+                if (response.ok) {
+                    addLogEntry(`✅ 回饋已提交: ${rating === 'good' ? '正確' : '錯誤'}`, 'success');
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addLogEntry(`❌ 回饋提交失敗: ${error.message}`, 'error');
+            }
+        }
+
+        // 提交修正
+        async function submitCorrection() {
+            if (!selectedResultId) {
+                addLogEntry('❌ 請先選擇一個結果項目', 'error');
+                return;
+            }
+
+            const correctionData = {
+                result_id: selectedResultId,
+                filename: document.getElementById('review-filename').value,
+                model: document.getElementById('review-model').value,
+                price: document.getElementById('review-price').value,
+                black_screen: document.getElementById('review-blackscreen').value === 'true'
+            };
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/correct', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(correctionData)
+                });
+                
+                if (response.ok) {
+                    addLogEntry(`✅ 修正已提交: ${correctionData.filename}`, 'success');
+                    setTimeout(fetchData, 1000);
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addLogEntry(`❌ 修正提交失敗: ${error.message}`, 'error');
+            }
+        }
+
+        // 設置拖拽上傳
+        function setupDragAndDrop() {
+            const uploadArea = document.querySelector('.upload-area');
+            
+            // 防止默認拖拽行為
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // 高亮拖拽區域
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, unhighlight, false);
+            });
+
+            // 處理文件放置
+            uploadArea.addEventListener('drop', handleDrop, false);
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            document.querySelector('.upload-area').classList.add('drag-over');
+        }
+
+        function unhighlight(e) {
+            document.querySelector('.upload-area').classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            // 模擬file input的事件
+            const fakeEvent = {
+                target: { files: files, value: '' }
+            };
+            handleImageUpload(fakeEvent);
+        }
+
+        // 開始輪詢
+        function startPolling() {
+            fetchData();
+            updateInterval = setInterval(fetchData, 2000);
+        }
+
+        // 停止輪詢
+        function stopPolling() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+        }
+
+        // 獲取資料
+        async function fetchData() {
+            try {
+                const response = await fetch('http://localhost:5000/api/status');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const data = await response.json();
+                currentData = data;
+                updateUI(data);
+                
+                // 更新狀態指示器
+                document.getElementById('status-dot').className = 'status-dot ' + 
+                    (data.stats?.is_running ? 'status-running' : 'status-idle');
+                document.getElementById('status-text').textContent = 
+                    data.stats?.is_running ? '處理中...' : '待機中';
+                document.getElementById('api-status').textContent = '正常';
+                
+            } catch (error) {
+                console.error('獲取狀態失敗:', error);
+                document.getElementById('status-dot').className = 'status-dot status-error';
+                document.getElementById('status-text').textContent = '連線失敗';
+                document.getElementById('api-status').textContent = '連線失敗';
+                addLogEntry(`❌ 連線失敗: ${error.message}`, 'error');
+            }
+        }
+
+        // 顯示LLM思考過程
+        function showThinkingProcess(message, type = 'info') {
+            const thinkingContent = document.getElementById('thinking-content');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            let color = '#e0e0e0';
+            switch(type) {
+                case 'success': color = '#00ff88'; break;
+                case 'error': color = '#ff4444'; break;
+                case 'warning': color = '#ffaa00'; break;
+                case 'processing': color = '#66d9ef'; break;
+            }
+            
+            const entry = document.createElement('div');
+            entry.style.color = color;
+            entry.style.marginBottom = '4px';
+            entry.style.lineHeight = '1.3';
+            entry.innerHTML = `<span style="opacity: 0.7;">[${timestamp}]</span> ${message}`;
+            
+            thinkingContent.appendChild(entry);
+            thinkingContent.scrollTop = thinkingContent.scrollHeight;
+            
+            // 限制條目數量
+            const entries = thinkingContent.children;
+            if (entries.length > 20) {
+                entries[0].remove();
+            }
+        }
+
+        // 更新思考過程
+        function updateThinkingProcess(thinking) {
+            if (thinking && thinking.message) {
+                showThinkingProcess(thinking.message, thinking.type || 'info');
+            }
+        }
+
+        // 處理資料夾上傳
+        async function handleFolderUpload(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+
+            // 過濾非圖片文件
+            const imageFiles = files.filter(file => file.type.startsWith('image/'));
+            
+            addLogEntry(`📂 資料夾上傳: 找到 ${files.length} 個檔案，其中 ${imageFiles.length} 個圖片`, 'info');
+            
+            if (imageFiles.length === 0) {
+                addLogEntry('❌ 資料夾中沒有圖片檔案', 'error');
+                return;
+            }
+
+            // 使用相同的批量上傳邏輯
+            const fakeEvent = {
+                target: { files: imageFiles, value: '' }
+            };
+            await handleImageUpload(fakeEvent);
+        }
+
+        // 新增日誌
+        function addLogEntry(message, type = 'info') {
+            const logArea = document.getElementById('log-area');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            
+            logArea.appendChild(entry);
+            logArea.scrollTop = logArea.scrollHeight;
+            
+            // 限制日誌條目數量
+            const entries = logArea.querySelectorAll('.log-entry');
+            if (entries.length > 50) {
+                entries[0].remove();
+            }
+        }
+
+        // 頁面離開時停止輪詢
+        window.addEventListener('beforeunload', stopPolling);
+    </script>
+</body>
+</html>

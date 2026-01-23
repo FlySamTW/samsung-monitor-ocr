@@ -1,0 +1,225 @@
+{
+  "dynamic_examples": [
+    [
+      "M-台中市-太平區-TK3C-太平-849.jpg",
+      {
+        "category": "單機",
+        "model": "S24DG302EC",
+        "price": "3690",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-太平區-TK3C-太平-852.jpg",
+      {
+        "category": "單機",
+        "model": "S27CG552EC",
+        "price": "4990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-沙鹿區-TK3C-沙鹿向上-841.jpg",
+      {
+        "category": "單機",
+        "model": "S24DG302EC",
+        "price": "3690",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-沙鹿區-TK3C-沙鹿向上-842.jpg",
+      {
+        "category": "單機",
+        "model": "S27F612EAC",
+        "price": "4990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-沙鹿區-TK3C-沙鹿向上-845.jpg",
+      {
+        "category": "單機",
+        "model": "S32CG552EC",
+        "price": "6990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-沙鹿區-TK3C-沙鹿向上-846.jpg",
+      {
+        "category": "不合格-單機但看不清楚價格或型號",
+        "model": "",
+        "price": "",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-東區-集雅社-台中LalaportSES-225.jpg",
+      {
+        "category": "單機",
+        "model": "S57CG952NC",
+        "price": "69900",
+        "black_screen": true
+      }
+    ],
+    [
+      "M-台中市-東區-集雅社-台中LalaportSES-226.jpg",
+      {
+        "category": "單機",
+        "model": "S49DG952SC",
+        "price": "39900",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-東區-集雅社-台中LalaportSES-227.jpg",
+      {
+        "category": "不合格-單機但看不清楚價格或型號",
+        "model": "",
+        "price": "32900",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南區-TK3C-台中旗艦-690.jpg",
+      {
+        "category": "遠景",
+        "model": "",
+        "price": "",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南區-TK3C-台中旗艦-694.jpg",
+      {
+        "category": "單機",
+        "model": "S27D300GAC",
+        "price": "3290",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南區-TK3C-台中旗艦-695.jpg",
+      {
+        "category": "無法分辨",
+        "model": "S24DG302EC",
+        "price": "3690",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南屯區-TK3C-公益-1055.jpg",
+      {
+        "category": "單機",
+        "model": "S27F612EAC",
+        "price": "4990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南屯區-TK3C-公益-1056.jpg",
+      {
+        "category": "單機",
+        "model": "S27CG552EC",
+        "price": "4990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南屯區-TK3C-公益-1060.jpg",
+      {
+        "category": "不合格-單機但看不清楚價格或型號",
+        "model": "",
+        "price": "14900",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南屯區-TK3C-台中五權-1374.jpg",
+      {
+        "category": "單機",
+        "model": "S24D362GAC",
+        "price": "2690",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-南屯區-TK3C-台中五權-1375.jpg",
+      {
+        "category": "單機",
+        "model": "S32FM703UC",
+        "price": "9900",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-梧棲區-TK3C-梧棲-876.jpg",
+      {
+        "category": "單機",
+        "model": "S27D300GAC",
+        "price": "3290",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-梧棲區-TK3C-梧棲-877.jpg",
+      {
+        "category": "單機",
+        "model": "S27F612EAC",
+        "price": "4990",
+        "black_screen": false
+      }
+    ],
+    [
+      "M-台中市-潭子區-TK3C-潭子-991.jpg",
+      {
+        "category": "單機",
+        "model": "S24D362GAC",
+        "price": "3490",
+        "black_screen": false
+      }
+    ]
+  ],
+  "feedback_rules": [
+    "User Note (M-台中市-南屯區-TK3C-豐樂-1361.jpg): 這很明顯是遠景",
+    "User Note (M-台中市-南屯區-TK3C-公益-1053.jpg): C34G55TWWC",
+    "User Note (M-台中市-大甲區-SF-大甲-412.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大甲區-TK3C-大甲-927.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-eLife-大里-300.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-eLife-大里-302.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-eLife-大里-303.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-SF-大里-417.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-SF-大里-424.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-TK3C-大里二-768.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大里區-TK3C-新大里-1399.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-703.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-705.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-707.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-709.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-711.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-大雅區-TK3C-新東海-712.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-太平區-SF-太平中興-430.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-太平區-SF-太平中興-431.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-太平區-TK3C-太平-849.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-太平區-TK3C-太平-852.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-沙鹿區-TK3C-沙鹿向上-841.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-沙鹿區-TK3C-沙鹿向上-842.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-沙鹿區-TK3C-沙鹿向上-845.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-沙鹿區-TK3C-沙鹿向上-846.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-東區-集雅社-台中LalaportSES-225.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-東區-集雅社-台中LalaportSES-226.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-東區-集雅社-台中LalaportSES-227.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南區-TK3C-台中旗艦-690.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南區-TK3C-台中旗艦-694.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南區-TK3C-台中旗艦-695.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南屯區-TK3C-公益-1055.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南屯區-TK3C-公益-1056.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南屯區-TK3C-公益-1060.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南屯區-TK3C-台中五權-1374.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-南屯區-TK3C-台中五權-1375.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-梧棲區-TK3C-梧棲-876.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-梧棲區-TK3C-梧棲-877.jpg): Imported from Project-1 History",
+    "User Note (M-台中市-潭子區-TK3C-潭子-991.jpg): Imported from Project-1 History"
+  ]
+}

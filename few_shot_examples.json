@@ -1,0 +1,114 @@
+[
+  {
+    "file_name": "example_001.jpg",
+    "category": "單機",
+    "model": "S27CG552EC",
+    "price": "4990",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_002.jpg",
+    "category": "單機",
+    "model": "S24F332EAC",
+    "price": "2390",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_003.jpg",
+    "category": "單機",
+    "model": "S32BM700UC",
+    "price": "6990",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_004.jpg",
+    "category": "單機",
+    "model": "S27CG552EC",
+    "price": "5990",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_005.jpg",
+    "category": "單機",
+    "model": "S32BM801UC",
+    "price": "9990",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_006.jpg",
+    "category": "單機",
+    "model": "S49CG954EC",
+    "price": "42900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_007.jpg",
+    "category": "單機",
+    "model": "S34CG502EC",
+    "price": "11900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_008.jpg",
+    "category": "單機",
+    "model": "S27C430EAC",
+    "price": "2890",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_009.jpg",
+    "category": "單機",
+    "model": "S34BG850DC",
+    "price": "24900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_010.jpg",
+    "category": "單機",
+    "model": "S49CG954EC",
+    "price": "42900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_011.jpg",
+    "category": "單機",
+    "model": "S34C654ULC",
+    "price": "13900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_012.jpg",
+    "category": "單機",
+    "model": "S57C700EAC",
+    "price": "12900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_013.jpg",
+    "category": "單機",
+    "model": "S34C652ULC",
+    "price": "16900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_014.jpg",
+    "category": "單機",
+    "model": "S49CG954EC",
+    "price": "69900",
+    "black_screen": false
+  },
+  {
+    "file_name": "example_015.jpg",
+    "category": "單機",
+    "model": "S27CG552EC",
+    "price": "5490",
+    "black_screen": true
+  },
+  {
+    "file_name": "example_016.jpg",
+    "category": "遠景",
+    "model": null,
+    "price": null,
+    "black_screen": false
+  }
+]

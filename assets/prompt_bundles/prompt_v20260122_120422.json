@@ -1,0 +1,14 @@
+{
+  "version_id": "prompt_v20260122_120422",
+  "created_at": "2026-01-22T12:04:22.827131",
+  "system_prompt": "你是一個專業的三星門市照片審核員。...",
+  "user_prompt_template": "請分析這張圖片...",
+  "few_shot_config": {
+    "source": "dynamic",
+    "k": 3
+  },
+  "parameters": {
+    "temperature": 0.1,
+    "top_p": 0.9
+  }
+}

@@ -1,0 +1,40 @@
+# Photo directories
+photos/
+商化照片-*/
+商化照片-*
+*.jpg
+*.png
+*.jpeg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Dashboard / Node
+dashboard/node_modules/
+dashboard/dist/
+dist/
+node_modules/
+
+# Logs and Results
+runs/
+*.csv
+*.xlsx
+results.json
+project-output.json
+*.tmp
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+.agent/
+.gemini/
