@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v9.61 (Stream Fixed)";
+const UI_VERSION = "v9.93 (Stream Visible)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -118,7 +118,7 @@ const App = () => {
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
     if (autoScroll && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      logsEndRef.current.scrollIntoView({ behavior: 'auto' });
     }
   }, [data?.lm_logs, autoScroll]);
 
@@ -165,12 +165,12 @@ const App = () => {
   const [targetDir, setTargetDir] = useState('商化照片-202512');
   const [controlMsg, setControlMsg] = useState('');
 
-  const handleStart = async () => {
+  const handleStart = async (restart = false) => {
       try {
           const res = await fetch('/api/start_batch', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ dir: targetDir })
+              body: JSON.stringify({ dir: targetDir, restart: restart })
           });
           const json = await res.json();
           if (res.ok) {
@@ -303,13 +303,21 @@ const App = () => {
                    }}
                />
                
-               <button onClick={handleStart} disabled={data?.is_running} 
-                   style={{
-                       background: data?.is_running ? '#333' : '#22c55e', 
-                       color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: data?.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px'
-                   }}>
-                   <Play size={12} /> 啟動
-               </button>
+                <button onClick={() => handleStart(false)} disabled={data?.stats?.is_running} 
+                    style={{
+                        background: data?.stats?.is_running ? '#333' : '#22c55e', 
+                        color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: data?.stats?.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px'
+                    }}>
+                    <Play size={12} /> 繼續執行
+                </button>
+
+                <button onClick={() => handleStart(true)} disabled={data?.stats?.is_running} 
+                    style={{
+                        background: data?.stats?.is_running ? '#333' : '#f59e0b', 
+                        color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: data?.stats?.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px'
+                    }}>
+                    <Zap size={12} /> 重新啟動
+                </button>
 
                <button onClick={handleStop} disabled={!data?.is_running} 
                    style={{
@@ -345,7 +353,7 @@ const App = () => {
                   display: 'flex', 
                   flexDirection: 'column'
               }}>
-                  <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', borderBottom: '1px solid #333' }}>
+                  <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
                       <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}><ImageIcon size={12}/> 即時預覽</span>
                       <span style={{color: '#00f5ff', fontFamily: 'JetBrains Mono'}}>{data?.current_file || '-'}</span>
                   </div>
@@ -416,7 +424,7 @@ const App = () => {
                   {/* Stream Buffer Overlay (Thinking) */}
                   {/* Stream Buffer Overlay REMOVED by user request */}
 
-                  <div style={{ padding: '4px 8px', background: '#111', borderBottom: '1px solid #333', fontSize: '0.7rem', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
+                  <div style={{ padding: '4px 8px', background: '#111', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
                       <Activity size={12} /> LLM 推論日誌
                   </div>
                   <div 
@@ -431,28 +439,10 @@ const App = () => {
                           lineHeight: '1.4', 
                           color: '#33ff33',
                           background: '#000',
-                          scrollBehavior: 'smooth'
+                          scrollBehavior: 'auto'
                       }}
                   >
-                      {/* Unified Syncing Thinking Stream (MOVE TO TOP v9.76) */}
-                      {data?.stream_buffer && (
-                          <div style={{ 
-                              padding: '10px', 
-                              color: '#ffffff', 
-                              fontSize: '0.9rem', 
-                              whiteSpace: 'pre-wrap',
-                              fontFamily: 'JetBrains Mono, monospace',
-                              lineHeight: '1.4',
-                              fontWeight: 'bold',
-                              background: 'rgba(88, 86, 214, 0.1)',
-                              borderRadius: '6px',
-                              borderLeft: '4px solid #5856d6',
-                              marginBottom: '12px'
-                          }}>
-                              {data.stream_buffer}
-                          </div>
-                      )}
-
+                      {/* Stream buffer moved to bottom for immediate visibility */}
                       {data?.lm_logs?.length > 0 ? (
                           [...data.lm_logs].reverse().map((line, i) => (
                               <div key={i} style={{ 
@@ -485,6 +475,26 @@ const App = () => {
                           ))
                       ) : (
                           <div style={{textAlign:'center', marginTop:'20%', color:'#222', fontSize:'0.7rem'}}>WAITING FOR LINK...</div>
+                      )}
+
+                      {/* Real-time Stream Buffer at BOTTOM for immediate visibility */}
+                      {data?.stream_buffer && (
+                          <div style={{ 
+                              padding: '10px', 
+                              color: '#ffffff', 
+                              fontSize: '0.9rem', 
+                              whiteSpace: 'pre-wrap',
+                              fontFamily: 'JetBrains Mono, monospace',
+                              lineHeight: '1.4',
+                              fontWeight: 'bold',
+                              background: 'rgba(88, 86, 214, 0.15)',
+                              borderRadius: '6px',
+                              borderLeft: '4px solid #5856d6',
+                              marginTop: '12px',
+                              marginBottom: '12px'
+                          }}>
+                              {data.stream_buffer}
+                          </div>
                       )}
 
                       <div ref={logsEndRef} />
@@ -551,7 +561,7 @@ const App = () => {
 
               {/* Learned Corrections Log - Unified Style */}
               <div style={{ flex: '0 0 150px', display: 'flex', flexDirection: 'column', borderBottom: '1px solid #333' }}>
-                  <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.7rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
+                  <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
                       <Brain size={12} color="#22c55e"/> 已學習訂正 ({data?.dynamic_examples_list?.length || 0})
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', padding: '8px', fontSize:'0.7rem' }}>
@@ -574,7 +584,7 @@ const App = () => {
 
               {/* Recent History - Unified Style */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                  <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.7rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
+                  <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
                       <Zap size={12} color="#f59e0b"/> 辨識紀錄
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>

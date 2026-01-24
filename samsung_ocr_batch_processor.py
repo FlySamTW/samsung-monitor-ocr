@@ -503,13 +503,13 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             pri = result_json.get("price") or "無價格"
             blk = result_json.get("black_screen")
 
-            if "遠景" in cat:
-                 orchestrator.log_system("⚠️ 判斷是遠景")
-            else:
-                 summary_line = f"✅ 判斷是單機: {mod} / {pri}"
-                 if blk:
-                     summary_line += " / 黑屏"
-                 orchestrator.log_system(summary_line)
+            # [v9.90 Personalized Summary Log]
+            status_emoji = "▶️"
+            category_name = "遠景" if "遠景" in cat else "單機"
+            summary_line = f"{status_emoji} 判斷是{category_name}： {mod} / {pri}"
+            if blk:
+                summary_line += " / 黑屏"
+            orchestrator.log_system(summary_line)
 
     except Exception as e:
         log.error(f"Analysis Failed: {e}")
@@ -659,9 +659,10 @@ def start_batch():
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
         
-        # Get directory from request
-        data = request.json or {}
-        target_dir = data.get('dir')
+        # Get directory and restart flag from request
+        req_data = request.json or {}
+        target_dir = req_data.get('dir')
+        restart = req_data.get('restart', False) # Default to false (Continue)
         
         if target_dir:
             if os.path.exists(target_dir):
@@ -670,8 +671,9 @@ def start_batch():
                 return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
 
         # 開始批次處理
-        orchestrator.start_batch()
-        return jsonify({"status": "started", "message": f"批次處理已開始 (目錄: {orchestrator.image_dir})"})
+        orchestrator.start_batch(restart=restart)
+        mode_text = "重新啟動" if restart else "繼續執行"
+        return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
         
     except Exception as e:
         return jsonify({"error": f"啟動失敗: {str(e)}"}), 500
