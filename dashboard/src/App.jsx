@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.8 (Better Error Handling)";
+const UI_VERSION = "v10.9 (No Retry Loop)";
 
 const App = () => {
   // Default State to prevent crash/white screen

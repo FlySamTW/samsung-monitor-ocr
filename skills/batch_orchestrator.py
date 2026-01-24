@@ -325,15 +325,21 @@ class BatchOrchestrator:
                 import traceback
                 error_msg = str(e)
                 
-                # [v10.8] Clearer error messages for different failure types
-                if "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg:
-                    self.log_system(f"❌ 圖片損壞，跳過: {fname}")
+                # [v10.9] Distinguish permanent failures from retryable errors
+                is_permanent_failure = "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg
+                
+                if is_permanent_failure:
+                    # Corrupted image - do NOT retry
+                    self.log_system(f"❌ 圖片損壞，永久跳過: {fname}")
                     self.log_system(f"   原因: 無法識別圖片格式或文件損壞")
+                    # Reset consecutive_failures so we don't hit circuit breaker
+                    consecutive_failures = 0
                 else:
+                    # System error - might be retryable
                     traceback.print_exc()
                     self.log_system(f"❌ 系統錯誤: {error_msg}")
+                    consecutive_failures += 1
                 
-                consecutive_failures += 1
                 self.stats['failed'] += 1
         
         self.is_running = False
