@@ -323,8 +323,16 @@ class BatchOrchestrator:
 
             except Exception as e:
                 import traceback
-                traceback.print_exc()
-                self.log_system(f"Error processing {fname}: {e}")
+                error_msg = str(e)
+                
+                # [v10.8] Clearer error messages for different failure types
+                if "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg:
+                    self.log_system(f"❌ 圖片損壞，跳過: {fname}")
+                    self.log_system(f"   原因: 無法識別圖片格式或文件損壞")
+                else:
+                    traceback.print_exc()
+                    self.log_system(f"❌ 系統錯誤: {error_msg}")
+                
                 consecutive_failures += 1
                 self.stats['failed'] += 1
         
