@@ -8,7 +8,8 @@ import {
   Box,
   Brain,
   Play,
-  Square
+  RotateCcw,
+  AlertCircle
 } from 'lucide-react';
 
 // Helper to ensure price has $ and commas
