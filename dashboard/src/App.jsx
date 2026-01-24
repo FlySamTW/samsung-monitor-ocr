@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.3 (Stats Inherit)";
+const UI_VERSION = "v10.4 (Scroll Best Practice)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -115,10 +115,11 @@ const App = () => {
       document.body.style.background = '#080808';
   }, []);
 
-  // Auto-scroll to TOP to show stream_buffer (v10.2 - Fixed for first appearance)
+  // Auto-scroll to show stream_buffer when it appears (v10.4 - Best Practice)
+  const streamBufferRef = useRef(null);
   useEffect(() => {
-    if (logsContainerRef.current && data?.stream_buffer) {
-      logsContainerRef.current.scrollTop = 0; // Force scroll to top when stream appears
+    if (streamBufferRef.current && data?.stream_buffer) {
+      streamBufferRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
     }
   }, [data?.stream_buffer]);
 
@@ -451,7 +452,7 @@ const App = () => {
                   >
                       {/* Real-time Stream Buffer at TOP (User Preference) */}
                       {data?.stream_buffer && (
-                          <div style={{ 
+                          <div ref={streamBufferRef} style={{ 
                               padding: '10px', 
                               color: '#ffffff', 
                               fontSize: '0.9rem', 
