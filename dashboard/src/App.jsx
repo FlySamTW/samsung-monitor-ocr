@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.2 (Scroll Fixed)";
+const UI_VERSION = "v10.3 (Stats Inherit)";
 
 const App = () => {
   // Default State to prevent crash/white screen

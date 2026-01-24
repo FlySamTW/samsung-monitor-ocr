@@ -194,7 +194,15 @@ class BatchOrchestrator:
                                      text = value.get('text', [])
                                      norm_result['price'] = text[0] if text else ''
                              self.run_results.append(norm_result)
-                     self.log_system(f"已載入 {len(self.run_results)} 筆先前辨識結果。")
+                     
+                     # [v10.3] Inherit SUCCESS and FAILED counts from loaded results
+                     success_count = sum(1 for r in self.run_results if r.get('category') != '失敗')
+                     failed_count = sum(1 for r in self.run_results if r.get('category') == '失敗')
+                     self.stats['success'] = success_count
+                     self.stats['failed'] = failed_count
+                     self.stats['processed'] = len(self.run_results)
+                     
+                     self.log_system(f"已載入 {len(self.run_results)} 筆先前辨識結果。(成功: {success_count}, 失敗: {failed_count})")
              except Exception as e:
                  log.error(f"Failed to load existing results: {e}")
                  self.log_system(f"⚠️ 無法載入先前結果: {e}")
