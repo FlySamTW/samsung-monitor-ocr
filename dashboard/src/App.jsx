@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.4 (Scroll Best Practice)";
+const UI_VERSION = "v10.5 (One-Time Scroll)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -115,11 +115,21 @@ const App = () => {
       document.body.style.background = '#080808';
   }, []);
 
-  // Auto-scroll to show stream_buffer when it appears (v10.4 - Best Practice)
+  // Auto-scroll ONCE with 10s delay (v10.5 - User Request)
   const streamBufferRef = useRef(null);
+  const hasScrolledRef = useRef(false); // Track if we've already scrolled
+  
   useEffect(() => {
-    if (streamBufferRef.current && data?.stream_buffer) {
-      streamBufferRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+    if (streamBufferRef.current && data?.stream_buffer && !hasScrolledRef.current) {
+      // Wait 10 seconds, then scroll once
+      const timer = setTimeout(() => {
+        if (streamBufferRef.current) {
+          streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          hasScrolledRef.current = true; // Mark as scrolled
+        }
+      }, 10000); // 10 seconds delay
+      
+      return () => clearTimeout(timer);
     }
   }, [data?.stream_buffer]);
 
