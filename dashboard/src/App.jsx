@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.0 (Zero I/O)";
+const UI_VERSION = "v10.1 (Flow Mode)";
 
 const App = () => {
   // Default State to prevent crash/white screen
