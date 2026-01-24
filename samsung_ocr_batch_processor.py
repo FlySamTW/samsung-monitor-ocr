@@ -251,7 +251,9 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             # tools=[tool_def], # REMOVED: Force Text Output
             stream=True,
             temperature=0.1,
-            max_tokens=2048
+            top_p=0.8,  # Qwen official recommendation
+            max_tokens=1024,  # Reduced from 2048 for faster streaming (v9.98)
+            stream_options={"include_usage": True}  # Qwen streaming optimization
         )
         
         tool_calls_buffer = []
