@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.5 (One-Time Scroll)";
+const UI_VERSION = "v10.6 (Smart Scroll)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -115,23 +115,20 @@ const App = () => {
       document.body.style.background = '#080808';
   }, []);
 
-  // Auto-scroll ONCE with 20s delay (v10.5 - User Request)
+  // Auto-scroll ONCE when container has enough entries (v10.6 - Smart Scroll)
   const streamBufferRef = useRef(null);
-  const hasScrolledRef = useRef(false); // Track if we've already scrolled
+  const hasScrolledRef = useRef(false);
   
   useEffect(() => {
-    if (streamBufferRef.current && data?.stream_buffer && !hasScrolledRef.current) {
-      // Wait 10 seconds, then scroll once
-      const timer = setTimeout(() => {
-        if (streamBufferRef.current) {
-          streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          hasScrolledRef.current = true; // Mark as scrolled
-        }
-      }, 20000); // 20 seconds delay
-      
-      return () => clearTimeout(timer);
+    // Scroll when we have stream_buffer AND enough log entries to fill container
+    const logCount = data?.lm_logs?.length || 0;
+    const threshold = 10; // Scroll when we have at least 10 log entries
+    
+    if (streamBufferRef.current && data?.stream_buffer && !hasScrolledRef.current && logCount >= threshold) {
+      streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      hasScrolledRef.current = true; // Only scroll once
     }
-  }, [data?.stream_buffer]);
+  }, [data?.stream_buffer, data?.lm_logs]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
