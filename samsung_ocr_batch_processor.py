@@ -23,7 +23,7 @@ SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4)
 # --- Logging Setup ---
 console = Console()
 logging.basicConfig(
-    level="INFO",
+    level="ERROR",  # v9.96: Only show errors in terminal
     format="%(message)s",
     datefmt="[%X]",
     handlers=[RichHandler(rich_tracebacks=True)]
