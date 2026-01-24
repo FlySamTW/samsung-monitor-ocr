@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v9.94 (Performance)";
+const UI_VERSION = "v9.95 (Stream Top)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -442,6 +442,25 @@ const App = () => {
                           scrollBehavior: 'auto'
                       }}
                   >
+                      {/* Real-time Stream Buffer at TOP (User Preference) */}
+                      {data?.stream_buffer && (
+                          <div style={{ 
+                              padding: '10px', 
+                              color: '#ffffff', 
+                              fontSize: '0.9rem', 
+                              whiteSpace: 'pre-wrap',
+                              fontFamily: 'JetBrains Mono, monospace',
+                              lineHeight: '1.4',
+                              fontWeight: 'bold',
+                              background: 'rgba(88, 86, 214, 0.15)',
+                              borderRadius: '6px',
+                              borderLeft: '4px solid #5856d6',
+                              marginBottom: '12px'
+                          }}>
+                              {data.stream_buffer}
+                          </div>
+                      )}
+
                       {/* Stream buffer moved to bottom for immediate visibility */}
                       {data?.lm_logs?.length > 0 ? (
                           [...data.lm_logs].reverse().map((line, i) => (
@@ -475,26 +494,6 @@ const App = () => {
                           ))
                       ) : (
                           <div style={{textAlign:'center', marginTop:'20%', color:'#222', fontSize:'0.7rem'}}>WAITING FOR LINK...</div>
-                      )}
-
-                      {/* Real-time Stream Buffer at BOTTOM for immediate visibility */}
-                      {data?.stream_buffer && (
-                          <div style={{ 
-                              padding: '10px', 
-                              color: '#ffffff', 
-                              fontSize: '0.9rem', 
-                              whiteSpace: 'pre-wrap',
-                              fontFamily: 'JetBrains Mono, monospace',
-                              lineHeight: '1.4',
-                              fontWeight: 'bold',
-                              background: 'rgba(88, 86, 214, 0.15)',
-                              borderRadius: '6px',
-                              borderLeft: '4px solid #5856d6',
-                              marginTop: '12px',
-                              marginBottom: '12px'
-                          }}>
-                              {data.stream_buffer}
-                          </div>
                       )}
 
                       <div ref={logsEndRef} />

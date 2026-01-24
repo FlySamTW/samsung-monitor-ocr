@@ -759,6 +759,12 @@ def main():
     except AttributeError:
         pass # Python < 3.7
 
+    # [v9.94] Suppress Flask request logging to reduce terminal noise
+    # Note: This only affects backend terminal output, NOT frontend stream_buffer display
+    werkzeug_log = logging.getLogger('werkzeug')
+    werkzeug_log.setLevel(logging.ERROR)
+    flask_app.logger.setLevel(logging.WARNING)
+
     global orchestrator, api_client, model_name_global
     
     parser = argparse.ArgumentParser()
