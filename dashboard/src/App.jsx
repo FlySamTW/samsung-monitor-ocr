@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v9.96 (Silent Terminal)";
+const UI_VERSION = "v9.97 (Auto-Scroll Top)";
 
 const App = () => {
   // Default State to prevent crash/white screen
