@@ -115,7 +115,7 @@ const App = () => {
       document.body.style.background = '#080808';
   }, []);
 
-  // Auto-scroll ONCE with 10s delay (v10.5 - User Request)
+  // Auto-scroll ONCE with 20s delay (v10.5 - User Request)
   const streamBufferRef = useRef(null);
   const hasScrolledRef = useRef(false); // Track if we've already scrolled
   
@@ -127,7 +127,7 @@ const App = () => {
           streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
           hasScrolledRef.current = true; // Mark as scrolled
         }
-      }, 10000); // 10 seconds delay
+      }, 20000); // 20 seconds delay
       
       return () => clearTimeout(timer);
     }
