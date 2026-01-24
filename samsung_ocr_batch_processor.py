@@ -353,6 +353,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                      if fallback_msg not in orchestrator.stream_buffer:
                          orchestrator.stream_buffer += fallback_msg
                          # print(fallback_msg, end="", flush=True)  # v10.0: Disabled
+                         pass  # v10.0: Keep block structure
 
                 for tc in delta.tool_calls:
                     if len(tool_calls_buffer) <= tc.index:
