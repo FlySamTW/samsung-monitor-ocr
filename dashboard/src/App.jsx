@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v9.99 (Stream Fixed)";
+const UI_VERSION = "v10.0 (Zero I/O)";
 
 const App = () => {
   // Default State to prevent crash/white screen

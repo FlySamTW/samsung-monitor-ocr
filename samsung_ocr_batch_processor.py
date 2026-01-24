@@ -242,7 +242,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         orchestrator.stream_buffer = "" # Clean start
         orchestrator._stream_active = True # [v9.69 Fix] Reset stream latch for new image!
         # orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)...") # Removed duplicate log
-        console.print(f"[cyan]▶️ 正在分析圖片: {fname}[/cyan]")
+        # console.print(f"[cyan]▶️ 正在分析圖片: {fname}[/cyan]")  # v10.0: Disabled for performance
 
     try:
         stream = api_client.chat.completions.create(
@@ -330,20 +330,20 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                             
                             orchestrator.stream_buffer += safe_part
                             orchestrator._stream_active = False # TRIP THE BREAKER
-                            print(safe_part, end="", flush=True)
+                            # print(safe_part, end="", flush=True)  # v10.0: Disabled
                         else:
                             # Check for other "code leakage" signals at end of stream
                             if "```" in temp_tc:
                                 safe_part = temp_tc.split("```")[0]
                                 orchestrator.stream_buffer += safe_part
                                 orchestrator._stream_active = False
-                                print(safe_part, end="", flush=True)
+                                # print(safe_part, end="", flush=True)  # v10.0: Disabled
                             else:
                                 orchestrator.stream_buffer += temp_tc
-                                print(temp_tc, end="", flush=True) 
+                                # print(temp_tc, end="", flush=True)  # v10.0: Disabled 
                     else:
                          # Stream is dead, long live the logs
-                         print(content_tc, end="", flush=True)
+                         # print(content_tc, end="", flush=True)  # v10.0: Disabled
 
             if delta.tool_calls:
                 # [Fallback] If model skips thinking and jumps to tool calls
@@ -351,7 +351,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                      fallback_msg = " [⚡ 模型略過思考，直接提取數據...]"
                      if fallback_msg not in orchestrator.stream_buffer:
                          orchestrator.stream_buffer += fallback_msg
-                         print(fallback_msg, end="", flush=True)
+                         # print(fallback_msg, end="", flush=True)  # v10.0: Disabled
 
                 for tc in delta.tool_calls:
                     if len(tool_calls_buffer) <= tc.index:
@@ -361,7 +361,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     if tc.function.name: tcb["function"]["name"] = tc.function.name
                     if tc.function.arguments: tcb["function"]["arguments"] += tc.function.arguments
 
-        print() # Newline after stream
+        # print() # Newline after stream  # v10.0: Disabled
     
         # [v9.55 Fix] DISABLED Stream Buffer Logging to prevent JSON leakage. 
         # We now rely solely on the Regex Extraction block below for clean thinking logs.
