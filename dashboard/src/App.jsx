@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v9.98 (Qwen Optimized)";
+const UI_VERSION = "v9.99 (Stream Fixed)";
 
 const App = () => {
   // Default State to prevent crash/white screen

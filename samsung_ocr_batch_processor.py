@@ -259,6 +259,10 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         tool_calls_buffer = []
 
         for chunk in stream:
+            # [v9.99 Fix] Skip chunks without choices (e.g., usage chunks from stream_options)
+            if not hasattr(chunk, 'choices') or not chunk.choices:
+                continue
+                
             delta = chunk.choices[0].delta
             
             # 1. Capture Content (Standard)
