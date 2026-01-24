@@ -344,6 +344,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     else:
                          # Stream is dead, long live the logs
                          # print(content_tc, end="", flush=True)  # v10.0: Disabled
+                         pass  # v10.0: Keep block structure
 
             if delta.tool_calls:
                 # [Fallback] If model skips thinking and jumps to tool calls
