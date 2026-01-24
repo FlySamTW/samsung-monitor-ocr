@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.6 (Smart Scroll)";
+const UI_VERSION = "v10.7 (Optimal Scroll)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -115,18 +115,20 @@ const App = () => {
       document.body.style.background = '#080808';
   }, []);
 
-  // Auto-scroll ONCE when container has enough entries (v10.6 - Smart Scroll)
+  // Auto-scroll ONCE when container is ~70% full (v10.7 - Optimal Timing)
   const streamBufferRef = useRef(null);
   const hasScrolledRef = useRef(false);
   
   useEffect(() => {
-    // Scroll when we have stream_buffer AND enough log entries to fill container
-    const logCount = data?.lm_logs?.length || 0;
-    const threshold = 10; // Scroll when we have at least 10 log entries
-    
-    if (streamBufferRef.current && data?.stream_buffer && !hasScrolledRef.current && logCount >= threshold) {
-      streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      hasScrolledRef.current = true; // Only scroll once
+    if (streamBufferRef.current && data?.stream_buffer && !hasScrolledRef.current && logsContainerRef.current) {
+      // Check if container is getting full (scrollHeight > clientHeight means content overflows)
+      const container = logsContainerRef.current;
+      const isFilling = container.scrollHeight > container.clientHeight * 0.7;
+      
+      if (isFilling) {
+        streamBufferRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        hasScrolledRef.current = true; // Only scroll once
+      }
     }
   }, [data?.stream_buffer, data?.lm_logs]);
 
