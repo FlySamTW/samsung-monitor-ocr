@@ -53,6 +53,7 @@ class BatchOrchestrator:
         self.save_data_file = None # Corrected syntax from self.save_data()_file
         self.recent_results = []
         self.retry_queue = []
+        self.failed_files = []  # [v11.0] Track all failed files with details
         self.stream_buffer = "" # Real-time streaming buffer
         
         # Processor Function (Dependency Injection)
@@ -81,6 +82,25 @@ class BatchOrchestrator:
         self.is_running = False
         self.stats['is_running'] = False
         log.info("Batch stopped by user.")
+
+    def get_status(self):
+        """Returns current runtime status and metrics."""
+        return {
+            "is_running": self.is_running,
+            "stats": self.stats,
+            "lm_logs": self.system_logs[-100:],
+            "stream_buffer": self.stream_buffer,
+            "current_file": self.current_file,
+            "failed_files": self.failed_files  # [v11.0] Include failed files
+        }
+    
+    def _save_failed_files(self):
+        """[v11.0] Save failed files to JSON for persistence."""
+        try:
+            with open("failed_files.json", 'w', encoding='utf-8') as f:
+                json.dump(self.failed_files, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.error(f"Failed to save failed_files.json: {e}")
 
     def _safe_run_loop(self, limit: int, restart: bool):
         """Wrapper to catch thread crashes."""
@@ -207,6 +227,17 @@ class BatchOrchestrator:
                  log.error(f"Failed to load existing results: {e}")
                  self.log_system(f"⚠️ 無法載入先前結果: {e}")
         
+        # [v11.0] Load failed files history
+        failed_files_path = "failed_files.json"
+        if not restart and os.path.exists(failed_files_path):
+            try:
+                with open(failed_files_path, 'r', encoding='utf-8') as f:
+                    self.failed_files = json.load(f)
+                    self.log_system(f"已載入 {len(self.failed_files)} 筆失敗記錄。")
+            except Exception as e:
+                log.error(f"Failed to load failed files: {e}")
+                self.log_system(f"⚠️ 無法載入失敗記錄: {e}")
+        
         # --- Loop ---
         work_queue = list(pending_files)
         
@@ -328,17 +359,32 @@ class BatchOrchestrator:
                 # [v10.9] Distinguish permanent failures from retryable errors
                 is_permanent_failure = "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg
                 
+                # [v11.0] Record failed file
+                failed_record = {
+                    "filename": fname,
+                    "reason": "",
+                    "timestamp": datetime.now().isoformat(),
+                    "error_type": ""
+                }
+                
                 if is_permanent_failure:
                     # Corrupted image - do NOT retry
                     self.log_system(f"❌ 圖片損壞，永久跳過: {fname}")
                     self.log_system(f"   原因: 無法識別圖片格式或文件損壞")
+                    failed_record["reason"] = "圖片損壞 - 無法識別圖片格式"
+                    failed_record["error_type"] = "corrupted_image"
                     # Reset consecutive_failures so we don't hit circuit breaker
                     consecutive_failures = 0
                 else:
                     # System error - might be retryable
                     traceback.print_exc()
                     self.log_system(f"❌ 系統錯誤: {error_msg}")
+                    failed_record["reason"] = f"系統錯誤: {error_msg[:100]}"
+                    failed_record["error_type"] = "system_error"
                     consecutive_failures += 1
+                
+                self.failed_files.append(failed_record)
+                self._save_failed_files()  # Save immediately
                 
                 self.stats['failed'] += 1
         

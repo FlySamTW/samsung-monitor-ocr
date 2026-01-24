@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.9 (No Retry Loop)";
+const UI_VERSION = "v11.0 (Failed Tracking Backend)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -53,6 +53,7 @@ const App = () => {
   const logsContainerRef = React.useRef(null);
   const logsEndRef = React.useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showFailedFiles, setShowFailedFiles] = useState(true); // [v11.0] Collapse control
 
   // ... (useEffect hooks)
 
