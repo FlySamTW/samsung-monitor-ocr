@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v11.0 (Failed Tracking Backend)";
+const UI_VERSION = "v11.0-backend (前端UI待修復)";
 
 const App = () => {
   // Default State to prevent crash/white screen
