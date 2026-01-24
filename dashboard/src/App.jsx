@@ -23,7 +23,7 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-const UI_VERSION = "v10.0 (Zero I/O)";
+const UI_VERSION = "v10.2 (Scroll Fixed)";
 
 const App = () => {
   // Default State to prevent crash/white screen
@@ -114,6 +114,13 @@ const App = () => {
       document.body.style.overflow = 'hidden';
       document.body.style.background = '#080808';
   }, []);
+
+  // Auto-scroll to TOP to show stream_buffer (v10.2 - Fixed for first appearance)
+  useEffect(() => {
+    if (logsContainerRef.current && data?.stream_buffer) {
+      logsContainerRef.current.scrollTop = 0; // Force scroll to top when stream appears
+    }
+  }, [data?.stream_buffer]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
