@@ -380,7 +380,7 @@ body {
 }
 
 /* Animations */
-@keyframes kitt-scan {
+@keyframes scan {
   0% {
     transform: translateX(-120%);
     opacity: 0.3;

@@ -5,7 +5,7 @@ import json
 import base64
 import logging
 import psutil
-from flask import Flask, jsonify, request, send_file, send_from_directory, send_from_directory, Response
+from flask import Flask, jsonify, request, send_file, send_from_directory, Response
 from flask_cors import CORS
 from rich.console import Console
 from rich.logging import RichHandler
@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v9.60 (Final Polish)"
+VERSION = "v16.9 (Stream/Prompt Fix)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -31,7 +31,8 @@ logging.basicConfig(
 log = logging.getLogger("rich")
 
 # --- Flask App ---
-flask_app = Flask(__name__)
+# [v14.8] Serve Dashboard from dist folder
+flask_app = Flask(__name__, static_folder=os.path.join('dashboard', 'dist'))
 CORS(flask_app)
 orchestrator: BatchOrchestrator = None
 api_client: OpenAI = None
@@ -185,24 +186,34 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     # RESTORE ORIGINAL RESOLUTION (No Constraint)
     # [IRON RULE] User said: "Do NOT compress images!!!" 
     image_processor.config["max_size"] = None 
-    active_file = os.path.join(orchestrator.image_dir, fname)
-    # if orchestrator: orchestrator.log_system(f"▶️ 載入圖片: {fname} (原始畫質/無壓縮)")
-    result = image_processor.process(active_file)
     
-    if not result:
-        return {"error": "Image processing failed"}
+    # [v16.3 DEBUG] Force Print to see if we enter
+    print(f"[DEBUG] process_single_image called for: {fname}")
 
-    # Use Full Image directly (Single Stage)
-    full_image_b64 = result['base64'] 
+    # [v16.3 Optimization] Use pre-loaded b64 to avoid double reading/path errors
+    if image_b64:
+        full_image_b64 = image_b64
+        # print(f"[DEBUG] Using provided image_b64, len={len(image_b64)}")
+    else:
+        active_file = os.path.join(orchestrator.image_dir, fname)
+        result = image_processor.process(active_file)
+        if not result:
+            print(f"[ERROR] Image processing failed for {fname}")
+            return {"error": "Image processing failed"}
+        full_image_b64 = result['base64'] 
 
     if orchestrator:
-        # orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)...")
+        orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)...")
         console.print(f"[cyan]正在分析... {fname}[/cyan]")
     
     # Adopt User's "Samsung Manager" Persona Prompt + IRON RULE (v9.9)
     # Get model list for injection
-    # v9.38: Optimization: Don't inject huge string
-    valid_models_str = "Samsung Monitor List (Internal)"
+    # v16.9 Fix: Actually load the list!
+    try:
+        with open('型號表.txt', 'r', encoding='utf-8') as f:
+             valid_models_str = f.read()
+    except:
+        valid_models_str = "(無法讀取型號表)"
     
     # Load System Prompt from external file
     try:
@@ -213,10 +224,9 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             orchestrator.log_system(f"❌ 讀取 Prompt 檔案失敗: {e}, 使用備份 Prompt")
         prompt_template = "你是三星螢幕管理員。請提取型號與價格。..." # 簡單備份
 
-    system_prompt = prompt_template.format(
-        valid_models_str=valid_models_str,
-        examples_section=examples_section
-    )
+    # v14.3: Use .replace() instead of .format() to avoid KeyError with JSON braces in prompt
+    system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
+                                   .replace("{examples_section}", "") # [v14.7 Removed Learning]
 
     user_prompt = f"圖片: {fname}\n請提取資訊 (繁體中文)，務必包含 Observation 和 JSON。"
     
@@ -235,16 +245,27 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     })
 
     full_response_text = ""
-    result_json = {"category": "失敗", "model": None, "price": None, "black_screen": False}
+    # [v14.1 Fix] Default category to None so we don't force '失敗' if new schema provided
+    result_json = {"category": None, "model": None, "price": None, "black_screen": False}
 
-    # Reset Stream Buffer for strict real-time sync
+    # [v9.62 Fix] Allow ANY IP address for Local LLM, not just localhost
+    use_local_llm = False
+    if api_client:
+        use_local_llm = True
+
     if orchestrator:
         orchestrator.stream_buffer = "" # Clean start
         orchestrator._stream_active = True # [v9.69 Fix] Reset stream latch for new image!
-        # orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)...") # Removed duplicate log
-        # console.print(f"[cyan]▶️ 正在分析圖片: {fname}[/cyan]")  # v10.0: Disabled for performance
+        console.print(f"[bold yellow]☁️  正在將圖片傳送到 LLM (Model: {model_name_global})...[/bold yellow]")
+        orchestrator.log_system(f"🚀 初始化 Local LLM 引擎 ({model_name_global}) - 準備就緒")
+        # Simplified
+        pass
 
     try:
+        # Move prompt loading inside try to catch formatting errors
+        # ... actually already done above ...
+        
+        start_llm_t = time.time()
         stream = api_client.chat.completions.create(
             model=model_name_global,
             messages=messages,
@@ -255,6 +276,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             max_tokens=1024,  # Reduced from 2048 for faster streaming (v9.98)
             stream_options={"include_usage": True}  # Qwen streaming optimization
         )
+        # [v16.9] Simplified Log
+        pass
         
         tool_calls_buffer = []
 
@@ -262,9 +285,12 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             # [v9.99 Fix] Skip chunks without choices (e.g., usage chunks from stream_options)
             if not hasattr(chunk, 'choices') or not chunk.choices:
                 continue
-                
-            delta = chunk.choices[0].delta
             
+            if not full_response_text: # First token!
+                duration_llm_first = time.time() - start_llm_t
+                console.print(f"[bold green]✨ LLM 已回應 (首字耗時: {duration_llm_first:.2f}s)[/bold green]")
+            
+            delta = chunk.choices[0].delta
             # 1. Capture Content (Standard)
             content_piece = ""
             if hasattr(delta, 'content') and delta.content:
@@ -349,7 +375,6 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             if delta.tool_calls:
                 # [Fallback] If model skips thinking and jumps to tool calls
                 if not content_piece and not full_response_text and orchestrator:
-                     fallback_msg = " [⚡ 模型略過思考，直接提取數據...]"
                      if fallback_msg not in orchestrator.stream_buffer:
                          orchestrator.stream_buffer += fallback_msg
                          # print(fallback_msg, end="", flush=True)  # v10.0: Disabled
@@ -428,6 +453,18 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                             clean_k = k.strip().strip('"')
                             val = result_json.pop(k)
                             result_json[clean_k] = val
+
+                    # [v16.9 Fix] Post-Processing: Validate Model against List
+                    # Logic: If model is not empty/null and NOT in valid_models_str, MARK IT.
+                    model_val = result_json.get('model')
+                    if model_val and model_val not in ["null", "None", "無"]:
+                         # Check strict token match to avoid subsstring false positives (e.g. 'M7' in 'M70')
+                         # But list is line-separated.
+                         if model_val not in valid_models_str:
+                             # Append Warning
+                             result_json['model'] = f"{model_val} (未建檔)"
+                             if orchestrator:
+                                 orchestrator.log_system(f"⚠️ 發現新機型: {model_val} (已標記為未建檔)")
                             if orchestrator: orchestrator.log_system(f"🔧 修復畸形鍵名: {repr(k)} -> {clean_k}")
                 else:
                     log.error(f"JSON Output was not a dict: {type(parsed)} -> {parsed}")
@@ -499,6 +536,37 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             if raw_price and isinstance(raw_price, str) and ',' not in raw_price and '$' not in raw_price and 'NT' not in raw_price:
                 result_json["price"] = None
 
+            # [v14.1 Fix] Backward Compatibility: Derive 'category' from new fields if missing
+            current_cat = result_json.get("category")
+            view_type = result_json.get("view_type")
+            screen_status = result_json.get("screen_status")
+            quality_issue = result_json.get("quality_issue")
+
+            if not current_cat or current_cat == "失敗":
+                if view_type == '遠景':
+                    result_json['category'] = '遠景'
+                elif screen_status and screen_status in ['黑屏', '藍屏']:
+                    result_json['category'] = f"不合格-{screen_status}"
+                elif quality_issue and quality_issue != '無':
+                    result_json['category'] = f"不合格-{quality_issue}"
+                elif view_type == '單機':
+                    result_json['category'] = '單機'
+
+            # [v14.6 Fix] Forced Cleaning of labels to prevent UI clutter
+            # Remove "Normal" states so they don't trigger the red error box in UI
+            if result_json.get("screen_status") in ["顯示畫面", "無", "正常", "None", None, "null"]:
+                result_json["screen_status"] = ""
+            if result_json.get("quality_issue") in ["無", "正常", "None", None, "null"]:
+                result_json["quality_issue"] = ""
+            
+            # Trim whitespaces just in case
+            if result_json.get("screen_status"): result_json["screen_status"] = result_json["screen_status"].strip()
+            if result_json.get("quality_issue"): result_json["quality_issue"] = result_json["quality_issue"].strip()
+            
+            # Final fallback if still nothing
+            if not result_json.get('category'):
+                 result_json['category'] = '失敗' if not result_json.get('model') else '單機'
+
         except Exception as e:
             log.error(f"Validation Error: {e}")
             if orchestrator: orchestrator.log_system(f"⚠️ 解析異常: {str(e)}")
@@ -506,7 +574,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         # [v9.71 Universal Summary Log] 
         # MOVED OUT OF ELSE BLOCK to guarantee execution.
         if orchestrator:
-            cat = result_json.get("category", "")
+            cat = result_json.get("category") or ""
             mod = result_json.get("model") or "無型號"
             pri = result_json.get("price") or "無價格"
             blk = result_json.get("black_screen")
@@ -518,6 +586,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             if blk:
                 summary_line += " / 黑屏"
             orchestrator.log_system(summary_line)
+            orchestrator.stream_buffer = "" # [v14.4 Fix] Clear buffer after log done
 
     except Exception as e:
         log.error(f"Analysis Failed: {e}")
@@ -527,30 +596,19 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
 
 # --- Flask API Routes ---
 
-@flask_app.route('/')
-def index():
-    # Defensive path check to prevent 500
-    dist_path = os.path.join('dashboard', 'dist', 'index.html')
-    if not os.path.exists(dist_path):
-        return "Dashboard Build in progress... Please wait and refresh.", 503
-    response = send_file(dist_path)
-    # [v9.81] Force no-cache to ensure latest UI is always served
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
 
-@flask_app.route('/assets/<path:path>')
-def serve_assets(path):
-    assets_dir = os.path.join('dashboard', 'dist', 'assets')
-    if not os.path.exists(assets_dir):
-        return "Assets not found", 404
-    response = send_from_directory(assets_dir, path)
-    # [v9.81] Force no-cache for JS/CSS assets
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+@flask_app.route('/api/list_dirs', methods=['GET'])
+def list_dirs():
+    """列出可用資料夾"""
+    try:
+        # 取得根目錄下所有資料夾
+        entries = os.listdir('.')
+        dirs = [e for e in entries if os.path.isdir(e) and not e.startswith('.') and e not in ['dashboard', 'runs', '__pycache__', '.venv', 'node_modules']]
+        # 優先排序列出包含「照片」或「商化」的資料夾
+        dirs.sort(key=lambda x: ("照片" in x or "商化" in x), reverse=True)
+        return jsonify(dirs)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @flask_app.route('/api/status', methods=['GET'])
 def get_status():
@@ -562,18 +620,33 @@ def get_status():
         # 構建狀態對象
         metrics = orchestrator.get_performance_metrics()
         
-        # [🔋 FORCE SYNC] 直接抓取全域變量，確保不被線程鎖定
+        # [🔋 v14.9.1 DEDUPLICATED STATS]
+        # Use full record aggregation for accurate, deduplicated counts
+        total_success_list = orchestrator.get_all_records()
+        total_failed_list = orchestrator.get_all_failed_records()
+        
+        total_success = len(total_success_list)
+        total_failed = len(total_failed_list)
+        
+        stats = {
+            "processed": total_success + total_failed,
+            "success": total_success,
+            "failed": total_failed,
+            "total": orchestrator.stats.get('total', 0)
+        }
+        
         status_obj = {
             "version": VERSION,
             "current_file": getattr(orchestrator, 'current_file', 'None'),
-            "stats": orchestrator.stats,
+            "stats": stats,
             "metrics": metrics,
             "stream_buffer": str(orchestrator.stream_buffer), # 強制轉字串避免類型錯誤
-            "lm_logs": list(orchestrator.system_logs),       # 傳送完整日誌確保前端過濾
+            "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             "recent_results": orchestrator.recent_results,
+            # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
             "is_running": orchestrator.is_running,
             "resources": {
-                "cpu": psutil.cpu_percent(interval=None),
+                "cpu": psutil.cpu_percent(interval=0.1),
                 "ram": psutil.virtual_memory().percent
             }
         }
@@ -634,6 +707,27 @@ def get_photo(filename):
     """提供圖片檔案 (備用路由)"""
     return get_image(filename)
 
+@flask_app.route('/api/success_records')
+def get_success_records():
+    """提供本次 Session 的成功辨識紀錄 (全量)"""
+    if not orchestrator:
+        return jsonify({"error": "系統未初始化"}), 500
+    
+    # Return full run results (in memory)
+    # [v11.4] Aggregated History (Current + Legacy + Previous Sessions)
+    results = orchestrator.get_all_records()
+    return jsonify(results)
+
+@flask_app.route('/')
+def serve_dashboard():
+    """服務主控制台"""
+    return send_from_directory(flask_app.static_folder, 'index.html')
+
+@flask_app.route('/assets/<path:path>')
+def serve_dashboard_assets(path):
+    """服務 Vite 靜態資源"""
+    return send_from_directory(os.path.join(flask_app.static_folder, 'assets'), path)
+
 @flask_app.route('/dashboard/optimized')
 def serve_optimized_dashboard():
     """提供優化後的控制台界面"""
@@ -667,19 +761,31 @@ def start_batch():
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
         
-        # Get directory and restart flag from request
+        # Get params from request
         req_data = request.json or {}
         target_dir = req_data.get('dir')
-        restart = req_data.get('restart', False) # Default to false (Continue)
+        restart = req_data.get('restart', False)
+        reprocess_last_n = req_data.get('reprocess_last_n', 0)
         
         if target_dir:
             if os.path.exists(target_dir):
                 orchestrator.image_dir = target_dir
+                orchestrator.config['image_dir'] = target_dir # [v16.7 Fix] Update detailed config too
             else:
                 return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
 
+        # [v15.0] Interactive Check: If no files to process, ask to re-run last 5
+        if not restart and reprocess_last_n == 0:
+            scan_res = orchestrator.get_pending_files()
+            if not scan_res['pending_files']:
+                return jsonify({
+                    "status": "needs_confirmation", 
+                    "message": "已全部處理完畢，是否要重跑最後 5 張圖片？",
+                    "files_count": len(scan_res['all_files'])
+                })
+
         # 開始批次處理
-        orchestrator.start_batch(restart=restart)
+        orchestrator.start_batch(restart=restart, reprocess_last_n=reprocess_last_n)
         mode_text = "重新啟動" if restart else "繼續執行"
         return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
         
@@ -698,26 +804,46 @@ def stop_batch():
     except Exception as e:
         return jsonify({"error": f"停止失敗: {str(e)}"}), 500
 
-@flask_app.route('/api/feedback', methods=['POST'])
-def feedback():
-    if not orchestrator: return jsonify({"error": "Init"}), 503
-    data = request.json
-    fname = data.get('file_name')
-    if data.get('is_correct'): return jsonify({"status":"ok"})
+@flask_app.route('/api/update_record', methods=['POST'])
+def update_record():
+    """[v11.6] Update a specific record by filename"""
+    if not orchestrator:
+        return jsonify({"error": "系統未初始化"}), 500
     
-    correct_data = data.get('correct_data')
-    if correct_data:
-        orchestrator.auto_curator.add_correction(fname, correct_data)
-        # Re-queue
-        if fname not in orchestrator.retry_queue:
-            orchestrator.retry_queue.append(fname)
+    try:
+        data = request.json
+        filename = data.get('filename')
+        updates = data.get('updates', {})
         
-        return jsonify({"status": "ok", "msg": "Learned & Re-queued"})
-    return jsonify({"error": "Missing data"}), 400
+        if not filename or not updates:
+            return jsonify({"error": "Missing filename or updates"}), 400
+            
+        success, msg = orchestrator.update_record_by_filename(filename, updates)
+        
+        if success:
+            return jsonify({"status": "success", "message": msg})
+        else:
+            return jsonify({"error": msg}), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@flask_app.route('/api/failed_records')
+def get_failed_records():
+    """Returns ALL unique failed records from history + current session."""
+    if not orchestrator:
+        return jsonify([])
+    
+    try:
+        # [v12.2 Fix] Return aggregated unique failures
+        return jsonify(orchestrator.get_all_failed_records())
+    except Exception as e:
+        log.error(f"Failed to fetch records: {e}")
+        return jsonify([])
 
 @flask_app.route('/api/correct', methods=['POST'])
 def correct_result():
-    """新的修正API端點，用於整合dashboard"""
+    """新的修正API端點，用於整合dashboard (僅存檔，不學習)"""
     if not orchestrator: 
         return jsonify({"error": "系統未初始化"}), 503
     
@@ -728,34 +854,38 @@ def correct_result():
         if not filename:
             return jsonify({"error": "缺少檔名"}), 400
         
-        # 創建修正資料
+        # 創建修正資料 [v11.5 New Schema]
         correction_data = {
-            "category": data.get('category', '單機'),
+            "view_type": data.get('view_type', '單機'), # Default View
+            "screen_status": data.get('screen_status', ''), 
+            "quality_issue": data.get('quality_issue', ''),
+            "note": data.get('note', ''),
             "model": data.get('model', ''),
-            "price": data.get('price', ''),
-            "black_screen": data.get('black_screen', False)
+            "price": data.get('price', '')
         }
         
-        # 添加到修正學習系統
-        orchestrator.auto_curator.add_correction(filename, correction_data)
+        # [v14.7] 僅記錄到紀錄中，不進行動態學習
+        orchestrator.update_record_by_filename(filename, correction_data)
         
         # 記錄到日誌
-        orchestrator.log_system(f"✅ 人工修正: {filename} -> {correction_data}")
-        
-        # 重新加入處理佇列
-        if filename not in orchestrator.retry_queue:
-            orchestrator.retry_queue.append(filename)
-            orchestrator.log_system(f"🔄 重新排程: {filename}")
+        orchestrator.log_system(f"✅ 人工修正已儲存: {filename}")
         
         return jsonify({
             "status": "success", 
-            "message": "修正已提交並加入學習",
+            "message": "修正已提交並儲存",
             "filename": filename,
             "correction": correction_data
         })
         
     except Exception as e:
         return jsonify({"error": f"修正失敗: {str(e)}"}), 500
+
+@flask_app.route('/<path:filename>')
+def serve_dist_fallback(filename):
+    """服務 dist 根目錄的其他檔案 (如 favicon, failed_records.html 等)"""
+    if os.path.exists(os.path.join(flask_app.static_folder, filename)):
+        return send_from_directory(flask_app.static_folder, filename)
+    return f"File not found: {filename}", 404
 
 # --- Main ---
 def main():
@@ -778,7 +908,7 @@ def main():
     parser = argparse.ArgumentParser()
     # Change default to the actual target directory to avoid CLI encoding issues
     parser.add_argument("--dir", default="商化照片-202512", help="Image directory")
-    parser.add_argument("--api_base", default="http://localhost:1234/v1", help="LM Studio/OpenAI Base URL")
+    parser.add_argument("--api_base", default="http://192.168.0.234:1234/v1", help="LM Studio/OpenAI Base URL")
     parser.add_argument("--api_key", default="lm-studio", help="API Key")
     parser.add_argument("--model", default="qwen/qwen3-vl-4b", help="Model Name")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
@@ -786,9 +916,8 @@ def main():
     args = parser.parse_args()
 
     model_name_global = args.model
-    # Force 127.0.0.1 and add timeout to prevent hangs
-    base_url_fixed = args.api_base.replace("localhost", "127.0.0.1")
-    api_client = OpenAI(base_url=base_url_fixed, api_key=args.api_key, timeout=float(args.timeout), max_retries=1)
+    # v14.2: Don't force 127.0.0.1 if localhost works better for user
+    api_client = OpenAI(base_url=args.api_base, api_key=args.api_key, timeout=float(args.timeout), max_retries=1)
 
     # Config for Orchestrator
     config = {

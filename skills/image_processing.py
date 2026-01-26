@@ -181,7 +181,15 @@ class ImageProcessor:
                 }
 
         except Exception as e:
-            log.error(f"Image processing failed for {image_path}: {e}")
+            # [v11.96 Silence Terminal Spam]
+            # Don't log "cannot identify image file" to console via log.error/warning
+            # because it blocks IO during batch processing of corrupted files.
+            err_str = str(e)
+            if "cannot identify image" in err_str:
+                # Silent fail for known corruption
+                pass 
+            else:
+                log.warning(f"Image processing failed for {image_path}: {e}")
             return None
 
     def create_thumbnail(self, image_path: str, max_size: int = 400) -> str:
