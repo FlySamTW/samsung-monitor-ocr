@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.44] FollowMe-Fix Version
-const UI_VERSION = "v18.44 (FollowMe-Fix)";
+// [v18.45] Split-Tag-Kill Version
+const UI_VERSION = "v18.45 (Split-Tag-Kill)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
