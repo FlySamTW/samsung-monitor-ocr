@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.48] Fallback-Strategy Version
-const UI_VERSION = "v18.48 (Fallback-Strategy)";
+// [v18.49] Semantic-Precision Version
+const UI_VERSION = "v18.49 (Semantic-Precision)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
