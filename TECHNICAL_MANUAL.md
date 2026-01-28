@@ -99,7 +99,26 @@ FollowMe 機型因其特殊外型（落地支架），常被豁免於傳統標�
 
 ## 開發歷程 (Version History)
 
-### **v18.49 (最新)** - Global Tag Inventory
+### **v18.52 (最新)** - Status Reporting & Generic Micro-Hunt
+
+- **修正目標**：解決狀態回寫與通用微距閱讀。
+- **核心邏輯**：
+  - **右上角型號為尊 (Top-Right Master)**：強制 AI 先看螢幕右上角型號，再以此為 Master Key 篩選下方標籤。
+  - **通用微距 (Generic Micro-Hunt)**：不分顏色，只要在型號位置，強制開啟顯微鏡模式。
+
+### **v18.51** - Micro-Reading Restoration
+
+- **修正目標**：解決 412 小字型號被忽略問題。
+- **核心邏輯**：
+  - **導航與閱讀分權**：Step 0 僅導航，禁止斷定無型號；Step B 強制微距閱讀。
+
+### **v18.50** - Anti-Curvature Distraction
+
+- **修正目標**：解決 431 曲率 (1000R) 干擾價格判斷。
+- **核心邏輯**：
+  - **視覺陷阱警示**：強制忽略 1000R/1500R，轉而尋找角落小字價格。
+
+### **v18.49** - Global Tag Inventory
 
 - **修正目標**：解決 852 多標籤選錯問題。
 - **核心邏輯**：

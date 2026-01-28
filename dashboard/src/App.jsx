@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.51] Micro-Reading Version
-const UI_VERSION = "v18.51 (Micro-Reading)";
+// [v18.52] Status-Report Version
+const UI_VERSION = "v18.52 (Status-Report)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
