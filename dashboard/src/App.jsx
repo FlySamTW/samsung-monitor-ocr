@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.25] Dual Vision Strategy Version
-const UI_VERSION = "v18.25 (Dual Vision)";
+// [v18.26] Full Vision & Price Guard Version
+const UI_VERSION = "v18.26 (Full Vision)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -651,6 +651,14 @@ const App = () => {
                             <span style={{ fontSize:'0.7rem', color:'#888' }}>品質異常</span>
                             <span style={{ color: inspectImage.category?.startsWith('不合格') ? '#ef4444' : '#555', fontWeight:'bold' }}>
                                 {inspectImage.category?.startsWith('不合格') ? inspectImage.category.replace('不合格-', '') : '無'}
+                            </span>
+                      </div>
+                      <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
+
+                      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', maxWidth: '150px' }}>
+                            <span style={{ fontSize:'0.7rem', color:'#888' }}>稽查備註</span>
+                            <span style={{ color: '#fff', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }} title={inspectImage.note}>
+                                {inspectImage.note || '-'}
                             </span>
                       </div>
                   </div>

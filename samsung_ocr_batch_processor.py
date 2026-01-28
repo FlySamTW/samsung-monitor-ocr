@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v17.34 (Relaxed Check)"
+VERSION = "v18.26 (Full Vision & Price Guard)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -282,21 +282,37 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     else:
         user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊 (繁體中文)，務必包含 Observation 和 JSON。"
 
+        # [v18.26 Revert] Stop sending multiple images. 
+        # AI handles full images better than isolated crops which lose context.
+        # The `messages` structure is now defined here to ensure only one image is sent.
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}},
+                {"type": "text", "text": user_prompt}
+            ]}
+        ]
+        # Skip the subsequent general message construction
+        # This ensures that `label_b64` is not added to `user_content`
+        # and the `user_prompt` is correctly integrated.
+        
     # [v18.22] 零記憶機制強制實作 (Zero Memory Policy)
     # 每次辨識前重設 messages 陣列，不留存任何對話歷史，確保圖片辨識的獨立性。
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Construct User Context
-    user_content = []
-    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
-    if label_b64:
-        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
-    user_content.append({"type": "text", "text": user_prompt})
+    # If `label_b64` was present, `messages` is not yet defined, so define it here.
+    if 'messages' not in locals():
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Construct User Context
+        user_content = []
+        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
+        # The line `if label_b64: user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})` is intentionally removed
+        # as per the instruction to revert sending multiple images.
+        user_content.append({"type": "text", "text": user_prompt})
 
-    messages.append({
-        "role": "user",
-        "content": user_content
-    })
+        messages.append({
+            "role": "user",
+            "content": user_content
+        })
 
     full_response_text = ""
     # [v17.30 Full Schema] Initialize with all required fields to avoid omission
