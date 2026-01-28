@@ -19,7 +19,7 @@ class ImageProcessor:
             "contrast_factor": 1.2,
             "sharpness_factor": 1.5,
             "auto_orient": True,
-            "detect_label_card": False  # FIXED: Default to False to keep PURE SOURCE
+            "detect_label_card": True  # [v18.25] Enable by default for Dual Vision
         }
 
     def detect_label_card(self, img_array: np.ndarray) -> tuple:
@@ -136,46 +136,40 @@ class ImageProcessor:
 
                 original_size = img.size
                 
-                # 2. Label Card Detection (NEW)
+                # 2. Label Card Detection (NEW [v18.25])
+                label_b64 = None
                 if self.config.get("detect_label_card"):
                     img_array = np.array(img)
                     cropped, bbox = self.detect_label_card(img_array)
                     
                     if cropped is not None:
-                        img = Image.fromarray(cropped)
-                        applied_transforms.append(f"label_crop_{bbox}")
-                        log.info(f"[Crop] Extracted label card region")
+                        # Encode Label to Base64
+                        label_img = Image.fromarray(cropped)
+                        lbl_buffered = io.BytesIO()
+                        label_img.convert("RGB").save(lbl_buffered, format="JPEG", quality=95)
+                        label_b64 = base64.b64encode(lbl_buffered.getvalue()).decode('utf-8')
+                        applied_transforms.append(f"label_crop_found_{bbox}")
+                        log.info(f"[Crop] Extracted high-res label card")
 
-                # 3. Resize if too large
+                # 3. Resize Full Image if too large (KEEP as context)
                 max_size = self.config.get("max_size")
-                if max_size is not None and (img.width > max_size or img.height > max_size):
-                    img.thumbnail((max_size, max_size))
+                full_img = img.copy()
+                if max_size is not None and (full_img.width > max_size or full_img.height > max_size):
+                    full_img.thumbnail((max_size, max_size))
                     applied_transforms.append(f"resize_to_{max_size}")
 
-                # 4. Enhance Contrast
-                factor = self.config.get("contrast_factor", 1.0)
-                if factor != 1.0:
-                    enhancer = ImageEnhance.Contrast(img)
-                    img = enhancer.enhance(factor)
-                    applied_transforms.append(f"contrast_{factor}")
-
-                # 5. Enhance Sharpness
-                factor = self.config.get("sharpness_factor", 1.0)
-                if factor != 1.0:
-                    enhancer = ImageEnhance.Sharpness(img)
-                    img = enhancer.enhance(factor)
-                    applied_transforms.append(f"sharpness_{factor}")
-
-                # Encode to Base64
+                # Encode Full Image to Base64
                 buffered = io.BytesIO()
-                img.convert("RGB").save(buffered, format="JPEG", quality=90)
-                img_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                full_img.convert("RGB").save(buffered, format="JPEG", quality=90)
+                full_img_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
                 return {
-                    "base64": img_b64,
+                    "base64": full_img_b64,
+                    "label_base64": label_b64,
                     "metadata": {
                         "original_size": original_size,
-                        "processed_size": img.size,
+                        "processed_size": full_img.size,
+                        "label_found": label_b64 is not None,
                         "transforms": applied_transforms
                     }
                 }

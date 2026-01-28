@@ -230,6 +230,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     print(f"[DEBUG] process_single_image called for: {fname}")
 
     # [v16.3 Optimization] Use pre-loaded b64 to avoid double reading/path errors
+    label_b64 = None
     if image_b64:
         full_image_b64 = image_b64
         # print(f"[DEBUG] Using provided image_b64, len={len(image_b64)}")
@@ -240,10 +241,12 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             print(f"[ERROR] Image processing failed for {fname}")
             return {"error": "Image processing failed"}
         full_image_b64 = result['base64'] 
-
+        label_b64 = result.get('label_base64') # [v18.25] Dual Vision: Get High-Res Crop
     if orchestrator:
-        orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)...")
-        console.print(f"[cyan]正在分析... {fname}[/cyan]")
+        msg = f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)..."
+        if label_b64: msg += " (偵測到價牌，啟用雙重視野放大 🔍)"
+        orchestrator.log_system(msg)
+        console.print(f"[cyan]{msg}[/cyan]")
     
     # Adopt User's "Samsung Manager" Persona Prompt + IRON RULE (v9.9)
     # Get model list for injection
@@ -272,24 +275,27 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
     import uuid
     random_salt = str(uuid.uuid4())[:8]
-    user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n請回傳: {fname}\n請提取資訊 (繁體中文)，務必包含 Observation 和 JSON。"
     
-    # messages usage check - No content change, just ensuring I check.
-    if orchestrator:
-        # [v17.35] Audit Log Removed for Cleanliness (Verification Done)
-        # [v17.34 Relaxed] Log Salt
-        orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (ID: {random_salt})...")
-        console.print(f"[cyan][全圖分析] 詳細資訊提取中... (ID: {random_salt})[/cyan]")
+    # [v18.25 Dual Vision Prompt]
+    if label_b64:
+        user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n我們為你準備了兩張圖：\n1. 圖 1 是環境全景圖 (用於判斷空間與底座)。\n2. 圖 2 是價牌的高清放大圖 (用於精確讀取文字)。\n請在第一行先盤點，並務必以「圖 2」字元為準。"
+    else:
+        user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊 (繁體中文)，務必包含 Observation 和 JSON。"
 
     # [v18.22] 零記憶機制強制實作 (Zero Memory Policy)
     # 每次辨識前重設 messages 陣列，不留存任何對話歷史，確保圖片辨識的獨立性。
     messages = [{"role": "system", "content": system_prompt}]
+    
+    # Construct User Context
+    user_content = []
+    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
+    if label_b64:
+        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
+    user_content.append({"type": "text", "text": user_prompt})
+
     messages.append({
         "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}},
-            {"type": "text", "text": user_prompt}
-        ]
+        "content": user_content
     })
 
     full_response_text = ""
