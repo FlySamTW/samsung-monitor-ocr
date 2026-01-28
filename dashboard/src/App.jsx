@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.21] Precise Pattern Match Version
-const UI_VERSION = "v18.21 (Precise Pattern)";
+// [v18.25] Dual Vision Strategy Version
+const UI_VERSION = "v18.25 (Dual Vision)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -639,26 +639,20 @@ const App = () => {
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>價格</span>
                            <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
                       </div>
+                      <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
                       
-                      {inspectImage.screen_status && (
-                          <>
-                           <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
-                           <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
-                                <span style={{ fontSize:'0.7rem', color:'#888' }}>狀態</span>
-                                <span style={{ color:'#ec4899', fontWeight:'bold' }}>{inspectImage.screen_status}</span>
-                           </div>
-                          </>
-                      )}
+                      <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
+                            <span style={{ fontSize:'0.7rem', color:'#888' }}>狀態</span>
+                            <span style={{ color: inspectImage.screen_status ? '#ec4899' : '#555', fontWeight:'bold' }}>{inspectImage.screen_status || '正常'}</span>
+                      </div>
+                      <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
 
-                       {inspectImage.category?.startsWith('不合格') && (
-                          <>
-                           <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
-                           <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
-                                <span style={{ fontSize:'0.7rem', color:'#888' }}>異常</span>
-                                <span style={{ color:'#ef4444', fontWeight:'bold' }}>{inspectImage.category.replace('不合格-', '')}</span>
-                           </div>
-                          </>
-                       )}
+                      <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
+                            <span style={{ fontSize:'0.7rem', color:'#888' }}>品質異常</span>
+                            <span style={{ color: inspectImage.category?.startsWith('不合格') ? '#ef4444' : '#555', fontWeight:'bold' }}>
+                                {inspectImage.category?.startsWith('不合格') ? inspectImage.category.replace('不合格-', '') : '無'}
+                            </span>
+                      </div>
                   </div>
              </div>
          )}

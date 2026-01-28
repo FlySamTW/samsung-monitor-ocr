@@ -131,34 +131,46 @@
             box-shadow: 0 0 50px rgba(0,0,0,0.8);
         }
 
-        /* Overlay Control Panel (Floating) */
+        /* Metadata Footer in Lightbox (Standardized v18.25) */
         .controls-overlay {
             position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(30, 30, 30, 0.9);
-            border: 1px solid #555;
-            padding: 20px;
-            border-radius: 12px;
-            z-index: 10000;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: #111;
+            border-top: 1px solid #333;
+            padding: 12px 24px;
             display: flex;
-            gap: 15px;
             align-items: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            backdrop-filter: blur(10px);
+            justify-content: center;
+            gap: 20px;
+            color: #ddd;
+            font-family: 'JetBrains Mono', monospace;
+            z-index: 10000;
+            box-shadow: 0 -10px 30px rgba(0,0,0,0.5);
         }
         
-        .edit-group {
+        .footer-item {
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            align-items: center;
+            min-width: 80px;
         }
-        .edit-group label { font-size: 11px; color: #aaa; }
-        .edit-group input {
-            background: #111; border: 1px solid #444; color: #fff;
-            padding: 8px; border-radius: 4px; width: 150px;
+        .footer-label { font-size: 10px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+        .footer-val { font-size: 14px; color: #fff; font-weight: bold; }
+        .footer-sep { width: 1px; height: 30px; background: #333; margin: 0 10px; }
+        
+        .footer-input {
+            background: #000;
+            border: 1px solid #444;
+            color: #00f5ff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+            text-align: center;
         }
+        .footer-input:focus { border-color: #00f5ff; outline: none; }
         
         .close-btn {
             position: absolute; top: 20px; right: 20px;
@@ -176,7 +188,7 @@
     <div class="container">
         <h1>
             <span>✅ 成功紀錄 <span id="totalCount" style="font-size:0.6em; background:#10b981; padding:2px 8px; border-radius:12px; vertical-align:middle;">0</span></span>
-            <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v_20:12:00</span>
+            <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v18.25 (Dual Vision)</span>
             <button class="btn" onclick="window.close()" style="background:#4b5563;">關閉視窗</button>
         </h1>
 
@@ -229,59 +241,61 @@
         </div>
 
         <div class="controls-overlay" onclick="event.stopPropagation()">
-            <!-- Info -->
-            <div style="position:absolute; top:-40px; left:0; width:100%; text-align:center;">
-                <span id="overlayFilename" style="background:rgba(0,0,0,0.8); color:#fff; padding:4px 12px; border-radius:12px; font-size:12px; border:1px solid #555;">filename.jpg</span>
-            </div>
-
-            <div style="display:flex; gap:10px;">
-                <div class="edit-group">
-                    <label>視角 (View)</label>
-                    <select id="editViewType" style="background:#111; border:1px solid #444; color:#fff; padding:8px; border-radius:4px; width:100px;">
-                        <option value="單機">單機</option>
-                        <option value="遠景">遠景</option>
-                    </select>
-                </div>
-                
-                <div class="edit-group">
-                    <label>畫面狀態 (Screen)</label>
-                    <select id="editScreenStatus" style="background:#111; border:1px solid #444; color:#fff; padding:8px; border-radius:4px; width:120px;">
-                        <option value="">正常 (無)</option>
-                        <option value="黑屏">黑屏</option>
-                        <option value="藍屏">藍屏</option>
-                        <option value="不顯示">不顯示</option>
-                    </select>
-                </div>
-                
-                <div class="edit-group">
-                    <label>品質 (Quality)</label>
-                    <select id="editQualityIssue" style="background:#111; border:1px solid #444; color:#fff; padding:8px; border-radius:4px; width:120px;">
-                        <option value="">正常 (無)</option>
-                        <option value="照不清楚">照不清楚</option>
-                        <option value="沒有規格價格牌">沒有規格價格牌</option>
-                    </select>
-                </div>
-            </div>
-
-            <div style="display:flex; gap:10px;">
-                <div class="edit-group">
-                    <label>型號 (Model)</label>
-                    <input type="text" id="editModel" style="width:120px;">
-                </div>
-                <div class="edit-group">
-                    <label>價格 (Price)</label>
-                    <input type="text" id="editPrice" style="width:80px;">
-                </div>
-            </div>
-
-            <div class="edit-group" style="width:100%;">
-                <label>備註 (Note)</label>
-                <textarea id="editNote" style="background:#111; border:1px solid #444; color:#fff; padding:8px; border-radius:4px; width:100%; height:40px; box-sizing:border-box; font-family:inherit;"></textarea>
+            <div class="footer-item" style="min-width: 150px;">
+                <span class="footer-label">檔名 (Filename)</span>
+                <span id="overlayFilename" class="footer-val" style="color:#888; font-size:12px;">-</span>
             </div>
             
-            <div style="display:flex; gap:10px; margin-left:10px;">
-                <button class="btn" style="background:#10b981; height:100%;" onclick="submitCorrection()">💾 儲存</button>
-                <button class="btn" style="background:#ef4444; height:100%;" onclick="closeLightbox()">❌ 取消</button>
+            <div class="footer-sep"></div>
+
+            <div class="footer-item">
+                <span class="footer-label">視角 (View)</span>
+                <select id="editViewType" class="footer-input">
+                    <option value="單機">單機</option>
+                    <option value="遠景">遠景</option>
+                </select>
+            </div>
+
+            <div class="footer-sep"></div>
+
+            <div class="footer-item">
+                <span class="footer-label">狀態 (Screen)</span>
+                <select id="editScreenStatus" class="footer-input">
+                    <option value="">正常</option>
+                    <option value="黑屏">黑屏</option>
+                    <option value="藍屏">藍屏</option>
+                    <option value="不顯示">不顯示</option>
+                </select>
+            </div>
+
+            <div class="footer-sep"></div>
+
+            <div class="footer-item">
+                <span class="footer-label">品質 (Quality)</span>
+                <select id="editQualityIssue" class="footer-input">
+                    <option value="">正常</option>
+                    <option value="照不清楚">照不清楚</option>
+                    <option value="沒有規格價格牌">無牌</option>
+                </select>
+            </div>
+
+            <div class="footer-sep"></div>
+
+            <div class="footer-item">
+                <span class="footer-label">型號 (Model)</span>
+                <input type="text" id="editModel" class="footer-input" style="width:130px;">
+            </div>
+
+            <div class="footer-sep"></div>
+
+            <div class="footer-item">
+                <span class="footer-label">價格 (Price)</span>
+                <input type="text" id="editPrice" class="footer-input" style="width:80px;">
+            </div>
+
+            <div class="footer-item" style="margin-left:20px; display:flex; flex-direction:row; gap:8px;">
+                <button class="btn" style="background:#10b981; padding:8px 16px;" onclick="submitCorrection()">💾 儲存</button>
+                <button class="btn" style="background:#4b5563; padding:8px 16px;" onclick="closeLightbox()">❌</button>
             </div>
         </div>
     </div>
