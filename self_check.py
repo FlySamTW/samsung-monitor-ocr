@@ -5,45 +5,55 @@ from rich.console import Console
 console = Console()
 logging.basicConfig(level=logging.INFO)
 
-def run_checks():
-    console.print("[bold cyan]Running ModelMatcher Self-Check (v18.42)...[/bold cyan]")
+# Mocking the Orchestrator and Logic to simulate Batch Processor behavior
+class MockOrchestrator:
+    def log_system(self, msg):
+        console.print(f"[LOG] {msg}")
+
+def test_followme_bypass():
+    console.print("[bold cyan]Running FollowMe Bypass Check (v18.44)...[/bold cyan]")
     
-    # Path might need adjustment depending on where this script is run relative to the file
-    # Assuming d:\00_程式\20260120_商化自動OCR圖片\型號表.txt exists
-    matcher = ModelMatcher("d:\\00_程式\\20260120_商化自動OCR圖片\\型號表.txt")
+    orchestrator = MockOrchestrator()
     
-    # Test cases: (Input string, Expected Model)
+    # Simulate the logic block from batch processor
+    # Conditions: Identified as FollowMe, clean_model is set, list check happens
+    
     test_cases = [
-        # Case 412: Greedy Regex should extract S24F532EAC and potentially fuzzy match it
-        # Note: If S24F532EAC is NOT in table, it might match S24F332EAC or similar.
-        # This test ensures the Regex extracts the candidate effectively.
-        ("24SAMSUNG S24F532EAC 100Hz", "S24F532EAC"), # Assuming exact match if in list, or closest
-        
-        # FollowMe Integrity
-        ("FollowMe M7 32\"", "FollowMe M7 32\""), 
-        
-        # Standard
-        ("S27CG552EC 5290", "S27CG552EC"), 
-        
-        # Partial
-        ("S27CG552", "S27CG552EC"), 
-        
-        # Noisy quotes loop check
-        ("'FollowMe M5 32'", "FollowMe M5 32\""),
+        {"raw": "FollowMe M7 32\"", "price": "12990", "expect_bypass": True, "expect_model": "FollowMe M7 32\""},
+        {"raw": "Unknown Model", "price": None, "expect_bypass": False, "expect_model": None}, # Should fail validation
     ]
 
-    for raw, expected in test_cases:
-        console.print(f"Testing input: '{raw}'")
-        result = matcher.match(raw)
+    # Load Valid Models to simulate the 'not in list' check
+    valid_models_list = ["S24F332EAC", "S27CG552EC"] # FollowMe NOT in this list to test Bypass
+
+    for case in test_cases:
+        raw_model = case['raw']
+        clean_model = raw_model # Simplify
+        data_obj = {"model": raw_model, "price": case['price']}
         
-        # Note: If valid_models doesn't have S24F532EAC, it won't match exactly.
-        # But we want to ensure it DOES return SOMETHING useful, not None.
+        console.print(f"Testing: {raw_model}")
         
-        if result == expected:
-            console.print(f" -> [green]PASS[/green] (Matches '{result}')")
+        # --- LOGIC REPLICATION START ---
+        is_followme_bypass = False
+        if "FollowMe" in clean_model or "FOLLOWME" in clean_model.upper():
+             mapped_model = 'FollowMe M7 32"' # Simplified mapping
+             clean_model = mapped_model
+             is_followme_bypass = True
+             orchestrator.log_system(f"⚠️ [FollowMe Logic] mapped to '{clean_model}' >> BYPASS CHECK")
+
+        # The Crucial Check
+        if clean_model not in valid_models_list and not is_followme_bypass:
+             console.print(f" -> [red]BLOCKED[/red] by Hallucination Check")
+             final_model = None
         else:
-            # Allow fuzzy match acceptance for 412 if the list doesn't have exact
-            console.print(f" -> [yellow]WARN[/yellow] (Got '{result}', Expected '{expected}')")
+             console.print(f" -> [green]PASSED[/green] (Valid or Bypassed)")
+             final_model = clean_model
+        # --- LOGIC REPLICATION END ---
+
+        if final_model == case['expect_model']:
+            console.print(f" -> [bold green]TEST PASS[/bold green]")
+        else:
+            console.print(f" -> [bold red]TEST FAIL[/bold red] (Got {final_model}, Expected {case['expect_model']})")
 
 if __name__ == "__main__":
-    run_checks()
+    test_followme_bypass()

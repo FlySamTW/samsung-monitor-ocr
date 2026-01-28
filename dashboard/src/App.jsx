@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.43] Price-Guard Version
-const UI_VERSION = "v18.43 (Price-Guard)";
+// [v18.44] FollowMe-Fix Version
+const UI_VERSION = "v18.44 (FollowMe-Fix)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {

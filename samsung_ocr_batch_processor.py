@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v18.43 (Price-Guard)"
+VERSION = "v18.44 (FollowMe-Fix)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -504,6 +504,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                         clean_model = clean_model.strip()
 
                         # [v18.15] FollowMe Logic (Price-Based Manual Mapping)
+                        is_followme_bypass = False # [v18.44] Flag to bypass strict checking
                         if "FOLLOWME" in clean_model:
                              # Default to M7
                              mapped_model = 'FollowMe M7 32"'
@@ -526,10 +527,12 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                                  mapped_model = 'FollowMe M5 32"'
                                  
                              clean_model = mapped_model
+                             is_followme_bypass = True # [v18.44] Enable Bypass
                              if orchestrator:
-                                 orchestrator.log_system(f"⚠️ [FollowMe Logic] '{raw_model}' mapped to '{clean_model}' (Price: {p_val})")
+                                 orchestrator.log_system(f"⚠️ [FollowMe Logic] '{raw_model}' mapped to '{clean_model}' (Price: {p_val}) >> BYPASS CHECK")
 
-                        if valid_models_list and clean_model not in valid_models_list:
+                        # [v18.44 Fix] Added bypass flag so FollowMe isn't killed by hallucination check
+                        if valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
                              # Try Fuzzy Match (Aggressive Recovery)
                              # [v18.28] Cutoff 0.7: Lowered to catch 412.jpg typos (S24F532 vs S24F332)
                              matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.7)
