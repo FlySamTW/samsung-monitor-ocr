@@ -71,6 +71,7 @@ def process_file(fname):
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
+            # [v18.22] 零記憶機制強制實作 (Zero Memory Policy)
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": [

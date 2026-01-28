@@ -281,6 +281,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (ID: {random_salt})...")
         console.print(f"[cyan][全圖分析] 詳細資訊提取中... (ID: {random_salt})[/cyan]")
 
+    # [v18.22] 零記憶機制強制實作 (Zero Memory Policy)
+    # 每次辨識前重設 messages 陣列，不留存任何對話歷史，確保圖片辨識的獨立性。
     messages = [{"role": "system", "content": system_prompt}]
     messages.append({
         "role": "user",
