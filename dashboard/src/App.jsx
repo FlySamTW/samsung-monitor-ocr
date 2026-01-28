@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.49] Global-Inventory Version
-const UI_VERSION = "v18.49 (Global-Inventory)";
+// [v18.50] Anti-Curvature Version
+const UI_VERSION = "v18.50 (Anti-Curvature)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
