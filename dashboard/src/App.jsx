@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.19] Structural Inventory Strategy
-const UI_VERSION = "v18.19 (Inventory Strategy)";
+// [v18.21] Precise Pattern Match Version
+const UI_VERSION = "v18.21 (Precise Pattern)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
