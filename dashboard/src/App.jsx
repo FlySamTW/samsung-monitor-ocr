@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.46] Color-Segregation Version
-const UI_VERSION = "v18.46 (Color-Segregation)";
+// [v18.47] FollowMe-Price-Hunt Version
+const UI_VERSION = "v18.47 (FollowMe-Price-Hunt)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
