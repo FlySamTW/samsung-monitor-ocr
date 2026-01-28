@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v19.00] Prompt-Refactor Version
-const UI_VERSION = "v19.00 (Prompt-Refactor)";
+// [v18.49] Global-Inventory Version
+const UI_VERSION = "v18.49 (Global-Inventory)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {

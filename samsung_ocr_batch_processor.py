@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v18.46 (Color-Segregation)"
+VERSION = "v18.49 (Global-Inventory)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -553,7 +553,16 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     if raw_price:
                         clean_price = "".join([c for c in str(raw_price) if c.isdigit()])
                         if len(clean_price) in [4, 5]:
-                            data_obj["price"] = clean_price
+                            # [v18.49] Strict integer check for banned curvature values
+                            try:
+                                p_int = int(clean_price)
+                                if p_int in [1000, 1500, 1800]:
+                                    if orchestrator: orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' -> '{p_int}' 命中曲率禁令 (1000R/1500R) -> None")
+                                    data_obj["price"] = None
+                                else:
+                                    data_obj["price"] = clean_price
+                            except ValueError:
+                                data_obj["price"] = clean_price # Fallback (shouldn't happen due to isdigit filter)
                         else:
                             if orchestrator: orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' -> '{clean_price}' 長度不符 (4-5) -> 強制修正為 None")
                             data_obj["price"] = None
