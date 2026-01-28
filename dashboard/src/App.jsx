@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.49] Semantic-Precision Version
-const UI_VERSION = "v18.49 (Semantic-Precision)";
+// [v19.00] Prompt-Refactor Version
+const UI_VERSION = "v19.00 (Prompt-Refactor)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
