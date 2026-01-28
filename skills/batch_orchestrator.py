@@ -63,6 +63,38 @@ class BatchOrchestrator:
         
         # Processor Function (Dependency Injection)
         self.processor_fn = None 
+        
+        # [v16.12] Force Rerun Queue
+        self.priority_queue = [] 
+
+    def force_rerun(self, filename: str):
+        """
+        [v16.12] Manually trigger re-processing of a specific file.
+        1. Remove from 'processed' / 'failed' cache if exists.
+        2. Delete the specific result JSON file to ensure 'overwrite' logic triggers.
+        3. Add to priority queue.
+        """
+        self.log_system(f"🔄 收到強制重跑請求: {filename}")
+        
+        # 1. Clean Memory State (Simple check, exact cleanup happens in loop)
+        # We don't need to surgically remove from self.recent_results or stats immediately
+        # because processing loop handles checking.
+        
+        # 2. Clean Disk State (Force Clean)
+        json_path = os.path.join(self.image_dir, f"{os.path.splitext(filename)[0]}_ocr_result.json")
+        if os.path.exists(json_path):
+            try:
+                os.remove(json_path)
+                self.log_system(f"   🗑️ 已刪除舊結果檔案: {os.path.basename(json_path)}")
+            except Exception as e:
+                self.log_system(f"   ⚠️ 刪除舊檔失敗: {e}")
+        
+        # 3. Inject into Priority Queue
+        if filename not in self.priority_queue:
+            self.priority_queue.append(filename)
+            self.log_system(f"   ✅ 已加入優先佇列 (目前 {len(self.priority_queue)} 筆排隊中)")
+            return True
+        return False
 
     def set_processor_function(self, fn: Callable):
         """Sets the function that performs the actual LLM call."""
@@ -345,7 +377,6 @@ class BatchOrchestrator:
         if os.path.exists(root_legacy):
             files_to_scan.append(os.path.abspath(root_legacy))
             
-        # Deduplicate paths
         files_to_scan = list(set(files_to_scan))
 
         for full_path in files_to_scan:
@@ -383,13 +414,38 @@ class BatchOrchestrator:
                     deleted_count += (original_len - len(new_data))
                     
             except Exception as e:
-                log.error(f"Error deleting from {jf}: {e}")
+                log.error(f"Error deleting from {full_path}: {e}")
         
         if deleted_count > 0:
             self.log_system(f"🗑️ 已從 {len(files_to_scan)} 個紀錄檔中移除 {deleted_count} 筆舊資料 (重跑準備)。")
-            self.log_system(f"ℹ️ 現在硬碟上的成功數應已減少，請稍後檢查儀表板數字。")
+        
+    def _purge_records_for_restart(self):
+        """
+        [v17.08] Physically remove old results to prevent shadowing.
+        This ensures that if we 'Restart' then 'Stop' then 'Continue', 
+        the 'Continue' step won't see legacy records from BEFORE the restart.
+        """
+        self.log_system("🧹 正在清理舊有的辨識紀錄 (已備份至 runs 目錄)...")
+        
+        count = 0
+        for f in os.listdir(self.image_dir):
+            file_path = os.path.join(self.image_dir, f)
+            # 1. Target Session JSONs
+            is_session = f.endswith(('OCR成功.json', 'OCR失敗.json')) or f == "project-output.json"
+            # 2. Target Individual Results
+            is_individual = f.endswith(('_ocr_result.json', '_ocr_result.txt'))
+            
+            if is_session or is_individual:
+                try:
+                    os.remove(file_path)
+                    count += 1
+                except Exception as e:
+                    log.warning(f"Failed to delete {f}: {e}")
+        
+        if count > 0:
+            self.log_system(f"✅ 已清理 {count} 個舊紀錄檔案，準備全新開始。")
         else:
-            self.log_system(f"⚠️ 警告: 找不到可刪除的舊紀錄 ({target_files})，可能檔名不匹配？")
+            self.log_system(f"⚠️ 警告: 找不到可刪除的舊紀錄，可能檔名不匹配？")
 
     def start_batch(self, limit: int = None, restart: bool = False, reprocess_last_n: int = 0):
         if self.is_running:
@@ -567,6 +623,11 @@ class BatchOrchestrator:
         log.info(f"Starting batch ({mode_str}) in {safe_dir_name}")
         self.log_system(f"Batch thread started ({mode_str}). Dir: {self.image_dir}") 
         
+        # [v17.08] Physical Cleanup on Restart
+        # This MUST happen before get_pending_files() so the scan is clean.
+        if restart:
+            self._purge_records_for_restart()
+
         # 1. Discover & Filter
         scan_res = self.get_pending_files()
         all_files = scan_res['all_files']
@@ -582,8 +643,9 @@ class BatchOrchestrator:
         self.base_success_count = len(processed_success)
         self.base_failed_count = len(processed_failed)
         self.stats['processed'] = len(processed_all)
-        self.stats['success'] = 0 
-        self.stats['failed'] = 0  
+        # [v16.21 Fix] Initialize with strict counts from disk scan to prevent drift
+        self.stats['success'] = len(processed_success)
+        self.stats['failed'] = len(processed_failed)  
         
         initial_processed_count = len(processed_all)
 
@@ -632,7 +694,7 @@ class BatchOrchestrator:
         if len(processed_all) > 0:
             self.log_system(f"ℹ️ 已略過 {len(processed_all)} 個已處理檔案 (成功:{self.base_success_count}, 失敗:{self.base_failed_count})。")
         
-        if not pending_files:
+        if not pending_files and not self.priority_queue:
             self.log_system("🎉 全部檔案皆已處理完畢！")
             self.is_running = False
             self.stats['is_running'] = False
@@ -661,7 +723,7 @@ class BatchOrchestrator:
         # --- Loop ---
         work_queue = list(pending_files)
         
-        while (work_queue or self.retry_queue) and not self.stop_event.is_set():
+        while (work_queue or self.retry_queue or self.priority_queue) and not self.stop_event.is_set():
             # [v11.8] Yield thread to allow Flask API to breathe during tight loops (e.g., fast failures)
             time.sleep(0.05) 
             
@@ -671,7 +733,11 @@ class BatchOrchestrator:
                 break
             
             # Pick File
-            if self.retry_queue:
+            if self.priority_queue:
+                fname = self.priority_queue.pop(0)
+                is_retry = True # Treat as retry to avoid skipping stats logic issues
+                self.log_system(f"⚡ [Priority] 優先插隊: {fname}")
+            elif self.retry_queue:
                 fname = self.retry_queue.pop(0)
                 is_retry = True
             elif work_queue:
@@ -732,16 +798,32 @@ class BatchOrchestrator:
                 # Generate thumbnail for frontend display
                 norm_result['thumb_b64'] = self.img_proc.create_thumbnail(img_path, max_size=400)
 
-                # D. Update Stats
-                if norm_result.get('view_type') != '失敗' and norm_result.get('category') != '失敗':  # Back compat checks
-                    self.stats['success'] += 1
+                # D. Update Stats (v16.24 Robust)
+                is_success = norm_result.get('view_type') != '失敗' and norm_result.get('category') != '失敗'
+                
+                if is_success:
+                    # If it was a failure before, remove from failure list
+                    if fname in processed_failed:
+                        processed_failed.discard(fname)
+                        self.stats['failed'] = len(processed_failed)
+                    
+                    # Add to success list if new
+                    if fname not in processed_success:
+                        processed_success.add(fname)
+                        self.stats['success'] = len(processed_success)
+                    
                     consecutive_failures = 0
                 else:
-                    self.stats['failed'] += 1
+                    # If it's a failure and not already marked as success elsewhere 
+                    # (though rerun is usually failure -> success, not success -> failure)
+                    if fname not in processed_success:
+                        processed_failed.add(fname)
+                        self.stats['failed'] = len(processed_failed)
+                    
                     consecutive_failures += 1
                 
-                # Update processed count (Total = Initial + Current Session)
-                self.stats['processed'] = initial_processed_count + len(self.run_results) + 1
+                # Total processed is strictly the sum of unique outcomes
+                self.stats['processed'] = len(processed_success) + len(processed_failed)
                 
                 # E. Save Result
                 # [v16.10] Track Unknown Models
@@ -763,6 +845,28 @@ class BatchOrchestrator:
                 # [v11.2] Save to DYNAMIC Session File
                 self.run_results.append(norm_result)
                 self.evaluator.export_to_label_studio_json(self.run_results, self.current_success_file)
+
+                # [v17.15 Fix] Save Thinking Process to Single Session TXT file
+                if 'thinking' in norm_result and norm_result['thinking']:
+                    try:
+                        # Derive TXT path from the main JSON path (project-output.json -> project-output.txt)
+                        session_txt_path = os.path.splitext(self.current_success_file)[0] + ".txt"
+                        
+                        # Append Mode
+                        with open(session_txt_path, 'a', encoding='utf-8') as f:
+                            f.write(f"{'='*30}\n")
+                            f.write(f"File: {fname}\n")
+                            f.write(f"Time: {datetime.now().strftime('%H:%M:%S')}\n")
+                            f.write(f"思考：{norm_result['thinking']}\n")
+                            
+                            # [v17.17 UX] Simple One-Line Result (Strict Format)
+                            res_line = f"結果：{norm_result.get('view_type')}/{norm_result.get('screen_status')}/{norm_result.get('quality_issue')}/{norm_result.get('model')}/{norm_result.get('price')}"
+                            f.write(res_line)
+                            f.write(f"\n{'='*30}\n\n")
+                            
+                        # self.log_system(f"📝 思考日誌已追加至: {os.path.basename(session_txt_path)}")
+                    except Exception as e:
+                        self.log_system(f"⚠️ 儲存思考日誌失敗: {e}")
 
 
             except Exception as e:

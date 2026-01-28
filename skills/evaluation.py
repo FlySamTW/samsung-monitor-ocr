@@ -98,25 +98,23 @@ class Evaluator:
                 "value": {"choices": [cat]}
             })
             
-            # 2. Model
-            if model:
-                result_items.append({
-                    "from_name": "model",
-                    "to_name": "image",
-                    "type": "textarea",
-                    "origin": "prediction",
-                    "value": {"text": [model]}
-                })
+            # 2. Model (Always output)
+            result_items.append({
+                "from_name": "model",
+                "to_name": "image",
+                "type": "textarea",
+                "origin": "prediction",
+                "value": {"text": [str(model) if model else "null"]}
+            })
 
-            # 3. Price
-            if price:
-                result_items.append({
-                    "from_name": "price",
-                    "to_name": "image",
-                    "type": "textarea",
-                    "origin": "prediction",
-                    "value": {"text": [str(price)]}
-                })
+            # 3. Price (Always output)
+            result_items.append({
+                "from_name": "price",
+                "to_name": "image",
+                "type": "textarea",
+                "origin": "prediction",
+                "value": {"text": [str(price) if price else "null"]}
+            })
                 
             task = {
                 "id": i + 1,

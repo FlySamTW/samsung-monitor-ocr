@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v16.9 (Stream/Prompt Fix)"
+VERSION = "v17.34 (Relaxed Check)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -38,7 +38,45 @@ orchestrator: BatchOrchestrator = None
 api_client: OpenAI = None
 model_name_global = ""
 
-# --- Helper: Coordinate Clamping ---
+# [v17.09] Structured Output Schema (B-Mode)
+SAMSUNG_AUDIT_SCHEMA = {
+  "type": "json_schema",
+  "json_schema": {
+    "name": "samsung_audit",
+    "strict": True,
+    "schema": {
+      "type": "object",
+      "additionalProperties": False,
+      "properties": {
+        # [v17.14 Fix] Strict Pattern to ban English explanations
+        # Allowed: Chinese, digits, punctuation, and valid model chars (including FollowMe mixed case)
+        "desc": { 
+            "type": "string",
+            "minLength": 60,
+            "maxLength": 200, 
+            "pattern": "^[\\u4e00-\\u9fff0-9A-Za-z\\s，。、「」『』（）()：:；;！!？?\\-\\/,$]*$"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": False,
+          "properties": {
+            "view_type": { "type": "string", "enum": ["遠景", "單機"] },
+            "screen_status": { "type": "string", "enum": ["顯示畫面", "黑屏", "藍屏", "無"] },
+            "quality_issue": { "type": "string", "enum": ["無", "不合格-照不清楚", "不合格-沒有規格牌", "不合格-沒有價格牌", "不合格-沒有規格和價格牌"] },
+            "model": { "type": ["string", "null"] },
+            "price": { "type": ["string", "null"] }
+          },
+          "required": ["view_type", "screen_status", "quality_issue", "model", "price"]
+        }
+      },
+      "required": ["desc", "data"]
+    }
+  }
+}
+
+# ... (Original Helper Functions) ...
+
+
 def clamp_coordinates(x_pct, y_pct, w_pct, h_pct, img_w, img_h):
     """
     Ensure coordinates are within valid bounds and prevent zero-size crops.
@@ -153,7 +191,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     
     # RESET STREAM BUFFER FOR NEW IMAGE
     if orchestrator:
-        orchestrator.stream_buffer = "..." # Reset to indicator
+        orchestrator.stream_buffer = "" # Reset to empty (remove '...')
 
     # Load Valid Models for Injection
     # Load Valid Models for Injection
@@ -182,6 +220,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             examples_section = f"\n\n### 參考範例 (人工訂正):\n{examples_str}\n請依據上述人類訂正的邏輯進行推論。"
     
     start_time = time.time()
+    thinking_text = "" # [v17.18 Fix] Initialize early to prevent UnboundLocalError
     
     # RESTORE ORIGINAL RESOLUTION (No Constraint)
     # [IRON RULE] User said: "Do NOT compress images!!!" 
@@ -225,15 +264,22 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         prompt_template = "你是三星螢幕管理員。請提取型號與價格。..." # 簡單備份
 
     # v14.3: Use .replace() instead of .format() to avoid KeyError with JSON braces in prompt
-    system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
-                                   .replace("{examples_section}", "") # [v14.7 Removed Learning]
+    # [v18.12] Disabled Injection to prevent Hallucination
+    # system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
+    #                                .replace("{examples_section}", "") 
+    system_prompt = prompt_template # Raw Prompt (No List)
 
-    user_prompt = f"圖片: {fname}\n請提取資訊 (繁體中文)，務必包含 Observation 和 JSON。"
+    # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
+    import uuid
+    random_salt = str(uuid.uuid4())[:8]
+    user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n請回傳: {fname}\n請提取資訊 (繁體中文)，務必包含 Observation 和 JSON。"
     
     # messages usage check - No content change, just ensuring I check.
     if orchestrator:
-        # orchestrator.log_system(f"▶️ [全圖分析] 讀取資訊與思考中...")
-        console.print(f"[cyan][全圖分析] 詳細資訊提取中...[/cyan]")
+        # [v17.35] Audit Log Removed for Cleanliness (Verification Done)
+        # [v17.34 Relaxed] Log Salt
+        orchestrator.log_system(f"▶️ 正在分析圖片: {fname} (ID: {random_salt})...")
+        console.print(f"[cyan][全圖分析] 詳細資訊提取中... (ID: {random_salt})[/cyan]")
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.append({
@@ -245,8 +291,17 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     })
 
     full_response_text = ""
-    # [v14.1 Fix] Default category to None so we don't force '失敗' if new schema provided
-    result_json = {"category": None, "model": None, "price": None, "black_screen": False}
+    # [v17.30 Full Schema] Initialize with all required fields to avoid omission
+    result_json = {
+        "view_type": "單機", 
+        "screen_status": "", 
+        "quality_issue": "",
+        "model": None, 
+        "price": None, 
+        "category": "單機",
+        "black_screen": False,
+        "thinking": ""
+    }
 
     # [v9.62 Fix] Allow ANY IP address for Local LLM, not just localhost
     use_local_llm = False
@@ -262,6 +317,10 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         pass
 
     try:
+        # [v17.16 Fix] Pre-Flight Check for Stop Signal
+        if orchestrator and not orchestrator.is_running:
+             return {"error": "Stopped by user"}
+
         # Move prompt loading inside try to catch formatting errors
         # ... actually already done above ...
         
@@ -269,19 +328,34 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         stream = api_client.chat.completions.create(
             model=model_name_global,
             messages=messages,
-            # tools=[tool_def], # REMOVED: Force Text Output
+            response_format=SAMSUNG_AUDIT_SCHEMA, # [v17.09] Enforce JSON Schema
             stream=True,
-            temperature=0.1,
-            top_p=0.8,  # Qwen official recommendation
-            max_tokens=1024,  # Reduced from 2048 for faster streaming (v9.98)
-            stream_options={"include_usage": True}  # Qwen streaming optimization
+            temperature=0.7, # [Recommend] Higher temp is safe with Schema
+            top_p=0.95,
+            max_tokens=1024,
+            presence_penalty=0.2, # [v17.20 Fix] Reduce stuttering
+            stream_options={"include_usage": True}
         )
-        # [v16.9] Simplified Log
         pass
         
         tool_calls_buffer = []
 
         for chunk in stream:
+            # [v17.25 Fix] Aggressive Stop Check
+            if orchestrator and not orchestrator.is_running:
+                console.print("[red]🛑 用戶強制中斷串流 (Aggressive Stop)[/red]")
+                try:
+                    stream.close() # Attempt to close stream connection
+                except:
+                    pass
+                return {"error": "Stopped by user"} # Exit immediately, don't just break loop 
+
+            # [v17.11 Fix Refined] Restore Stop Button Functionality
+            if orchestrator and not orchestrator.is_running:
+                console.print("[red]🛑 用戶強制中斷串流[/red]")
+                # stream.close() # Can confuse client
+                break
+
             # [v9.99 Fix] Skip chunks without choices (e.g., usage chunks from stream_options)
             if not hasattr(chunk, 'choices') or not chunk.choices:
                 continue
@@ -302,76 +376,21 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             if content_piece:
                 content_tc = to_tc(content_piece)
                 full_response_text += content_tc
+                VERSION = "v17.34 (Relaxed Check)"
                 
-                # --- [Stream Logic v9.13] ---
-                # 1. No Artificial Delay (User Request: "Faster!")
-                # 2. Stop updating visual buffer if JSON block starts (User Request: "No Code!")
-                
-                if orchestrator:
-                    # Check if we are entering code block
-                    if "```" in content_tc or "json" in content_tc.lower():
-                        # Simple check: if buffer doesn't have it yet, maybe text is transitioning
-                        # stricter: check full response or lookahead. 
-                        # reliable: checks if full_response_text has '```json'
-                        pass
-                    
-                    # Logic: Only add to stream_buffer if we haven't seen the start of JSON yet
-                    # identifying marker: "```json" or "Step 2" if strict
-                    is_json_part = False
-                    if "```json" in full_response_text:
-                         is_json_part = True
-                    
-                    # [v9.62 Real-time Sanitization]
-                    # Attempt to clean partial chunks of jargon.
-                    # Note: Split tokens might still leak, but this covers most cases.
-                    stream_replacements = {
-                        "model=null": "無型號",
-                        "price=null": "無價格",
-                        "null": "無",
-                        "false": "否",
-                        "true": "是",
-                        "[思考]": "" # [v9.66 Hide Thinking Tag]
-                    }
-                    temp_tc = content_tc
-                    for k, v in stream_replacements.items():
-                        if k in temp_tc:
-                            temp_tc = temp_tc.replace(k, v)
-                    
-                    # [v9.68 Strict Split-and-Stop]
-                    # If we aren't streaming, just print to console and skip buffer update
-                    # Note: We rely on 'is_json_part' as our persistent latch (defined outside loop? No, need to be careful)
-                    # Actually, 'is_json_part' is reset every loop in previous code! This was the BUG!
-                    # It should be a persistent state variable across chunks.
-                    
-                    # Correction: creating a local latch.
-                    # We assume 'is_now_json' tracks if we have EVER hit json in this session.
-                    if getattr(orchestrator, '_stream_active', True):
-                        if '{' in temp_tc:
-                            # CRITICAL: Split at the exact point of JSON start
-                            safe_part = temp_tc.split('{')[0]
-                            
-                            # Clean up trailing junk like "here is the json"
-                            if "json" in safe_part.lower():
-                                safe_part = safe_part.replace("json", "").replace("JSON", "")
-                            
-                            orchestrator.stream_buffer += safe_part
-                            orchestrator._stream_active = False # TRIP THE BREAKER
-                            # print(safe_part, end="", flush=True)  # v10.0: Disabled
-                        else:
-                            # Check for other "code leakage" signals at end of stream
-                            if "```" in temp_tc:
-                                safe_part = temp_tc.split("```")[0]
-                                orchestrator.stream_buffer += safe_part
-                                orchestrator._stream_active = False
-                                # print(safe_part, end="", flush=True)  # v10.0: Disabled
-                            else:
-                                orchestrator.stream_buffer += temp_tc
-                                # print(temp_tc, end="", flush=True)  # v10.0: Disabled 
-                    else:
-                         # Stream is dead, long live the logs
-                         # print(content_tc, end="", flush=True)  # v10.0: Disabled
-                         pass  # v10.0: Keep block structure
+                # [v17.27 Clean Stream] Only show description, HIDE JSON
+                # The user prompt enforces: Line 1 (Text) \n Line 2 (JSON)
+                if '{' in full_response_text:
+                    clean_display = full_response_text.split('{')[0].strip()
+                    current_display = clean_display
+                else:
+                    current_display = full_response_text
 
+                # Final Update
+                if orchestrator:
+                    orchestrator.stream_buffer = current_display
+
+             
             if delta.tool_calls:
                 # [Fallback] If model skips thinking and jumps to tool calls
                 if not content_piece and not full_response_text and orchestrator:
@@ -401,51 +420,159 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         #         orchestrator.log_system(f"[{SESSION_ID}] [思考詳細] {clean_think}")
         #         console.print(f"[dim]已將思考過程紀錄至系統日誌。[/dim]")
 
-        # --- Parse Result (Strategy: Tool Call -> Regex Fallback) ---
+        # [v17.28 Fix] Parsing Strategy for "Text + JSON" Prompt
+        # Prompt Format:
+        # Line 1: Description... (Thinking)
+        # Line 2: { "view_type": ... } (JSON)
+        
         args_str = None
+        # [v17.29 Safety] Default to full text so we NEVER verify empty logs
+        thinking_text = full_response_text 
+
+        import re
+        # Find JSON block (last valid block preferrably)
+        json_candidates = re.findall(r'(\{[\s\S]*?\})', full_response_text)
         
-        # Strategy A: Tool Calls
-        if tool_calls_buffer:
-             args_str = tool_calls_buffer[0]["function"]["arguments"]
-        
-        # Strategy B: Regex Fallback (if no tool calls)
-        if not args_str:
-            import re
-            # [v9.50 Fix] Improved extraction for "[思考] ... {JSON}" format
-            # 1. Try to find the last valid JSON object block
-            json_candidates = re.findall(r'(\{[\s\S]*?\})', full_response_text)
+        if json_candidates:
+            # Take the last candidate that looks like our schema
+            for candidate in reversed(json_candidates):
+                if '"view_type"' in candidate or '"model"' in candidate:
+                    args_str = candidate
+                    break
+            if not args_str: args_str = json_candidates[-1]
             
-            if json_candidates:
-                # Iterate backwards to find the one that looks most like our result
-                for candidate in reversed(json_candidates):
-                    if '"category"' in candidate and '"model"' in candidate:
-                        args_str = candidate
-                        break
-                
-                # If still none, take the last one
-                if not args_str and json_candidates:
-                    args_str = json_candidates[-1]
-        
+            # Extract Thinking Text (Everything BEFORE the JSON)
+            # We split by the found JSON string to get the text before it
+            parts = full_response_text.split(args_str)
+            if parts[0].strip():
+                thinking_text = parts[0].strip()
+
+                # [v17.35 Refactored] Cross-Talk Check REMOVED.
+                # The v18 Prompt relies on Random Salt for protection and does NOT echo filename.
+                pass
+
+        # [Fallback] If strict JSON only (unlikely with this prompt but possible)
+        elif full_response_text.strip().startswith('{'):
+             args_str = full_response_text
+             thinking_text = "..." # Just JSON, no thinking
+
         if args_str:
              try:
-                # [v9.50 Fix] Pre-cleaning to avoid "str object" or KeyError issues
-                if isinstance(args_str, str):
-                    args_str = args_str.strip()
-                    # Remove any leading non-json junk if mixed in (though regex usually handles this)
-                
                 args_str = sanitize_json(args_str)
-                # [DEBUG LOG REMOVED]
-                # if orchestrator: 
-                #     orchestrator.log_system(f"🔍 [DEBUG] Pre-Parse JSON: {repr(args_str)[:100]}...")
-
                 parsed = json.loads(args_str)
                 
-                # [CRITICAL CHECK] Ensure it is a DICT
                 if isinstance(parsed, dict):
-                    # [v9.52 Fix] Use UPDATE instead of REPLACE to preserve defaults (category='失敗')
-                    # This prevents KeyError if parsed dict has weird keys or missing keys
-                    result_json.update(parsed)
+                    # [v17.28] New Prompt puts 'desc' OUTSIDE JSON.
+                    # But if the model reverted to old schema (desc inside), handle it.
+                    if 'desc' in parsed and not thinking_text:
+                        thinking_text = parsed['desc']
+
+                    # [v18 Strict Backend Insurance]
+                    # 1. Load Model List
+                    valid_models_list = []
+                    try:
+                         with open('型號表.txt', 'r', encoding='utf-8') as f:
+                             valid_models_list = [line.strip().upper() for line in f if line.strip()]
+                    except:
+                         if orchestrator: orchestrator.log_system("⚠️ 無法讀取型號表，跳過模型嚴格校驗")
+
+                    # Handle 'data' nesting if exists
+                    data_obj = parsed.get('data', parsed)
+                    if not isinstance(data_obj, dict): data_obj = parsed # Fallback
+
+                    # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
+                    import difflib # Ensure import available (inline is safe)
+                    raw_model = data_obj.get("model")
+                    if raw_model and isinstance(raw_model, str):
+                        # [v18.12] Enhanced Noise Removal for Raw OCR
+                        # Remove: quotes, units, brand names to maximize fuzzy match chance
+                        clean_model = raw_model.strip().upper()
+                        noise_patterns = ['27"', '32"', '34"', '49"', '27INCH', '32INCH', 'SAMSUNG', 'HZ', 'MS', '1000R', '1500R']
+                        for noise in noise_patterns:
+                            clean_model = clean_model.replace(noise, "")
+                        clean_model = clean_model.strip()
+
+                        # [v18.15] FollowMe Logic (Price-Based Manual Mapping)
+                        if "FOLLOWME" in clean_model:
+                             # Default to M7
+                             mapped_model = 'FollowMe M7 32"'
+                             
+                             # Use Price to disambiguate if available
+                             p_val = data_obj.get("price")
+                             if p_val and str(p_val).isdigit():
+                                 p_int = int(p_val)
+                                 if p_int < 11500: # User said 9900
+                                     mapped_model = 'FollowMe M5 32"'
+                                 elif p_int > 14500: # User said 15999
+                                     mapped_model = 'FollowMe Pro M7 43"'
+                                 else: # User said 12990
+                                     mapped_model = 'FollowMe M7 32"'
+                             
+                             # Fallback to text heuristics if price invalid
+                             elif "PRO" in clean_model or "43" in clean_model:
+                                 mapped_model = 'FollowMe Pro M7 43"'
+                             elif "M5" in clean_model:
+                                 mapped_model = 'FollowMe M5 32"'
+                                 
+                             clean_model = mapped_model
+                             if orchestrator:
+                                 orchestrator.log_system(f"⚠️ [FollowMe Logic] '{raw_model}' mapped to '{clean_model}' (Price: {p_val})")
+
+                        if valid_models_list and clean_model not in valid_models_list:
+                             # Try Fuzzy Match (Aggressive Recovery)
+                             # Cutoff 0.8: Only catch close typos (1-2 chars), avoid wrong model guessing
+                             matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.8)
+                             if matches:
+                                 corrected_model = matches[0]
+                                 if orchestrator: 
+                                     orchestrator.log_system(f"⚠️ [模糊修復] '{clean_model}' -> '{corrected_model}' (In List)")
+                                 data_obj["model"] = corrected_model
+                             else:
+                                 if orchestrator: 
+                                     orchestrator.log_system(f"⚠️ [幻覺攔截] Model '{clean_model}' 無法匹配任何型號 -> None")
+                                 data_obj["model"] = None
+                        else:
+                             data_obj["model"] = clean_model
+
+                    # 3. Strict Price Check (4-5 digits only)
+                    raw_price = data_obj.get("price")
+                    if raw_price:
+                        clean_price = "".join([c for c in str(raw_price) if c.isdigit()])
+                        if len(clean_price) in [4, 5]:
+                            data_obj["price"] = clean_price
+                        else:
+                            if orchestrator: orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' -> '{clean_price}' 長度不符 (4-5) -> 強制修正為 None")
+                            data_obj["price"] = None
+
+                    # 4. Auto-Calculate Quality Issue
+                    p_val = data_obj.get("price")
+                    m_val = data_obj.get("model")
                     
+                    if p_val and not m_val:
+                        data_obj["quality_issue"] = "缺型號(規格牌不清/不在表內)"
+                    elif m_val and not p_val:
+                        data_obj["quality_issue"] = "缺價格(價牌不清/不對齊)"
+                    elif m_val and p_val:
+                         data_obj["quality_issue"] = "無"
+                    else:
+                         if data_obj.get("view_type") == "遠景":
+                             data_obj["quality_issue"] = "無"
+                         else:
+                             # [v18.02] Distinguish 'Missing' vs 'Unclear' based on Description keywords
+                             # Since strict JSON doesn't carry this info, we infer it from Line 1.
+                             desc_keywords_unclear = ["不清", "模糊", "反光", "遮擋", "無法辨識", "看不到"]
+                             is_unclear = any(k in thinking_text for k in desc_keywords_unclear) if thinking_text else False
+                             
+                             if is_unclear:
+                                 data_obj["quality_issue"] = "不合格-照不清楚"
+                             else:
+                                 data_obj["quality_issue"] = "不合格-沒有規格和價格牌"
+
+                    # Update final result
+                    for k, v in data_obj.items():
+                        if k in result_json:
+                            result_json[k] = v
+
                     # [Safety] Check for weird keys containing newlines (The specific user error)
                     # If we find them, try to fix them by stripping whitespace
                     for k in list(result_json.keys()):
@@ -453,19 +580,11 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                             clean_k = k.strip().strip('"')
                             val = result_json.pop(k)
                             result_json[clean_k] = val
-
-                    # [v16.9 Fix] Post-Processing: Validate Model against List
-                    # Logic: If model is not empty/null and NOT in valid_models_str, MARK IT.
-                    model_val = result_json.get('model')
-                    if model_val and model_val not in ["null", "None", "無"]:
-                         # Check strict token match to avoid subsstring false positives (e.g. 'M7' in 'M70')
-                         # But list is line-separated.
-                         if model_val not in valid_models_str:
-                             # Append Warning
-                             result_json['model'] = f"{model_val} (未建檔)"
-                             if orchestrator:
-                                 orchestrator.log_system(f"⚠️ 發現新機型: {model_val} (已標記為未建檔)")
                             if orchestrator: orchestrator.log_system(f"🔧 修復畸形鍵名: {repr(k)} -> {clean_k}")
+
+                    # [v17.18 Fix] REMOVED Early "Unlisted" Marking
+                    # Reason: This logic conflicts with Prompt's fuzzy matching and blocks the Python ModelMatcher.
+                    # We now let the late-stage ModelMatcher handle alignment.
                 else:
                     log.error(f"JSON Output was not a dict: {type(parsed)} -> {parsed}")
                     if orchestrator: orchestrator.log_system(f"❌ JSON 解析後非物件: {str(parsed)[:50]}")
@@ -483,16 +602,19 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
 
         # --- Validation & Cleaning ---
         try:
-            # [v9.71 Regex Reasoning Extraction]
-            # Capture everything before the first '{' as reasoning.
-            thinking_text = ""
-            if '{' in full_response_text:
-                thinking_text = full_response_text.split('{')[0].strip()
-            else:
-                thinking_text = full_response_text.strip()
+             # [v17.09] Thinking Text is already extracted from Schema 'desc' field
+            if not thinking_text:
+                thinking_text = "..." # Fallback
             
             # Remove any unwanted residue (like [思考] if AI ignores prompt)
-            thinking_text = thinking_text.replace('[思考]', '').replace('觀察內容...', '').strip()
+            # [v17.18 Safety] Ensure string
+            if thinking_text is None: thinking_text = "..."
+            thinking_text = str(thinking_text).replace('[思考]', '').replace('觀察內容...', '').replace('Observation:', '').replace('Observation', '').strip()
+
+            # [v17.26 Fix] Aggressively strip "Observation:" prefix
+            if thinking_text:
+                import re
+                thinking_text = re.sub(r'(?i)^observation:\s*', '', thinking_text).strip()
 
             # Log to Frontend (One time only)
             if thinking_text and orchestrator:
@@ -509,7 +631,9 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                 for code_term, natural_term in replacements.items():
                     clean_think = re.sub(re.escape(code_term), natural_term, clean_think, flags=re.IGNORECASE)
                 
-                orchestrator.log_system(f"[思考詳細] {clean_think}")
+                # [v17.26 Fix] Ensure what we show is what we save
+                # We update the 'thinking' field in result_json LATER, so we just log here.
+                orchestrator.log_system(f"[THINK] {clean_think}")
 
             # ... (Rest of existing validation logic for model/price/cat) ...
             parsed_model = result_json.get("model")
@@ -528,29 +652,80 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
-            if current_cat == "單機" and not result_json.get("model"):
-                result_json["category"] = "不合格-單機但看不清楚價格或型號"
+            
+            # [v17.23 Fix] Force Quality Issue if Model/Price missing in Single Unit
+            if result_json.get("view_type") == "單機" or current_cat == "單機":
+                 # If Model is missing and no specific failure reason given, it MUST be "No Spec Card"
+                if not result_json.get("model") and not result_json.get("quality_issue"):
+                     result_json["quality_issue"] = "不合格-沒有規格牌"
+                
+                # If Price is missing and no failure reason, it might be "No Price Card"
+                # (But check if Spec Card logic took precedence? Standard says Spec > Price)
+                elif not result_json.get("price") and not result_json.get("quality_issue"):
+                     result_json["quality_issue"] = "不合格-沒有價格牌"
 
-            # [v9.56 Strict Price Rule]
+            # Re-eval current_cat after forcing QI
+            qi = result_json.get("quality_issue")
+            if qi and qi not in ["無", "無標籤(正常)"]:
+                 result_json["category"] = f"不合格-{qi}"
+
+            if current_cat == "單機" and not result_json.get("model"):
+                # [v16.33 Refinement] Strictly map requested 4 unqualified types
+                qi = result_json.get("quality_issue")
+                unqualified_types = ["照不清楚", "沒有規格牌", "沒有價格牌", "沒有規格和價格牌"]
+                
+                if qi in unqualified_types:
+                    result_json["category"] = f"不合格-{qi}"
+                elif qi == "無標籤(正常)":
+                    result_json["category"] = "單機"
+                else:
+                    # Fallback for other issues (like glare/blur) if no model identified
+                    result_json["category"] = "不合格-照不清楚"
+
+            # [v17.13 Optimization] Relaxed Price Validation
+            # User Feedback: Many valid prices are plain 4-digit numbers (e.g. 4990).
+            # [v18.05 Strict Gate] Explicitly BAN spec units
             raw_price = result_json.get("price")
-            if raw_price and isinstance(raw_price, str) and ',' not in raw_price and '$' not in raw_price and 'NT' not in raw_price:
-                result_json["price"] = None
+            if raw_price and isinstance(raw_price, str):
+                # Check for forbidden spec units AND props
+                # "R", "HZ", "MS" -> Specs
+                # "SWITCH", "NINTENDO", "PS5" -> Props
+                forbidden = ['R', 'HZ', 'MS', 'CM', 'MM', 'X', 'INCH', '”', '"', 'SWITCH', 'NINTENDO', 'PS5', 'SONY']
+                if any(u in raw_price.upper() for u in forbidden):
+                     if orchestrator:
+                         orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' 含規格/道具關鍵字 -> 無效")
+                     result_json["price"] = None
+                else:
+                    # Proceed with digit cleaning
+                     pass 
+            # if raw_price and isinstance(raw_price, str) and ',' not in raw_price and '$' not in raw_price and 'NT' not in raw_price:
+            #     result_json["price"] = None
 
             # [v14.1 Fix] Backward Compatibility: Derive 'category' from new fields if missing
-            current_cat = result_json.get("category")
+            # [v17.30 Logic] Map view_type/quality_issue to legacy 'category' for UI/Dashboard
             view_type = result_json.get("view_type")
             screen_status = result_json.get("screen_status")
             quality_issue = result_json.get("quality_issue")
+            
+            if view_type == '遠景':
+                result_json['category'] = '遠景'
+            elif screen_status == '黑屏':
+                result_json['category'] = '不合格-黑屏'
+                result_json['black_screen'] = True
+            elif screen_status == '藍屏':
+                result_json['category'] = '不合格-藍屏'
+            elif quality_issue and quality_issue not in ['無', '', '正常']:
+                # Map new logic to legacy categories if they match common patterns
+                if "照不清楚" in quality_issue: result_json['category'] = "不合格-照不清楚"
+                elif "沒有規格" in quality_issue: result_json['category'] = "不合格-沒有規格牌"
+                elif "沒有價格" in quality_issue: result_json['category'] = "不合格-沒有價格牌"
+                else: result_json['category'] = '單機' # Allow price-only or model-only to be 'Single Unit'
+            else:
+                result_json['category'] = '單機'
 
-            if not current_cat or current_cat == "失敗":
-                if view_type == '遠景':
-                    result_json['category'] = '遠景'
-                elif screen_status and screen_status in ['黑屏', '藍屏']:
-                    result_json['category'] = f"不合格-{screen_status}"
-                elif quality_issue and quality_issue != '無':
-                    result_json['category'] = f"不合格-{quality_issue}"
-                elif view_type == '單機':
-                    result_json['category'] = '單機'
+            # Final fallback
+            if not result_json.get('category'):
+                 result_json['category'] = '單機' if result_json.get('price') or result_json.get('model') else '失敗'
 
             # [v14.6 Fix] Forced Cleaning of labels to prevent UI clutter
             # Remove "Normal" states so they don't trigger the red error box in UI
@@ -591,6 +766,11 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     except Exception as e:
         log.error(f"Analysis Failed: {e}")
         if orchestrator: orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
+    
+    # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
+    # Ensure we use the safest thinking_text version captured earlier
+    final_think = thinking_text if 'thinking_text' in locals() else ""
+    result_json['thinking'] = final_think
     
     return result_json
 
@@ -828,6 +1008,38 @@ def update_record():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@flask_app.route('/api/rerun', methods=['POST'])
+def rerun_file():
+    """
+    [v16.12] Force Rerun Endpoint
+    Accepts: {"filename": "xxx.jpg"}
+    """
+    if not orchestrator:
+        return jsonify({"error": "Orchestrator 未初始化"}), 500
+    
+    try:
+        data = request.json
+        filename = data.get('filename')
+        if not filename:
+            return jsonify({"error": "Missing filename"}), 400
+            
+        success = orchestrator.force_rerun(filename)
+        
+        # [v16.51 Fix] Robust Auto-restart using standard start_batch logic
+        if success:
+             # Check if thread is alive. If not, start it using standard method.
+             if not orchestrator.is_running:
+                 print(f"[Run] Auto-starting batch for priority item: {filename}")
+                 # Use start_batch to ensure all session variables and stop_events are handled correctly
+                 orchestrator.start_batch(limit=None, restart=False)
+                 
+             return jsonify({"status": "queued", "message": f"{filename} 已加入優先重跑佇列 (立即執行)"})
+        else:
+           return jsonify({"status": "exists", "message": "此檔案已在佇列中"}), 200
+    except Exception as e:
+        log.error(f"Rerun API Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @flask_app.route('/api/failed_records')
 def get_failed_records():
     """Returns ALL unique failed records from history + current session."""
@@ -947,7 +1159,8 @@ def main():
     # Start loop (start_batch spawns its own thread)
     orchestrator.start_batch(args.limit)
 
-    flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    # [v17.27] Explicitly enable threading to prevent UI blocking
+    flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
     main()

@@ -4,7 +4,7 @@ set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\Sys
 chcp 65001 >nul
 
 echo ==========================================
-echo      Samsung OCR Launcher v16.8 [FIXED]
+echo      Samsung OCR Launcher (Latest)
 echo ==========================================
 echo.
 
@@ -31,11 +31,11 @@ if exist "__pycache__" rmdir /s /q "__pycache__"
 
 echo.
 echo.
-echo [4/5] 啟動核心引擎 (v16.8)...
+echo [4/5] 啟動核心引擎 (Auto-Load Latest)...
 cd /d "%~dp0"
 
 :: 設定視窗標題 (這會讓下一次執行時能識別並殺死此視窗)
-title OCR Backend Server (v16.8)
+title OCR Backend Server
 
 echo.
 echo [5/5] 準備開啟控制面板 (8秒後)...

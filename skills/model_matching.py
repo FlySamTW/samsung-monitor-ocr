@@ -32,41 +32,88 @@ class ModelMatcher:
         """
         Attempts to find the closest matching model from the valid list.
         Returns the matched model name, or None if no match found.
+        [v16.80] Added Size Gatekeeper to prevent cross-size hallucinations.
         """
         if not raw_model or not self.valid_models:
             return None
 
         # Normalize raw input
         upper_raw = raw_model.upper().replace("-", "").replace(" ", "")
+        
+        # Helper: Extract size from string (e.g., S32... -> 32)
+        def get_size_prefix(s: str) -> Optional[str]:
+            import re
+            m = re.search(r'(24|27|32|34|37|40|43|49|55|57)', s)
+            return m.group(1) if m else None
+
+        detected_input_size = get_size_prefix(upper_raw)
+
+        # Create a version without leading 'L' for broader matching (e.g. LS32... -> S32...)
+        upper_raw_no_l = upper_raw
+        if upper_raw.startswith("L") and len(upper_raw) > 3:
+            upper_raw_no_l = upper_raw[1:]
+
+        def check_substring(model_val: str, input_val: str) -> bool:
+            """Check if model is in input or input is in model."""
+            return model_val in input_val or input_val in model_val
+
+        def is_size_matching(candidate_model: str) -> bool:
+            """[v16.80] Gatekeeper: Mismatched sizes are strictly forbidden."""
+            if not detected_input_size: return True # Cannot verify
+            candidate_size = get_size_prefix(candidate_model)
+            if candidate_size and candidate_size != detected_input_size:
+                return False
+            return True
 
         # 1. Exact Match (Normalized)
         for m in self.valid_models:
             m_norm = m.upper().replace("-", "").replace(" ", "")
             if m_norm == upper_raw:
                 return m
+            if m_norm == upper_raw_no_l:
+                return m
 
         # 2. Substring Match with Keyword Weighting
-        # Priority Keywords (Case Insensitive)
         priority_keywords = ["M7", "M5", "M8", "G5", "G7", "G8", "G9", "T55", "R500"]
+        matched_candidates = []
         
-        # Check for keyword matches first
         for key in priority_keywords:
             if key in upper_raw:
-                # Find all models containing this keyword
-                potential_matches = [m for m in self.valid_models if key in m.upper()]
-                if potential_matches:
-                    # Return the longest matching model or best fit
-                    return potential_matches[0]
+                candidates = [m for m in self.valid_models if key in m.upper()]
+                for m in candidates:
+                    m_norm = m.upper().replace("-", "").replace(" ", "")
+                    if check_substring(m_norm, upper_raw) or check_substring(m_norm, upper_raw_no_l):
+                        # [v16.80] Apply Size Gatekeeper
+                        if is_size_matching(m):
+                            matched_candidates.append(m)
+        
+        if matched_candidates:
+            matched_candidates = list(set(matched_candidates))
+            matched_candidates.sort(key=lambda x: len(x), reverse=True)
+            return matched_candidates[0]
 
+        # 3. General Substring Match
         if len(upper_raw) >= 3:
             for m in self.valid_models:
                 m_norm = m.upper().replace("-", "").replace(" ", "")
-                if upper_raw in m_norm or m_norm in upper_raw:
-                    return m
+                if check_substring(m_norm, upper_raw) or check_substring(m_norm, upper_raw_no_l):
+                    # [v16.80] Apply Size Gatekeeper
+                    if is_size_matching(m):
+                        return m
 
-        # 3. Fuzzy Match
-        matches = difflib.get_close_matches(raw_model.upper(), self.valid_models, n=1, cutoff=0.3)
+        # 4. Fuzzy Match (Cutoff increased to 0.6)
+        # Filter valid models by size first if possible
+        if detected_input_size:
+            potential_models = [m for m in self.valid_models if detected_input_size in m]
+        else:
+            potential_models = self.valid_models
+
+        matches = difflib.get_close_matches(upper_raw, potential_models, n=1, cutoff=cutoff)
         if matches:
             return matches[0]
+            
+        matches_no_l = difflib.get_close_matches(upper_raw_no_l, potential_models, n=1, cutoff=cutoff)
+        if matches_no_l:
+            return matches_no_l[0]
 
         return None
