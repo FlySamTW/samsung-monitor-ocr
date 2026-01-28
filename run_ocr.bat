@@ -4,7 +4,7 @@ set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\Sys
 chcp 65001 >nul
 
 echo ==========================================
-echo      Samsung OCR Launcher (Latest)
+echo      Samsung OCR Launcher (v18.27)
 echo ==========================================
 echo.
 
@@ -39,7 +39,7 @@ title OCR Backend Server
 
 echo.
 echo [5/5] 準備開啟控制面板 (8秒後)...
-:: 背景執行：開啟瀏覽器 (最小化視窗執行等待)
+:: 背景執行：開啟瀏覽器 (控制面板 v18.27)
 start /min "" cmd /c "timeout /t 8 /nobreak >nul && start http://localhost:5000"
 
 echo ---------------------------------------------------

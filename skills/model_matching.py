@@ -33,12 +33,44 @@ class ModelMatcher:
         Attempts to find the closest matching model from the valid list.
         Returns the matched model name, or None if no match found.
         [v16.80] Added Size Gatekeeper to prevent cross-size hallucinations.
+        [v18.41] Added Greedy Regex Extraction to handle noisy inputs (e.g., '24SAMSUNG S24F532EAC').
         """
         if not raw_model or not self.valid_models:
             return None
 
-        # Normalize raw input
-        upper_raw = raw_model.upper().replace("-", "").replace(" ", "")
+        import re
+
+        # [v18.41] Greedy Regex Extraction Strategy
+        # Try to extract potential model patterns from the raw string first
+        # This solves cases like "24SAMSUNG S24F532EAC 100" where the correct model is buried
+        greedy_pattern = r'([SFC][0-9]{2}[A-Z0-9]+)'
+        greedy_matches = re.findall(greedy_pattern, raw_model.upper())
+        
+        candidates_to_check = [raw_model] # Always check the full raw string too
+        if greedy_matches:
+            # Filter matches that are too short to be valid models (e.g., S24)
+            valid_greedy = [m for m in greedy_matches if len(m) >= 6]
+            candidates_to_check.extend(valid_greedy)
+            log.info(f"[ModelMatcher] Greedy Extraction Found: {valid_greedy}")
+
+        # Iterate through candidates (Greedy matches first, then raw)
+        # We prioritize the extracted clean signals
+        best_match = None
+        
+        for candidate_raw in candidates_to_check:
+            # Normalize raw input
+            # [v18.39] Remove quotes and size units to handle 'FollowMe M7 32"' vs 'FollowMe M7 32'
+            upper_raw = candidate_raw.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "").replace("INCH", "").replace("吋", "")
+            
+            # ... internal logic ...
+            match_result = self._internal_match(upper_raw, cutoff)
+            if match_result:
+                return match_result
+        
+        return None
+
+    def _internal_match(self, upper_raw: str, cutoff: float) -> Optional[str]:
+        """Internal matching logic separated for reuse."""
         
         # Helper: Extract size from string (e.g., S32... -> 32)
         def get_size_prefix(s: str) -> Optional[str]:
@@ -48,10 +80,27 @@ class ModelMatcher:
 
         detected_input_size = get_size_prefix(upper_raw)
 
-        # Create a version without leading 'L' for broader matching (e.g. LS32... -> S32...)
+        # [v18.42 Fix] Define upper_raw_no_l BEFORE usage
         upper_raw_no_l = upper_raw
         if upper_raw.startswith("L") and len(upper_raw) > 3:
             upper_raw_no_l = upper_raw[1:]
+
+        # 1. Exact Match (Normalized)
+        for m in self.valid_models:
+            # [v18.39] Also normalize the valid model string (remove quotes)
+            m_norm = m.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "")
+            if m_norm == upper_raw:
+                return m
+            if m_norm == upper_raw_no_l: 
+                return m
+
+        # (Moved above)
+            
+        # Re-check Exact Match with no_l
+        for m in self.valid_models:
+             m_norm = m.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "")
+             if m_norm == upper_raw_no_l:
+                 return m
 
         def check_substring(model_val: str, input_val: str) -> bool:
             """Check if model is in input or input is in model."""
@@ -65,23 +114,17 @@ class ModelMatcher:
                 return False
             return True
 
-        # 1. Exact Match (Normalized)
-        for m in self.valid_models:
-            m_norm = m.upper().replace("-", "").replace(" ", "")
-            if m_norm == upper_raw:
-                return m
-            if m_norm == upper_raw_no_l:
-                return m
-
         # 2. Substring Match with Keyword Weighting
-        priority_keywords = ["M7", "M5", "M8", "G5", "G7", "G8", "G9", "T55", "R500"]
+        # [v18.39] Added FollowMe to priority keywords
+        priority_keywords = ["FollowMe", "M7", "M5", "M8", "G5", "G7", "G8", "G9", "T55", "R500"]
         matched_candidates = []
         
         for key in priority_keywords:
-            if key in upper_raw:
-                candidates = [m for m in self.valid_models if key in m.upper()]
+            if key.upper() in upper_raw:
+                candidates = [m for m in self.valid_models if key.upper() in m.upper()]
                 for m in candidates:
-                    m_norm = m.upper().replace("-", "").replace(" ", "")
+                    # [v18.39] Normalize candidate
+                    m_norm = m.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "")
                     if check_substring(m_norm, upper_raw) or check_substring(m_norm, upper_raw_no_l):
                         # [v16.80] Apply Size Gatekeeper
                         if is_size_matching(m):
@@ -95,7 +138,8 @@ class ModelMatcher:
         # 3. General Substring Match
         if len(upper_raw) >= 3:
             for m in self.valid_models:
-                m_norm = m.upper().replace("-", "").replace(" ", "")
+                # [v18.39] Normalize candidate
+                m_norm = m.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "")
                 if check_substring(m_norm, upper_raw) or check_substring(m_norm, upper_raw_no_l):
                     # [v16.80] Apply Size Gatekeeper
                     if is_size_matching(m):

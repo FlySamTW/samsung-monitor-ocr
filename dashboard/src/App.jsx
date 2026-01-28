@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.26] Full Vision & Price Guard Version
-const UI_VERSION = "v18.26 (Full Vision)";
+// [v18.43] Price-Guard Version
+const UI_VERSION = "v18.43 (Price-Guard)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -583,40 +583,41 @@ const App = () => {
                   </button>
 
                   {/* Image Container */}
-                  <div 
-                     style={{ 
-                         flex: 1, 
-                         width: '100%',
-                         position: 'relative', 
-                         overflow: 'hidden',
-                         display: 'flex', alignItems: 'center', justifyContent: 'center'
-                     }}
-                     onMouseDown={(e) => {
-                         if(e.target.tagName !== 'IMG') return; // Only drag if clicking image area logic if needed, but let's keep simple
-                         setIsDragging(true);
-                         dragStartRef.current = { x: e.clientX - modalPosition.x, y: e.clientY - modalPosition.y };
-                     }}
-                  >
-                      <img 
-                          src={`/api/image/${encodeURIComponent(inspectImage.file_name)}`} 
-                          style={{ 
-                              transform: `translate(${modalPosition.x}px, ${modalPosition.y}px)`,
-                              maxHeight: '85vh', maxWidth: '90vw',
-                              border: '2px solid #555', borderRadius: '8px', 
-                              boxShadow: '0 0 40px rgba(0,0,0,0.6)',
-                              objectFit: 'contain'
-                          }} 
-                          alt="Inspection" 
-                          draggable={false}
-                      />
-                  </div>
-
-                  {/* Metadata Footer */}
-                  <div style={{ 
-                      width: '100%', background: '#111', borderTop: '1px solid #333', 
-                      padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '20px',
-                      color: '#ddd', fontFamily: 'JetBrains Mono', fontSize: '0.9rem', zIndex: 10005
-                  }}>
+                      <div 
+                         style={{
+                             position: 'absolute',
+                             transform: `translate(${modalPosition.x}px, ${modalPosition.y}px)`,
+                             transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                             cursor: isDragging ? 'grabbing' : 'grab'
+                         }}
+                         onMouseDown={(e) => {
+                            setIsDragging(true);
+                            dragStartRef.current = { x: e.clientX - modalPosition.x, y: e.clientY - modalPosition.y };
+                         }}
+                      >
+                          <img 
+                              src={`/api/image/${encodeURIComponent(inspectImage.file_name)}`} 
+                              style={{ 
+                                  display: 'block',
+                                  border: '4px solid #444', 
+                                  borderRadius: '4px', 
+                                  boxShadow: '0 0 100px rgba(0,0,0,0.8)',
+                                  userSelect: 'none',
+                                  pointerEvents: 'auto'
+                              }} 
+                              alt="Inspection" 
+                              draggable={false}
+                          />
+                      </div>
+                  
+                   {/* Metadata Footer [v18.30 Fix: Stays at Bottom] */}
+                   <div style={{ 
+                       position: 'absolute', bottom: 0, left: 0,
+                       width: '100%', background: '#111', borderTop: '2px solid #333', 
+                       padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '20px',
+                       color: '#ddd', fontFamily: 'JetBrains Mono', fontSize: '0.9rem', zIndex: 10005,
+                       boxShadow: '0 -5px 25px rgba(0,0,0,0.8)'
+                   }}>
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>檔名</span>
                            <span style={{ color:'#00f5ff', fontWeight:'bold' }}>{inspectImage.file_name}</span>

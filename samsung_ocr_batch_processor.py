@@ -15,7 +15,7 @@ from openai import OpenAI
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v18.26 (Full Vision & Price Guard)"
+VERSION = "v18.43 (Price-Guard)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -276,43 +276,30 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     import uuid
     random_salt = str(uuid.uuid4())[:8]
     
-    # [v18.25 Dual Vision Prompt]
+    # [v18.35 Stateless Purge]
+    # 1. 強化無狀態提示 (Engineering Strategy)
+    # 2. 恢復雙重視野 (Engineering Strategy)
+    # 3. 確保每次都建立全新 messages
+    
+    # Construct User Context
+    user_content = []
+    
+    # Image 1: Context (Full Image)
+    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
+    
+    # Image 2: High-Resolution (Crop) if detected
     if label_b64:
-        user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n我們為你準備了兩張圖：\n1. 圖 1 是環境全景圖 (用於判斷空間與底座)。\n2. 圖 2 是價牌的高清放大圖 (用於精確讀取文字)。\n請在第一行先盤點，並務必以「圖 2」字元為準。"
+        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
+        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。請執行『視覺歸屬』檢查。」\n圖片: {fname}\nRequestID: {random_salt}\n[提示]\n圖 1 (全景): 用於確認標籤相對於螢幕底座的位置歸屬。\n圖 2 (特寫): 用於讀取該標籤上的細微文字。\n請結合兩者，確保讀到的文字是來自於『歸屬於該螢幕的同一張標籤』。"
     else:
-        user_prompt = f"圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊 (繁體中文)，務必包含 Observation 和 JSON。"
+        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
 
-        # [v18.26 Revert] Stop sending multiple images. 
-        # AI handles full images better than isolated crops which lose context.
-        # The `messages` structure is now defined here to ensure only one image is sent.
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}},
-                {"type": "text", "text": user_prompt}
-            ]}
-        ]
-        # Skip the subsequent general message construction
-        # This ensures that `label_b64` is not added to `user_content`
-        # and the `user_prompt` is correctly integrated.
-        
-    # [v18.22] 零記憶機制強制實作 (Zero Memory Policy)
-    # 每次辨識前重設 messages 陣列，不留存任何對話歷史，確保圖片辨識的獨立性。
-    # If `label_b64` was present, `messages` is not yet defined, so define it here.
-    if 'messages' not in locals():
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Construct User Context
-        user_content = []
-        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
-        # The line `if label_b64: user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})` is intentionally removed
-        # as per the instruction to revert sending multiple images.
-        user_content.append({"type": "text", "text": user_prompt})
+    user_content.append({"type": "text", "text": user_prompt})
 
-        messages.append({
-            "role": "user",
-            "content": user_content
-        })
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
 
     full_response_text = ""
     # [v17.30 Full Schema] Initialize with all required fields to avoid omission
@@ -354,8 +341,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             messages=messages,
             response_format=SAMSUNG_AUDIT_SCHEMA, # [v17.09] Enforce JSON Schema
             stream=True,
-            temperature=0.7, # [Recommend] Higher temp is safe with Schema
-            top_p=0.95,
+            temperature=0.4, # [v18.36 Vibrant Persona] Balance precision & character (Engineering Choice)
+            top_p=0.7,
             max_tokens=1024,
             presence_penalty=0.2, # [v17.20 Fix] Reduce stuttering
             stream_options={"include_usage": True}
@@ -508,10 +495,10 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     import difflib # Ensure import available (inline is safe)
                     raw_model = data_obj.get("model")
                     if raw_model and isinstance(raw_model, str):
-                        # [v18.12] Enhanced Noise Removal for Raw OCR
-                        # Remove: quotes, units, brand names to maximize fuzzy match chance
+                        # [v18.28] Enhanced Noise Removal for Raw OCR (Expanded)
                         clean_model = raw_model.strip().upper()
-                        noise_patterns = ['27"', '32"', '34"', '49"', '27INCH', '32INCH', 'SAMSUNG', 'HZ', 'MS', '1000R', '1500R']
+                        # Added 24" as it appears in 412.jpg
+                        noise_patterns = ['24"', '27"', '32"', '34"', '49"', '24INCH', '27INCH', '32INCH', 'SAMSUNG', 'HZ', 'MS', '1000R', '1500R']
                         for noise in noise_patterns:
                             clean_model = clean_model.replace(noise, "")
                         clean_model = clean_model.strip()
@@ -544,8 +531,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
 
                         if valid_models_list and clean_model not in valid_models_list:
                              # Try Fuzzy Match (Aggressive Recovery)
-                             # Cutoff 0.8: Only catch close typos (1-2 chars), avoid wrong model guessing
-                             matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.8)
+                             # [v18.28] Cutoff 0.7: Lowered to catch 412.jpg typos (S24F532 vs S24F332)
+                             matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.7)
                              if matches:
                                  corrected_model = matches[0]
                                  if orchestrator: 
