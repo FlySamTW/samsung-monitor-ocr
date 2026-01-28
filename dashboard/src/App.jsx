@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.45] Split-Tag-Kill Version
-const UI_VERSION = "v18.45 (Split-Tag-Kill)";
+// [v18.46] Color-Segregation Version
+const UI_VERSION = "v18.46 (Color-Segregation)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
