@@ -4,7 +4,7 @@ set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\Sys
 chcp 65001 >nul
 
 echo ==========================================
-echo      Samsung OCR Launcher (v18.27)
+echo    Samsung OCR Launcher (v18.60 鐵律版)
 echo ==========================================
 echo.
 
@@ -26,8 +26,44 @@ echo [2/5] 釋放 Port 5000 (強力解鎖模式)...
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Write-Host '檢查 Port 5000...'; $procs = Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($procs) { foreach($pid in $procs) { Write-Host '>> 正在殺死 PID '$pid'...'; Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } } else { Write-Host '>> Port 5000 乾淨無佔用。' }"
 
 echo.
-echo [3/5] 清除 Python 快取...
-if exist "__pycache__" rmdir /s /q "__pycache__"
+echo [3/5] 🧹 徹底清除所有快取 (鐵律執行)...
+:: === 鐵律：確保每次都使用最新程式碼 ===
+
+:: 清除所有 __pycache__ 目錄 (遞歸搜尋)
+for /d /r . %%d in (__pycache__) do (
+    if exist "%%d" (
+        echo   >> 清除: %%d
+        rmdir /s /q "%%d" 2>nul
+    )
+)
+
+:: 清除所有 .pyc 檔案 (編譯快取)
+for /r . %%f in (*.pyc) do (
+    if exist "%%f" (
+        echo   >> 刪除: %%f
+        del /f /q "%%f" 2>nul
+    )
+)
+
+:: 清除所有 .pyo 檔案 (優化快取)
+for /r . %%f in (*.pyo) do (
+    if exist "%%f" (
+        echo   >> 刪除: %%f
+        del /f /q "%%f" 2>nul
+    )
+)
+
+:: 清除 skills 目錄快取 (重點區域)
+if exist "skills\__pycache__" (
+    echo   >> 重點清理: skills\__pycache__
+    rmdir /s /q "skills\__pycache__" 2>nul
+)
+
+:: 設定環境變數強制重載模組
+set PYTHONDONTWRITEBYTECODE=1
+set PYTHONUNBUFFERED=1
+
+echo   ✅ 快取清理完成，確保使用最新程式碼
 
 echo.
 echo.

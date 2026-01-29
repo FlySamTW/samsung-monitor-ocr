@@ -145,18 +145,42 @@ class ModelMatcher:
                     if is_size_matching(m):
                         return m
 
-        # 4. Fuzzy Match (Cutoff increased to 0.6)
-        # Filter valid models by size first if possible
+        # 4. [v18.61] Precise Single-Digit Tolerance Matching
+        # Check for exactly ONE digit difference, prioritize spec list models
         if detected_input_size:
             potential_models = [m for m in self.valid_models if detected_input_size in m]
         else:
             potential_models = self.valid_models
-
-        matches = difflib.get_close_matches(upper_raw, potential_models, n=1, cutoff=cutoff)
+        
+        # [v18.61] Precise single-digit difference detection
+        for model in potential_models:
+            model_norm = model.upper().replace("-", "").replace(" ", "").replace('"', "").replace("'", "")
+            
+            # Must be same length to compare character by character
+            if len(model_norm) == len(upper_raw):
+                different_positions = []
+                digit_differences = []
+                
+                # Check each character position
+                for i, (spec_char, ocr_char) in enumerate(zip(model_norm, upper_raw)):
+                    if spec_char != ocr_char:
+                        different_positions.append(i)
+                        # Check if both are digits (this is the key difference)
+                        if spec_char.isdigit() and ocr_char.isdigit():
+                            digit_differences.append((i, spec_char, ocr_char))
+                
+                # Allow exactly ONE digit difference, no other differences
+                if len(different_positions) == 1 and len(digit_differences) == 1:
+                    pos, spec_digit, ocr_digit = digit_differences[0]
+                    log.info(f"[ModelMatcher] Single digit tolerance: {upper_raw} -> {model} (position {pos}: OCR={ocr_digit} -> Spec={spec_digit})")
+                    return model
+        
+        # 5. Standard fuzzy match as fallback (lowered cutoff)
+        matches = difflib.get_close_matches(upper_raw, potential_models, n=1, cutoff=0.5)
         if matches:
             return matches[0]
             
-        matches_no_l = difflib.get_close_matches(upper_raw_no_l, potential_models, n=1, cutoff=cutoff)
+        matches_no_l = difflib.get_close_matches(upper_raw_no_l, potential_models, n=1, cutoff=0.5)
         if matches_no_l:
             return matches_no_l[0]
 

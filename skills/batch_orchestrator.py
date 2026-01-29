@@ -31,7 +31,7 @@ class BatchOrchestrator:
 
         # Initializes Skills
         self.prompt_mgr = PromptManager(config['assets_dir'])
-        self.img_proc = ImageProcessor()
+        self.img_proc = ImageProcessor({"max_size": None})  # [v18.57] 不壓縮原圖
         self.model_matcher = ModelMatcher(config['model_list_file'])
         self.field_norm = FieldNormalizer()
         self.evaluator = Evaluator()
@@ -493,6 +493,7 @@ class BatchOrchestrator:
         self.stop_event.set()
         self.is_running = False
         self.stats['is_running'] = False
+        self.log_system("🛑 收到停止指令，正在中斷處理...")
         log.info("Batch stopped by user.")
 
     def get_status(self):
@@ -773,6 +774,11 @@ class BatchOrchestrator:
                 )
                 duration = time.time() - start_t
                 
+                # [v18.53 Fix] Check stop signal after LLM call completes
+                if self.stop_event.is_set():
+                    self.log_system("🛑 處理已中斷 (LLM 呼叫後)")
+                    break
+                
                 # C. Post-Process (Validation & Matching)
                 norm_result = self.field_norm.normalize(raw_result)
                 
@@ -920,8 +926,12 @@ class BatchOrchestrator:
         
         with open(os.path.join(run_dir, "manifest.json"), 'w') as f:
             json.dump(manifest, f, indent=2)
-            
-        self.log_system("批次處理已完成。")
+        
+        # [v18.53 Fix] Show appropriate message based on stop reason
+        if self.stop_event.is_set():
+            self.log_system("🛑 批次處理已被用戶中斷。")
+        else:
+            self.log_system("✅ 批次處理已完成。")
         self.stream_buffer = "" # [v14.5 Fix] Clear on completion
 
     def log_system(self, msg: str, with_timestamp: bool = False):

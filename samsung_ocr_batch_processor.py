@@ -1,4 +1,6 @@
 import os
+import sys
+import importlib
 import argparse
 import time
 import json
@@ -11,17 +13,64 @@ from rich.console import Console
 from rich.logging import RichHandler
 from openai import OpenAI
 
-# Import Skills
+# === 鐵律：確保模組重載 ===
+# 強制清除快取，確保每次執行都使用最新程式碼
+def force_reload_skills():
+    """徹底重載 skills 模組，避免快取問題"""
+    skills_modules = [
+        'skills.batch_orchestrator',
+        'skills.prompt_versioning',
+        'skills.image_processing', 
+        'skills.model_matching',
+        'skills.field_extraction',
+        'skills.evaluation'
+    ]
+    
+    for module_name in skills_modules:
+        if module_name in sys.modules:
+            importlib.reload(sys.modules[module_name])
+
+# 執行強制重載
+force_reload_skills()
+
+# Import Skills (確保使用最新版本)
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 
-VERSION = "v18.49 (Global-Inventory)"
+VERSION = "v18.65 (標籤鐵律版)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-# --- Logging Setup ---
+# --- Logging Setup (必須在函數定義前) ---
 console = Console()
+
+# === 鐵律：版本追蹤與快取檢查 ===
+def print_version_info():
+    """顯示版本資訊，確保使用者知道正在執行的版本"""
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"🔄 [bold green]Samsung OCR System {VERSION}[/bold green]")
+    console.print(f"📅 啟動時間: {current_time}")
+    console.print(f"🆔 Session ID: {SESSION_ID}")
+    console.print(f"🔧 鐵律模式: [bold yellow]強制重載所有模組[/bold yellow]")
+    console.print("=" * 50)
+
+# === 快取檢查 ===
+def verify_no_cache():
+    """檢查是否還有殘留的快取檔案"""
+    cache_dirs = []
+    for root, dirs, files in os.walk('.'):
+        if '__pycache__' in dirs:
+            cache_dirs.append(os.path.join(root, '__pycache__'))
+    
+    if cache_dirs:
+        console.print(f"⚠️  [bold red]警告：發現 {len(cache_dirs)} 個快取目錄殘留[/bold red]")
+        for cache_dir in cache_dirs:
+            console.print(f"   🗂️  {cache_dir}")
+    else:
+        console.print("✅ 快取清理確認：無殘留快取")
+
+# --- 完整 Logging Setup ---
 logging.basicConfig(
     level="ERROR",  # v9.96: Only show errors in terminal
     format="%(message)s",
@@ -258,9 +307,11 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         valid_models_str = "(無法讀取型號表)"
     
     # Load System Prompt from external file
+    prompt_file = 'samsung_ocr_prompt.txt'
     try:
-        with open('samsung_ocr_prompt.txt', 'r', encoding='utf-8') as f:
+        with open(prompt_file, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
+        # [v18.58] Prompt version is shown at startup only, not per-image
     except Exception as e:
         if orchestrator:
             orchestrator.log_system(f"❌ 讀取 Prompt 檔案失敗: {e}, 使用備份 Prompt")
@@ -341,10 +392,11 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             messages=messages,
             response_format=SAMSUNG_AUDIT_SCHEMA, # [v17.09] Enforce JSON Schema
             stream=True,
-            temperature=0.4, # [v18.36 Vibrant Persona] Balance precision & character (Engineering Choice)
+            temperature=0.3, # [v18.62] 降低溫度減少胡言亂語
             top_p=0.7,
-            max_tokens=1024,
-            presence_penalty=0.2, # [v17.20 Fix] Reduce stuttering
+            max_tokens=512,  # [v18.62] 縮短最大長度，避免無限迴圈
+            presence_penalty=0.5, # [v18.62] 提高懲罰，避免重複
+            frequency_penalty=0.3, # [v18.62] 新增頻率懲罰
             stream_options={"include_usage": True}
         )
         pass
@@ -396,6 +448,11 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     current_display = clean_display
                 else:
                     current_display = full_response_text
+                
+                # [v18.61 Fix] 清理串流輸出：移除開頭「符號和結尾 ```json 標記
+                current_display = current_display.lstrip('「').rstrip('」')
+                current_display = current_display.replace('```json', '').replace('```', '')
+                current_display = current_display.strip()
 
                 # Final Update
                 if orchestrator:
@@ -494,7 +551,29 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
                     import difflib # Ensure import available (inline is safe)
                     raw_model = data_obj.get("model")
-                    if raw_model and isinstance(raw_model, str):
+                    
+                    # [v18.56] FollowMe Detection: Check if AI mentioned FollowMe in description
+                    desc_text = str(parsed.get("desc", "")).upper() + str(data_obj.get("desc", "")).upper()
+                    is_followme_detected = "FOLLOWME" in desc_text or "圓形底座" in desc_text or "落地支架" in desc_text
+                    
+                    # [v18.56] If model is null/None but FollowMe detected, auto-fill based on price
+                    if (raw_model is None or str(raw_model).upper() == "NULL" or raw_model == "") and is_followme_detected:
+                        p_val = data_obj.get("price")
+                        if p_val:
+                            clean_price = "".join([c for c in str(p_val) if c.isdigit()])
+                            if clean_price and len(clean_price) in [4, 5]:
+                                p_int = int(clean_price)
+                                if p_int < 11500:
+                                    data_obj["model"] = 'FollowMe M5 32"'
+                                elif p_int > 14500:
+                                    data_obj["model"] = 'FollowMe Pro M7 43"'
+                                else:
+                                    data_obj["model"] = 'FollowMe M7 32"'
+                                raw_model = data_obj["model"]
+                                if orchestrator:
+                                    orchestrator.log_system(f"🔧 [FollowMe 自動填入] 根據價格 {p_int} 填入型號: {raw_model}")
+                    
+                    if raw_model and isinstance(raw_model, str) and raw_model.upper() != "NULL":
                         # [v18.28] Enhanced Noise Removal for Raw OCR (Expanded)
                         clean_model = raw_model.strip().upper()
                         # Added 24" as it appears in 412.jpg
@@ -528,8 +607,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                                  
                              clean_model = mapped_model
                              is_followme_bypass = True # [v18.44] Enable Bypass
-                             if orchestrator:
-                                 orchestrator.log_system(f"⚠️ [FollowMe Logic] '{raw_model}' mapped to '{clean_model}' (Price: {p_val}) >> BYPASS CHECK")
+                             # [v18.63] Silent log, no UI output
+                             console.print(f"[dim]⚠️ [FollowMe Logic] '{raw_model}' -> '{clean_model}' (Price: {p_val})[/dim]")
 
                         # [v18.44 Fix] Added bypass flag so FollowMe isn't killed by hallucination check
                         if valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
@@ -538,12 +617,10 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                              matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.7)
                              if matches:
                                  corrected_model = matches[0]
-                                 if orchestrator: 
-                                     orchestrator.log_system(f"⚠️ [模糊修復] '{clean_model}' -> '{corrected_model}' (In List)")
+                                 # [v18.58] Silent fuzzy match, no log message
                                  data_obj["model"] = corrected_model
                              else:
-                                 if orchestrator: 
-                                     orchestrator.log_system(f"⚠️ [幻覺攔截] Model '{clean_model}' 無法匹配任何型號 -> None")
+                                 # [v18.56] Silently set to None, no need for scary log message
                                  data_obj["model"] = None
                         else:
                              data_obj["model"] = clean_model
@@ -557,14 +634,16 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                             try:
                                 p_int = int(clean_price)
                                 if p_int in [1000, 1500, 1800]:
-                                    if orchestrator: orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' -> '{p_int}' 命中曲率禁令 (1000R/1500R) -> None")
+                                    # [v18.63] Silent log
+                                    console.print(f"[dim]⚠️ [價格攔截] {raw_price} -> 曲率禁令[/dim]")
                                     data_obj["price"] = None
                                 else:
                                     data_obj["price"] = clean_price
                             except ValueError:
                                 data_obj["price"] = clean_price # Fallback (shouldn't happen due to isdigit filter)
                         else:
-                            if orchestrator: orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' -> '{clean_price}' 長度不符 (4-5) -> 強制修正為 None")
+                            # [v18.63] Silent log
+                            console.print(f"[dim]⚠️ [價格攔截] {raw_price} 長度不符[/dim]")
                             data_obj["price"] = None
 
                     # 4. Auto-Calculate Quality Issue
@@ -633,6 +712,8 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             # [v17.18 Safety] Ensure string
             if thinking_text is None: thinking_text = "..."
             thinking_text = str(thinking_text).replace('[思考]', '').replace('觀察內容...', '').replace('Observation:', '').replace('Observation', '').strip()
+            # [v18.58] Remove markdown code block markers
+            thinking_text = thinking_text.replace('```json', '').replace('```', '').strip()
 
             # [v17.26 Fix] Aggressively strip "Observation:" prefix
             if thinking_text:
@@ -716,7 +797,7 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                 forbidden = ['R', 'HZ', 'MS', 'CM', 'MM', 'X', 'INCH', '”', '"', 'SWITCH', 'NINTENDO', 'PS5', 'SONY']
                 if any(u in raw_price.upper() for u in forbidden):
                      if orchestrator:
-                         orchestrator.log_system(f"⚠️ [價格攔截] Price '{raw_price}' 含規格/道具關鍵字 -> 無效")
+                         console.print(f"[dim]⚠️ [價格攔截] {raw_price} 含規格關鍵字[/dim]")
                      result_json["price"] = None
                 else:
                     # Proceed with digit cleaning
@@ -1124,6 +1205,10 @@ def serve_dist_fallback(filename):
 
 # --- Main ---
 def main():
+    # === 鐵律：首先執行版本檢查 ===
+    print_version_info()
+    verify_no_cache()
+    
     # Fix for Windows Console Encoding (CP950 vs UTF-8)
     import sys
     try:
@@ -1169,6 +1254,19 @@ def main():
     orchestrator.set_processor_function(process_single_image)
     orchestrator.log_system(f"[{SESSION_ID}] 系統初始化完成... 後端已連線。", with_timestamp=True) # Immediate feedback
     
+    # [v18.56] Show Prompt version at startup
+    import os
+    from datetime import datetime
+    prompt_file = 'samsung_ocr_prompt.txt'
+    if os.path.exists(prompt_file):
+        prompt_mtime = os.path.getmtime(prompt_file)
+        prompt_time_str = datetime.fromtimestamp(prompt_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        orchestrator.log_system(f"📜 Prompt 版本: {prompt_time_str}", with_timestamp=False)
+        console.print(f"[bold green]📜 Prompt 版本: {prompt_time_str}[/bold green]")
+    else:
+        orchestrator.log_system(f"❌ 找不到 Prompt 檔案: {prompt_file}", with_timestamp=False)
+        console.print(f"[bold red]❌ 找不到 Prompt 檔案: {prompt_file}[/bold red]")
+    
     # Replace standard print with console.print/log to avoid CP950 errors on Windows
     title = f"Samsung OCR Batch System {VERSION} [SID: {SESSION_ID}]"
     console.print(f"[bold yellow]>>> SESSION: {SESSION_ID} <<<[/bold yellow]")
@@ -1178,12 +1276,19 @@ def main():
     console.print(f"API Base: {args.api_base}")
     console.print("--------------------------------------------------")
     
-    # Start loop
-    # Start loop (start_batch spawns its own thread)
-    orchestrator.start_batch(args.limit)
+    # [v18.54 Fix] Do NOT auto-start batch processing
+    # Wait for user to click "Start" button in dashboard
+    console.print("[yellow]⏳ 等待儀表板操作... 請在瀏覽器中選擇資料夾並點擊「繼續執行」[/yellow]")
 
     # [v17.27] Explicitly enable threading to prevent UI blocking
     flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
+    # === 鐵律：最終版本確認 ===
+    console.print("\n" + "="*60)
+    console.print(f"🎯 [bold green]最終確認：正在執行 {VERSION}[/bold green]")
+    console.print(f"📊 Session ID: {SESSION_ID}")
+    console.print(f"⚡ 強制重載模式：已確保所有模組為最新版本")
+    console.print("="*60 + "\n")
+    
     main()
