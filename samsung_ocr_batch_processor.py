@@ -23,7 +23,8 @@ def force_reload_skills():
         'skills.image_processing', 
         'skills.model_matching',
         'skills.field_extraction',
-        'skills.evaluation'
+        'skills.evaluation',
+        'skills.official_price'  # [v18.67] 官方價格驗證
     ]
     
     for module_name in skills_modules:
@@ -36,8 +37,9 @@ force_reload_skills()
 # Import Skills (確保使用最新版本)
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
+from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.65 (標籤鐵律版)"
+VERSION = "v18.74 (取官網最低價)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -625,6 +627,31 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                         else:
                              data_obj["model"] = clean_model
 
+                    # [v18.66] 尺寸描述 vs 型號 交叉驗證
+                    # 如果思考文字提到「43型」但型號卻是 S32...，表示混搭標籤
+                    final_model = data_obj.get("model")
+                    if final_model and thinking_text:
+                        import re
+                        # 從思考文字中抓取尺寸描述（如「43型」、「32型」、「27型」）
+                        size_in_desc = re.search(r'(\d{2})型', thinking_text)
+                        if size_in_desc:
+                            desc_size = size_in_desc.group(1)
+                            # 從型號中抓取尺寸（如 S43... 的 43、S32... 的 32）
+                            model_size_match = re.search(r'S(\d{2})', str(final_model).upper())
+                            if model_size_match:
+                                model_size = model_size_match.group(1)
+                                if desc_size != model_size:
+                                    # 尺寸不符！嘗試從 valid_models 中找正確尺寸的型號
+                                    console.print(f"[yellow]⚠️ [尺寸交叉驗證] 描述={desc_size}型 但型號={final_model} → 嘗試修正[/yellow]")
+                                    # 找同系列但正確尺寸的型號
+                                    correct_size_candidates = [m for m in valid_models_list if f"S{desc_size}" in m.upper()]
+                                    if correct_size_candidates:
+                                        # 用 fuzzy match 在正確尺寸的候選中找最接近的
+                                        best_match = difflib.get_close_matches(clean_model.replace(model_size, desc_size), correct_size_candidates, n=1, cutoff=0.6)
+                                        if best_match:
+                                            data_obj["model"] = best_match[0]
+                                            console.print(f"[green]✅ [尺寸交叉驗證] 修正為: {best_match[0]}[/green]")
+
                     # 3. Strict Price Check (4-5 digits only)
                     raw_price = data_obj.get("price")
                     if raw_price:
@@ -850,6 +877,33 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             log.error(f"Validation Error: {e}")
             if orchestrator: orchestrator.log_system(f"⚠️ 解析異常: {str(e)}")
             
+        # [v18.67] 官方價格驗證
+        try:
+            model_for_price = result_json.get("model")
+            price_for_validate = result_json.get("price")
+            
+            # [v18.69] 自動發現新型號
+            if model_for_price:
+                try_discover_model(model_for_price)
+            
+            if model_for_price and price_for_validate and str(price_for_validate).isdigit():
+                price_int = int(price_for_validate)
+                price_check = validate_ocr_price(model_for_price, price_int)
+                result_json['price_status'] = price_check['status']
+                result_json['price_symbol'] = price_check['symbol']
+                result_json['official_price'] = price_check['official_price']
+                result_json['price_diff_percent'] = price_check['diff_percent']
+                
+                # 價格差異 > 20% 時觸發警告
+                if price_check['status'] in ['high', 'low'] and price_check['official_price']:
+                    diff = price_check['diff_percent']
+                    official = price_check['official_price']
+                    symbol = price_check['symbol']
+                    if orchestrator:
+                        orchestrator.log_system(f"⚠️ 價格警告: {model_for_price} OCR=${price_int:,} {symbol} 官方=${official:,} (差異{diff:+.1f}%)")
+        except Exception as e:
+            log.warning(f"Price validation error: {e}")
+            
         # [v9.71 Universal Summary Log] 
         # MOVED OUT OF ELSE BLOCK to guarantee execution.
         if orchestrator:
@@ -1044,6 +1098,15 @@ def start_batch():
     try:
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
+        
+        # [v18.67] 每次啟動時重置價格查詢快取，確保重新從官網抓最新價格
+        try:
+            from skills.official_price import get_price_manager
+            pm = get_price_manager()
+            pm.session_fetched.clear()  # 清空「本次已查詢」記錄
+            console.print("[dim]🔄 已重置價格查詢狀態，將從官網抓取最新價格[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️ 重置價格查詢失敗: {e}[/yellow]")
         
         # Get params from request
         req_data = request.json or {}
@@ -1254,6 +1317,11 @@ def main():
     orchestrator.set_processor_function(process_single_image)
     orchestrator.log_system(f"[{SESSION_ID}] 系統初始化完成... 後端已連線。", with_timestamp=True) # Immediate feedback
     
+    # [v18.70] 設定價格查詢日誌回調，讓儀錶板也能看到聯網狀態
+    def price_log_to_dashboard(msg: str):
+        orchestrator.log_system(msg, with_timestamp=False)
+    set_price_log_callback(price_log_to_dashboard)
+    
     # [v18.56] Show Prompt version at startup
     import os
     from datetime import datetime
@@ -1266,6 +1334,13 @@ def main():
     else:
         orchestrator.log_system(f"❌ 找不到 Prompt 檔案: {prompt_file}", with_timestamp=False)
         console.print(f"[bold red]❌ 找不到 Prompt 檔案: {prompt_file}[/bold red]")
+    
+    # [v18.67] 啟動時清空價格快取 TXT
+    try:
+        pm = get_price_manager()
+        pm.clear_and_init()
+    except Exception as e:
+        console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
     
     # Replace standard print with console.print/log to avoid CP950 errors on Windows
     title = f"Samsung OCR Batch System {VERSION} [SID: {SESSION_ID}]"

@@ -204,6 +204,7 @@
                             <th width="120">品質問題</th>
                             <th width="120">型號</th>
                             <th width="80">價格</th>
+                            <th width="50">價格驗證</th>
                             <th>備註</th>
                             <th width="60">操作</th>
                         </tr>
@@ -216,6 +217,15 @@
                             <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
                             <th><input type="text" onkeyup="filterData()" placeholder="篩選型號..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
                             <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
+                            <th>
+                                <select onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                    <option value="">全部</option>
+                                    <option value="✓">✓ 符合</option>
+                                    <option value="↑">↑ 高於</option>
+                                    <option value="↓">↓ 低於</option>
+                                    <option value="?">? 未知</option>
+                                </select>
+                            </th>
                             <th><input type="text" onkeyup="filterData()" placeholder="篩選備註..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
                             <th></th>
                         </tr>
@@ -227,6 +237,7 @@
             <div class="pagination">
                 <button class="page-btn" onclick="changePage(-1)">上一頁</button>
                 <span id="pageInfo">Page 1</span>
+                <span id="filterCount" style="color:#888; font-size:12px;">(篩選: 0 筆)</span>
                 <button class="page-btn" onclick="changePage(1)">下一頁</button>
             </div>
         </div>
@@ -377,6 +388,9 @@
                     
                     <td><input type="text" id="model_${item.file_name}" value="${item.model || ''}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     <td><input type="text" id="price_${item.file_name}" value="${item.price || ''}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
+                    <td style="text-align:center;">
+                        ${getPriceStatusBadge(item)}
+                    </td>
                     <td><input type="text" id="note_${item.file_name}" value="${item.note || ''}" placeholder="備註..." style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     
                     <td>
@@ -388,8 +402,37 @@
             
             const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE) || 1;
             document.getElementById('pageInfo').textContent = `Page ${currentPage} / ${totalPages}`;
+            document.getElementById('filterCount').textContent = `(篩選: ${filteredRecords.length} 筆)`;
             document.querySelectorAll('.page-btn')[0].disabled = currentPage === 1;
             document.querySelectorAll('.page-btn')[1].disabled = currentPage === totalPages;
+        }
+        
+        // [v18.71] 價格狀態徽章 - 停產用 "-"
+        function getPriceStatusBadge(item) {
+            const symbol = item.price_symbol || '?';
+            const status = item.price_status || 'unknown';
+            const officialPrice = item.official_price;
+            const diffPercent = item.price_diff_percent;
+            
+            let bgColor = '#dc2626';  // unknown - 紅色
+            let fontWeight = '900';   // 所有符號都加粗
+            let title = '官網查無價格';
+            
+            if (status === 'match') {
+                bgColor = '#22c55e';  // 綠色
+                title = `符合官方 $${officialPrice?.toLocaleString() || '?'} (${diffPercent > 0 ? '+' : ''}${diffPercent || 0}%)`;
+            } else if (status === 'high') {
+                bgColor = '#ef4444';  // 紅色
+                title = `高於官方 $${officialPrice?.toLocaleString() || '?'} (+${diffPercent || 0}%)`;
+            } else if (status === 'low') {
+                bgColor = '#3b82f6';  // 藍色
+                title = `低於官方 $${officialPrice?.toLocaleString() || '?'} (${diffPercent || 0}%)`;
+            } else if (status === 'discontinued') {
+                bgColor = '#555';     // 灰色
+                title = '官網查無此型號 (已停產)';
+            }
+            
+            return `<span title="${title}" style="display:inline-block; padding:2px 8px; border-radius:4px; background:${bgColor}; color:#fff; font-weight:${fontWeight}; cursor:help;">${symbol}</span>`;
         }
 
         // --- Inline Save Logic ---
@@ -471,14 +514,16 @@
 
         // --- Filter Logic ---
         function filterData() {
-            // Get all inputs
+            // Get all inputs and select
             const inputs = document.querySelectorAll('#filterRow input');
+            const selects = document.querySelectorAll('#filterRow select');
             const termFilename = inputs[0].value.toLowerCase();
             const termView = inputs[1].value.toLowerCase();
             const termScreen = inputs[2].value.toLowerCase();
             const termQuality = inputs[3].value.toLowerCase();
             const termModel = inputs[4].value.toLowerCase();
             const termPrice = inputs[5].value.toLowerCase();
+            const termPriceStatus = selects[0].value;  // [v18.67] 價格驗證篩選
             const termNote = inputs[6].value.toLowerCase();
 
             filteredRecords = allRecords.filter(item => {
@@ -490,6 +535,10 @@
                 const fModel = (item.model || '').toLowerCase();
                 const fPrice = (item.price || '').toLowerCase();
                 const fNote = (item.note || '').toLowerCase();
+                const fPriceSymbol = item.price_symbol || '?';  // [v18.67]
+
+                // [v18.67] 價格驗證狀態篩選
+                const priceStatusMatch = !termPriceStatus || fPriceSymbol === termPriceStatus;
 
                 return fName.includes(termFilename) &&
                        fView.includes(termView) &&
@@ -497,6 +546,7 @@
                        fQuality.includes(termQuality) &&
                        fModel.includes(termModel) &&
                        fPrice.includes(termPrice) &&
+                       priceStatusMatch &&
                        fNote.includes(termNote);
             });
 

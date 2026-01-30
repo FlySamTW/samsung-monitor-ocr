@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal enabledelayedexpansion
 set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;%PATH%"
 chcp 65001 >nul
@@ -9,16 +9,16 @@ echo ==========================================
 echo.
 
 echo [1/5] 執行暴力進程清理 (Aggressive Cleanup)...
-:: 第一波：強制殺除所有 Python 與 Node 進程
-taskkill /F /IM python.exe /T 2>nul
-taskkill /F /IM node.exe /T 2>nul
-taskkill /F /FI "WINDOWTITLE eq OCR Backend*" /T 2>nul
+:: 第一波：強制殺除所有 Python 與 Node 進程 (使用完整路徑避免 PATH 問題)
+C:\Windows\System32\taskkill.exe /F /IM python.exe /T 2>nul
+C:\Windows\System32\taskkill.exe /F /IM node.exe /T 2>nul
+C:\Windows\System32\taskkill.exe /F /FI "WINDOWTITLE eq OCR Backend*" /T 2>nul
 
 :: 等待一秒讓系統釋放資源
 timeout /t 1 /nobreak >nul
 
 :: 第二波：再次確認，確保無殘留
-taskkill /F /IM python.exe /T 2>nul
+C:\Windows\System32\taskkill.exe /F /IM python.exe /T 2>nul
 
 echo.
 echo [2/5] 釋放 Port 5000 (強力解鎖模式)...

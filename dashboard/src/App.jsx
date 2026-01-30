@@ -25,8 +25,8 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
-// [v18.52] Status-Report Version
-const UI_VERSION = "v18.52 (Status-Report)";
+// [v18.73] 超嚴格型號驗證（檢查標題）
+const UI_VERSION = "v18.74 (取官網最低價)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -52,6 +52,7 @@ const App = () => {
   const [availableDirs, setAvailableDirs] = useState([]);
   const [targetDir, setTargetDir] = useState(localStorage.getItem('samsung_ocr_target_dir') || '商化照片-202512');
   const [controlMsg, setControlMsg] = useState('');
+  const [isConnected, setIsConnected] = useState(true); // [v18.67] 追蹤伺服器連線狀態
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({ title: '', message: '', onConfirm: null });
   const [editingFile, setEditingFile] = useState(null);
@@ -115,8 +116,10 @@ const App = () => {
       }
 
       setError(null);
+      setIsConnected(true); // [v18.67] 連線成功
     } catch (err) {
       setError(err.message);
+      setIsConnected(false); // [v18.67] 連線失敗
     }
   };
 
@@ -267,7 +270,9 @@ const App = () => {
              setTimeout(() => setControlMsg(''), 3000);
           }
       } catch (e) {
-          setControlMsg(`❌ 停止失敗: ${e}`);
+          // [v18.67] 即使連線失敗，也顯示已發送停止請求
+          setControlMsg(`⚠️ 已發送停止請求 (伺服器可能已停止或斷線)`);
+          setTimeout(() => setControlMsg(''), 5000);
       }
   };
 
@@ -337,8 +342,8 @@ const App = () => {
                     style={{ background: stats.is_running ? '#333' : '#f59e0b', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                     <Zap size={12} /> 重新啟動
                 </button>
-               <button onClick={handleStop} disabled={!stats.is_running} 
-                   style={{ background: !stats.is_running ? '#333' : '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: !stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+               <button onClick={handleStop}
+                   style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <Square size={12} /> 停止
                </button>
                <button onClick={() => window.open('/failed_records.html', '_blank')} 
@@ -498,8 +503,23 @@ const App = () => {
                                                 <div style={{ fontSize: '0.7rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {res.model || (res.category?.startsWith('不合格') ? res.category.replace('不合格-', '') : '(無型號)')}
                                                 </div>
-                                                <div style={{ fontSize: '0.7rem', color: '#f59e0b', whiteSpace: 'nowrap' }}>
+                                                <div style={{ fontSize: '0.7rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                     {formatDisplayPrice(res.price)}
+                                                    {res.price_symbol && (
+                                                        <span 
+                                                            title={res.price_status === 'discontinued' ? '官網查無此型號 (已停產)' : res.official_price ? `官方價: $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : '官網查無價格'}
+                                                            style={{ 
+                                                                fontSize: '0.65rem', 
+                                                                fontWeight: '900',
+                                                                color: res.price_status === 'match' ? '#22c55e' : 
+                                                                       res.price_status === 'high' ? '#ef4444' : 
+                                                                       res.price_status === 'low' ? '#3b82f6' : 
+                                                                       res.price_status === 'discontinued' ? '#888' : '#ff0000'
+                                                            }}
+                                                        >
+                                                            {res.price_symbol}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                          )}
@@ -526,6 +546,30 @@ const App = () => {
                                             </button>
                                             {res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
                                             {res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
+                                            {res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
+                                            {/* [v18.67] 價格驗證符號 - 包含 ? 未知 */}
+                                            {res.view_type !== '遠景' && res.price && (
+                                                <span 
+                                                    title={
+                                                        res.price_status === 'unknown' ? '官網查無價格' :
+                                                        res.official_price ? `官方 $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : ''
+                                                    }
+                                                    style={{ 
+                                                        fontSize: '0.7rem', 
+                                                        padding: '1px 4px', 
+                                                        borderRadius: '3px', 
+                                                        background: res.price_status === 'match' ? '#22c55e' : 
+                                                                   res.price_status === 'high' ? '#ef4444' : 
+                                                                   res.price_status === 'low' ? '#3b82f6' : 
+                                                                   res.price_status === 'discontinued' ? '#555' : '#dc2626',
+                                                        color: '#fff',
+                                                        fontWeight: '900',
+                                                        cursor: 'help'
+                                                    }}
+                                                >
+                                                    {res.price_symbol || '?'}
+                                                </span>
+                                            )}
                                          </div>
                                      </div>
                                  </div>
@@ -638,7 +682,28 @@ const App = () => {
 
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>價格</span>
-                           <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                               <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
+                               {inspectImage.price_symbol && (
+                                   <span 
+                                       title={inspectImage.price_status === 'discontinued' ? '官網查無此型號 (已停產)' : inspectImage.official_price ? `官方價: $${inspectImage.official_price.toLocaleString()} (${inspectImage.price_diff_percent > 0 ? '+' : ''}${inspectImage.price_diff_percent}%)` : '官網查無價格'}
+                                       style={{ 
+                                           fontSize: '1rem', 
+                                           fontWeight: '900',
+                                           padding: '2px 6px',
+                                           borderRadius: '4px',
+                                           background: inspectImage.price_status === 'match' ? '#22c55e' : 
+                                                      inspectImage.price_status === 'high' ? '#ef4444' : 
+                                                      inspectImage.price_status === 'low' ? '#3b82f6' : 
+                                                      inspectImage.price_status === 'discontinued' ? '#555' : '#dc2626',
+                                           color: '#fff',
+                                           cursor: 'help'
+                                       }}
+                                   >
+                                       {inspectImage.price_symbol}
+                                   </span>
+                               )}
+                           </div>
                       </div>
                       <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
                       
