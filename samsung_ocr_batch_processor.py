@@ -39,7 +39,7 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.74 (取官網最低價)"
+VERSION = "v18.75 (PromptManager 配置管理系統)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -308,15 +308,23 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     except:
         valid_models_str = "(無法讀取型號表)"
     
-    # Load System Prompt from external file
-    prompt_file = 'samsung_ocr_prompt.txt'
+    # [v18.75 FIX] Load System Prompt from PromptManager (Bundle System)
+    # 🔴 徹底修復：不再硬編碼 txt 檔案路徑，使用版本化的 Bundle 系統
     try:
-        with open(prompt_file, 'r', encoding='utf-8') as f:
-            prompt_template = f.read()
-        # [v18.58] Prompt version is shown at startup only, not per-image
+        # 優先從 PromptManager 載入
+        prompt_template = prompt_mgr.get_system_prompt()
+        
+        # 如果 Bundle 為空，fallback 到 txt 檔案（相容性）
+        if not prompt_template or len(prompt_template.strip()) < 100:
+            prompt_file = 'samsung_ocr_prompt.txt'
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                prompt_template = f.read()
+            if orchestrator:
+                orchestrator.log_system(f"⚠️ PromptManager 為空，使用 {prompt_file}")
     except Exception as e:
+        # 最終備份
         if orchestrator:
-            orchestrator.log_system(f"❌ 讀取 Prompt 檔案失敗: {e}, 使用備份 Prompt")
+            orchestrator.log_system(f"❌ 讀取 Prompt 失敗: {e}, 使用最小備份")
         prompt_template = "你是三星螢幕管理員。請提取型號與價格。..." # 簡單備份
 
     # v14.3: Use .replace() instead of .format() to avoid KeyError with JSON braces in prompt
@@ -1341,6 +1349,16 @@ def main():
         pm.clear_and_init()
     except Exception as e:
         console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
+    
+    # [v18.75] Display Prompt Version on Startup
+    try:
+        prompt_bundle = prompt_mgr.get_prompt_bundle()
+        prompt_version = prompt_bundle.get("version_id", "unknown")
+        prompt_created = prompt_bundle.get("created_at", "N/A")
+        console.print(f"[cyan]📝 Prompt Version: {prompt_version}[/cyan]")
+        console.print(f"[cyan]   Created: {prompt_created}[/cyan]")
+    except Exception as e:
+        console.print(f"[yellow]⚠️ 無法取得 Prompt 版本資訊[/yellow]")
     
     # Replace standard print with console.print/log to avoid CP950 errors on Windows
     title = f"Samsung OCR Batch System {VERSION} [SID: {SESSION_ID}]"
