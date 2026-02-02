@@ -39,7 +39,7 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.75 (PromptManager 配置管理系統)"
+VERSION = "v18.76 (動態 Prompt 載入 - 每張照片重新讀取)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -310,17 +310,15 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
     
     # [v18.75 FIX] Load System Prompt from PromptManager (Bundle System)
     # 🔴 徹底修復：不再硬編碼 txt 檔案路徑，使用版本化的 Bundle 系統
+    # [v18.76 動態讀取] 每張照片都重新讀取 prompt.txt，修改後不需重啟！
     try:
-        # 優先從 PromptManager 載入
-        prompt_template = prompt_mgr.get_system_prompt()
-        
-        # 如果 Bundle 為空，fallback 到 txt 檔案（相容性）
-        if not prompt_template or len(prompt_template.strip()) < 100:
-            prompt_file = 'samsung_ocr_prompt.txt'
-            with open(prompt_file, 'r', encoding='utf-8') as f:
-                prompt_template = f.read()
-            if orchestrator:
-                orchestrator.log_system(f"⚠️ PromptManager 為空，使用 {prompt_file}")
+        # 🔥 強制每次都從檔案讀取，不使用快取
+        prompt_file = 'samsung_ocr_prompt.txt'
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            prompt_template = f.read()
+        # 可選：記錄檔案修改時間，方便 debug
+        # import os; mtime = os.path.getmtime(prompt_file)
+        # print(f"[DEBUG] Prompt loaded, mtime={mtime}")
     except Exception as e:
         # 最終備份
         if orchestrator:
