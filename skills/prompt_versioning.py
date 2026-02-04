@@ -90,7 +90,15 @@ class PromptManager:
         return self.current_bundle_data.get("system_prompt", "")
 
     def get_user_prompt_template(self) -> str:
-        return self.current_bundle_data.get("user_prompt_template", "")
+        # [v18.83] Hotfix: Always read from the live text file to ensure prompt updates apply immediately!
+        # This bypasses the JSON bundle cache which was causing stale prompts.
+        prompt_txt_path = os.path.join(self.assets_dir, "..", "samsung_ocr_prompt.txt")
+        try:
+            with open(prompt_txt_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            log.warning(f"Failed to read live prompt file: {e}. Falling back to bundle.")
+            return self.current_bundle_data.get("user_prompt_template", "")
 
     def get_prompt_bundle(self) -> Dict[str, Any]:
         """Returns the current prompt bundle, loading if necessary."""

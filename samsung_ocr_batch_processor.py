@@ -39,7 +39,7 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.76 (動態 Prompt 載入 - 每張照片重新讀取)"
+VERSION = "v18.84 (Prompt v5.33 L-Sticker Priority)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -227,6 +227,45 @@ def to_tc(text):
     return cc.convert(text) if cc else text
 
 # --- Main Processor Function (Single Stage v6.8) ---
+
+def _detect_repetition(text: str) -> bool:
+    """
+    [v18.82] 簡易的重複語句偵測器 (Watchdog)
+    如果發現長句子連續出現 2 次以上，判定為陷入迴圈。
+    """
+    if not text: return False
+    
+    # 1. 簡單的逐行檢查
+    lines = [L.strip() for L in text.split('\n') if len(L.strip()) > 15] # 忽略太短的行
+    if len(lines) < 2: return False # [Modified] 至少要有2行才可能重複
+    
+    # 檢查最後 15 行是否有重複
+    recent_lines = lines[-15:]
+    from collections import Counter
+    counts = Counter(recent_lines)
+    
+    # 如果任何一句話出現超過 2 次 [Modified]
+    for line, count in counts.items():
+        if count >= 2:
+            # 進一步確認該句子長度夠長 (避免誤判 "..." 或 "思考中")
+            if len(line) > 10:
+                print(f"[Watchdog] 偵測到重複語句: {line[:20]}... (x{count})")
+                return True
+                
+    # 2. 暴力 N-gram 檢查 (針對没換行的長段落)
+    # 檢查長度為 30 的 substring 是否重複出現 3 次以上 [Modified]
+    if len(text) > 200:
+        window_size = 30
+        threshold = 3 
+        # 簡易採樣檢查
+        for i in range(0, len(text) - window_size, 50): # 步長 50
+            sub = text[i : i+window_size]
+            if text.count(sub) >= threshold:
+                print(f"[Watchdog] 偵測到段落重複: {sub[:20]}... (x{text.count(sub)})")
+                return True
+                
+    return False
+
 def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_processor):
     """
     Two-Stage Pipeline with Dual Resolution Strategy (Currently Single Stage):
@@ -398,13 +437,14 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         stream = api_client.chat.completions.create(
             model=model_name_global,
             messages=messages,
-            response_format=SAMSUNG_AUDIT_SCHEMA, # [v17.09] Enforce JSON Schema
+            # [v18.80] 移除 response_format，讓模型輸出自由格式（獨白+JSON）
+            # 解析邏輯已加強，可處理「第1行獨白 + 第2行JSON」格式
             stream=True,
-            temperature=0.3, # [v18.62] 降低溫度減少胡言亂語
-            top_p=0.7,
-            max_tokens=512,  # [v18.62] 縮短最大長度，避免無限迴圈
-            presence_penalty=0.5, # [v18.62] 提高懲罰，避免重複
-            frequency_penalty=0.3, # [v18.62] 新增頻率懲罰
+            # [v18.65] OCR 優化參數（LM Studio 兼容）
+            temperature=0.1,
+            top_p=0.8,
+            max_tokens=1024,
+            presence_penalty=1.5,
             stream_options={"include_usage": True}
         )
         pass
@@ -483,6 +523,16 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     if tc.function.name: tcb["function"]["name"] = tc.function.name
                     if tc.function.arguments: tcb["function"]["arguments"] += tc.function.arguments
 
+
+        # [v18.82] Anti-Loop Watchdog (防跳針偵測)
+        # 用於偵測 LLM 是否陷入邏輯死鎖（不斷重複同一段話）
+        if _detect_repetition(full_response_text):
+            error_msg = "偵測到 LLM 輸出進入無限迴圈 (Logic Deadlock)，強制重試。"
+            console.print(f"[bold red]🛑 {error_msg}[/bold red]")
+            if orchestrator:
+                orchestrator.log_system(f"❌ {error_msg}")
+            return {"error": "LLM Repetitive Loop Detected"}
+
         # print() # Newline after stream  # v10.0: Disabled
     
         # [v9.55 Fix] DISABLED Stream Buffer Logging to prevent JSON leakage. 
@@ -506,31 +556,41 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
         thinking_text = full_response_text 
 
         import re
-        # Find JSON block (last valid block preferrably)
-        json_candidates = re.findall(r'(\{[\s\S]*?\})', full_response_text)
+        # [v18.80] 強化解析邏輯：處理「第1行獨白 + 第2行JSON」格式
+        # 策略：按行分割，找到 JSON 行，其餘為獨白
         
-        if json_candidates:
-            # Take the last candidate that looks like our schema
-            for candidate in reversed(json_candidates):
-                if '"view_type"' in candidate or '"model"' in candidate:
-                    args_str = candidate
-                    break
-            if not args_str: args_str = json_candidates[-1]
-            
-            # Extract Thinking Text (Everything BEFORE the JSON)
-            # We split by the found JSON string to get the text before it
-            parts = full_response_text.split(args_str)
-            if parts[0].strip():
-                thinking_text = parts[0].strip()
-
-                # [v17.35 Refactored] Cross-Talk Check REMOVED.
-                # The v18 Prompt relies on Random Salt for protection and does NOT echo filename.
-                pass
-
-        # [Fallback] If strict JSON only (unlikely with this prompt but possible)
-        elif full_response_text.strip().startswith('{'):
-             args_str = full_response_text
-             thinking_text = "..." # Just JSON, no thinking
+        lines = full_response_text.strip().split('\n')
+        json_line = None
+        monologue_lines = []
+        
+        for line in lines:
+            line_stripped = line.strip()
+            # JSON 行必須以 { 開頭並包含關鍵欄位
+            if line_stripped.startswith('{') and ('"view_type"' in line_stripped or '"model"' in line_stripped):
+                json_line = line_stripped
+            elif line_stripped and not line_stripped.startswith('{'):
+                monologue_lines.append(line_stripped)
+        
+        # 如果找到 JSON 行
+        if json_line:
+            args_str = json_line
+            thinking_text = ' '.join(monologue_lines) if monologue_lines else "..."
+        else:
+            # [Fallback] 用正則找 JSON 塊（處理多行 JSON 或格式變化）
+            json_candidates = re.findall(r'(\{[\s\S]*?\})', full_response_text)
+            if json_candidates:
+                for candidate in reversed(json_candidates):
+                    if '"view_type"' in candidate or '"model"' in candidate:
+                        args_str = candidate
+                        break
+                if not args_str: args_str = json_candidates[-1]
+                
+                parts = full_response_text.split(args_str)
+                if parts[0].strip():
+                    thinking_text = parts[0].strip()
+            elif full_response_text.strip().startswith('{'):
+                args_str = full_response_text
+                thinking_text = "..."
 
         if args_str:
              try:
@@ -560,26 +620,9 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                     import difflib # Ensure import available (inline is safe)
                     raw_model = data_obj.get("model")
                     
-                    # [v18.56] FollowMe Detection: Check if AI mentioned FollowMe in description
-                    desc_text = str(parsed.get("desc", "")).upper() + str(data_obj.get("desc", "")).upper()
-                    is_followme_detected = "FOLLOWME" in desc_text or "圓形底座" in desc_text or "落地支架" in desc_text
-                    
-                    # [v18.56] If model is null/None but FollowMe detected, auto-fill based on price
-                    if (raw_model is None or str(raw_model).upper() == "NULL" or raw_model == "") and is_followme_detected:
-                        p_val = data_obj.get("price")
-                        if p_val:
-                            clean_price = "".join([c for c in str(p_val) if c.isdigit()])
-                            if clean_price and len(clean_price) in [4, 5]:
-                                p_int = int(clean_price)
-                                if p_int < 11500:
-                                    data_obj["model"] = 'FollowMe M5 32"'
-                                elif p_int > 14500:
-                                    data_obj["model"] = 'FollowMe Pro M7 43"'
-                                else:
-                                    data_obj["model"] = 'FollowMe M7 32"'
-                                raw_model = data_obj["model"]
-                                if orchestrator:
-                                    orchestrator.log_system(f"🔧 [FollowMe 自動填入] 根據價格 {p_int} 填入型號: {raw_model}")
+                    # [v18.81] 移除 FollowMe 自動偵測邏輯
+                    # 原因：AI 幻覺說「圓形底座」時會誤觸發，導致錯誤的型號自動填入
+                    # FollowMe 判定應該只依據 AI 明確輸出的型號，不要從獨白關鍵字推斷
                     
                     if raw_model and isinstance(raw_model, str) and raw_model.upper() != "NULL":
                         # [v18.28] Enhanced Noise Removal for Raw OCR (Expanded)
@@ -666,18 +709,62 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
                             # [v18.49] Strict integer check for banned curvature values
                             try:
                                 p_int = int(clean_price)
-                                if p_int in [1000, 1500, 1800]:
-                                    # [v18.63] Silent log
+                                # 只攔截明確的曲率值
+                                banned_values = [1000, 1500, 1800]
+                                if p_int in banned_values:
                                     console.print(f"[dim]⚠️ [價格攔截] {raw_price} -> 曲率禁令[/dim]")
                                     data_obj["price"] = None
                                 else:
                                     data_obj["price"] = clean_price
                             except ValueError:
-                                data_obj["price"] = clean_price # Fallback (shouldn't happen due to isdigit filter)
+                                data_obj["price"] = clean_price
                         else:
-                            # [v18.63] Silent log
                             console.print(f"[dim]⚠️ [價格攔截] {raw_price} 長度不符[/dim]")
                             data_obj["price"] = None
+
+                    # [v18.78] 獨白交叉驗證：從獨白中提取型號和價格，與 JSON 比對
+                    if thinking_text and thinking_text != "...":
+                        # 從獨白提取型號
+                        desc_model_patterns = [
+                            r'型號[是為]?\s*([A-Z]\d{2}[A-Z0-9]+)',
+                            r'寫著\s*([A-Z]\d{2}[A-Z0-9]+)',
+                            r'\b([A-Z]\d{2}[A-Z][A-Z0-9]{4,})\b',
+                        ]
+                        desc_model = None
+                        for pattern in desc_model_patterns:
+                            match = re.search(pattern, thinking_text, re.IGNORECASE)
+                            if match:
+                                desc_model = match.group(1).strip().upper()
+                                break
+                        
+                        # 從獨白提取價格
+                        desc_price_patterns = [
+                            r'價格[是為標籤上寫著]?\s*[「」\"]?(\d{4,5})[」\"]?',
+                            r'寫著[「」]?(\d{4,5})[」]?',
+                            r'(\d{4,5})\s*[元,，]',
+                        ]
+                        desc_price = None
+                        for pattern in desc_price_patterns:
+                            match = re.search(pattern, thinking_text)
+                            if match:
+                                desc_price = match.group(1)
+                                break
+                        
+                        json_model = str(data_obj.get("model", "")).upper() if data_obj.get("model") else None
+                        json_price = data_obj.get("price")
+                        
+                        # 交叉驗證：如果獨白和 JSON 不一致，記錄警告
+                        if desc_model and json_model and desc_model != json_model:
+                            console.print(f"[yellow]⚠️ [獨白vs JSON] 型號不符: 獨白={desc_model}, JSON={json_model}[/yellow]")
+                        if desc_price and json_price and desc_price != json_price:
+                            console.print(f"[yellow]⚠️ [獨白vs JSON] 價格不符: 獨白={desc_price}, JSON={json_price}[/yellow]")
+                        
+                        # 如果 JSON 有價格但獨白中「沒看到價格」關鍵詞，可能是幻覺
+                        no_price_keywords = ["沒看到價格", "沒有價格", "價格看不到", "找不到價格"]
+                        if json_price and any(k in thinking_text for k in no_price_keywords):
+                            console.print(f"[yellow]⚠️ [獨白交叉驗證] 獨白說沒價格但 JSON 有 {json_price}，可能是幻覺[/yellow]")
+                            # 可選：自動清除幻覺價格
+                            # data_obj["price"] = None
 
                     # 4. Auto-Calculate Quality Issue
                     p_val = data_obj.get("price")
@@ -928,8 +1015,13 @@ def process_single_image(fname, image_b64, prompt_mgr, auto_curator, image_proce
             orchestrator.stream_buffer = "" # [v14.4 Fix] Clear buffer after log done
 
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
         log.error(f"Analysis Failed: {e}")
-        if orchestrator: orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
+        log.error(f"詳細錯誤: {error_detail}")
+        if orchestrator: 
+            orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
+            console.print(f"[red]❌ 詳細錯誤追蹤:\n{error_detail}[/red]")
     
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
