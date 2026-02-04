@@ -39,7 +39,7 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.84 (Prompt v5.33 L-Sticker Priority)"
+VERSION = "v18.89 (Prompt v5.40 Readability Override)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
