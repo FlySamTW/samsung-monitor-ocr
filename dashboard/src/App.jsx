@@ -26,7 +26,7 @@ const formatDisplayPrice = (val) => {
 };
 
 // [v18.73] 超嚴格型號驗證（檢查標題）
-const UI_VERSION = "v18.74 (取官網最低價)";
+const UI_VERSION = "v18.80 (prompt v3.7)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {

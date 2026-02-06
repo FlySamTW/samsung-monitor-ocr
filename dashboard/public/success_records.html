@@ -188,7 +188,7 @@
     <div class="container">
         <h1>
             <span>✅ 成功紀錄 <span id="totalCount" style="font-size:0.6em; background:#10b981; padding:2px 8px; border-radius:12px; vertical-align:middle;">0</span></span>
-            <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v18.25 (Dual Vision)</span>
+            <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v18.83 (修復縮圖點擊放大)</span>
             <button class="btn" onclick="window.close()" style="background:#4b5563;">關閉視窗</button>
         </h1>
 
@@ -211,14 +211,40 @@
                         <!-- Filter Row -->
                         <tr id="filterRow" style="background: #222;">
                             <th></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選檔名..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選型號..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
+                            <th><input type="text" id="filter_filename" onkeyup="filterData()" placeholder="篩選檔名..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
                             <th>
-                                <select onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                <select id="filter_view" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                    <option value="">全部</option>
+                                    <option value="單機">單機</option>
+                                    <option value="遠景">遠景</option>
+                                </select>
+                            </th>
+                            <th>
+                                <select id="filter_screen" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                    <option value="">全部</option>
+                                    <option value="正常">正常</option>
+                                    <option value="黑屏">黑屏</option>
+                                    <option value="藍屏">藍屏</option>
+                                    <option value="不顯示">不顯示</option>
+                                </select>
+                            </th>
+                            <th>
+                                <select id="filter_quality" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                    <option value="">全部</option>
+                                    <option value="無">無問題</option>
+                                    <option value="照不清楚">照不清楚</option>
+                                    <option value="沒有規格牌">沒有規格牌</option>
+                                    <option value="沒有價格牌">沒有價格牌</option>
+                                    <option value="沒有規格價格牌">無吊牌</option>
+                                </select>
+                            </th>
+                            <th><input type="text" id="filter_model" onkeyup="filterData()" placeholder="篩選型號..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
+                            <th style="display:flex; gap:2px;">
+                                <input type="number" id="filter_price_min" onchange="filterData()" placeholder="最低" style="width:45%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                                <input type="number" id="filter_price_max" onchange="filterData()" placeholder="最高" style="width:45%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
+                            </th>
+                            <th>
+                                <select id="filter_price_status" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
                                     <option value="">全部</option>
                                     <option value="✓">✓ 符合</option>
                                     <option value="↑">↑ 高於</option>
@@ -226,7 +252,7 @@
                                     <option value="?">? 未知</option>
                                 </select>
                             </th>
-                            <th><input type="text" onkeyup="filterData()" placeholder="篩選備註..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
+                            <th><input type="text" id="filter_note" onkeyup="filterData()" placeholder="篩選備註..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
                             <th></th>
                         </tr>
                     </thead>
@@ -332,6 +358,13 @@
                 document.getElementById('totalCount').textContent = allRecords.length;
                 filteredRecords = [...allRecords]; // Init filter
                 renderTable();
+                
+                // [v18.83] 用事件委派處理縮圖點擊，避免特殊字元問題
+                document.getElementById('tableBody').addEventListener('click', (e) => {
+                    if (e.target.classList.contains('thumb') && e.target.dataset.filename) {
+                        openLightbox(e.target.dataset.filename);
+                    }
+                });
             } catch (err) {
                 alert("無法載入資料: " + err);
             }
@@ -355,7 +388,8 @@
                 item.quality_issue = item.quality_issue || (item.category && item.category.includes('看') ? '照不清楚' : '');
 
                 // [v13.1 Fix] Always load from API to guarantee thumbnail availability
-                let imgHtml = `<img src="/api/image/${encodeURIComponent(item.file_name)}" class="thumb" loading="lazy" onclick="openLightbox('${item.file_name}')" onerror="this.onerror=null;this.parentElement.innerHTML='<div style=\'width:60px;height:60px;background:#333;display:flex;align-items:center;justify-content:center;\'>?</div>'">`;
+                // [v18.83] 改用 data-filename 避免特殊字元問題
+                let imgHtml = `<img src="/api/image/${encodeURIComponent(item.file_name)}" class="thumb" loading="lazy" data-filename="${item.file_name.replace(/"/g, '&quot;')}" onerror="this.onerror=null;this.parentElement.innerHTML='<div style=\'width:60px;height:60px;background:#333;display:flex;align-items:center;justify-content:center;\'>?</div>'">`;
 
                 // Inline Inputs
                 tr.innerHTML = `
@@ -514,40 +548,44 @@
 
         // --- Filter Logic ---
         function filterData() {
-            // Get all inputs and select
-            const inputs = document.querySelectorAll('#filterRow input');
-            const selects = document.querySelectorAll('#filterRow select');
-            const termFilename = inputs[0].value.toLowerCase();
-            const termView = inputs[1].value.toLowerCase();
-            const termScreen = inputs[2].value.toLowerCase();
-            const termQuality = inputs[3].value.toLowerCase();
-            const termModel = inputs[4].value.toLowerCase();
-            const termPrice = inputs[5].value.toLowerCase();
-            const termPriceStatus = selects[0].value;  // [v18.67] 價格驗證篩選
-            const termNote = inputs[6].value.toLowerCase();
+            // Get filter values by ID
+            const termFilename = (document.getElementById('filter_filename')?.value || '').toLowerCase();
+            const termView = document.getElementById('filter_view')?.value || '';
+            const termScreen = document.getElementById('filter_screen')?.value || '';
+            const termQuality = document.getElementById('filter_quality')?.value || '';
+            const termModel = (document.getElementById('filter_model')?.value || '').toLowerCase();
+            const termPriceMin = parseInt(document.getElementById('filter_price_min')?.value) || 0;
+            const termPriceMax = parseInt(document.getElementById('filter_price_max')?.value) || Infinity;
+            const termPriceStatus = document.getElementById('filter_price_status')?.value || '';
+            const termNote = (document.getElementById('filter_note')?.value || '').toLowerCase();
 
             filteredRecords = allRecords.filter(item => {
                 // Ensure fields exist
                 const fName = (item.file_name || '').toLowerCase();
-                const fView = (item.view_type || (item.category && item.category.includes('遠景') ? '遠景' : '單機')).toLowerCase();
-                const fScreen = (item.screen_status || (item.category && item.category.includes('黑屏') ? '黑屏' : (item.category && item.category.includes('藍屏') ? '藍屏' : ''))).toLowerCase();
-                const fQuality = (item.quality_issue || (item.category && item.category.includes('看') ? '照不清楚' : '')).toLowerCase();
+                const fView = item.view_type || (item.category && item.category.includes('遠景') ? '遠景' : '單機');
+                const fScreen = item.screen_status || (item.category && item.category.includes('黑屏') ? '黑屏' : (item.category && item.category.includes('藍屏') ? '藍屏' : '正常'));
+                const fQuality = item.quality_issue || '';
                 const fModel = (item.model || '').toLowerCase();
-                const fPrice = (item.price || '').toLowerCase();
+                const fPrice = parseInt((item.price || '').toString().replace(/,/g, '')) || 0;
                 const fNote = (item.note || '').toLowerCase();
-                const fPriceSymbol = item.price_symbol || '?';  // [v18.67]
+                const fPriceSymbol = item.price_symbol || '?';
 
-                // [v18.67] 價格驗證狀態篩選
+                // Filter checks
+                const filenameMatch = fName.includes(termFilename);
+                const viewMatch = !termView || fView === termView;
+                const screenMatch = !termScreen || fScreen === termScreen || (termScreen === '正常' && !fScreen);
+                const qualityMatch = !termQuality || fQuality.includes(termQuality) || (termQuality === '無' && !fQuality);
+                const modelMatch = fModel.includes(termModel);
+                
+                // Price range filter
+                const priceMatch = (!termPriceMin && !isFinite(termPriceMax)) || 
+                                   (fPrice >= termPriceMin && fPrice <= (isFinite(termPriceMax) ? termPriceMax : Infinity));
+                
                 const priceStatusMatch = !termPriceStatus || fPriceSymbol === termPriceStatus;
+                const noteMatch = fNote.includes(termNote);
 
-                return fName.includes(termFilename) &&
-                       fView.includes(termView) &&
-                       fScreen.includes(termScreen) &&
-                       fQuality.includes(termQuality) &&
-                       fModel.includes(termModel) &&
-                       fPrice.includes(termPrice) &&
-                       priceStatusMatch &&
-                       fNote.includes(termNote);
+                return filenameMatch && viewMatch && screenMatch && qualityMatch && 
+                       modelMatch && priceMatch && priceStatusMatch && noteMatch;
             });
 
             currentPage = 1; // Reset to page 1

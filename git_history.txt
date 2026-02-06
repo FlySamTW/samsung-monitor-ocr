@@ -1,0 +1,10 @@
+10340a6 Update Prompt v5.40 (Wide View Exception) & Batch Processor v18.89
+537d669 Fix: Prompt v5.33 L-Sticker Priority & v18.84 Version Bump (Auto-OCR Optimization)
+c794683 v18.76 + Prompt v2.3: 動態 Prompt 載入 + 無狀態聲明 + M7 型號規則
+497494c ⚠️ 新增範例警告：禁止照抄範例數字
+efa19fd 🔧 v2.1: 嚴格價格格式驗證（必須有千分位或符號）+ 活動海報識別
+a197565 📝 系統運行中產生的臨時檔案（價格快取清空記錄）
+3055163 🧹 清理專案：刪除廢棄檔案，簡化文檔
+83bb82c 🔧 v18.75: 建立 PromptManager 配置管理系統 (徹底解決 v2 未生效問題)
+0a8f318 Prompt v2.0 - Qwen3-VL 優化版本 (視覺錨點+正面觸發+步驟化)
+fb858fa v18.74 備份 - 重寫 Prompt 前的狀態

@@ -39,7 +39,7 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 
-VERSION = "v18.98 (PromptV2.4-SubjectFirst)"
+VERSION = "v18.99 (FollowMe-Logic-Fix)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -635,14 +635,25 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             # [v18.15] FollowMe Logic (Price-Based Manual Mapping)
             is_followme_bypass = False # [v18.44] Flag to pass strict checking
             
+            # [v18.99] 修復：如果 AI 已識別出有效的 S 型號 (如 S32M703UC)，就不要強制覆蓋為 FollowMe
+            # 只有當 clean_model 是空的、無效的、或明確包含 "FOLLOWME" 時才觸發 FollowMe 邏輯
+            has_valid_s_model = bool(clean_model and clean_model.startswith('S') and len(clean_model) >= 8)
+            
             # [v18.94] Enhanced FollowMe Detection (Check Raw & Thinking)
             # 即使 clean_model 被洗掉，只要 raw_model 或 thinking_text 有跡象，就啟動救援
-            followme_hints = ["FOLLOWME", "M7", "M5", "SMART MONITOR"]
+            followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
             
-            if "FOLLOWME" in clean_model: is_followme_candidate = True
-            elif raw_model and any(h in raw_model.upper() for h in followme_hints): is_followme_candidate = True
-            elif thinking_text and "FOLLOW ME" in thinking_text.upper(): is_followme_candidate = True
+            # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
+            # 1. clean_model 明確包含 "FOLLOWME" 
+            # 2. 或者 clean_model 為空/無效，且 raw_model/thinking_text 有 FollowMe 關鍵字
+            if "FOLLOWME" in clean_model: 
+                is_followme_candidate = True
+            elif not has_valid_s_model:  # 只有當沒有有效 S 型號時才檢查其他線索
+                if raw_model and any(h in raw_model.upper() for h in followme_hints): 
+                    is_followme_candidate = True
+                elif thinking_text and any(h in thinking_text.upper() for h in followme_hints): 
+                    is_followme_candidate = True
             
             if is_followme_candidate:
                  # Default to M7
@@ -1051,11 +1062,22 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
-        log.error(f"Analysis Failed: {e}")
-        log.error(f"詳細錯誤: {error_detail}")
-        if orchestrator: 
-            orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
-            console.print(f"[red]❌ 詳細錯誤追蹤:\n{error_detail}[/red]")
+        error_str = str(e).lower()
+        
+        # [v18.99] 友善錯誤訊息：針對 LM Studio 常見錯誤
+        if "failed to process image" in error_str:
+            friendly_msg = "❌ LLM 回應「無法處理圖片」- 可能是圖片格式不支援或 LM Studio 模型問題"
+            log.error(f"LM Studio 圖片處理失敗: {e}")
+            if orchestrator: 
+                orchestrator.log_system(friendly_msg)
+                console.print(f"[red]{friendly_msg}[/red]")
+                console.print(f"[dim]💡 建議: 確認 LM Studio 模型是否支援圖片輸入 (需要 Vision 模型如 Qwen-VL)[/dim]")
+        else:
+            log.error(f"Analysis Failed: {e}")
+            log.error(f"詳細錯誤: {error_detail}")
+            if orchestrator: 
+                orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
+                console.print(f"[red]❌ 詳細錯誤追蹤:\n{error_detail}[/red]")
     
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
