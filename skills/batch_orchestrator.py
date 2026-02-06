@@ -769,7 +769,6 @@ class BatchOrchestrator:
                     fname=fname,
                     image_b64=proc_res['base64'], 
                     prompt_mgr=self.prompt_mgr,
-                    auto_curator=None, # [v16.7 Fix] Removed undefined attribute access
                     image_processor=self.img_proc 
                 )
                 duration = time.time() - start_t

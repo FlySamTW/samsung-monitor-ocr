@@ -154,14 +154,24 @@ class ImageProcessor:
                 # 3. Resize Full Image if too large (KEEP as context)
                 max_size = self.config.get("max_size")
                 full_img = img.copy()
+                needs_reencode = False
+                
                 if max_size is not None and (full_img.width > max_size or full_img.height > max_size):
                     full_img.thumbnail((max_size, max_size))
                     applied_transforms.append(f"resize_to_{max_size}")
-
-                # Encode Full Image to Base64
-                buffered = io.BytesIO()
-                full_img.convert("RGB").save(buffered, format="JPEG", quality=90)
-                full_img_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                    needs_reencode = True
+                
+                # [v18.65] 只在必要時重新編碼，避免畫質損失
+                if needs_reencode:
+                    # 縮圖後需要重新編碼
+                    buffered = io.BytesIO()
+                    full_img.convert("RGB").save(buffered, format="JPEG", quality=95)
+                    full_img_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                else:
+                    # 直接讀取原始檔案的 bytes，不重新編碼！
+                    with open(image_path, 'rb') as f:
+                        full_img_b64 = base64.b64encode(f.read()).decode('utf-8')
+                    applied_transforms.append("raw_bytes_no_reencode")
 
                 return {
                     "base64": full_img_b64,
