@@ -302,12 +302,13 @@ class OfficialPriceManager:
     def _fetch_from_product_page(self, model: str) -> Optional[int]:
         """
         從產品詳情頁抓取價格（最可靠的方式）
-        [v18.72] 嚴格驗證型號匹配，避免誤抓其他型號價格
+        [v18.96] 價格邏輯修正：排除折扣金額，取實際售價（通常是次低價或明確標示者）
         
         流程：
         1. 在分類頁找包含「完整型號」的產品連結
         2. 進入產品頁後，再次驗證頁面確實包含此型號
-        3. 只有驗證通過才抓取價格
+        3. 抓取所有候選價格，過濾掉「省下/Save」
+        4. 使用啟發式規則選出正確售價
         """
         model_clean = model.upper().strip()
         full_model = self._to_full_model(model_clean).lower()
@@ -359,71 +360,101 @@ class OfficialPriceManager:
                             prod_html = prod_response.text
                             
                             # [v18.73] 超嚴格驗證：檢查 URL 和頁面標題
-                            # 1. 產品 URL 本身必須包含完整型號
                             if full_model.lower() not in product_url.lower():
                                 _log_price_status(f"[yellow]⚠️ URL 驗證失敗：{product_url} 不包含 {full_model}[/yellow]")
                                 continue
                             
-                            # 2. 頁面標題或主要內容區必須包含型號（避免底部列表干擾）
+                            # 頁面標題或主要內容區必須包含型號
                             title_match = re.search(r'<title[^>]*>(.*?)</title>', prod_html, re.I | re.S)
                             h1_match = re.search(r'<h1[^>]*>(.*?)</h1>', prod_html, re.I | re.S)
-                            
                             title_text = title_match.group(1) if title_match else ""
                             h1_text = h1_match.group(1) if h1_match else ""
                             
-                            # [v18.73] 修正：檢查商業型號（S27CG552EC）而非完整型號（ls27cg552ecxzw）
+                            # 檢查商業型號（S27CG552EC）
                             if model_clean.lower() not in title_text.lower() and model_clean.lower() not in h1_text.lower():
-                                _log_price_status(f"[yellow]⚠️ 標題驗證失敗：頁面標題/H1 都不包含 {model_clean}[/yellow]")
-                                _log_price_status(f"[dim]標題: {title_text[:100]}[/dim]")
+                                _log_price_status(f"[yellow]⚠️ 標題驗證失敗：{model_clean} 不在頁面標題中[/yellow]")
                                 continue
                             
-                            # [v18.74] 優先找實際售價（折扣後價格），而非原價
-                            # Samsung 官網格式：NT$3,290 原價NT$3,490 省下 NT$200
-                            # 我們要取 3,290（實際售價），不是 3,490（原價）
+                            # === [v18.96 修正] 價格抓取策略 ===
+                            candidates = []
                             
-                            all_prices = []
-                            
-                            # 方法1: JSON-LD 中的價格
-                            sale_patterns = [
-                                r'"lowPrice"[:\s]+"?([\d,]+)"?',     # JSON-LD 標準特價欄位
-                                r'"salePrice"[:\s]+"?([\d,]+)"?',    # 促銷價欄位
-                                r'"price"[:\s]+"?([\d,]+)"?',        # 一般價格欄位
-                            ]
-                            
-                            for price_pattern in sale_patterns:
-                                for json_match in re.finditer(price_pattern, prod_html):
-                                    try:
-                                        price = int(json_match.group(1).replace(',', ''))
-                                        if 1000 < price < 100000:
-                                            all_prices.append(price)
-                                    except:
-                                        pass
-                            
-                            # 方法2: HTML 中的 NT$ 價格（排除「原價」後面的價格）
-                            # 找所有 NT$X,XXX 格式的價格
-                            nt_prices = re.findall(r'NT\$\s*([\d,]+)', prod_html)
-                            for p in nt_prices:
+                            # 1. 優先：從 JSON-LD 抓取明確定義的價格
+                            # Samsung 官網通常有 "offers": { "price": "14990", ... }
+                            json_ld_blocks = re.findall(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', prod_html, re.DOTALL)
+                            for block in json_ld_blocks:
                                 try:
-                                    price = int(p.replace(',', ''))
-                                    if 1000 < price < 100000:
-                                        all_prices.append(price)
+                                    data = json.loads(block)
+                                    # 遞迴搜尋 "offers" 或直接找 "price"
+                                    # (簡化版：直接轉字串找 "price": "xxxx")
+                                    # 這裡使用更安全的解析：
+                                    if isinstance(data, dict):
+                                        offers = data.get('offers')
+                                        if isinstance(offers, dict):
+                                            p = offers.get('price')
+                                            if p:
+                                                candidates.append({'val': int(float(p)), 'src': 'json-ld', 'priority': 10})
+                                        elif isinstance(offers, list):
+                                            for offer in offers:
+                                                p = offer.get('price')
+                                                if p:
+                                                    candidates.append({'val': int(float(p)), 'src': 'json-ld', 'priority': 10})
                                 except:
                                     pass
+
+                            # 2. 備用：從 HTML 文字抓取 NT$ 價格
+                            # 需要排除 "省下 NT$200" / "Save NT$200"
+                            # 用 regex 把 "Save/省下" 附近的排除
                             
-                            # [v18.74] 取最低價（實際售價通常是最低的）
-                            if all_prices:
-                                actual_price = min(all_prices)
-                                _log_price_status(f"[green]✓ 找到 {model_clean} 官方價格: NT${actual_price:,} (最低價)[/green]")
-                                return actual_price
+                            # 先把 HTML 轉純文字或針對性分割
+                            text_content = re.sub(r'<[^>]+>', ' ', prod_html)
                             
-                            # 備用：找型號附近的 NT$ 價格
-                            price_pattern = rf'{re.escape(full_model)}[^0-9]*NT\$\s*([\d,]+)'
-                            price_match = re.search(price_pattern, prod_html, re.I)
-                            if price_match:
-                                price = int(price_match.group(1).replace(',', ''))
-                                if 1000 < price < 100000:
-                                    _log_price_status(f"[green]✓ 找到 {model_clean} 官方價格: NT${price:,}[/green]")
-                                    return price
+                            # 找所有 NT$ 價格
+                            # [v18.97 Fix] 增強 regex：允許前綴與價格之間有更多符號
+                            # 捕獲前 20 個字元來檢查關鍵字
+                            price_matches = re.finditer(r'(.{0,20})\s*NT\$\s*([\d,]+)', text_content, re.IGNORECASE)
+                            
+                            for pm in price_matches:
+                                prefix = pm.group(1)
+                                price_str = pm.group(2)
+                                try:
+                                    val = int(price_str.replace(',', ''))
+                                    
+                                    # 過濾邏輯
+                                    # [v18.97 Fix] 移除 < 2000 門檻（因為折扣金額可能很大）
+                                    # 強制檢查關鍵字 "省下", "Save", "折", "Discount", "Recycle", "Trade-in"
+                                    if prefix:
+                                        prefix_lower = prefix.lower()
+                                        if any(k in prefix_lower for k in ['省下', 'save', '折', 'discount', 'recycle', 'trade-in']):
+                                            continue
+                                    
+                                    candidates.append({'val': val, 'src': 'html-regex', 'priority': 5})
+                                except:
+                                    pass
+
+                            if not candidates:
+                                _log_price_status(f"[yellow]⚠️ {model_clean} 頁面沒找到有效價格[/yellow]")
+                                continue
+                                
+                            # === 決策邏輯 ===
+                            # 去重
+                            unique_prices = sorted(list(set([c['val'] for c in candidates])))
+                            
+                            if not unique_prices:
+                                continue
+                                
+                            final_price = None
+                            
+                            # 策略 A: 如果只有一個價格，就用它
+                            if len(unique_prices) == 1:
+                                final_price = unique_prices[0]
+                                _log_price_status(f"[green]✓ 找到單一價格: NT${final_price:,}[/green]")
+                            else:
+                                # 策略 B: 取有效最低價 (因為我們已濾除折扣額，剩餘通常是 [特價, 原價])
+                                final_price = min(unique_prices)
+                                _log_price_status(f"[green]✓ 找到多個價格 {unique_prices}，取有效最低價: NT${final_price:,} (已過濾折扣額)[/green]")
+                            
+                            if final_price:
+                                return final_price
                 
             except requests.exceptions.Timeout:
                 _log_price_status(f"[yellow]⚠️ 連接 {category} 頁面超時[/yellow]")

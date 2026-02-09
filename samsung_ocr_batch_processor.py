@@ -324,7 +324,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         full_image_b64 = result['base64'] 
         label_b64 = result.get('label_base64') # [v18.25] Dual Vision: Get High-Res Crop
     if orchestrator:
-        msg = f"▶️ 正在分析圖片: {fname} (單一階段 Qwen-VL極速版)..."
+        msg = f"▶️ 正在分析圖片: {fname} (Model: {model_name_global})..."
         if label_b64: msg += " (偵測到價牌，啟用雙重視野放大 🔍)"
         orchestrator.log_system(msg)
         console.print(f"[cyan]{msg}[/cyan]")
@@ -434,15 +434,15 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             if attempt > 0:
                 console.print(f"[bold yellow]🔄 觸發重試 (Attempt {attempt+1}/{max_retries+1}) - 加入價格警告提示...[/bold yellow]")
                 orchestrator.log_system(f"🔄 [Auto-Retry] 觸發價格與型號不一致的重試機制...")
-
+            
             stream = api_client.chat.completions.create(
                 model=model_name_global,
                 messages=messages,
                 stream=True,
-                temperature=0.1,
-                top_p=0.8,
-                max_tokens=1024,
-                presence_penalty=1.5,
+                temperature=0.1,  # Keep low for OCR precision
+                # top_p=0.8,      # Removed to allow model defaults
+                # max_tokens=1024, # Let model decide or use default
+                # presence_penalty=1.5, # Removed: harmful for OCR (forces diversity)
                 stream_options={"include_usage": True}
             )
             
@@ -608,7 +608,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         if parsed and isinstance(parsed, dict):
              data_obj = parsed.get('data', parsed)
         
-        if not isinstance(data_obj, dict): data_obj = parsed # Fallback
+        if not isinstance(data_obj, dict): data_obj = {} # Fallback to empty dict to prevent AttributeError
 
         # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
         import difflib # Ensure import available (inline is safe)
@@ -884,6 +884,14 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             if thinking_text:
                 import re
                 thinking_text = re.sub(r'(?i)^observation:\s*', '', thinking_text).strip()
+                
+                # [v18.99] 去除重複的「整體符合「遠景」條件」（AI 有時會講兩次）
+                distant_phrase = '整體符合「遠景」條件'
+                if thinking_text.count(distant_phrase) > 1:
+                    # 只保留第一次出現
+                    first_idx = thinking_text.find(distant_phrase)
+                    end_of_first = first_idx + len(distant_phrase)
+                    thinking_text = thinking_text[:end_of_first].strip()
 
             # Log to Frontend (One time only)
             if thinking_text and orchestrator:
@@ -975,6 +983,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             view_type = result_json.get("view_type")
             screen_status = result_json.get("screen_status")
             quality_issue = result_json.get("quality_issue")
+            
+            # [v18.99 Backup] 獨白關鍵字備援檢測：若 JSON 沒說遠景，但獨白明確說了，則強制修正
+            if thinking_text and '整體符合「遠景」條件' in thinking_text:
+                if view_type != '遠景':
+                    console.print(f"[yellow]⚠️ [獨白備援] JSON 寫 {view_type} 但獨白說遠景 → 強制修正為遠景[/yellow]")
+                    view_type = '遠景'
+                    result_json['view_type'] = '遠景'
             
             if view_type == '遠景':
                 result_json['category'] = '遠景'
@@ -1451,6 +1466,32 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
     parser.add_argument("--timeout", type=int, default=180, help="API request timeout in seconds")
     args = parser.parse_args()
+
+    # [v18.99] Auto-Detect Model from LM Studio
+    # 這裡我們嘗試動態獲取當前掛載的模型
+    try:
+        import requests
+        api_base_url = args.api_base
+        if not api_base_url.endswith('/v1'):
+            chk_url = f"{api_base_url.rstrip('/')}/v1/models"
+        else:
+            chk_url = f"{api_base_url.rstrip('/')}/models"
+            
+        print(f"[Init] Detecting active model from: {chk_url} ...")
+        resp = requests.get(chk_url, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = data.get('data', [])
+            if models:
+                detected_id = models[0]['id']
+                print(f"[Init] 🟢 Auto-Detected Active Model: {detected_id}")
+                args.model = detected_id # Override command line arg
+            else:
+                print(f"[Init] ⚠️ No models found in response. Using default: {args.model}")
+        else:
+            print(f"[Init] ⚠️ API Check Failed ({resp.status_code}). Using default: {args.model}")
+    except Exception as e:
+        print(f"[Init] ⚠️ Auto-Detect Failed: {e}. Using default: {args.model}")
 
     model_name_global = args.model
     # v14.2: Don't force 127.0.0.1 if localhost works better for user

@@ -82,7 +82,7 @@ echo ---------------------------------------------------
 echo  OCR 核心已啟動，請勿關閉此視窗 (單一視窗模式)
 echo ---------------------------------------------------
 :: 直接在當前視窗執行 Python (會卡住視窗直到結束)
-python samsung_ocr_batch_processor.py --model qwen/qwen3-vl-4b --api_base http://192.168.0.234:1234/v1
+python samsung_ocr_batch_processor.py --api_base http://192.168.0.234:1234/v1
 
 :: 當 Python 結束後才會執行到這裡
 echo.
