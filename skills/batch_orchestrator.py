@@ -98,6 +98,32 @@ class BatchOrchestrator:
             return True
         return False
 
+    def refresh_stats(self):
+        """
+        [v19.6] Force refresh of statistics based on current directory.
+        Called when directory changes or on-demand.
+        """
+        try:
+            # [v19.6 Fix] Purge memory to prevent ghost records from previous folder
+            self.recent_results = []
+            self.failed_files = []
+            
+            scan_res = self.get_pending_files()
+            self.stats['total'] = len(scan_res['all_files'])
+            self.stats['success'] = len(scan_res['processed_success'])
+            self.stats['failed'] = len(scan_res['processed_failed'])
+            self.stats['processed'] = len(scan_res['processed_all'])
+            
+            # Update base counts specific to this run context
+            self.base_success_count = len(scan_res['processed_success'])
+            self.base_failed_count = len(scan_res['processed_failed'])
+            
+            return self.stats
+        except Exception as e:
+            self.log_system(f"⚠️ Stats refresh failed: {e}")
+            return self.stats
+
+
     def set_processor_function(self, fn: Callable):
         """Sets the function that performs the actual LLM call."""
         self.processor_fn = fn
@@ -115,8 +141,8 @@ class BatchOrchestrator:
             self.log_system(f"Failed to list actual files: {e}")
             actual_files = set()
 
-        # 1. Load Legacy Global File
-        legacy_files = [os.path.join(self.image_dir, "project-output.json"), "project-output.json"]
+        # 1. Load Legacy Global File (Scoped to current dir ONLY)
+        legacy_files = [os.path.join(self.image_dir, "project-output.json")]
         for lf in legacy_files:
             if os.path.exists(lf):
                 self._load_json_to_map(lf, all_records_map)
@@ -638,8 +664,8 @@ class BatchOrchestrator:
                                 processed_failed.add(fname)
                 except: pass
 
-        # Legacy Support
-        for lp in [os.path.join(self.image_dir, "project-output.json"), "project-output.json"]:
+        # Legacy Support (Scoped to current dir ONLY)
+        for lp in [os.path.join(self.image_dir, "project-output.json")]:
             if os.path.exists(lp):
                 try:
                     with open(lp, 'r', encoding='utf-8') as f:

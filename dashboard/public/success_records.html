@@ -229,7 +229,7 @@
     <div class="container">
       <h1>
         <span>✅ 成功紀錄 <span id="totalCount" style="font-size: 0.6em; background: #10b981; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span></span>
-        <span id="version-stamp" style="font-size: 12px; color: #aaa; margin-left: 10px; font-weight: normal;">Build: v18.99 (Re-run & Live Monitor)</span>
+        <span id="version-stamp" style="font-size: 12px; color: #aaa; margin-left: 10px; font-weight: normal;">Build: v19.7 (Cache Fix)</span>
         <button class="btn" onclick="window.close()" style="background: #4b5563">關閉視窗</button>
       </h1>
 
@@ -413,8 +413,11 @@
 
         async function init() {
             try {
+            try {
                 // [v19.0] Sync Directory from LocalStorage (or default)
-                const savedDir = localStorage.getItem('lastDir') || '商化照片-202601';
+                // [v19.6 Fix] Use correct key 'samsung_ocr_target_dir' to match App.jsx
+                const savedDir = localStorage.getItem('samsung_ocr_target_dir') || '商化照片-202512';
+                
                 // Call API to switch directory silently
                 try {
                     await fetch('/api/set_work_dir', {
@@ -496,8 +499,8 @@
                         </select>
                     </td>
                     
-                    <td><input type="text" id="model_${item.file_name}" value="${item.model || ''}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
-                    <td><input type="text" id="price_${item.file_name}" value="${item.price || ''}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
+                    <td><input type="text" id="model_${item.file_name}" value="${item.model === null ? 'null' : (item.model || '')}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
+                    <td><input type="text" id="price_${item.file_name}" value="${item.price === null ? 'null' : (item.price || '')}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     <td style="text-align:center;">
                         ${getPriceStatusBadge(item)}
                     </td>
@@ -848,11 +851,11 @@
             const ss = record.screen_status || (record.category && record.category.includes('黑屏') ? '黑屏' : (record.category && record.category.includes('藍屏') ? '藍屏' : ''));
             const qi = record.quality_issue || (record.category && record.category.includes('看不清楚') ? '照不清楚' : '');
 
-            document.getElementById('editViewType').value = vw;
-            document.getElementById('editScreenStatus').value = ss;
-            document.getElementById('editQualityIssue').value = qi;
-            document.getElementById('editModel').value = record.model || '';
-            document.getElementById('editPrice').value = record.price || '';
+            document.getElementById('editViewType').value = record.view_type || '單機';
+            document.getElementById('editScreenStatus').value = record.screen_status || '';
+            document.getElementById('editQualityIssue').value = record.quality_issue || '';
+            document.getElementById('editModel').value = record.model === null ? 'null' : (record.model || '');
+            document.getElementById('editPrice').value = record.price === null ? 'null' : (record.price || '');
 
             pan = { x: 0, y: 0 };
             imgContainer.style.transform = `translate(0px, 0px)`;

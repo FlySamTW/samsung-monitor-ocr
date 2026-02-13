@@ -1386,6 +1386,9 @@ def set_work_dir():
             # [v19.1] Save Config on Switch
             save_last_config(target_dir, model_name_global)
             
+            # [v19.6 Fix] Refresh stats immediately for correct dashboard counts
+            orchestrator.refresh_stats()
+
             orchestrator.log_system(f"📂 工作目錄已切換至: {target_dir}")
             return jsonify({"status": "success", "message": f"Switched to {target_dir}"})
         else:

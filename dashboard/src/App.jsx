@@ -26,7 +26,7 @@ const formatDisplayPrice = (val) => {
 };
 
 // [v18.73] 超嚴格型號驗證（檢查標題）
-const UI_VERSION = "v19.5 (DeepSeek-R1 Fix)";
+const UI_VERSION = "v19.7 (Cache & Sync Fix)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -194,9 +194,23 @@ const App = () => {
   }, []);
 
   // [v16.27 Persistence] Save targetDir to localStorage
+  // [v19.7 Fix] Also sync with backend immediately!
   useEffect(() => {
     if (targetDir) {
         localStorage.setItem('samsung_ocr_target_dir', targetDir);
+        
+        // Call Backend to Switch Dir
+        fetch('/api/set_work_dir', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ dir: targetDir })
+        }).then(res => res.json())
+          .then(data => {
+              console.log("[Backend] Work Dir Switched:", targetDir, data);
+              // Force fetch data to update stats immediately
+              fetchData();
+          })
+          .catch(err => console.error("Failed to sync work dir:", err));
     }
   }, [targetDir]);
 
@@ -346,11 +360,11 @@ const App = () => {
                    style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <Square size={12} /> 停止
                </button>
-               <button onClick={() => window.open('/failed_records.html', '_blank')} 
+               <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')} 
                    style={{ background: '#6366f1', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <AlertCircle size={12} /> 失敗記錄 ({stats.failed})
                </button>
-               <button onClick={() => window.open('/success_records.html', '_blank')} 
+               <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')} 
                    style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
                </button>

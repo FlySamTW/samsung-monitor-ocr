@@ -102,7 +102,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>❌ 失敗圖片清單 <span id="count" style="font-size: 0.6em; background: #ef5350; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span> <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v18.25 (Dual Vision)</span></h1>
+        <h1>❌ 失敗圖片清單 <span id="count" style="font-size: 0.6em; background: #ef5350; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span> <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v19.7 (Cache Fix)</span></h1>
         
         <div class="stats">
             <span>以下列出所有從 <code>failed_files.json</code> 載入的失敗記錄：</span>
@@ -140,11 +140,26 @@
 
         async function fetchData() {
             try {
+                // [v19.6 Fix] Sync Directory from LocalStorage to ensure backend context is correct
+                const savedDir = localStorage.getItem('samsung_ocr_target_dir');
+                if (savedDir) {
+                    try {
+                        await fetch('/api/set_work_dir', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ dir: savedDir })
+                        });
+                        console.log("[Init] Synced dir:", savedDir);
+                    } catch(e) {
+                         console.error("Failed to sync dir", e);
+                    }
+                }
+
                 const response = await fetch('/api/failed_records');
                 failedFiles = await response.json();
                 render();
             } catch (error) {
-                document.getElementById('content').innerHTML = `<div style="color: #ef5350; text-align: center; padding: 20px;">⚠️ 無法連接後端 API</div>`;
+                document.getElementById('content').innerHTML = `<div style="color: #ef5350; text-align: center; padding: 20px;">⚠️ 無法連接後端 API: ${error}</div>`;
             }
         }
 
