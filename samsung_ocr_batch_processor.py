@@ -1108,6 +1108,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         # [v9.71 Universal Summary Log] 
         # MOVED OUT OF ELSE BLOCK to guarantee execution.
         if orchestrator:
+            # [Fix] Log Thinking Process to System Log as requested
+            if 'thinking_text' in locals() and thinking_text:
+                orchestrator.log_system(f"💭 思考: {thinking_text}")
+
             cat = result_json.get("category") or ""
             mod = result_json.get("model") or "無型號"
             pri = result_json.get("price") or "無價格"

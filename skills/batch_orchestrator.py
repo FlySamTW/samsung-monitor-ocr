@@ -110,7 +110,7 @@ class BatchOrchestrator:
         # Get actual files in current dir
         try:
             actual_files = set(f for f in os.listdir(self.image_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png')))
-            self.log_system(f"Found {len(actual_files)} actual image files in {self.image_dir}")
+            # self.log_system(f"Found {len(actual_files)} actual image files in {self.image_dir}")
         except Exception as e:
             self.log_system(f"Failed to list actual files: {e}")
             actual_files = set()
@@ -147,9 +147,11 @@ class BatchOrchestrator:
                         after_count = len(all_records_map)
                         diff = after_count - before_count
                         if diff != 0:
-                            self.log_system(f"Loaded {fname}: {diff} records (Total: {after_count})")
+                            pass
+                            # self.log_system(f"Loaded {fname}: {diff} records (Total: {after_count})")
             except Exception as e:
-                self.log_system(f"⚠️ Failed to sort/load historical files: {e}")
+                pass
+                # self.log_system(f"⚠️ Failed to sort/load historical files: {e}")
 
         # 3. Filter by existing files and prioritize Memory
         record_map = {}
