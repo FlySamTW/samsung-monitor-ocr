@@ -43,6 +43,8 @@ class BatchOrchestrator:
         self.stream_buffer = "" # Real-time streaming buffer
         self.recent_results = []
         self.retry_queue = []
+        self.priority_queue = [] # [v16.12] Priority Queue
+        self.session_processed = set() # [v19.1] Session-level deduplication to prevent "Infinite Loop" ghosts
         self.base_success_count = 0 # [v11.7] Cache for performance
 
         self.is_running = False
@@ -108,7 +110,9 @@ class BatchOrchestrator:
         # Get actual files in current dir
         try:
             actual_files = set(f for f in os.listdir(self.image_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png')))
-        except:
+            self.log_system(f"Found {len(actual_files)} actual image files in {self.image_dir}")
+        except Exception as e:
+            self.log_system(f"Failed to list actual files: {e}")
             actual_files = set()
 
         # 1. Load Legacy Global File
@@ -119,22 +123,75 @@ class BatchOrchestrator:
         
         # 2. Load Session Files
         if os.path.exists(self.image_dir):
-            for fname in os.listdir(self.image_dir):
-                if fname.endswith("OCR成功.json"):
-                    self._load_json_to_map(os.path.join(self.image_dir, fname), all_records_map)
+            # [v12.0 Fix] Scan ALL existing JSONs to rebuild memory
+            # [v19.1 Fix] Sort by modification time (Oldest -> Newest) to ensure latest updates win
+            try:
+                # [v19.4 Logic] Robust sorting with error handling for race conditions
+                all_files = []
+                for f in os.listdir(self.image_dir):
+                    try:
+                        # 嘗試獲取 mtime，如果失敗 (如檔案剛被刪除) 則忽略
+                        mtime = os.path.getmtime(os.path.join(self.image_dir, f))
+                        all_files.append((f, mtime))
+                    except (FileNotFoundError, PermissionError):
+                        continue
+                
+                # Sort by time
+                all_files.sort(key=lambda x: x[1])
+                
+                for fname, _ in all_files:
+                    if fname.endswith("OCR成功.json"):
+                        fpath = os.path.join(self.image_dir, fname)
+                        before_count = len(all_records_map)
+                        self._load_json_to_map(fpath, all_records_map)
+                        after_count = len(all_records_map)
+                        diff = after_count - before_count
+                        if diff != 0:
+                            self.log_system(f"Loaded {fname}: {diff} records (Total: {after_count})")
+            except Exception as e:
+                self.log_system(f"⚠️ Failed to sort/load historical files: {e}")
 
         # 3. Filter by existing files and prioritize Memory
-        final_map = {}
+        record_map = {}
         for f in actual_files:
             if f in all_records_map:
-                final_map[f] = all_records_map[f]
+                record_map[f] = all_records_map[f]
         
         # Overlay Memory
-        for res in self.run_results:
+        for res in self.recent_results:
             if res['file_name'] in actual_files:
-                final_map[res['file_name']] = res
+                record_map[res['file_name']] = res
+        
+        # 3. Filter by actual files in current dir
+        # Only return records for files that actually exist in the image_dir
+        final_records = []
+        actual_files_lower = set()
+        try:
+            # [v19.7 Fix] Case-Insensitive Matching for Windows
+            # Store lower-case filenames for existence check
+            actual_files_lower = set(f.lower() for f in os.listdir(self.image_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png')))
             
-        return list(final_map.values())
+            with open("debug_orchestrator.log", "a", encoding="utf-8") as debug_log:
+                debug_log.write(f"[{datetime.now()}] Found {len(actual_files_lower)} actual image files (case-insensitive) in {self.image_dir}\n")
+        except Exception as e:
+            self.log_system(f"Failed to list actual files: {e}")
+            with open("debug_orchestrator.log", "a", encoding="utf-8") as debug_log:
+                debug_log.write(f"[{datetime.now()}] Failed to list actual files: {e}\n")
+
+        for filename, record in record_map.items():
+            # Check if filename.lower() exists in actual_files_lower
+            if filename.lower() in actual_files_lower:
+                final_records.append(record)
+            else:
+                # [DEBUG] Log missing files (first 5)
+                if len(final_records) == 0 and len(record_map) > 0:
+                     with open("debug_orchestrator.log", "a", encoding="utf-8") as debug_log:
+                        debug_log.write(f"[{datetime.now()}] Skipped missing file: {filename}\n")
+        
+        with open("debug_orchestrator.log", "a", encoding="utf-8") as debug_log:
+            debug_log.write(f"[{datetime.now()}] Final records count after filtering: {len(final_records)}\n")
+
+        return final_records
 
     def get_all_failed_records(self):
         """
@@ -176,7 +233,17 @@ class BatchOrchestrator:
         if not os.path.exists(filepath): return
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                # [v18.99 Fix] Handle empty or corrupted files
+                content = f.read().strip()
+                if not content: 
+                    self.log_system(f"⚠️ Warning: {filepath} is empty.")
+                    return
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError as je:
+                    self.log_system(f"❌ JSON Error in {filepath}: {je.msg} at line {je.lineno} col {je.colno}")
+                    return
+                
                 for item in data:
                     # Parse LS JSON
                     try:
@@ -475,7 +542,7 @@ class BatchOrchestrator:
         # [v11.9 Fix] Always reset session stats on new batch start
         # Previous logic was inverted/confused. New Batch = New Stats.
         self.failed_files = []
-        self.run_results = []
+        self.recent_results = []
         self.stats['success'] = 0
         self.stats['failed'] = 0
         self.stats['processed'] = 0 # [v11.91 Fix] Reset to 0, thread will update base count
@@ -719,7 +786,7 @@ class BatchOrchestrator:
         }
         
         # [v11.2] We start clean for THIS file output, but we keep idempotency.
-        self.run_results = [] 
+        self.recent_results = [] 
         
         # --- Loop ---
         work_queue = list(pending_files)
@@ -733,11 +800,23 @@ class BatchOrchestrator:
                 self.log_system(f"Meltdown: {MAX_FAILURES} consecutive failures. Stopping.")
                 break
             
+            # [v19.1 Fix] Session-level Deduplication (The Ultimate Ghost Buster)
+            # If this file was already processed IN THIS SESSION (and we are not forcing a specific retry logic that clears this),
+            # skip it. This prevents the "Triple Trigger" where:
+            # 1. Priority Queue adds it
+            # 2. File system scan sees it as "pending" (because JSON was deleted) and adds to Work Queue
+            # 3. Work Queue processes it AGAIN
+            
             # Pick File
+            fname = None
+            is_priority = False
+            
             if self.priority_queue:
                 fname = self.priority_queue.pop(0)
-                is_retry = True # Treat as retry to avoid skipping stats logic issues
+                is_retry = True 
+                is_priority = True # Mark as priority
                 self.log_system(f"⚡ [Priority] 優先插隊: {fname}")
+                
             elif self.retry_queue:
                 fname = self.retry_queue.pop(0)
                 is_retry = True
@@ -746,6 +825,21 @@ class BatchOrchestrator:
                 is_retry = False
             else:
                 break
+                
+            # [v19.1] Global Deduplication Check
+            if fname in self.session_processed and not is_priority:
+                 # If it's NOT a priority item (user requested), but it IS in session_processed,
+                 # it implies a Work Queue duplicate. SKIP IT.
+                 # Priority items are allowed to re-run (that's the point).
+                 self.log_system(f"⏩ [Dedup] 已在本次會話處理過，略過重複執行: {fname}")
+                 continue
+
+            # [v19.01 Fix] Deduplicate: Remove from work_queue if it's there
+            if is_priority and fname in work_queue:
+                try:
+                    work_queue.remove(fname)
+                except ValueError:
+                    pass
                 
             self.current_file = fname
             self.stream_buffer = "" # Reset buffer for new file
@@ -848,8 +942,8 @@ class BatchOrchestrator:
                 )
 
                 # [v11.2] Save to DYNAMIC Session File
-                self.run_results.append(norm_result)
-                self.evaluator.export_to_label_studio_json(self.run_results, self.current_success_file)
+                self.recent_results.append(norm_result)
+                self.evaluator.export_to_label_studio_json(self.recent_results, self.current_success_file)
 
                 # [v17.15 Fix] Save Thinking Process to Single Session TXT file
                 if 'thinking' in norm_result and norm_result['thinking']:

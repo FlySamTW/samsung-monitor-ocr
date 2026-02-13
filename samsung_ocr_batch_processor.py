@@ -58,6 +58,31 @@ def print_version_info():
     console.print("=" * 50)
 
 # === 快取檢查 ===
+CONFIG_FILE = ".last_run_config.json"
+
+def load_last_config():
+    """載入上次執行的設定 (目錄與模型)"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            console.print(f"[yellow]⚠️ 無法讀取設定檔: {e}[/yellow]")
+    return {}
+
+def save_last_config(image_dir, model_name):
+    """儲存本次執行的設定"""
+    try:
+        data = {
+            "last_image_dir": image_dir,
+            "last_model": model_name,
+            "updated_at": datetime.now().isoformat()
+        }
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        # console.print(f"[dim]💾 設定已儲存: {image_dir}[/dim]")
+    except Exception as e:
+        console.print(f"[red]❌ 設定儲存失敗: {e}[/red]")
 def verify_no_cache():
     """檢查是否還有殘留的快取檔案"""
     cache_dirs = []
@@ -83,7 +108,17 @@ log = logging.getLogger("rich")
 
 # --- Flask App ---
 # [v14.8] Serve Dashboard from dist folder
-flask_app = Flask(__name__, static_folder=os.path.join('dashboard', 'dist'))
+# [v19.6] Robust JSON Serialization for Datetime
+from datetime import datetime
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.strftime('%Y-%m-%d %H:%M:%S')
+        return super().default(obj)
+
+flask_app = Flask(__name__, static_folder="dashboard/dist", static_url_path="/")
+flask_app.json_encoder = CustomJSONEncoder # For Flask < 2.2
+flask_app.json.cls = CustomJSONEncoder # For Flask >= 2.2
 CORS(flask_app)
 orchestrator: BatchOrchestrator = None
 api_client: OpenAI = None
@@ -305,7 +340,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     
     # RESTORE ORIGINAL RESOLUTION (No Constraint)
     # [IRON RULE] User said: "Do NOT compress images!!!" 
-    image_processor.config["max_size"] = None 
+    # [v18.99 Critical Fix] However, 12MP images (4000x3000) consume ~12k tokens, causing Context Overflow (8k limit).
+    # We MUST cap at a reasonable high-res limit (e.g. 2560px) to survive.
+    # 2560px is still > 2K resolution, sufficient for OCR.
+    image_processor.config["max_size"] = 2560
     
     # [v16.3 DEBUG] Force Print to see if we enter
     print(f"[DEBUG] process_single_image called for: {fname}")
@@ -536,6 +574,16 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                     parsed = json.loads(args_str)
                 except:
                     pass
+            
+            # [v18.99 Fix] Retry if JSON is completely missing
+            if not parsed and attempt < max_retries:
+                console.print(f"[bold red]⚠️ 未偵測到有效 JSON，要求 LLM 補完...[/bold red]")
+                orchestrator.log_system(f"⚠️ [Auto-Retry] LLM 未輸出 JSON，觸發重試...")
+                # Append the previous incomplete response as assistant output
+                messages.append({"role": "assistant", "content": full_response_text})
+                # Prompt user to force JSON
+                messages.append({"role": "user", "content": "你忘了輸出 JSON！請依照格式要求，在最後補上 JSON 區塊。\n(只輸出 JSON，不要再解釋)"})
+                continue
             
             # [v18.90] Price Consistency Check
             price_check_passed = True
@@ -1220,9 +1268,13 @@ def get_success_records():
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
     
+    # [DEBUG] Visible Proof for User
+    print(f"[API] 🟢 /api/success_records called. Path: {orchestrator.image_dir}")
+    
     # Return full run results (in memory)
     # [v11.4] Aggregated History (Current + Legacy + Previous Sessions)
     results = orchestrator.get_all_records()
+    print(f"[API] 🟢 Returned {len(results)} records.")
     return jsonify(results)
 
 @flask_app.route('/')
@@ -1301,12 +1353,41 @@ def start_batch():
                 })
 
         # 開始批次處理
+        # [v19.1] Save Config on Start
+        save_last_config(orchestrator.image_dir, model_name_global)
+        
         orchestrator.start_batch(restart=restart, reprocess_last_n=reprocess_last_n)
         mode_text = "重新啟動" if restart else "繼續執行"
         return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
         
     except Exception as e:
         return jsonify({"error": f"啟動失敗: {str(e)}"}), 500
+
+@flask_app.route('/api/set_work_dir', methods=['POST'])
+def set_work_dir():
+    """[v19.0] 允許前端在不啟動批次的情況下切換工作目錄，以便查看歷史紀錄"""
+    if not orchestrator:
+        return jsonify({"error": "系統未初始化"}), 500
+    
+    try:
+        data = request.json
+        target_dir = data.get('dir')
+        
+        if not target_dir:
+            return jsonify({"error": "Missing dir parameter"}), 400
+            
+        if os.path.exists(target_dir):
+            orchestrator.image_dir = target_dir
+            orchestrator.config['image_dir'] = target_dir
+            # [v19.1] Save Config on Switch
+            save_last_config(target_dir, model_name_global)
+            
+            orchestrator.log_system(f"📂 工作目錄已切換至: {target_dir}")
+            return jsonify({"status": "success", "message": f"Switched to {target_dir}"})
+        else:
+            return jsonify({"error": f"Directory not found: {target_dir}"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @flask_app.route('/api/stop', methods=['POST'])
 def stop_batch():
@@ -1428,12 +1509,26 @@ def correct_result():
     except Exception as e:
         return jsonify({"error": f"修正失敗: {str(e)}"}), 500
 
-@flask_app.route('/<path:filename>')
-def serve_dist_fallback(filename):
-    """服務 dist 根目錄的其他檔案 (如 favicon, failed_records.html 等)"""
-    if os.path.exists(os.path.join(flask_app.static_folder, filename)):
-        return send_from_directory(flask_app.static_folder, filename)
-    return f"File not found: {filename}", 404
+# [v19.55] Global Cache Busting for Frontend
+@flask_app.after_request
+def add_header(response):
+    """
+    Force browser to NOT cache index.html so updates are seen immediately.
+    """
+    if request.path == '/' or request.path.endswith('index.html'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
+# [v18.99] Serve React App
+@flask_app.route('/', defaults={'path': ''})
+@flask_app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(os.path.join(flask_app.static_folder, path)):
+        return send_from_directory(flask_app.static_folder, path)
+    else:
+        return send_from_directory(flask_app.static_folder, 'index.html')
 
 # --- Main ---
 def main():
@@ -1459,13 +1554,32 @@ def main():
     
     parser = argparse.ArgumentParser()
     # Change default to the actual target directory to avoid CLI encoding issues
-    parser.add_argument("--dir", default="商化照片-202512", help="Image directory")
+    parser.add_argument("--dir", default="商化照片-202601", help="Image directory")
     parser.add_argument("--api_base", default="http://192.168.0.234:1234/v1", help="LM Studio/OpenAI Base URL")
     parser.add_argument("--api_key", default="lm-studio", help="API Key")
     parser.add_argument("--model", default="qwen/qwen3-vl-4b", help="Model Name")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
     parser.add_argument("--timeout", type=int, default=180, help="API request timeout in seconds")
     args = parser.parse_args()
+
+    # [v19.1] Load Last Config (Override defaults if not specified via CLI)
+    # Priority: CLI Args > Last Config > Hardcoded Default
+    last_config = load_last_config()
+    
+    # If user didn't specify --dir (it equals default), try to load from config
+    # Note: argparse default is processed before this, so we check if it matches the hardcoded default
+    if args.dir == "商化照片-202601" and "last_image_dir" in last_config:
+        args.dir = last_config["last_image_dir"]
+    
+    # [v19.2 Fix] Start using absolute path to prevent CWD/Relative path issues in Orchestrator
+    if not os.path.isabs(args.dir):
+        args.dir = os.path.abspath(args.dir)
+    
+    console.print(f"[Init] 📂 Loaded last used directory: [cyan]{args.dir}[/cyan]")
+    
+    if args.model == "qwen/qwen3-vl-4b" and "last_model" in last_config:
+         # Optional: override model if desired, but auto-detect usually handles this
+         pass
 
     # [v18.99] Auto-Detect Model from LM Studio
     # 這裡我們嘗試動態獲取當前掛載的模型
@@ -1516,9 +1630,6 @@ def main():
         orchestrator.log_system(msg, with_timestamp=False)
     set_price_log_callback(price_log_to_dashboard)
     
-    # [v18.56] Show Prompt version at startup
-    import os
-    from datetime import datetime
     prompt_file = 'samsung_ocr_prompt.txt'
     if os.path.exists(prompt_file):
         prompt_mtime = os.path.getmtime(prompt_file)
@@ -1560,6 +1671,18 @@ def main():
     console.print("[yellow]⏳ 等待儀表板操作... 請在瀏覽器中選擇資料夾並點擊「繼續執行」[/yellow]")
 
     # [v17.27] Explicitly enable threading to prevent UI blocking
+    # [v19.5] Auto-Open Browser (Moved from batch script to Python for reliability)
+    import webbrowser
+    from threading import Timer
+    def open_browser():
+        try:
+            webbrowser.open("http://localhost:5000")
+            console.print("[green]🚀 Browser launch command sent.[/green]")
+        except Exception as e:
+            console.print(f"[red]⚠️ Browser launch failed: {e}[/red]")
+            
+    Timer(1.5, open_browser).start()
+    
     flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":

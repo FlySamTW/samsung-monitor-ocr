@@ -1,346 +1,402 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Samsung OCR - 成功紀錄</title>
     <style>
-        /* ... existing styles ... */
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #e5e5e5;
-            margin: 0;
-            padding: 20px;
-            line-height: 1.5;
-            overflow: hidden; /* Prevent body scroll when lightbox is open */
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: #262626;
-            border-radius: 8px;
-            border: 1px solid #404040;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-            height: calc(100vh - 40px); /* Full height container */
-            display: flex;
-            flex-direction: column;
-        }
-        h1 {
-            border-bottom: 1px solid #404040;
-            padding-bottom: 15px;
-            margin-top: 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-shrink: 0;
-        }
-        #content {
-            flex: 1;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-        .table-container {
-            flex: 1;
-            overflow-y: auto;
-        }
-        /* ... table styles ... */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-        }
-        th, td {
-            text-align: left;
-            padding: 12px;
-            border-bottom: 1px solid #404040;
-        }
-        th {
-            background-color: #333;
-            color: #9ca3af;
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        tr:hover { background-color: #2a2a2a; }
-        .thumb {
-            width: 60px;
-            height: 60px;
-            object-fit: cover;
-            border-radius: 4px;
-            cursor: zoom-in;
-            border: 1px solid #555;
-            transition: transform 0.2s;
-        }
-        .thumb:hover { transform: scale(1.1); border-color: #6366f1; }
-        
-        .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-        .tag-model { background: #1e3a8a; color: #93c5fd; }
-        .tag-price { background: #064e3b; color: #6ee7b7; }
-        
-        .pagination {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin-top: 10px;
-            gap: 10px;
-            padding-top: 10px;
-            border-top: 1px solid #404040;
-            flex-shrink: 0;
-        }
-        .btn {
-            background-color: #6366f1; color: white; border: none; padding: 6px 12px;
-            border-radius: 4px; cursor: pointer; font-size: 13px; margin-right: 5px;
-        }
-        .btn:hover { background-color: #4f46e5; }
-        .page-btn {
-            background: #333; color: #fff; border: 1px solid #555; padding: 5px 10px;
-            cursor: pointer; border-radius: 4px;
-        }
-        .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        /* Lightbox Container (Full Screen) */
-        #lightbox {
-            display: none;
-            position: fixed;
-            inset: 0;
-            z-index: 9999;
-            background: rgba(0,0,0,0.95);
-            justify-content: center;
-            align-items: center;
-            overflow: hidden;
-            user-select: none;
-        }
-        
-        /* Draggable Image Layer */
-        #lightboxImgContainer {
-            transform-origin: center;
-            cursor: grab;
-        }
-        #lightboxImgContainer.grabbing { cursor: grabbing; }
-        
-        #lightboxImg {
-            display: block;
-            pointer-events: none; /* Let container handle drag */
-            min-width: 500px;
-            max-width: none;
-            max-height: none;
-            box-shadow: 0 0 50px rgba(0,0,0,0.8);
-        }
-
-        /* Metadata Footer in Lightbox (Standardized v18.25) */
-        .controls-overlay {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            background: #111;
-            border-top: 1px solid #333;
-            padding: 12px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 20px;
-            color: #ddd;
-            font-family: 'JetBrains Mono', monospace;
-            z-index: 10000;
-            box-shadow: 0 -10px 30px rgba(0,0,0,0.5);
-        }
-        
-        .footer-item {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-width: 80px;
-        }
-        .footer-label { font-size: 10px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
-        .footer-val { font-size: 14px; color: #fff; font-weight: bold; }
-        .footer-sep { width: 1px; height: 30px; background: #333; margin: 0 10px; }
-        
-        .footer-input {
-            background: #000;
-            border: 1px solid #444;
-            color: #00f5ff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: inherit;
-            font-size: 13px;
-            text-align: center;
-        }
-        .footer-input:focus { border-color: #00f5ff; outline: none; }
-        
-        .close-btn {
-            position: absolute; top: 20px; right: 20px;
-            width: 48px; height: 48px; border-radius: 50%;
-            background: rgba(255, 0, 0, 0.2);
-            border: 2px solid #fff; color: #fff;
-            font-size: 24px; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; z-index: 10001;
-        }
-        .close-btn:hover { background: rgba(255, 0, 0, 0.6); }
-
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background-color: #1a1a1a;
+        color: #e5e5e5;
+        margin: 0;
+        padding: 20px;
+        line-height: 1.5;
+        overflow: hidden; /* Prevent body scroll when lightbox is open */
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: #262626;
+        border-radius: 8px;
+        border: 1px solid #404040;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        height: calc(100vh - 40px); /* Full height container */
+        display: flex;
+        flex-direction: column;
+      }
+      h1 {
+        border-bottom: 1px solid #404040;
+        padding-bottom: 15px;
+        margin-top: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+      }
+      #content {
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .table-container {
+        flex: 1;
+        overflow-y: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px;
+        border-bottom: 1px solid #404040;
+      }
+      th {
+        background-color: #333;
+        color: #9ca3af;
+        font-weight: 600;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      tr:hover {
+        background-color: #2a2a2a;
+      }
+      .thumb {
+        width: 60px;
+        height: 60px;
+        object-fit: cover;
+        border-radius: 4px;
+        cursor: zoom-in;
+        border: 1px solid #555;
+        transition: transform 0.2s;
+      }
+      .thumb:hover {
+        transform: scale(1.1);
+        border-color: #6366f1;
+      }
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+      .pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-top: 10px;
+        gap: 10px;
+        padding-top: 10px;
+        border-top: 1px solid #404040;
+        flex-shrink: 0;
+      }
+      .btn {
+        background-color: #6366f1;
+        color: white;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+        margin-right: 5px;
+      }
+      .btn:hover {
+        background-color: #4f46e5;
+      }
+      .page-btn {
+        background: #333;
+        color: #fff;
+        border: 1px solid #555;
+        padding: 5px 10px;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      .page-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      /* Lightbox Container */
+      #lightbox {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: rgba(0, 0, 0, 0.95);
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        user-select: none;
+      }
+      #lightboxImgContainer {
+        transform-origin: center;
+        cursor: grab;
+      }
+      #lightboxImgContainer.grabbing {
+        cursor: grabbing;
+      }
+      #lightboxImg {
+        display: block;
+        pointer-events: none;
+        min-width: 500px;
+        max-width: none;
+        max-height: none;
+        box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+      }
+      /* Metadata Footer in Lightbox */
+      .controls-overlay {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background: #111;
+        border-top: 1px solid #333;
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        color: #ddd;
+        font-family: "JetBrains Mono", monospace;
+        z-index: 10000;
+        box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.5);
+      }
+      .footer-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-width: 80px;
+      }
+      .footer-label {
+        font-size: 10px;
+        color: #888;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+      .footer-val {
+        font-size: 14px;
+        color: #fff;
+        font-weight: bold;
+      }
+      .footer-sep {
+        width: 1px;
+        height: 30px;
+        background: #333;
+        margin: 0 10px;
+      }
+      .footer-input {
+        background: #000;
+        border: 1px solid #444;
+        color: #00f5ff;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 13px;
+        text-align: center;
+      }
+      .footer-input:focus {
+        border-color: #00f5ff;
+        outline: none;
+      }
+      .close-btn {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: rgba(255, 0, 0, 0.2);
+        border: 2px solid #fff;
+        color: #fff;
+        font-size: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        z-index: 10001;
+      }
+      .close-btn:hover {
+        background: rgba(255, 0, 0, 0.6);
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <h1>
-            <span>✅ 成功紀錄 <span id="totalCount" style="font-size:0.6em; background:#10b981; padding:2px 8px; border-radius:12px; vertical-align:middle;">0</span></span>
-            <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v18.83 (修復縮圖點擊放大)</span>
-            <button class="btn" onclick="window.close()" style="background:#4b5563;">關閉視窗</button>
-        </h1>
+      <h1>
+        <span>✅ 成功紀錄 <span id="totalCount" style="font-size: 0.6em; background: #10b981; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span></span>
+        <span id="version-stamp" style="font-size: 12px; color: #aaa; margin-left: 10px; font-weight: normal;">Build: v18.99 (Re-run & Live Monitor)</span>
+        <button class="btn" onclick="window.close()" style="background: #4b5563">關閉視窗</button>
+      </h1>
 
-        <div id="content">
-            <div class="table-container">
-                <table id="dataTable">
-                    <thead>
-                        <tr>
-                            <th width="60">縮圖</th>
-                            <th width="150">檔名</th>
-                            <th width="80">視角</th>
-                            <th width="100">畫面狀態</th>
-                            <th width="120">品質問題</th>
-                            <th width="120">型號</th>
-                            <th width="80">價格</th>
-                            <th width="50">價格驗證</th>
-                            <th>備註</th>
-                            <th width="60">操作</th>
-                        </tr>
-                        <!-- Filter Row -->
-                        <tr id="filterRow" style="background: #222;">
-                            <th></th>
-                            <th><input type="text" id="filter_filename" onkeyup="filterData()" placeholder="篩選檔名..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th>
-                                <select id="filter_view" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                                    <option value="">全部</option>
-                                    <option value="單機">單機</option>
-                                    <option value="遠景">遠景</option>
-                                </select>
-                            </th>
-                            <th>
-                                <select id="filter_screen" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                                    <option value="">全部</option>
-                                    <option value="正常">正常</option>
-                                    <option value="黑屏">黑屏</option>
-                                    <option value="藍屏">藍屏</option>
-                                    <option value="不顯示">不顯示</option>
-                                </select>
-                            </th>
-                            <th>
-                                <select id="filter_quality" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                                    <option value="">全部</option>
-                                    <option value="無">無問題</option>
-                                    <option value="照不清楚">照不清楚</option>
-                                    <option value="沒有規格牌">沒有規格牌</option>
-                                    <option value="沒有價格牌">沒有價格牌</option>
-                                    <option value="沒有規格價格牌">無吊牌</option>
-                                </select>
-                            </th>
-                            <th><input type="text" id="filter_model" onkeyup="filterData()" placeholder="篩選型號..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th style="display:flex; gap:2px;">
-                                <input type="number" id="filter_price_min" onchange="filterData()" placeholder="最低" style="width:45%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                                <input type="number" id="filter_price_max" onchange="filterData()" placeholder="最高" style="width:45%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                            </th>
-                            <th>
-                                <select id="filter_price_status" onchange="filterData()" style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;">
-                                    <option value="">全部</option>
-                                    <option value="✓">✓ 符合</option>
-                                    <option value="↑">↑ 高於</option>
-                                    <option value="↓">↓ 低於</option>
-                                    <option value="?">? 未知</option>
-                                </select>
-                            </th>
-                            <th><input type="text" id="filter_note" onkeyup="filterData()" placeholder="篩選備註..." style="width:100%; background:#111; color:#fff; border:1px solid #444; padding:4px;"></th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="tableBody"></tbody>
-                </table>
-            </div>
-            
-            <div class="pagination">
-                <button class="page-btn" onclick="changePage(-1)">上一頁</button>
-                <span id="pageInfo">Page 1</span>
-                <span id="filterCount" style="color:#888; font-size:12px;">(篩選: 0 筆)</span>
-                <button class="page-btn" onclick="changePage(1)">下一頁</button>
-            </div>
+      <div id="content">
+        <div class="table-container">
+          <table id="dataTable">
+            <thead>
+              <tr>
+                <th width="60">縮圖</th>
+                <th width="150">檔名</th>
+                <th width="80">視角</th>
+                <th width="100">畫面狀態</th>
+                <th width="120">品質問題</th>
+                <th width="120">型號</th>
+                <th width="80">價格</th>
+                <th width="50">價格驗證</th>
+                <th>備註</th>
+                <th width="100">操作</th>
+              </tr>
+              <!-- Filter Row -->
+              <tr id="filterRow" style="background: #222">
+                <th></th>
+                <th><input type="text" id="filter_filename" onkeyup="filterData()" placeholder="篩選檔名..." style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;" /></th>
+                <th>
+                  <select id="filter_view" onchange="filterData()" style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;">
+                    <option value="">全部</option>
+                    <option value="單機">單機</option>
+                    <option value="遠景">遠景</option>
+                  </select>
+                </th>
+                <th>
+                  <select id="filter_screen" onchange="filterData()" style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;">
+                    <option value="">全部</option>
+                    <option value="正常">正常</option>
+                    <option value="黑屏">黑屏</option>
+                    <option value="藍屏">藍屏</option>
+                    <option value="不顯示">不顯示</option>
+                  </select>
+                </th>
+                <th>
+                  <select id="filter_quality" onchange="filterData()" style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;">
+                    <option value="">全部</option>
+                    <option value="無">無問題</option>
+                    <option value="照不清楚">照不清楚</option>
+                    <option value="沒有規格牌">沒有規格牌</option>
+                    <option value="沒有價格牌">沒有價格牌</option>
+                    <option value="沒有規格價格牌">無吊牌</option>
+                  </select>
+                </th>
+                <th><input type="text" id="filter_model" onkeyup="filterData()" placeholder="篩選型號..." style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;" /></th>
+                <th style="display: flex; gap: 2px">
+                  <input type="number" id="filter_price_min" onchange="filterData()" placeholder="最低" style="width: 45%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;" />
+                  <input type="number" id="filter_price_max" onchange="filterData()" placeholder="最高" style="width: 45%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;" />
+                </th>
+                <th>
+                  <select id="filter_price_status" onchange="filterData()" style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;">
+                    <option value="">全部</option>
+                    <option value="✓">✓ 符合</option>
+                    <option value="↑">↑ 高於</option>
+                    <option value="↓">↓ 低於</option>
+                    <option value="?">? 未知</option>
+                  </select>
+                </th>
+                <th><input type="text" id="filter_note" onkeyup="filterData()" placeholder="篩選備註..." style="width: 100%; background: #111; color: #fff; border: 1px solid #444; padding: 4px;" /></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
         </div>
+
+        <div class="pagination">
+          <button class="page-btn" onclick="changePage(-1)">上一頁</button>
+          <span id="pageInfo">Page 1</span>
+          <span id="filterCount" style="color: #888; font-size: 12px">(篩選: 0 筆)</span>
+          <button class="page-btn" onclick="changePage(1)">下一頁</button>
+        </div>
+      </div>
     </div>
 
     <!-- Lightbox -->
     <div id="lightbox">
-        <div class="close-btn" onclick="closeLightbox()">×</div>
-        
-        <div id="lightboxImgContainer" onmousedown="startDrag(event)">
-            <img id="lightboxImg" src="" alt="Full View">
+      <div class="close-btn" onclick="closeLightbox()">×</div>
+      <div id="lightboxImgContainer" onmousedown="startDrag(event)">
+        <img id="lightboxImg" src="" alt="Full View" />
+      </div>
+      <div class="controls-overlay" onclick="event.stopPropagation()">
+        <div class="footer-item" style="min-width: 150px">
+          <span class="footer-label">檔名 (Filename)</span>
+          <span id="overlayFilename" class="footer-val" style="color: #888; font-size: 12px">-</span>
         </div>
+        <div class="footer-sep"></div>
+        <div class="footer-item">
+          <span class="footer-label">視角 (View)</span>
+          <select id="editViewType" class="footer-input">
+            <option value="單機">單機</option>
+            <option value="遠景">遠景</option>
+          </select>
+        </div>
+        <div class="footer-sep"></div>
+        <div class="footer-item">
+          <span class="footer-label">狀態 (Screen)</span>
+          <select id="editScreenStatus" class="footer-input">
+            <option value="">正常</option>
+            <option value="黑屏">黑屏</option>
+            <option value="藍屏">藍屏</option>
+            <option value="不顯示">不顯示</option>
+          </select>
+        </div>
+        <div class="footer-sep"></div>
+        <div class="footer-item">
+          <span class="footer-label">品質 (Quality)</span>
+          <select id="editQualityIssue" class="footer-input">
+            <option value="">正常</option>
+            <option value="照不清楚">照不清楚</option>
+            <option value="沒有規格價格牌">無牌</option>
+          </select>
+        </div>
+        <div class="footer-sep"></div>
+        <div class="footer-item">
+          <span class="footer-label">型號 (Model)</span>
+          <input type="text" id="editModel" class="footer-input" style="width: 130px" />
+        </div>
+        <div class="footer-sep"></div>
+        <div class="footer-item">
+          <span class="footer-label">價格 (Price)</span>
+          <input type="text" id="editPrice" class="footer-input" style="width: 80px" />
+        </div>
+        <div class="footer-item" style="margin-left: 20px; display: flex; flex-direction: row; gap: 8px;">
+          <button class="btn" style="background: #10b981; padding: 8px 16px" onclick="submitCorrection()">💾 儲存</button>
+          <button class="btn" style="background: #f59e0b; padding: 8px 16px" onclick="triggerRerunFromLightbox()">⚡ 重跑</button>
+          <button class="btn" style="background: #4b5563; padding: 8px 16px" onclick="closeLightbox()">❌</button>
+        </div>
+      </div>
+    </div>
 
-        <div class="controls-overlay" onclick="event.stopPropagation()">
-            <div class="footer-item" style="min-width: 150px;">
-                <span class="footer-label">檔名 (Filename)</span>
-                <span id="overlayFilename" class="footer-val" style="color:#888; font-size:12px;">-</span>
+    <!-- Live Monitor Panel [v18.99] -->
+    <div id="liveMonitor" style="position:fixed; bottom:0; left:0; width:100%; height:200px; background:#111; border-top:1px solid #333; z-index:9000; display:none; flex-direction:column; box-shadow:0 -5px 20px rgba(0,0,0,0.5);">
+        <div style="background:#222; padding:5px 10px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; cursor:pointer;" onclick="toggleMonitorSize()">
+            <span style="font-weight:bold; color:#10b981;">📟 即時監控 (Live Monitor) - <span id="monitorStatus">Idle</span></span>
+            <div>
+                <button class="btn" style="padding:2px 8px; font-size:12px; background:#444;" onclick="toggleMonitor(event)">_ 縮小</button>
+                <button class="btn" style="padding:2px 8px; font-size:12px; background:#ef4444;" onclick="closeMonitor(event)">× 關閉</button>
             </div>
-            
-            <div class="footer-sep"></div>
-
-            <div class="footer-item">
-                <span class="footer-label">視角 (View)</span>
-                <select id="editViewType" class="footer-input">
-                    <option value="單機">單機</option>
-                    <option value="遠景">遠景</option>
-                </select>
+        </div>
+        <div style="flex:1; display:flex; overflow:hidden;">
+            <!-- Stream Buffer (Thinking) -->
+            <div style="flex:1; border-right:1px solid #333; display:flex; flex-direction:column;">
+                <div style="background:#1a1a1a; padding:2px 10px; font-size:11px; color:#888;">🧠 LLM 思考過程 (Stream Buffer)</div>
+                <pre id="monitorStream" style="flex:1; overflow:auto; margin:0; padding:10px; color:#e5e5e5; font-family:'JetBrains Mono', monospace; font-size:13px; white-space:pre-wrap;"></pre>
             </div>
-
-            <div class="footer-sep"></div>
-
-            <div class="footer-item">
-                <span class="footer-label">狀態 (Screen)</span>
-                <select id="editScreenStatus" class="footer-input">
-                    <option value="">正常</option>
-                    <option value="黑屏">黑屏</option>
-                    <option value="藍屏">藍屏</option>
-                    <option value="不顯示">不顯示</option>
-                </select>
-            </div>
-
-            <div class="footer-sep"></div>
-
-            <div class="footer-item">
-                <span class="footer-label">品質 (Quality)</span>
-                <select id="editQualityIssue" class="footer-input">
-                    <option value="">正常</option>
-                    <option value="照不清楚">照不清楚</option>
-                    <option value="沒有規格價格牌">無牌</option>
-                </select>
-            </div>
-
-            <div class="footer-sep"></div>
-
-            <div class="footer-item">
-                <span class="footer-label">型號 (Model)</span>
-                <input type="text" id="editModel" class="footer-input" style="width:130px;">
-            </div>
-
-            <div class="footer-sep"></div>
-
-            <div class="footer-item">
-                <span class="footer-label">價格 (Price)</span>
-                <input type="text" id="editPrice" class="footer-input" style="width:80px;">
-            </div>
-
-            <div class="footer-item" style="margin-left:20px; display:flex; flex-direction:row; gap:8px;">
-                <button class="btn" style="background:#10b981; padding:8px 16px;" onclick="submitCorrection()">💾 儲存</button>
-                <button class="btn" style="background:#4b5563; padding:8px 16px;" onclick="closeLightbox()">❌</button>
+            <!-- System Logs -->
+            <div style="flex:1; display:flex; flex-direction:column;">
+                <div style="background:#1a1a1a; padding:2px 10px; font-size:11px; color:#888;">📜 系統日誌 (System Logs)</div>
+                <div id="monitorLogs" style="flex:1; overflow:auto; padding:10px; font-family:'JetBrains Mono', monospace; font-size:12px;"></div>
             </div>
         </div>
     </div>
 
+    <!-- Live Monitor Toggle Button (Floating) -->
+    <div id="monitorToggleBtn" style="position:fixed; bottom:20px; right:20px; z-index:8000; display:none;">
+        <button class="btn" onclick="openMonitor()" style="border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(0,0,0,0.5); font-size:20px;">📟</button>
+    </div>
+
     <script>
-        // ... (API logic remains similar, updated for Lightbox)
         let allRecords = [];
-        let filteredRecords = []; // [v14.0] Filtered Subset
+        let filteredRecords = [];
         let currentPage = 1;
         const ITEMS_PER_PAGE = 100;
         let currentEditingFile = null;
@@ -351,20 +407,46 @@
         let startPos = { x: 0, y: 0 };
         const imgContainer = document.getElementById('lightboxImgContainer');
 
+        // Monitor State
+        let isMonitorOpen = false;
+        let monitorInterval = null;
+
         async function init() {
             try {
+                // [v19.0] Sync Directory from LocalStorage (or default)
+                const savedDir = localStorage.getItem('lastDir') || '商化照片-202601';
+                // Call API to switch directory silently
+                try {
+                    await fetch('/api/set_work_dir', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ dir: savedDir })
+                    });
+                    console.log("[Init] Switched to:", savedDir);
+                } catch(e) {
+                    console.error("[Init] Failed to switch dir:", e);
+                }
+
                 const res = await fetch('/api/success_records');
                 allRecords = await res.json();
                 document.getElementById('totalCount').textContent = allRecords.length;
                 filteredRecords = [...allRecords]; // Init filter
                 renderTable();
                 
-                // [v18.83] 用事件委派處理縮圖點擊，避免特殊字元問題
+                // [v18.83] 用事件委派處理縮圖點擊
                 document.getElementById('tableBody').addEventListener('click', (e) => {
                     if (e.target.classList.contains('thumb') && e.target.dataset.filename) {
                         openLightbox(e.target.dataset.filename);
                     }
                 });
+
+                // Start Monitor Polling if open
+                if (localStorage.getItem('monitorOpen') === 'true') {
+                    openMonitor();
+                } else {
+                    document.getElementById('monitorToggleBtn').style.display = 'block';
+                }
+
             } catch (err) {
                 alert("無法載入資料: " + err);
             }
@@ -372,9 +454,6 @@
 
         function renderTable() {
             const tbody = document.getElementById('tableBody');
-            
-            // [v14.0] Update Header REMOVED - Using Static HTML Header now to verify filters persist input
-            
             tbody.innerHTML = '';
             
             const start = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -387,11 +466,8 @@
                 item.screen_status = item.screen_status || (item.category && item.category.includes('黑屏') ? '黑屏' : (item.category && item.category.includes('藍屏') ? '藍屏' : ''));
                 item.quality_issue = item.quality_issue || (item.category && item.category.includes('看') ? '照不清楚' : '');
 
-                // [v13.1 Fix] Always load from API to guarantee thumbnail availability
-                // [v18.83] 改用 data-filename 避免特殊字元問題
                 let imgHtml = `<img src="/api/image/${encodeURIComponent(item.file_name)}" class="thumb" loading="lazy" data-filename="${item.file_name.replace(/"/g, '&quot;')}" onerror="this.onerror=null;this.parentElement.innerHTML='<div style=\'width:60px;height:60px;background:#333;display:flex;align-items:center;justify-content:center;\'>?</div>'">`;
 
-                // Inline Inputs
                 tr.innerHTML = `
                     <td>${imgHtml}</td>
                     <td style="font-family:monospace; color:#d1d5db; font-size:12px; overflow:hidden; text-overflow:ellipsis;" title="${item.file_name}">${item.file_name}</td>
@@ -428,7 +504,10 @@
                     <td><input type="text" id="note_${item.file_name}" value="${item.note || ''}" placeholder="備註..." style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     
                     <td>
-                        <button class="btn" style="background:#10b981; padding:4px 8px; margin:0;" onclick="saveRow('${item.file_name}')">💾</button>
+                        <div style="display:flex; gap:5px;">
+                            <button class="btn" style="background:#10b981; padding:4px 8px; margin:0;" onclick="saveRow('${item.file_name}')" title="儲存">💾</button>
+                            <button class="btn" style="background:#f59e0b; padding:4px 8px; margin:0;" onclick="requestRerun('${item.file_name}')" title="重跑">⚡</button>
+                        </div>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -440,36 +519,34 @@
             document.querySelectorAll('.page-btn')[0].disabled = currentPage === 1;
             document.querySelectorAll('.page-btn')[1].disabled = currentPage === totalPages;
         }
-        
-        // [v18.71] 價格狀態徽章 - 停產用 "-"
+
         function getPriceStatusBadge(item) {
             const symbol = item.price_symbol || '?';
             const status = item.price_status || 'unknown';
             const officialPrice = item.official_price;
             const diffPercent = item.price_diff_percent;
             
-            let bgColor = '#dc2626';  // unknown - 紅色
-            let fontWeight = '900';   // 所有符號都加粗
+            let bgColor = '#dc2626';
+            let fontWeight = '900';
             let title = '官網查無價格';
             
             if (status === 'match') {
-                bgColor = '#22c55e';  // 綠色
+                bgColor = '#22c55e';
                 title = `符合官方 $${officialPrice?.toLocaleString() || '?'} (${diffPercent > 0 ? '+' : ''}${diffPercent || 0}%)`;
             } else if (status === 'high') {
-                bgColor = '#ef4444';  // 紅色
+                bgColor = '#ef4444';
                 title = `高於官方 $${officialPrice?.toLocaleString() || '?'} (+${diffPercent || 0}%)`;
             } else if (status === 'low') {
-                bgColor = '#3b82f6';  // 藍色
+                bgColor = '#3b82f6';
                 title = `低於官方 $${officialPrice?.toLocaleString() || '?'} (${diffPercent || 0}%)`;
             } else if (status === 'discontinued') {
-                bgColor = '#555';     // 灰色
+                bgColor = '#555';
                 title = '官網查無此型號 (已停產)';
             }
             
             return `<span title="${title}" style="display:inline-block; padding:2px 8px; border-radius:4px; background:${bgColor}; color:#fff; font-weight:${fontWeight}; cursor:help;">${symbol}</span>`;
         }
 
-        // --- Inline Save Logic ---
         async function saveRow(filename) {
             const viewType = document.getElementById(`view_${filename}`).value;
             const screenStatus = document.getElementById(`screen_${filename}`).value;
@@ -477,9 +554,6 @@
             const model = document.getElementById(`model_${filename}`).value;
             const price = document.getElementById(`price_${filename}`).value;
             const note = document.getElementById(`note_${filename}`).value;
-
-            // Optimistic UI Update (Green flash or something?)
-            // For now just standard save flow
             
             try {
                 const res = await fetch('/api/correct', {
@@ -498,7 +572,6 @@
                 
                 const json = await res.json();
                 if (json.status === 'success') {
-                    // Update Local Data
                     const rec = allRecords.find(r => r.file_name === filename);
                     if (rec) { 
                         rec.view_type = viewType;
@@ -508,13 +581,10 @@
                         rec.model = model; 
                         rec.price = price; 
                     }
-                    // Optional: Toast notification instead of Alert
-                    // alert('已儲存'); 
-                    // Change button color temporarily to indicate success?
                     const btn = document.querySelector(`button[onclick="saveRow('${filename}')"]`);
                     if(btn) {
                         const originalColor = btn.style.background;
-                        btn.style.background = '#3b82f6'; // Blue
+                        btn.style.background = '#3b82f6';
                         btn.innerHTML = '✔';
                         setTimeout(() => {
                             btn.style.background = originalColor;
@@ -529,16 +599,200 @@
             }
         }
 
-        // (Original Lightbox Logic for Read-only View)
-        // Lightbox now assumes editing is done in the list, 
-        // but we can keep the lightbox "View" logic pure, or allow edits there too.
-        // User wants to EDIT in the list. I will keep Lightbox purely for VIEWING details (1:1),
-        // effectively stripping the edit controls from lightbox to avoid confusion, 
-        // OR keeping them synced.
-        // For simplicity and user request "Don't need pop up to modify", 
-        // I will keep lightbox as a "Zoom View".
+        async function requestRerun(filename) {
+            // [v18.99] User requested NO confirm dialog
+            // if (!confirm(`確定要將 ${filename} 加入優先重跑佇列嗎？\n(將會覆寫目前的結果)`)) return;
+            
+            try {
+                openMonitor();
+                
+                const res = await fetch('/api/rerun', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: filename })
+                });
+                const json = await res.json();
+                
+                if (json.status === 'queued' || json.status === 'exists') {
+                    const btn = document.querySelector(`button[onclick="requestRerun('${filename}')"]`);
+                    if(btn) {
+                        btn.style.background = '#7c3aed';
+                        btn.innerHTML = '⏳';
+                        btn.disabled = true;
+                    }
+                } else {
+                    alert('重跑請求失敗: ' + (json.error || '不明錯誤'));
+                }
+            } catch (e) {
+                alert('重跑請求失敗: ' + e);
+            }
+        }
+
+        function openMonitor() {
+            document.getElementById('liveMonitor').style.display = 'flex';
+            document.getElementById('monitorToggleBtn').style.display = 'none';
+            isMonitorOpen = true;
+            localStorage.setItem('monitorOpen', 'true');
+            if (!monitorInterval) {
+                pollStatus();
+                monitorInterval = setInterval(pollStatus, 2000);
+            }
+        }
+
+        function closeMonitor(e) {
+            if(e) e.stopPropagation();
+            document.getElementById('liveMonitor').style.display = 'none';
+            document.getElementById('monitorToggleBtn').style.display = 'block';
+            isMonitorOpen = false;
+            localStorage.setItem('monitorOpen', 'false');
+            if (monitorInterval) {
+                clearInterval(monitorInterval);
+                monitorInterval = null;
+            }
+        }
+
+        function toggleMonitor(e) {
+            if(e) e.stopPropagation();
+            const panel = document.getElementById('liveMonitor');
+            if (panel.style.height === '30px') {
+                panel.style.height = '200px';
+            } else {
+                panel.style.height = '30px';
+            }
+        }
         
-        // (Legacy Lightbox Logic removed to avoid duplicates)
+        function toggleMonitorSize() {
+             const panel = document.getElementById('liveMonitor');
+            if (panel.style.height === '30px') {
+                panel.style.height = '200px';
+            } else {
+                panel.style.height = '30px';
+            }
+        }
+
+        let monitorState = 'idle'; // idle, waiting_for_start, running, finshing
+
+        function openMonitor() {
+            document.getElementById('liveMonitor').style.display = 'flex';
+            document.getElementById('monitorToggleBtn').style.display = 'none';
+            isMonitorOpen = true;
+            localStorage.setItem('monitorOpen', 'true');
+            
+            // [v18.99] Reset State for new run
+            monitorState = 'waiting_for_start';
+            
+            if (!monitorInterval) {
+                pollStatus();
+                monitorInterval = setInterval(pollStatus, 1000); // Faster pulling (1s)
+            }
+        }
+
+        async function pollStatus() {
+            if (!isMonitorOpen) return;
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                // [v18.99] Robust State Machine for Auto-Refresh
+                // 1. If we see it running, mark as running
+                if (data.is_running) {
+                    monitorState = 'running';
+                }
+                
+                // 2. If we were waiting or running, and now it's NOT running...
+                //    BUT we must ensure we actually saw it run OR we have a "completed" log signal
+                const hasCompletionLog = data.lm_logs && data.lm_logs.some(l => {
+                    const msg = (typeof l === 'string') ? l : l.message;
+                    return msg && (msg.includes("批次處理已完成") || msg.includes("已加入優先重跑佇列"));
+                });
+
+                if (!data.is_running) {
+                    if (monitorState === 'running') {
+                        // Was running, now stopped -> Refresh!
+                        refreshTableData();
+                        monitorState = 'idle';
+                    } else if (monitorState === 'waiting_for_start') {
+                         // It might have finished TRULY fast? Or hasn't started yet?
+                         // If logs say "Completed", then it finished fast.
+                         if (hasCompletionLog) {
+                             refreshTableData();
+                             monitorState = 'idle';
+                         }
+                         // Otherwise, stay in waiting_for_start (or timeout?)
+                         // Only wait for 5 seconds max, then reset to avoid stuck
+                         // (Not implemented here to keep simple, relying on log signal)
+                    }
+                }
+
+                const streamPre = document.getElementById('monitorStream');
+                if (data.stream_buffer) {
+                    streamPre.textContent = data.stream_buffer;
+                    streamPre.scrollTop = streamPre.scrollHeight;
+                }
+
+                const logsDiv = document.getElementById('monitorLogs');
+                if (data.lm_logs && data.lm_logs.length > 0) {
+                    logsDiv.innerHTML = data.lm_logs.map(l => {
+                        // Handle String Logs from Backend (which are strings, not objects)
+                        let timestamp = "";
+                        let message = l;
+                        let color = "#888";
+
+                        if (typeof l === 'string') {
+                            const tsMatch = l.match(/^\[(\d{2}:\d{2}:\d{2})\] (.*)/);
+                            if (tsMatch) {
+                                timestamp = tsMatch[1];
+                                message = tsMatch[2];
+                            }
+                        } else {
+                            // Fallback if object
+                            timestamp = l.timestamp || "";
+                            message = l.message || JSON.stringify(l);
+                            if(l.level === 'ERROR') color = '#ff6b6b';
+                            else if(l.level === 'WARNING') color = '#fca5a5';
+                        }
+
+                        if (message.includes("ERROR") || message.includes("❌") || message.includes("Failed")) color = "#ff6b6b";
+                        else if (message.includes("WARNING") || message.includes("⚠️")) color = "#fca5a5";
+                        else if (message.includes("✅") || message.includes("Success")) color = "#10b981";
+                        else if (message.includes("▶️") || message.includes("Processing")) color = "#3b82f6";
+                        
+                        return `<div style="margin-bottom:2px; font-family:monospace; font-size:12px;">
+                                    ${timestamp ? `<span style="color:#666; margin-right:5px;">[${timestamp}]</span>` : ''}
+                                    <span style="color:${color}">${message}</span>
+                                </div>`;
+                    }).join('');
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }
+                
+                const statusEl = document.getElementById('monitorStatus');
+                statusEl.textContent = data.is_running ? "Running..." : "Idle";
+                statusEl.style.color = data.is_running ? "#10b981" : "#888";
+                statusEl.style.textShadow = data.is_running ? "0 0 5px #10b981" : "none";
+
+            } catch (e) {
+                console.error("Monitor Poll Error", e);
+            }
+        }
+
+        async function refreshTableData() {
+            try {
+                const r = await fetch('/api/success_records');
+                if (r.ok) {
+                    allRecords = await r.json();
+                    document.getElementById('totalCount').textContent = allRecords.length;
+                    filterData(); // Re-render table
+                    
+                    // Show small notification
+                    const btn = document.getElementById('monitorToggleBtn');
+                    const originalText = btn.textContent;
+                    btn.textContent = "Data Refreshed! 🔄";
+                    setTimeout(() => btn.textContent = originalText, 2000);
+                }
+            } catch(e) {
+                console.error("Auto-refresh failed", e);
+            }
+        }
 
         function changePage(delta) {
             currentPage += delta;
@@ -546,63 +800,50 @@
             document.querySelector('.table-container').scrollTop = 0;
         }
 
-        // --- Filter Logic ---
         function filterData() {
-            // Get filter values by ID
-            const termFilename = (document.getElementById('filter_filename')?.value || '').toLowerCase();
-            const termView = document.getElementById('filter_view')?.value || '';
-            const termScreen = document.getElementById('filter_screen')?.value || '';
-            const termQuality = document.getElementById('filter_quality')?.value || '';
-            const termModel = (document.getElementById('filter_model')?.value || '').toLowerCase();
-            const termPriceMin = parseInt(document.getElementById('filter_price_min')?.value) || 0;
-            const termPriceMax = parseInt(document.getElementById('filter_price_max')?.value) || Infinity;
-            const termPriceStatus = document.getElementById('filter_price_status')?.value || '';
-            const termNote = (document.getElementById('filter_note')?.value || '').toLowerCase();
+            const termFilename = (document.getElementById("filter_filename")?.value || "").toLowerCase();
+            const termView = document.getElementById("filter_view")?.value || "";
+            const termScreen = document.getElementById("filter_screen")?.value || "";
+            const termQuality = document.getElementById("filter_quality")?.value || "";
+            const termModel = (document.getElementById("filter_model")?.value || "").toLowerCase();
+            const termPriceMin = parseInt(document.getElementById("filter_price_min")?.value) || 0;
+            const termPriceMax = parseInt(document.getElementById("filter_price_max")?.value) || Infinity;
+            const termPriceStatus = document.getElementById("filter_price_status")?.value || "";
+            const termNote = (document.getElementById("filter_note")?.value || "").toLowerCase();
 
-            filteredRecords = allRecords.filter(item => {
-                // Ensure fields exist
-                const fName = (item.file_name || '').toLowerCase();
-                const fView = item.view_type || (item.category && item.category.includes('遠景') ? '遠景' : '單機');
-                const fScreen = item.screen_status || (item.category && item.category.includes('黑屏') ? '黑屏' : (item.category && item.category.includes('藍屏') ? '藍屏' : '正常'));
-                const fQuality = item.quality_issue || '';
-                const fModel = (item.model || '').toLowerCase();
-                const fPrice = parseInt((item.price || '').toString().replace(/,/g, '')) || 0;
-                const fNote = (item.note || '').toLowerCase();
-                const fPriceSymbol = item.price_symbol || '?';
+            filteredRecords = allRecords.filter((item) => {
+                const fName = (item.file_name || "").toLowerCase();
+                const fView = item.view_type || (item.category && item.category.includes("遠景") ? "遠景" : "單機");
+                const fScreen = item.screen_status || (item.category && item.category.includes("黑屏") ? "黑屏" : item.category && item.category.includes("藍屏") ? "藍屏" : "正常");
+                const fQuality = item.quality_issue || "";
+                const fModel = (item.model || "").toLowerCase();
+                const fPrice = parseInt((item.price || "").toString().replace(/,/g, "")) || 0;
+                const fNote = (item.note || "").toLowerCase();
+                const fPriceSymbol = item.price_symbol || "?";
 
-                // Filter checks
                 const filenameMatch = fName.includes(termFilename);
                 const viewMatch = !termView || fView === termView;
-                const screenMatch = !termScreen || fScreen === termScreen || (termScreen === '正常' && !fScreen);
-                const qualityMatch = !termQuality || fQuality.includes(termQuality) || (termQuality === '無' && !fQuality);
+                const screenMatch = !termScreen || fScreen === termScreen || (termScreen === "正常" && !fScreen);
+                const qualityMatch = !termQuality || fQuality.includes(termQuality) || (termQuality === "無" && !fQuality);
                 const modelMatch = fModel.includes(termModel);
-                
-                // Price range filter
-                const priceMatch = (!termPriceMin && !isFinite(termPriceMax)) || 
-                                   (fPrice >= termPriceMin && fPrice <= (isFinite(termPriceMax) ? termPriceMax : Infinity));
-                
+                const priceMatch = (!termPriceMin && !isFinite(termPriceMax)) || (fPrice >= termPriceMin && fPrice <= termPriceMax);
                 const priceStatusMatch = !termPriceStatus || fPriceSymbol === termPriceStatus;
                 const noteMatch = fNote.includes(termNote);
 
-                return filenameMatch && viewMatch && screenMatch && qualityMatch && 
-                       modelMatch && priceMatch && priceStatusMatch && noteMatch;
+                return filenameMatch && viewMatch && screenMatch && qualityMatch && modelMatch && priceMatch && priceStatusMatch && noteMatch;
             });
 
-            currentPage = 1; // Reset to page 1
+            currentPage = 1;
             renderTable();
         }
 
-        // --- Lightbox Logic ---
         function openLightbox(filename) {
             const record = allRecords.find(r => r.file_name === filename);
             if (!record) return;
 
             currentEditingFile = filename;
-            
-            // Set Form Data
             document.getElementById('overlayFilename').textContent = filename;
             
-            // Map legacy data to new fields if missing
             const vw = record.view_type || (record.category && record.category.includes('遠景') ? '遠景' : '單機');
             const ss = record.screen_status || (record.category && record.category.includes('黑屏') ? '黑屏' : (record.category && record.category.includes('藍屏') ? '藍屏' : ''));
             const qi = record.quality_issue || (record.category && record.category.includes('看不清楚') ? '照不清楚' : '');
@@ -610,12 +851,9 @@
             document.getElementById('editViewType').value = vw;
             document.getElementById('editScreenStatus').value = ss;
             document.getElementById('editQualityIssue').value = qi;
-            document.getElementById('editNote').value = record.note || '';
-            
             document.getElementById('editModel').value = record.model || '';
             document.getElementById('editPrice').value = record.price || '';
 
-            // Reset Pan
             pan = { x: 0, y: 0 };
             imgContainer.style.transform = `translate(0px, 0px)`;
             
@@ -623,21 +861,15 @@
             imgEl.src = `/api/image/${encodeURIComponent(filename)}`;
             
             document.getElementById('lightbox').style.display = 'flex';
-            
-            // Add global mouse listeners
             window.addEventListener('mousemove', onDrag);
             window.addEventListener('mouseup', endDrag);
         }
 
-        // ...
-
-        // --- Submit ---
         async function submitCorrection() {
             if (!currentEditingFile) return;
             const viewType = document.getElementById('editViewType').value;
             const screenStatus = document.getElementById('editScreenStatus').value;
             const qualityIssue = document.getElementById('editQualityIssue').value;
-            const note = document.getElementById('editNote').value;
             const model = document.getElementById('editModel').value;
             const price = document.getElementById('editPrice').value;
 
@@ -650,7 +882,6 @@
                         view_type: viewType,
                         screen_status: screenStatus,
                         quality_issue: qualityIssue,
-                        note: note,
                         model: model,
                         price: price
                     })
@@ -658,13 +889,11 @@
                 
                 const json = await res.json();
                 if (json.status === 'success') {
-                    // Update Local Data
                     const rec = allRecords.find(r => r.file_name === currentEditingFile);
                     if (rec) { 
                         rec.view_type = viewType;
                         rec.screen_status = screenStatus;
                         rec.quality_issue = qualityIssue;
-                        rec.note = note;
                         rec.model = model; 
                         rec.price = price; 
                     }
@@ -677,8 +906,14 @@
                 alert('發送請求失敗: ' + e);
             }
         }
+        
+        function triggerRerunFromLightbox() {
+            if(currentEditingFile) {
+                requestRerun(currentEditingFile);
+                closeLightbox();
+            }
+        }
 
-        // --- Drag & Close Logic ---
         function closeLightbox() {
             document.getElementById('lightbox').style.display = 'none';
             window.removeEventListener('mousemove', onDrag);
@@ -709,5 +944,5 @@
 
         init();
     </script>
-</body>
+  </body>
 </html>

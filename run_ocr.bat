@@ -1,90 +1,94 @@
 ﻿@echo off
 setlocal enabledelayedexpansion
-set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;%PATH%"
 chcp 65001 >nul
 
+:: [重要] 強制修復 PATH 變數，避免找不到 taskkill
+set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;%PATH%"
+
+:: ==========================================
+:: [0/5] 請求管理員權限 (Self-Elevation)
+:: ==========================================
+>nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+if '%errorlevel%' NEQ '0' (
+    echo [警告] 未取得管理員權限！正在請求權限...
+    goto UACPrompt
+) else ( goto gotAdmin )
+
+:UACPrompt
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
+    exit /B
+
+:gotAdmin
+    pushd "%CD%"
+    CD /D "%~dp0"
+
 echo ==========================================
-echo    Samsung OCR Launcher (v18.60 鐵律版)
+echo    Samsung OCR Launcher (v19.1 PATH修復版)
+echo    已取得管理員權限 - 準備獵殺殭屍程序
 echo ==========================================
 echo.
 
-echo [1/5] 執行暴力進程清理 (Aggressive Cleanup)...
-:: 第一波：強制殺除所有 Python 與 Node 進程 (使用完整路徑避免 PATH 問題)
+:: ==========================================
+:: [1/5] 終極獵殺 (Multi-Method Kill)
+:: ==========================================
+echo [1/5] 正在強制終止 Python 程序...
+
+:: 方法 1: PowerShell Stop-Process (最強力)
+echo    >> 嘗試 PowerShell Stop-Process...
+powershell -NoProfile -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+
+:: 方法 2: Taskkill (使用絕對路徑，避免 PATH 問題)
+echo    >> 嘗試 C:\Windows\System32\taskkill.exe...
 C:\Windows\System32\taskkill.exe /F /IM python.exe /T 2>nul
 C:\Windows\System32\taskkill.exe /F /IM node.exe /T 2>nul
 C:\Windows\System32\taskkill.exe /F /FI "WINDOWTITLE eq OCR Backend*" /T 2>nul
 
-:: 等待一秒讓系統釋放資源
-timeout /t 1 /nobreak >nul
+:: 方法 3: WMIC (備用)
+echo    >> 嘗試 WMIC Call Terminate...
+wmic process where name="python.exe" call terminate >nul 2>&1
 
-:: 第二波：再次確認，確保無殘留
-C:\Windows\System32\taskkill.exe /F /IM python.exe /T 2>nul
+:: 確認是否還有殘留
+timeout /t 2 /nobreak >nul
+tasklist | findstr /i "python.exe" >nul
+if %errorlevel%==0 (
+    echo [❌ 失敗] Python 殭屍程序仍然存活！請手動重開機！
+    tasklist | findstr /i "python.exe"
+    pause
+    exit
+) else (
+    echo [✅ 成功] 所有 Python 程序已清除。
+)
 
 echo.
-echo [2/5] 釋放 Port 5000 (強力解鎖模式)...
-:: 使用 PowerShell 強制尋找並殺死佔用 Port 5000 的所有 Process ID
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Write-Host '檢查 Port 5000...'; $procs = Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($procs) { foreach($pid in $procs) { Write-Host '>> 正在殺死 PID '$pid'...'; Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } } else { Write-Host '>> Port 5000 乾淨無佔用。' }"
+echo [2/5] 釋放 Port 5000...
+powershell -NoProfile -Command "$p=Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue; if($p){Stop-Process -Id $p.OwningProcess -Force}"
 
 echo.
-echo [3/5] 🧹 徹底清除所有快取 (鐵律執行)...
-:: === 鐵律：確保每次都使用最新程式碼 ===
-
-:: 清除所有 __pycache__ 目錄 (遞歸搜尋)
+echo [3/5] 清除 Python 快取...
 for /d /r . %%d in (__pycache__) do (
-    if exist "%%d" (
-        echo   >> 清除: %%d
-        rmdir /s /q "%%d" 2>nul
-    )
+    if exist "%%d" rmdir /s /q "%%d" 2>nul
 )
 
-:: 清除所有 .pyc 檔案 (編譯快取)
-for /r . %%f in (*.pyc) do (
-    if exist "%%f" (
-        echo   >> 刪除: %%f
-        del /f /q "%%f" 2>nul
-    )
+echo.
+echo [4/5] 啟動 OCR 後端系統 (v19.0)...
+echo ------------------------------------------
+set PYTHON_CMD=python
+where python >nul 2>nul
+if %errorlevel% NEQ 0 (
+    echo [❌ 錯誤] 找不到 python 指令！請確認已安裝 Python。
+    pause
+    exit
 )
 
-:: 清除所有 .pyo 檔案 (優化快取)
-for /r . %%f in (*.pyo) do (
-    if exist "%%f" (
-        echo   >> 刪除: %%f
-        del /f /q "%%f" 2>nul
-    )
-)
-
-:: 清除 skills 目錄快取 (重點區域)
-if exist "skills\__pycache__" (
-    echo   >> 重點清理: skills\__pycache__
-    rmdir /s /q "skills\__pycache__" 2>nul
-)
-
-:: 設定環境變數強制重載模組
-set PYTHONDONTWRITEBYTECODE=1
-set PYTHONUNBUFFERED=1
-
-echo   ✅ 快取清理完成，確保使用最新程式碼
+:: 啟動並保持視窗開啟 (交由 Python 控制)
+echo.
+echo [5/5] 自動開啟 Dashboard... (交由 Python 控制)
+echo.
+%PYTHON_CMD% samsung_ocr_batch_processor.py
 
 echo.
-echo.
-echo [4/5] 啟動核心引擎 (Auto-Load Latest)...
-cd /d "%~dp0"
-
-:: 設定視窗標題 (這會讓下一次執行時能識別並殺死此視窗)
-title OCR Backend Server
-
-echo.
-echo [5/5] 準備開啟控制面板 (8秒後)...
-:: 背景執行：開啟瀏覽器 (控制面板 v18.27)
-start /min "" cmd /c "timeout /t 8 /nobreak >nul && start http://localhost:5000"
-
-echo ---------------------------------------------------
-echo  OCR 核心已啟動，請勿關閉此視窗 (單一視窗模式)
-echo ---------------------------------------------------
-:: 直接在當前視窗執行 Python (會卡住視窗直到結束)
-python samsung_ocr_batch_processor.py --api_base http://192.168.0.234:1234/v1
-
-:: 當 Python 結束後才會執行到這裡
-echo.
-echo 伺服器已停止。
+echo [⚠️ 警告] 系統已停止。如果是非正常結束，請檢查上方錯誤訊息。
 pause
