@@ -24,7 +24,7 @@
 | 檔案 | 說明 |
 |------|------|
 | run_ocr.bat | **唯一啟動腳本** |
-| samsung_ocr_batch_processor.py | 主程式 (v18.75) |
+| samsung_ocr_batch_processor.py | 主程式 (v18.99) |
 | samsung_ocr_prompt.txt | OCR Prompt |
 | 型號表.txt | 型號清單 |
 | skills/ | 功能模組 |
@@ -45,5 +45,18 @@ run_ocr.bat 會自動清理
 
 ---
 
-版本：v18.75 (PromptManager 配置管理系統)
-更新：2026-01-30
+## 📅 更新日誌
+
+**v18.99 (2026-03-05)** — UI 日誌去重修復
+- 移除辨識紀錄區首尾重複記錄
+- 移除日誌區重複的思考輸出
+- 清除獨白欄多餘的「思考:」前綴
+- [詳見 SAMSUNG_OCR_EXPERIENCE_SKILL.md]
+
+**v18.75 (2026-01-30)**
+- PromptManager 配置管理系統
+
+---
+
+版本：v18.99 (UI 日誌去重版)
+更新：2026-03-05

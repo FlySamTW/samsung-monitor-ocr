@@ -970,7 +970,7 @@ class BatchOrchestrator:
                 )
 
                 # [v11.2] Save to DYNAMIC Session File
-                self.recent_results.append(norm_result)
+                # Note: norm_result already insert(0) above, do NOT append again
                 self.evaluator.export_to_label_studio_json(self.recent_results, self.current_success_file)
 
                 # [v17.15 Fix] Save Thinking Process to Single Session TXT file

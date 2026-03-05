@@ -6,6 +6,36 @@ description: Technial Rulebook & Post-Mortem for Samsung OCR Project
 
 **Purpose**: To document critical engineering failures and strict rules for future development, ensuring mistakes are never repeated.
 
+## 🔄 最新改動日誌 (v18.99+)
+
+### [2026-03-05] 日誌與結果列表去重修復
+
+**問題**：UIÂ 中辨識紀錄區和日誌區出現重複內容
+- 辨識記錄列表：首列和最後各重複顯示一筆
+- 日誌區：同一段思考文字顯示兩次（含重複「思考:」標題）
+- 獨白欄（串流緩衝）：顯示多餘「思考:」前綴
+
+**修復**：
+1. **[skills/batch_orchestrator.py L972]** — 移除多餘 `recent_results.append()`
+   - 原因：`insert(0, ...)` 已經加入記錄，再 `append` 造成首尾各一筆
+   - 修法：只保留 `insert(0, ...)` 邏輯，刪除後續的 `append`
+
+2. **[samsung_ocr_batch_processor.py L1113]** — 移除重複的思考日誌輸出
+   - 原因：前面驗證區已發出 `[THINK]` 標記的日誌，此處 `💭 思考:` 為冗餘
+   - 修法：刪除 `orchestrator.log_system(f"💭 思考: {thinking_text}")` 行
+
+3. **[samsung_ocr_batch_processor.py L527]** — 清除獨白欄的「思考:」前綴
+   - 原因：模型串流原文含 `思考:` 前綴，獨白欄不需顯示標題
+   - 修法：在設定 `stream_buffer` 前用 regex 去除 `^思考[:：]\s*`
+
+**架構理念確認**：
+- ✅ Prompt 集中在 `samsung_ocr_prompt.txt`，規範不硬寫
+- ✅ 程式碼只負責執行與日誌，不修改系統邏輯
+- ✅ LM Studio 設定全在 LM Studio 面板，無硬寫
+- ✅ 模型自動檢測：啟動時從 API 讀取實際加載的模型
+
+---
+
 ## ⚠️ CRITICAL ENGINEERING RULES (Blood Lessons)
 
 ### 1. Process Management (The "Zombie" Rule)

@@ -522,6 +522,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                         current_display = full_response_text
                     
                     current_display = current_display.lstrip('「').rstrip('」').replace('```json', '').replace('```', '').strip()
+                    # 獨白欄不需要顯示「思考:」標題前綴
+                    import re as _re
+                    current_display = _re.sub(r'^思考[:：]\s*', '', current_display).strip()
                     if orchestrator: orchestrator.stream_buffer = current_display
 
             # Anti-Loop Check
@@ -1108,9 +1111,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         # [v9.71 Universal Summary Log] 
         # MOVED OUT OF ELSE BLOCK to guarantee execution.
         if orchestrator:
-            # [Fix] Log Thinking Process to System Log as requested
-            if 'thinking_text' in locals() and thinking_text:
-                orchestrator.log_system(f"💭 思考: {thinking_text}")
+            # [THINK] log is already emitted in the validation block above via [THINK] prefix
+            # Do NOT log again here to prevent duplicate in UI
 
             cat = result_json.get("category") or ""
             mod = result_json.get("model") or "無型號"
