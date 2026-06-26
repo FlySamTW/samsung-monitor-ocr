@@ -1,0 +1,35 @@
+[
+  {
+    "name": "round2-edge-遠景負向FollowMe不可救回-SF-大里-1237",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1237.jpg",
+    "note": "遠景照片；模型描述含『沒有 FollowMe 白色垂直支架』時，後處理不可因白色垂直支架字樣誤救成 FollowMe。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "round2-edge-eLife-大里-346-S27D300GAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-346.jpg",
+    "note": "人工檢視：主角是一般三星 27 吋，價牌型號 S27D300GAC，價格 3,290；不可誤讀成 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "round2-edge-SF-大里-1238-S32CG552EC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1238.jpg",
+    "note": "人工檢視：主角上方 G5 標籤可讀 S32CG552EC (32)，下方商品價 6,990；不可把 model 清成 null。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32CG552EC",
+      "price": "6990"
+    }
+  }
+]

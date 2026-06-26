@@ -1,0 +1,52 @@
+[
+  {
+    "name": "round9-edge-TK3C-南京旗艦-806-S27D300GAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台北市-中山區-TK3C-南京旗艦-806.jpg",
+    "note": "人工檢視：主角價牌清楚是 Samsung 27 型 S3 平面螢幕 S27D300GAC，價格 3,290；右側 FollowMe 活動立牌不可借用。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "round9-edge-TK3C-台中甘肅-1110-S43FM702UC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-TK3C-台中甘肅-1110.jpg",
+    "note": "人工檢視：主角價牌清楚是 Samsung 43 吋 AI M7 智慧聯網螢幕 S43FM702UC，價格 13,990；旁邊 LG/Nintendo 不影響主角 Samsung 判定，也不是 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S43FM702UC",
+      "price": "13990"
+    }
+  },
+  {
+    "name": "round9-edge-eLife-北安-486-S32FM702UC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台北市-中山區-eLife-北安-486.jpg",
+    "note": "人工檢視：左側 Samsung 32 吋 Smart Monitor 價牌可見 S32FM702UC，粉紅限時特價 9,990；不可硬塞 G5 型號 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S32FM702UC",
+      "price": "9990"
+    }
+  },
+  {
+    "name": "round9-edge-SF-豐原-1342-S27D300GAC不可被立牌轉FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-豐原區-SF-豐原-1342.jpg",
+    "note": "人工檢視：中間主角下方粉紅價牌是 Samsung S27D300GAC / 3,090；藍色 Smart Monitor 活動立牌不是主角價牌，不可救成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "round9-edge-神腦-台中忠明-632-FollowMeM5排除月付999",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西　區-神腦-台中忠明-632.jpg",
+    "note": "人工檢視：主角是 Samsung FollowMe 32 M5 實機，畫面側邊月付 999 是電信方案價不可當商品價；下方小立牌商品價為 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  }
+]

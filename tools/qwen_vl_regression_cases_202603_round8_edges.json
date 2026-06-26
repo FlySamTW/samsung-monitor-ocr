@@ -1,0 +1,32 @@
+[
+  {
+    "name": "round8-edge-TK3C-東山-1066-S32FM703UC低價清除",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-TK3C-東山-1066.jpg",
+    "note": "人工檢視：主角是 Samsung S32FM703UC，但價牌顯示 2,390，依使用者規則低於 3000 不是三星螢幕商品售價；保留型號、清除價格。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S32FM703UC",
+      "price": null
+    }
+  },
+  {
+    "name": "round8-edge-TK3C-台中旗艦-776-S24DG302EC低價清除",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南　區-TK3C-台中旗艦-776.jpg",
+    "note": "人工檢視：主角價牌是 Samsung S24DG302EC，價格 2,999；低於 3000 不是有效商品售價，不能填 price，但型號要保留。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S24DG302EC",
+      "price": null
+    }
+  },
+  {
+    "name": "round8-edge-TK3C-沙鹿-1050-SmartMonitorM7保留13990",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-沙鹿區-TK3C-沙鹿-1050.jpg",
+    "note": "人工檢視：畫面主角是 Samsung Smart Monitor M7，左下價牌清楚寫 13,990；未讀到完整 S??FM??UC 型號時 model 可為 null，但不可把 Smart Monitor M7 誤判 LG，也不可丟掉 13,990。",
+    "expected": {
+      "view_type": "單機",
+      "model": null,
+      "price": "13990"
+    }
+  }
+]

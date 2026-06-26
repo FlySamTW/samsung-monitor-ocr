@@ -14,13 +14,51 @@ class ImageProcessor:
     Features: Resize, Contrast Enhancement, Sharpness, Grayscale conversion, Label Card Detection.
     """
     def __init__(self, config: dict = None):
-        self.config = config or {
+        defaults = {
             "max_size": 4096, 
             "contrast_factor": 1.2,
             "sharpness_factor": 1.5,
             "auto_orient": True,
-            "detect_label_card": True  # [v18.25] Enable by default for Dual Vision
+            "detect_label_card": True,  # [v18.25] Enable by default for Dual Vision
+            "bottom_label_strip": False,
+            "bottom_center_zoom": False,
         }
+        self.config = defaults
+        if config:
+            self.config.update(config)
+
+    def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
+        """
+        Crop the lower shelf/label band for difficult retail photos.
+        This is deterministic and intended for rerun workflows, not manual slicing.
+        """
+        try:
+            h, w = img_array.shape[:2]
+            y1 = int(h * 0.58)
+            y2 = int(h * 0.95)
+            cropped = img_array[y1:y2, 0:w]
+            return cropped, (0, y1, w, y2 - y1)
+        except Exception as e:
+            log.warning(f"Bottom label strip crop failed: {e}")
+            return None, None
+
+    def crop_bottom_center_zoom(self, img_array: np.ndarray) -> tuple:
+        """
+        Crop and enlarge the lower-center price card zone.
+        Useful when the main product label sits behind the shelf rail.
+        """
+        try:
+            h, w = img_array.shape[:2]
+            x1 = int(w * 0.32)
+            x2 = int(w * 0.72)
+            y1 = int(h * 0.62)
+            y2 = int(h * 0.94)
+            cropped = img_array[y1:y2, x1:x2]
+            zoomed = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            return zoomed, (x1, y1, x2 - x1, y2 - y1)
+        except Exception as e:
+            log.warning(f"Bottom center zoom crop failed: {e}")
+            return None, None
 
     def detect_label_card(self, img_array: np.ndarray) -> tuple:
         """
@@ -138,6 +176,9 @@ class ImageProcessor:
                 
                 # 2. Label Card Detection (NEW [v18.25])
                 label_b64 = None
+                bottom_label_b64 = None
+                bottom_center_b64 = None
+                max_size = self.config.get("max_size")
                 if self.config.get("detect_label_card"):
                     img_array = np.array(img)
                     cropped, bbox = self.detect_label_card(img_array)
@@ -145,14 +186,40 @@ class ImageProcessor:
                     if cropped is not None:
                         # Encode Label to Base64
                         label_img = Image.fromarray(cropped)
+                        if max_size is not None and (label_img.width > max_size or label_img.height > max_size):
+                            label_img.thumbnail((max_size, max_size))
+                            applied_transforms.append(f"label_resize_to_{max_size}")
                         lbl_buffered = io.BytesIO()
                         label_img.convert("RGB").save(lbl_buffered, format="JPEG", quality=95)
                         label_b64 = base64.b64encode(lbl_buffered.getvalue()).decode('utf-8')
                         applied_transforms.append(f"label_crop_found_{bbox}")
                         log.info(f"[Crop] Extracted high-res label card")
 
+                    if self.config.get("bottom_label_strip"):
+                        bottom_cropped, bottom_bbox = self.crop_bottom_label_strip(img_array)
+                        if bottom_cropped is not None:
+                            bottom_img = Image.fromarray(bottom_cropped)
+                            if max_size is not None and (bottom_img.width > max_size or bottom_img.height > max_size):
+                                bottom_img.thumbnail((max_size, max_size))
+                                applied_transforms.append(f"bottom_label_resize_to_{max_size}")
+                            bottom_buffered = io.BytesIO()
+                            bottom_img.convert("RGB").save(bottom_buffered, format="JPEG", quality=95)
+                            bottom_label_b64 = base64.b64encode(bottom_buffered.getvalue()).decode('utf-8')
+                            applied_transforms.append(f"bottom_label_strip_{bottom_bbox}")
+
+                    if self.config.get("bottom_center_zoom"):
+                        center_cropped, center_bbox = self.crop_bottom_center_zoom(img_array)
+                        if center_cropped is not None:
+                            center_img = Image.fromarray(center_cropped)
+                            if max_size is not None and (center_img.width > max_size or center_img.height > max_size):
+                                center_img.thumbnail((max_size, max_size))
+                                applied_transforms.append(f"bottom_center_resize_to_{max_size}")
+                            center_buffered = io.BytesIO()
+                            center_img.convert("RGB").save(center_buffered, format="JPEG", quality=95)
+                            bottom_center_b64 = base64.b64encode(center_buffered.getvalue()).decode('utf-8')
+                            applied_transforms.append(f"bottom_center_zoom_{center_bbox}")
+
                 # 3. Resize Full Image if too large (KEEP as context)
-                max_size = self.config.get("max_size")
                 full_img = img.copy()
                 needs_reencode = False
                 
@@ -176,10 +243,14 @@ class ImageProcessor:
                 return {
                     "base64": full_img_b64,
                     "label_base64": label_b64,
+                    "bottom_label_base64": bottom_label_b64,
+                    "bottom_center_base64": bottom_center_b64,
                     "metadata": {
                         "original_size": original_size,
                         "processed_size": full_img.size,
                         "label_found": label_b64 is not None,
+                        "bottom_label_strip": bottom_label_b64 is not None,
+                        "bottom_center_zoom": bottom_center_b64 is not None,
                         "transforms": applied_transforms
                     }
                 }

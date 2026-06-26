@@ -1,0 +1,24 @@
+[
+  {
+    "name": "round5-edge-SF-太平中興-1246-不適用FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-SF-太平中興-1246.jpg",
+    "note": "人工檢視：主角右上 L 貼紙清楚是 G5 S27CG552EC，底部同區價牌 4,990；描述中的『不適用 FollowMe』是排除語句，不可反向救成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "round5-edge-eLife-北屯-296-品牌名不等於型號",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-eLife-北屯-296.jpg",
+    "note": "人工檢視：主角三星螢幕下方價牌可見 9,990，但沒有清楚 S 開頭完整型號；只看到 SAMSUNG 品牌名時不可硬補 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "9990"
+    }
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "name": "round10-edge-TK3C-公益-738-FollowMeM7保留14990",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南屯區-TK3C-公益-738.jpg",
+    "note": "實體 FollowMe，有白色落地圓盤、長直桿與托盤；價牌 14,990 是五位數商品價，不可誤稱低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "14990"
+    }
+  },
+  {
+    "name": "round10-edge-TK3C-台中超越-977-SmartMonitorM7桌上型保留11900",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南屯區-TK3C-台中超越-977.jpg",
+    "note": "桌上型 Samsung Smart Monitor M7，白色短支架/桌腳不是 FollowMe；價牌 11,900 是五位數商品價，但完整 S 型號未清楚讀出時 model 保持 null。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "11900"
+    }
+  },
+  {
+    "name": "round10-edge-TK3C-台中旗艦-774-活動告示不可算FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南　區-TK3C-台中旗艦-774.jpg",
+    "note": "人工確認：右側 Samsung FollowMe 是活動告示廣告，不是實景商品；主角是一般桌上型 Samsung S27F612EAC，價格 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S27F612EAC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "round10-edge-SF-豐原-1344-OLEDG8不可借左側M7側標",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-豐原區-SF-豐原-1344.jpg",
+    "note": "人工確認：螢幕右上方的 M7 側標屬於左邊那台螢幕；本案要找中間主要螢幕，價牌是 32 吋 Samsung S32DG802SC 4K 電競智慧聯網 OLED，價格 26,900。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S32DG802SC",
+      "price": "26900"
+    }
+  }
+]

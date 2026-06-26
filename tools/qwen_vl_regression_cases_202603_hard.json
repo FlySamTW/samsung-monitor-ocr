@@ -1,0 +1,35 @@
+[
+  {
+    "name": "202603疑難-1-FollowMe或單機-M-台中市-大甲區-TK3C-大甲-838",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-838.jpg",
+    "note": "疑難對照：看模型是否能辨識白色直立支架、底座與托盤。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "202603疑難-2-FollowMe或遠景-M-台中市-大里區-eLife-大里-344",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-344.jpg",
+    "note": "疑難對照：中央白色直立支架展示機旁有環境干擾。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe Pro M7 43\"",
+      "price": "17990"
+    }
+  },
+  {
+    "name": "202603疑難-3-FollowMe-M-台中市-大甲區-神腦-大甲光明-651",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-651.jpg",
+    "note": "疑難對照：明顯白色直立支架與圓形底座，測試輸出 view_type 是否有 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  }
+]

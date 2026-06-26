@@ -1,0 +1,13 @@
+[
+  {
+    "name": "context-check-FollowMe-M5-神腦-大甲光明-652",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-652.jpg",
+    "note": "完整守門加下方整條價牌帶後曾在 2560 長邊超過 16384 context；2400 長邊應可避免爆 context，仍需保留辨識結果。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  }
+]

@@ -1,0 +1,57 @@
+[
+  {
+    "name": "round4-edge-神腦-大里中興-628-FollowMe-M5",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-神腦-大里中興-628.jpg",
+    "note": "人工檢視：牌面上方明確寫 SAMSUNG FollowMe 32 M5，底部價牌 10,990；不可因 10,990 或模型自述誤判為 M7。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "round4-edge-SF-大里-1241-S27CG552EC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1241.jpg",
+    "note": "人工檢視：中間主角下方標籤是 S27CG552EC / 4,990；S27CG552ZK 不在型號表，是尾碼誤讀。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "round4-edge-SF-大里-1242-S27FG532EC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1242.jpg",
+    "note": "人工檢視：中間主角下方標籤是 S27FG532EC / 4,990；S27FQ532EC 不在型號表，是 G/Q 誤讀。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27FG532EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "round4-edge-eLife-太平樹德-377-SmartMonitor不硬配G5",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-377.jpg",
+    "note": "人工檢視：畫面是 Smart Monitor，價格 13,990；沒有清楚 S 開頭完整型號，不可硬配 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "13990"
+    }
+  },
+  {
+    "name": "round4-edge-SF-太平中興-1244-非三星遠景",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-SF-太平中興-1244.jpg",
+    "note": "人工檢視：整排展示區遠景，右側與箱子多為 ASUS/ROG，無清楚三星主角型號；不可保留非三星價格。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  }
+]

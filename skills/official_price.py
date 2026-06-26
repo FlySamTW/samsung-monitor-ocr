@@ -14,7 +14,7 @@ import re
 import time
 import json
 import requests
-from typing import Optional, Tuple, Dict, Callable
+from typing import Optional, Tuple, Dict, Callable, List
 from rich.console import Console
 
 console = Console()
@@ -22,6 +22,8 @@ console = Console()
 # 三星產品頁 URL 模板 (使用完整型號)
 SAMSUNG_PRODUCT_API = "https://www.samsung.com/tw/api/v1/product/{model_id}/spec"
 SAMSUNG_SEARCH_API = "https://www.samsung.com/tw/searchProduct"
+# [v19.14] Samsung Product Finder API：一次取得所有顯示器型號與價格
+SAMSUNG_FINDER_API = "https://searchapi.samsung.com/v6/front/b2c/product/finder/global"
 
 # 全域日誌回調函數
 _log_callback: Optional[Callable[[str], None]] = None
@@ -51,20 +53,22 @@ class OfficialPriceManager:
         # 不在 init 時載入，等 clear_and_init 被呼叫
     
     def clear_and_init(self):
-        """清空「即時價格表.txt」並初始化（每次啟動伺服器時呼叫）"""
+        """[v19.14] 初始化價格管理器（不再清空既有快取，啟動時會用 Finder API 一次性刷新）"""
         try:
-            # 清空即時價格表，只保留標題
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                f.write("# Samsung 官方價格快取 (伺服器啟動時自動清空)\n")
-                f.write("# 格式: 型號|價格|來源|時間\n")
-                f.write("# 你可以即時編輯此檔案來修正價格\n")
-                f.write("# ========================================\n")
-            self.price_cache.clear()
+            # 若檔案不存在則建立空白檔案
+            if not os.path.exists(self.cache_file):
+                with open(self.cache_file, 'w', encoding='utf-8') as f:
+                    f.write("# Samsung 官方價格快取\n")
+                    f.write("# 格式: 型號|價格|來源|時間\n")
+                    f.write("# 你可以即時編輯此檔案來修正價格\n")
+                    f.write("# ========================================\n")
+            # 載入既有快取，避免每次啟動都重新抓價
+            self._load_from_txt()
             self.session_fetched.clear()
             self.discontinued_models.clear()  # [v18.71] 清空停產記錄
-            console.print("[cyan]🔄 已清空即時價格表，準備從官網抓取最新價格[/cyan]")
+            console.print("[cyan]🔄 已載入即時價格表快取，啟動後將一次性刷新[/cyan]")
         except Exception as e:
-            console.print(f"[yellow]⚠️ 清空即時價格表失敗: {e}[/yellow]")
+            console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
     
     def _load_from_txt(self):
         """即時從 TXT 讀取（用戶可能已手動修改）"""
@@ -165,7 +169,23 @@ class OfficialPriceManager:
             _log_price_status(f"[green]💾 已寫入即時價格表: {model} = NT${price:,}[/green]")
         except Exception as e:
             console.print(f"[yellow]⚠️ 儲存價格快取失敗: {e}[/yellow]")
-    
+
+    def _rewrite_cache_file(self):
+        """[v19.14] 用目前的 price_cache 重建快取檔案，避免重複行累積"""
+        try:
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                f.write("# Samsung 官方價格快取\n")
+                f.write("# 格式: 型號|價格|來源|時間\n")
+                f.write("# 你可以即時編輯此檔案來修正價格\n")
+                f.write("# ========================================\n")
+                timestamp = time.strftime("%Y-%m-%d %H:%M")
+                for model in sorted(self.price_cache.keys()):
+                    price = self.price_cache[model]
+                    if price and price > 0:
+                        f.write(f"{model}|{price}|finder-api-bulk|{timestamp}\n")
+        except Exception as e:
+            _log_price_status(f"[yellow]⚠️ 重建價格快取檔案失敗: {e}[/yellow]")
+
     def _to_full_model(self, model: str) -> str:
         """
         商業型號 → 完整型號
@@ -549,6 +569,239 @@ class OfficialPriceManager:
             "discontinued": "-"  # [v18.71] 停產
         }
         return symbols.get(status, "?")
+
+    def discover_models_from_samsung(self, update_model_list: bool = True) -> List[str]:
+        """
+        [v19.13] 從三星台灣 monitors 全產品頁面一次性抓取所有顯示器型號，並更新型號表。
+        主要只抓 https://www.samsung.com/tw/monitors/all-monitors/ 這一頁，速度接近即時。
+        """
+        url = "https://www.samsung.com/tw/monitors/all-monitors/"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.samsung.com/tw/',
+        }
+
+        discovered_short = set()
+        discovered_full = set()
+
+        try:
+            _log_price_status("[cyan]🌐 正在從 Samsung 全產品頁抓取型號清單...[/cyan]")
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            html = response.text
+
+            # 提取所有 /tw/monitors/.../ 產品連結，並取出最後一段 slug
+            # 只保留至少有三層路徑的產品頁，例如 /tw/monitors/gaming/odyssey-...-ls27cg552ecxzw/
+            product_urls = re.findall(r'https://www\.samsung\.com(/tw/monitors/[^"\s<>]+/)', html)
+            slugs = set()
+            for u in product_urls:
+                parts = [p for p in u.rstrip('/').split('/') if p]
+                # 排除 /tw/monitors/ 根目錄與 /tw/monitors/all-monitors/
+                if len(parts) >= 4 and parts[-1] not in ('monitors', 'all-monitors'):
+                    slugs.add(parts[-1])
+
+            for slug in slugs:
+                # slug 通常長這樣：essential-monitor-s3-27-inch-100hz-ls27d362gacxzw
+                segments = slug.split('-')
+                if not segments:
+                    continue
+                last = segments[-1].upper().strip()
+                if not last or len(last) < 10:
+                    continue
+
+                # 完整型號（例如 LS27D362GACXZW）
+                discovered_full.add(last)
+
+                # 嘗試轉換成短型號
+                short = self._extract_best_short_model(last)
+                if short:
+                    discovered_short.add(short)
+
+            # 合併現有型號表與新發現的短型號（只保留短型號，因為 OCR 輸出與後續比對皆以短型號為主）
+            existing = set(self._load_model_list())
+            all_models = existing | discovered_short
+
+            if update_model_list and all_models:
+                try:
+                    sorted_models = sorted(all_models, key=lambda x: x.upper())
+                    # 先寫入暫存檔再覆蓋，避免寫到一半損毀原檔
+                    tmp_file = f"{self.model_list_file}.tmp"
+                    with open(tmp_file, 'w', encoding='utf-8') as f:
+                        for m in sorted_models:
+                            f.write(f"{m}\n")
+                    os.replace(tmp_file, self.model_list_file)
+                    _log_price_status(f"[green]✅ 型號表已更新：原有 {len(existing)} 筆，新增 {len(all_models - existing)} 筆，共 {len(all_models)} 筆[/green]")
+                except Exception as e:
+                    _log_price_status(f"[yellow]⚠️ 寫入型號表失敗: {e}[/yellow]")
+
+            return sorted(discovered_short)
+
+        except Exception as e:
+            _log_price_status(f"[yellow]⚠️ 抓取 Samsung 型號清單失敗: {e}[/yellow]")
+            return []
+
+    def _extract_best_short_model(self, full_code: str) -> Optional[str]:
+        """
+        從 URL 中的完整型號碼提取最可能的短型號。
+        例如 LS27D362GACXZW -> S27D362GAC；LC34G55TWWCXZW -> C34G55TWW。
+        利用現有型號表的 2 字母結尾來決定最佳候選，避免過度碎片。
+        """
+        code = full_code.upper().strip()
+        if not code:
+            return None
+
+        # 去掉 L 前綴（Samsung 台灣官網通常會加 L 在型號前面）
+        no_l = code[1:] if code.startswith('L') else code
+
+        # 常見後綴，由長到短移除
+        suffixes = ['ECXZW', 'UCXZW', 'SCXZW', 'ACXZW', 'CXZW', 'XZW']
+        candidates = []
+        for suffix in suffixes:
+            if no_l.endswith(suffix):
+                short = no_l[:-len(suffix)]
+                if re.match(r'^[SC][0-9]{2}[A-Z0-9]+[A-Z]{2,3}$', short) and 8 <= len(short) <= 13:
+                    candidates.append(short)
+
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # 多個候選時，用現有型號表來評分：完全吻合 > 結尾吻合 > 長度
+        existing = set(m.upper() for m in self._load_model_list())
+        known_endings = {m[-2:].upper() for m in existing if len(m) >= 2}
+
+        def score(c: str) -> int:
+            s = 0
+            cu = c.upper()
+            if cu in existing:
+                s += 1000
+            ending = cu[-2:]
+            if ending in known_endings:
+                s += 100
+            # 結尾是 C 的通常更常見
+            if ending.endswith('C'):
+                s += 10
+            # 偏好較長的候選
+            s += len(cu)
+            return s
+
+        candidates.sort(key=score, reverse=True)
+        return candidates[0]
+
+    def _bulk_fetch_prices_from_searchapi(self) -> Dict[str, int]:
+        """
+        [v19.14] 使用 Samsung Product Finder API 一次性抓取所有顯示器型號與價格。
+        回傳 {短型號: 價格}，只回傳有價格的項目。
+        """
+        result: Dict[str, int] = {}
+        try:
+            params = {
+                "type": "07010000",
+                "siteCode": "tw",
+                "start": 1,
+                "num": 200,
+                "sort": "newest",
+                "onlyFilterInfoYN": "N",
+                "keySummaryYN": "Y",
+            }
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.samsung.com/tw/monitors/all-monitors/',
+            }
+            _log_price_status("[cyan]🌐 正在使用 Samsung Product Finder API 一次性抓取所有顯示器價格...[/cyan]")
+            response = requests.get(SAMSUNG_FINDER_API, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            product_list = data.get('response', {}).get('resultData', {}).get('productList', [])
+            total = data.get('response', {}).get('resultData', {}).get('common', {}).get('totalRecord', len(product_list))
+
+            for product in product_list:
+                for model in product.get('modelList', []):
+                    short = model.get('modelName', '').upper().strip()
+                    full = model.get('modelCode', '').upper().strip()
+                    if not short or not full:
+                        continue
+
+                    # 選擇實際售價：優先促銷價，其次標價
+                    price = None
+                    promo = model.get('promotionPrice')
+                    if promo:
+                        try:
+                            price = int(promo)
+                        except (ValueError, TypeError):
+                            pass
+                    if not price:
+                        raw = model.get('price')
+                        if raw:
+                            try:
+                                price = int(raw)
+                            except (ValueError, TypeError):
+                                pass
+
+                    if price and 1000 <= price <= 1000000:
+                        result[short] = price
+                        # 同時記錄完整型號對應價格，供後續比對
+                        result[full] = price
+
+            _log_price_status(f"[green]✅ Finder API 抓取完成：共 {total} 個產品，{len(result)} 筆價格[/green]")
+        except Exception as e:
+            _log_price_status(f"[yellow]⚠️ Finder API 抓取失敗: {e}[/yellow]")
+        return result
+
+    def prefetch_all_models(self):
+        """
+        [v19.14] 啟動時在背景一次性刷新所有顯示器官網價格。
+        使用 Samsung Product Finder API（單一請求），不再逐型號慢抓。
+        """
+        import threading
+
+        def _run():
+            # 1. 使用 Finder API 一次性取得所有型號與價格
+            prices = self._bulk_fetch_prices_from_searchapi()
+            if not prices:
+                # 若 Finder API 失敗，改用舊的網頁型號發現作為後備
+                self.discover_models_from_samsung(update_model_list=True)
+                return
+
+            # 2. 更新型號表（保留既有 + 新增發現的短型號）
+            discovered_short = {m for m in prices.keys() if self._is_samsung_model_format(m)}
+            existing = set(self._load_model_list())
+            all_models = existing | discovered_short
+            try:
+                sorted_models = sorted(all_models, key=lambda x: x.upper())
+                tmp_file = f"{self.model_list_file}.tmp"
+                with open(tmp_file, 'w', encoding='utf-8') as f:
+                    for m in sorted_models:
+                        f.write(f"{m}\n")
+                os.replace(tmp_file, self.model_list_file)
+                _log_price_status(f"[green]✅ 型號表已更新：原有 {len(existing)} 筆，新增 {len(all_models - existing)} 筆，共 {len(all_models)} 筆[/green]")
+            except Exception as e:
+                _log_price_status(f"[yellow]⚠️ 寫入型號表失敗: {e}[/yellow]")
+
+            # 3. 更新價格快取並重建檔案，避免重複行累積
+            for model, price in prices.items():
+                if price and price > 0:
+                    self.price_cache[model] = price
+            self._rewrite_cache_file()
+
+            # 4. [v19.14] 把型號表中有、但 Finder API 沒有的型號標記為停產，避免後續慢速查詢又顯示問號
+            current_models = {m for m in prices.keys() if self._is_samsung_model_format(m)}
+            discontinued = existing - current_models
+            for m in discontinued:
+                self.discontinued_models.add(m)
+            if discontinued:
+                _log_price_status(f"[dim]ℹ️ 已標記 {len(discontinued)} 個型號為停產（不在目前官網清單中）[/dim]")
+
+            _log_price_status(f"[cyan]✅ 背景價格刷新完成：已更新 {len(prices)} 筆價格紀錄[/cyan]")
+
+        threading.Thread(target=_run, daemon=True).start()
+
 
 
 # 全域實例

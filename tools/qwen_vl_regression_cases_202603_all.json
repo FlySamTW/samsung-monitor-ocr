@@ -1,0 +1,567 @@
+[
+  {
+    "name": "all-01-202603抽樣-1-M-台中市-大甲區-TK3C-大甲-838",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-838.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "all-02-202603抽樣-2-M-台中市-大甲區-TK3C-大甲-846",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-846.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32DG802SC",
+      "price": "36900"
+    }
+  },
+  {
+    "name": "all-03-202603抽樣-3-M-台中市-大里區-eLife-大里-344",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-344.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe Pro M7 43\"",
+      "price": "17990"
+    }
+  },
+  {
+    "name": "all-04-202603抽樣-4-M-台中市-大里區-eLife-大里-347",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-347.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-05-202603抽樣-5-M-台中市-大甲區-SF-大甲-1232",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1232.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-06-202603抽樣-6-M-台中市-大甲區-SF-大甲-1236",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1236.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。；人工檢視價牌修正：粉紅標籤為 S27D300GAC / 3,090。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "all-07-202603抽樣-7-M-台中市-大甲區-神腦-大甲光明-651",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-651.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-08-202603抽樣-8-M-台中市-東　區-集雅社-台中LalaportSES-1550",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-東　區-集雅社-台中LalaportSES-1550.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_sample.json。202603真實照片抽樣；先不使用裁切圖，測試4B是否足夠。",
+    "expected": {
+      "view_type": "單機",
+      "model": null
+    }
+  },
+  {
+    "name": "all-09-M-台中市-大甲區-神腦-大甲光明-652",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-652.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：FollowMe M5，標籤可見 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-10-M-台中市-大甲區-神腦-大甲光明-653",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-653.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：一般 Smart Monitor M7，1,990 是電信方案價，不可當商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S32FM703UC",
+      "price": null
+    }
+  },
+  {
+    "name": "all-11-M-台中市-大甲區-SF-大甲-1233",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1233.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S24F332EAC，2,390 低於 3000，依規則不可當商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S24F332EAC",
+      "price": null
+    }
+  },
+  {
+    "name": "all-12-M-台中市-大甲區-SF-大甲-1234",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1234.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：Odyssey G5 S27CG552EC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-13-M-台中市-大甲區-SF-大甲-1235",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1235.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S32FG50ZBC，標籤價 7,490。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FG50ZBC",
+      "price": "7490"
+    }
+  },
+  {
+    "name": "all-14-M-台中市-大甲區-TK3C-大甲-839",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-839.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S27F612EAC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27F612EAC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-15-M-台中市-大甲區-TK3C-大甲-840",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-840.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S27D300GAC，標籤價 3,290。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "all-16-M-台中市-大甲區-TK3C-大甲-841",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-841.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S27CG552EC，標籤價 7,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "7990"
+    }
+  },
+  {
+    "name": "all-17-M-台中市-大甲區-TK3C-大甲-842",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-842.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：S27FG532EC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27FG532EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-18-M-台中市-大甲區-TK3C-大甲-843",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-843.jpg",
+    "note": "總回歸；來源 qwen_vl_regression_cases_202603_explore_10.json。202603探索抽樣轉正式答案：FollowMe M7，標籤價 12,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "all-19-M-台中市-大甲區-TK3C-大甲-844",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-844.jpg",
+    "note": "202603 新探索抽樣轉正式答案：遠一點的 Samsung FollowMe 4K 實體展示，底下價牌 12,990，應判 FollowMe M7 32，不可因支架局部被遮住而當一般單機。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "all-20-M-台中市-大里區-神腦-大里中興-629",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-神腦-大里中興-629.jpg",
+    "note": "202603 新探索抽樣轉正式答案：FollowMe M5 32，底部商品價 10,990 有效；旁邊月付 999 是方案價，不能拿來清掉 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-21-M-台中市-大里區-SF-大里-1237",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1237.jpg",
+    "note": "202603 第二輪探索轉正式答案：遠景照片；模型描述含『沒有 FollowMe 白色垂直支架』時，後處理不可因白色垂直支架字樣誤救成 FollowMe。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-22-M-台中市-大里區-eLife-大里-346",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-346.jpg",
+    "note": "202603 第二輪探索轉正式答案：主角是一般三星 27 吋，價牌型號 S27D300GAC，價格 3,290；不可誤讀成 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "all-23-M-台中市-大里區-SF-大里-1238",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1238.jpg",
+    "note": "202603 第二輪探索轉正式答案：主角上方 G5 標籤可讀 S32CG552EC (32)，下方商品價 6,990；不可把 model 清成 null。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32CG552EC",
+      "price": "6990"
+    }
+  },
+  {
+    "name": "all-24-M-台中市-太平區-eLife-太平樹德-375",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-375.jpg",
+    "note": "202603 第三輪探索轉正式答案：多台螢幕與多張價牌的貨架遠景，沒有明確單一主角與可讀型號，應判遠景。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-25-M-台中市-太平區-eLife-太平樹德-376",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-376.jpg",
+    "note": "202603 第三輪探索轉正式答案：桌上 FollowMe 春節活動立牌不是主角螢幕規格牌；主角應依右側三星 27 吋標籤，價格 3,290，大於 3000，不能說低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "all-26-M-台中市-大雅區-TK3C-新東海-958",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大雅區-TK3C-新東海-958.jpg",
+    "note": "202603 第三輪探索轉正式答案：S24F332EAC 價格 2,590 低於 3000，依規則不可當三星螢幕商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S24F332EAC",
+      "price": null
+    }
+  },
+  {
+    "name": "all-27-M-台中市-西屯區-集雅社-台中大遠百-1547",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-集雅社-台中大遠百-1547.jpg",
+    "note": "202603 第三輪探索轉正式答案：ViewFinity 27 吋 5K，底部標籤可讀 S27C900PAC，價格 24,900。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27C900PAC",
+      "price": "24900"
+    }
+  },
+  {
+    "name": "all-28-M-台中市-大里區-神腦-大里中興-628",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-神腦-大里中興-628.jpg",
+    "note": "202603 第四輪探索轉正式答案：牌面上方明確寫 SAMSUNG FollowMe 32 M5，底部價牌 10,990；不可因 10,990 或模型自述誤判為 M7。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-29-M-台中市-大里區-SF-大里-1241",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1241.jpg",
+    "note": "202603 第四輪探索轉正式答案：中間主角下方標籤是 S27CG552EC / 4,990；S27CG552ZK 不在型號表，是尾碼誤讀。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-30-M-台中市-大里區-SF-大里-1242",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1242.jpg",
+    "note": "202603 第四輪探索轉正式答案：中間主角下方標籤是 S27FG532EC / 4,990；S27FQ532EC 不在型號表，是 G/Q 誤讀。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27FG532EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-31-M-台中市-太平區-eLife-太平樹德-377",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-377.jpg",
+    "note": "202603 第四輪探索轉正式答案：畫面是 Smart Monitor，價格 13,990；沒有清楚 S 開頭完整型號，不可硬配 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "13990"
+    }
+  },
+  {
+    "name": "all-32-M-台中市-太平區-SF-太平中興-1244",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-SF-太平中興-1244.jpg",
+    "note": "202603 第四輪探索轉正式答案：整排展示區遠景，右側與箱子多為 ASUS/ROG，無清楚三星主角型號；不可保留非三星價格。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-33-M-台中市-太平區-SF-太平中興-1246",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-SF-太平中興-1246.jpg",
+    "note": "202603 第五輪探索轉正式答案：主角右上 L 貼紙清楚是 G5 S27CG552EC，底部同區價牌 4,990；描述中的『不適用 FollowMe』是排除語句，不可反向救成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-34-M-台中市-北屯區-eLife-北屯-296",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-eLife-北屯-296.jpg",
+    "note": "202603 第五輪探索轉正式答案：主角三星螢幕下方價牌可見 9,990，但沒有清楚 S 開頭完整型號；只看到 SAMSUNG 品牌名時不可硬補 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "9990"
+    }
+  },
+  {
+    "name": "all-35-M-台中市-西屯區-集雅社-台中新光-1600",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-集雅社-台中新光-1600.jpg",
+    "note": "202603 第六輪探索轉正式答案：右下標籤可讀 S32FM702UC / 10,990；畫面沒有 FollowMe 白色支架或圓形底座，這是一般 Smart Monitor，不可標準化成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FM702UC",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-36-M-台中市-西屯區-eLife-逢甲-322",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-eLife-逢甲-322.jpg",
+    "note": "202603 第六輪探索轉正式答案：多台螢幕與多張價牌的展示區遠景；即使模型描述『其中一台』有價格，也不可把零散價牌 39,990 救回正式答案。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-37-M-台中市-太平區-TK3C-太平-1162",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-TK3C-太平-1162.jpg",
+    "note": "202603 第七輪探索轉正式答案：主角是 LG 可移動螢幕，雖有 17,990 價牌與白色支架，但不是 Samsung FollowMe；本專案不可保留非三星主角價格。",
+    "expected": {
+      "view_type": "單機",
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "all-38-M-台中市-大里區-SF-大里-1243",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1243.jpg",
+    "note": "202603 第七輪探索轉正式答案：價牌下方粉紅標籤是 27 吋 Samsung S27D300GAC，價格 3,090；上方 G74 是螢幕編號/活動資訊，不是 S 型號。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "all-39-M-台中市-北屯區-SF-文心-1249",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-SF-文心-1249.jpg",
+    "note": "202603 第七輪探索轉正式答案：粉紅 Samsung 標籤清楚是 S27D300GAC / 3,090；不可因為螢幕顯示遊戲畫面或鄰近 G5 語境誤補 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "all-40-M-台中市-西屯區-TK3C-青海-927",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-TK3C-青海-927.jpg",
+    "note": "202603 第七輪探索轉正式答案：左側 Samsung 32 吋 AI M7 標籤可見 S32FM703UC / 10,990；右側 3,490 是 BENQ 24 吋價牌，不可填給 Samsung，也不可說 3,490 低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FM703UC",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-41-TK3C-東山-1066-S32FM703UC低價清除",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-TK3C-東山-1066.jpg",
+    "note": "人工檢視：主角是 Samsung S32FM703UC，但價牌顯示 2,390，依使用者規則低於 3000 不是三星螢幕商品售價；保留型號、清除價格。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S32FM703UC",
+      "price": null
+    }
+  },
+  {
+    "name": "all-42-TK3C-台中旗艦-776-S24DG302EC低價清除",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南　區-TK3C-台中旗艦-776.jpg",
+    "note": "人工檢視：主角價牌是 Samsung S24DG302EC，價格 2,999；低於 3000 不是有效商品售價，不能填 price，但型號要保留。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S24DG302EC",
+      "price": null
+    }
+  },
+  {
+    "name": "all-43-TK3C-沙鹿-1050-SmartMonitorM7保留13990",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-沙鹿區-TK3C-沙鹿-1050.jpg",
+    "note": "人工檢視：畫面主角是 Samsung Smart Monitor M7，左下價牌清楚寫 13,990；未讀到完整 S??FM??UC 型號時 model 可為 null，但不可把 Smart Monitor M7 誤判 LG，也不可丟掉 13,990。",
+    "expected": {
+      "view_type": "單機",
+      "model": null,
+      "price": "13990"
+    }
+  },
+  {
+    "name": "all-44-TK3C-南京旗艦-806-S27D300GAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台北市-中山區-TK3C-南京旗艦-806.jpg",
+    "note": "人工檢視：主角價牌清楚是 Samsung 27 型 S3 平面螢幕 S27D300GAC，價格 3,290；右側 FollowMe 活動立牌不可借用。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "all-45-TK3C-台中甘肅-1110-S43FM702UC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-TK3C-台中甘肅-1110.jpg",
+    "note": "人工檢視：主角價牌清楚是 Samsung 43 吋 AI M7 智慧聯網螢幕 S43FM702UC，價格 13,990；旁邊 LG/Nintendo 不影響主角 Samsung 判定，也不是 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S43FM702UC",
+      "price": "13990"
+    }
+  },
+  {
+    "name": "all-46-eLife-北安-486-S32FM702UC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台北市-中山區-eLife-北安-486.jpg",
+    "note": "人工檢視：左側 Samsung 32 吋 Smart Monitor 價牌可見 S32FM702UC，粉紅限時特價 9,990；不可硬塞 G5 型號 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S32FM702UC",
+      "price": "9990"
+    }
+  },
+  {
+    "name": "all-47-SF-豐原-1342-S27D300GAC不可被立牌轉FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-豐原區-SF-豐原-1342.jpg",
+    "note": "人工檢視：中間主角下方粉紅價牌是 Samsung S27D300GAC / 3,090；藍色 Smart Monitor 活動立牌不是主角價牌，不可救成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "all-48-神腦-台中忠明-632-FollowMeM5排除月付999",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西　區-神腦-台中忠明-632.jpg",
+    "note": "人工檢視：主角是 Samsung FollowMe 32 M5 實機，畫面側邊月付 999 是電信方案價不可當商品價；下方小立牌商品價為 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "all-49-TK3C-公益-738-FollowMeM7保留14990",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南屯區-TK3C-公益-738.jpg",
+    "note": "實體 FollowMe，有白色落地圓盤、長直桿與托盤；價牌 14,990 是五位數商品價，不可誤稱低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "14990"
+    }
+  },
+  {
+    "name": "all-50-TK3C-台中超越-977-SmartMonitorM7桌上型保留11900",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南屯區-TK3C-台中超越-977.jpg",
+    "note": "桌上型 Samsung Smart Monitor M7，白色短支架/桌腳不是 FollowMe；價牌 11,900 是五位數商品價，但完整 S 型號未清楚讀出時 model 保持 null。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "不合格-沒有規格牌",
+      "model": null,
+      "price": "11900"
+    }
+  },
+  {
+    "name": "all-51-TK3C-台中旗艦-774-活動告示不可算FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-南　區-TK3C-台中旗艦-774.jpg",
+    "note": "人工確認：右側 Samsung FollowMe 是活動告示廣告，不是實景商品；主角是一般桌上型 Samsung S27F612EAC，價格 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S27F612EAC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "all-52-SF-豐原-1344-OLEDG8不可借左側M7側標",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-豐原區-SF-豐原-1344.jpg",
+    "note": "人工確認：螢幕右上方的 M7 側標屬於左邊那台螢幕；本案要找中間主要螢幕，價牌是 32 吋 Samsung S32DG802SC 4K 電競智慧聯網 OLED，價格 26,900。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S32DG802SC",
+      "price": "26900"
+    }
+  }
+]

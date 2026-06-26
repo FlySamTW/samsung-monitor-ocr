@@ -50,23 +50,76 @@ class Evaluator:
         }
         return metrics
 
-    def generate_csv_report(self, results: List[Dict[str, Any]], filepath: str):
+    def generate_csv_report(self, results: List[Dict[str, Any]], filepath: str, append: bool = False):
         """Writes the standard results CSV."""
         try:
-            headers = ['timestamp', 'file_name', 'category', 'model', 'price', 'black_screen', 'raw_response', 'run_id']
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            headers = [
+                'timestamp',
+                'file_name',
+                'category',
+                'view_type',
+                'screen_status',
+                'quality_issue',
+                'model',
+                'price',
+                'price_status',
+                'official_price',
+                'price_diff_percent',
+                'black_screen',
+                'duration',
+                'run_id',
+                'review_status',
+                'human_is_correct',
+                'human_category',
+                'human_model',
+                'human_price',
+                'human_notes',
+                'rerun_priority',
+                'rerun_reason',
+                'rerun_recommended_model',
+                'raw_response',
+                'thinking',
+            ]
+            mode = 'a' if append else 'w'
+            should_write_header = True
+            if append:
+                try:
+                    import os
+                    should_write_header = (not os.path.exists(filepath)) or os.path.getsize(filepath) == 0
+                except OSError:
+                    should_write_header = True
+
+            with open(filepath, mode, newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
-                writer.writerow(headers)
+                if should_write_header:
+                    writer.writerow(headers)
                 for r in results:
                     writer.writerow([
                         r.get('timestamp',''), 
                         r.get('file_name',''), 
                         r.get('category',''),
+                        r.get('view_type',''),
+                        r.get('screen_status',''),
+                        r.get('quality_issue',''),
                         r.get('model','') or 'null', 
                         r.get('price','') or 'null', 
+                        r.get('price_status',''),
+                        r.get('official_price',''),
+                        r.get('price_diff_percent',''),
                         r.get('black_screen',''),
+                        r.get('duration',''),
+                        r.get('run_id', ''),
+                        r.get('review_status', ''),
+                        r.get('human_is_correct', ''),
+                        r.get('human_category', ''),
+                        r.get('human_model', ''),
+                        r.get('human_price', ''),
+                        r.get('human_notes', ''),
+                        r.get('rerun_priority', ''),
+                        r.get('rerun_reason', ''),
+                        r.get('rerun_recommended_model', ''),
                         r.get('raw_response','').replace('\n', ' ')[:5000],
-                        r.get('run_id', '')
+                        r.get('thinking','').replace('\n', ' ')[:5000],
                     ])
         except Exception as e:
             log.error(f"Failed to write CSV report: {e}")

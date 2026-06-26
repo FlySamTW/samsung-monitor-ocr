@@ -1,0 +1,46 @@
+[
+  {
+    "name": "round3-edge-eLife-太平樹德-375-多台遠景",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-375.jpg",
+    "note": "人工檢視：多台螢幕與多張價牌的貨架遠景，沒有明確單一主角與可讀型號，應判遠景。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "round3-edge-eLife-太平樹德-376-活動立牌非FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-eLife-太平樹德-376.jpg",
+    "note": "人工檢視：桌上 FollowMe 春節活動立牌不是主角螢幕規格牌；主角應依右側三星 27 吋標籤，價格 3,290，大於 3000，不能說低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "round3-edge-TK3C-新東海-958-低於3000清價",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大雅區-TK3C-新東海-958.jpg",
+    "note": "人工檢視：S24F332EAC 價格 2,590 低於 3000，依規則不可當三星螢幕商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S24F332EAC",
+      "price": null
+    }
+  },
+  {
+    "name": "round3-edge-集雅社-台中大遠百-1547-S27C900PAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-集雅社-台中大遠百-1547.jpg",
+    "note": "人工檢視：ViewFinity 27 吋 5K，底部標籤可讀 S27C900PAC，價格 24,900。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27C900PAC",
+      "price": "24900"
+    }
+  }
+]

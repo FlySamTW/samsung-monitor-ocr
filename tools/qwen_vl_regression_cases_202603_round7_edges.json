@@ -1,0 +1,45 @@
+[
+  {
+    "name": "round7-edge-TK3C-太平-1162-LG非三星不可保留價格",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-太平區-TK3C-太平-1162.jpg",
+    "note": "人工檢視：主角是 LG 可移動螢幕，雖有 17,990 價牌與白色支架，但不是 Samsung FollowMe；本專案不可保留非三星主角價格。",
+    "expected": {
+      "view_type": "單機",
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "round7-edge-SF-大里-1243-S27D300GAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-SF-大里-1243.jpg",
+    "note": "人工檢視：價牌下方粉紅標籤是 27 吋 Samsung S27D300GAC，價格 3,090；上方 G74 是螢幕編號/活動資訊，不是 S 型號。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "round7-edge-SF-文心-1249-S27D300GAC",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-北屯區-SF-文心-1249.jpg",
+    "note": "人工檢視：粉紅 Samsung 標籤清楚是 S27D300GAC / 3,090；不可因為螢幕顯示遊戲畫面或鄰近 G5 語境誤補 S27CG552EC。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "round7-edge-TK3C-青海-927-SamsungM7不可拿BenQ價牌",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-TK3C-青海-927.jpg",
+    "note": "人工檢視：左側 Samsung 32 吋 AI M7 標籤可見 S32FM703UC / 10,990；右側 3,490 是 BENQ 24 吋價牌，不可填給 Samsung，也不可說 3,490 低於 3000。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FM703UC",
+      "price": "10990"
+    }
+  }
+]

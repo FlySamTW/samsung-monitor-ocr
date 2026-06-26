@@ -1,0 +1,112 @@
+[
+  {
+    "name": "explore-M-台中市-大甲區-神腦-大甲光明-652",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-652.jpg",
+    "note": "202603探索抽樣轉正式答案：FollowMe M5，標籤可見 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-神腦-大甲光明-653",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-神腦-大甲光明-653.jpg",
+    "note": "202603探索抽樣轉正式答案：一般 Smart Monitor M7，1,990 是電信方案價，不可當商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S32FM703UC",
+      "price": null
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-SF-大甲-1233",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1233.jpg",
+    "note": "202603探索抽樣轉正式答案：S24F332EAC，2,390 低於 3000，依規則不可當商品售價。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "不合格-沒有價格牌",
+      "model": "S24F332EAC",
+      "price": null
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-SF-大甲-1234",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1234.jpg",
+    "note": "202603探索抽樣轉正式答案：Odyssey G5 S27CG552EC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-SF-大甲-1235",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1235.jpg",
+    "note": "202603探索抽樣轉正式答案：S32FG50ZBC，標籤價 7,490。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FG50ZBC",
+      "price": "7490"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-TK3C-大甲-839",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-839.jpg",
+    "note": "202603探索抽樣轉正式答案：S27F612EAC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27F612EAC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-TK3C-大甲-840",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-840.jpg",
+    "note": "202603探索抽樣轉正式答案：S27D300GAC，標籤價 3,290。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3290"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-TK3C-大甲-841",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-841.jpg",
+    "note": "202603探索抽樣轉正式答案：S27CG552EC，標籤價 7,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "7990"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-TK3C-大甲-842",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-842.jpg",
+    "note": "202603探索抽樣轉正式答案：S27FG532EC，標籤價 4,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27FG532EC",
+      "price": "4990"
+    }
+  },
+  {
+    "name": "explore-M-台中市-大甲區-TK3C-大甲-843",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-843.jpg",
+    "note": "202603探索抽樣轉正式答案：FollowMe M7，標籤價 12,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  }
+]

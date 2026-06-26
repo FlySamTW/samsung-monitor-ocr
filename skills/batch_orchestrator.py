@@ -13,6 +13,7 @@ from skills.image_processing import ImageProcessor
 from skills.model_matching import ModelMatcher
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
+from skills.audit_fields import enrich_result_for_review
 
 log = logging.getLogger("rich")
 
@@ -31,7 +32,11 @@ class BatchOrchestrator:
 
         # Initializes Skills
         self.prompt_mgr = PromptManager(config['assets_dir'])
-        self.img_proc = ImageProcessor({"max_size": None})  # [v18.57] 不壓縮原圖
+        self.img_proc = ImageProcessor({
+            "max_size": None,  # [v18.57] 不壓縮原圖
+            "bottom_label_strip": config.get("bottom_label_strip", False),
+            "bottom_center_zoom": config.get("bottom_center_zoom", False),
+        })
         self.model_matcher = ModelMatcher(config['model_list_file'])
         self.field_norm = FieldNormalizer()
         self.evaluator = Evaluator()
@@ -58,6 +63,10 @@ class BatchOrchestrator:
         self.failed_files = [] 
         self.stream_buffer = "" 
         self.unknown_models = set() # [v16.10] Track unique unknown models 
+        
+        # [OCG-v2.3] Cumulative cost tracking for average cost per image
+        self.total_image_cost = 0.0
+        self.cost_image_count = 0
         
         # Dynamic Session Paths [v11.2]
         self.current_success_file = None # [v16.5] No default to prevent root pollution
@@ -392,6 +401,14 @@ class BatchOrchestrator:
             # Apply Updates to Label Studio Format
             res_list = current_data[target_index]['annotations'][0]['result']
             
+            # Extract old model for mistake tracking
+            old_model = ""
+            for field in res_list:
+                if field.get('from_name') == 'model':
+                    val = field.get('value', {}).get('text', [])
+                    if val: old_model = val[0]
+                    break
+            
             # Helper to update or append specific field
             def update_ls_field(field_name, text_value):
                 found = False
@@ -431,6 +448,75 @@ class BatchOrchestrator:
             if 'model' in updates: update_ls_field('model', updates['model'])
             if 'price' in updates: update_ls_field('price', updates['price'])
             
+            # [Phase 2] Save to Mistake Book if model was corrected
+            if 'model' in updates and old_model and updates['model'] and str(old_model).upper() != str(updates['model']).upper():
+                mistake_file = os.path.join(self.image_dir, "mistake_book.json")
+                mistakes = []
+                if os.path.exists(mistake_file):
+                    try:
+                        with open(mistake_file, 'r', encoding='utf-8') as mf:
+                            mistakes = json.load(mf)
+                    except: pass
+                
+                new_mistake = {"wrong": str(old_model), "correct": str(updates['model'])}
+                if new_mistake not in mistakes:
+                    mistakes.append(new_mistake)
+                    try:
+                        with open(mistake_file, 'w', encoding='utf-8') as mf:
+                            json.dump(mistakes, mf, ensure_ascii=False, indent=2)
+                        self.log_system(f"🧠 已將糾錯經驗學習至錯題本: {old_model} -> {updates['model']}")
+                    except Exception as e:
+                        log.error(f"Failed to save mistake book: {e}")
+            
+            # [Stage 2] Generate SFT Dataset JSONL (ShareGPT Format)
+            try:
+                dataset_file = os.path.join(self.image_dir, "human_verified_dataset.jsonl")
+                img_path_for_training = os.path.abspath(os.path.join(self.image_dir, filename))
+                
+                # Reconstruct full corrected JSON
+                # Attempt to get existing metadata to preserve fields not in updates
+                current_view = updates.get('view_type', '單機')
+                current_status = updates.get('screen_status', '正常')
+                current_quality = updates.get('quality_issue', '無')
+                
+                for field in res_list:
+                    if field.get('from_name') == 'category':
+                        raw_cat = field.get('value', {}).get('choices', [''])[0]
+                        if "遠景" in raw_cat: current_view = "遠景"
+                        if "黑屏" in raw_cat: current_status = "黑屏"
+                        if "看不清楚" in raw_cat: current_quality = "照不清楚"
+                
+                correct_json = {
+                    "view_type": updates.get('view_type', current_view),
+                    "screen_status": updates.get('screen_status', current_status),
+                    "quality_issue": updates.get('quality_issue', current_quality),
+                    "model": updates.get('model', ''),
+                    "price": updates.get('price', '')
+                }
+                
+                sft_record = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image", "image": img_path_for_training.replace('\\', '/')},
+                                {"type": "text", "text": f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {filename}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"}
+                            ]
+                        },
+                        {
+                            "role": "assistant",
+                            "content": json.dumps(correct_json, ensure_ascii=False)
+                        }
+                    ]
+                }
+                
+                with open(dataset_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(sft_record, ensure_ascii=False) + '\n')
+                
+                self.log_system(f"📈 [Stage 2] 已產生 ShareGPT 訓練數據，累積至: human_verified_dataset.jsonl")
+            except Exception as e:
+                log.error(f"Failed to generate SFT dataset: {e}")
+                
             # Simple metadata update
             if 'view_type' in updates: 
                  # Hack: append to note or ignore? 
@@ -878,6 +964,12 @@ class BatchOrchestrator:
                 # A. Preprocess
                 # [v16.7 Fix] Removed invalid self.VERSION check
                 img_path = os.path.join(self.image_dir, fname)
+                if os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}:
+                    fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1280"))
+                    self.img_proc.config["max_size"] = fast_max_size
+                    self.img_proc.config["detect_label_card"] = False
+                    self.img_proc.config["bottom_label_strip"] = False
+                    self.img_proc.config["bottom_center_zoom"] = False
                 proc_res = self.img_proc.process(img_path)
                 if not proc_res:
                     raise Exception("Image preprocessing failed")
@@ -891,7 +983,8 @@ class BatchOrchestrator:
                     fname=fname,
                     image_b64=proc_res['base64'], 
                     prompt_mgr=self.prompt_mgr,
-                    image_processor=self.img_proc 
+                    image_processor=self.img_proc,
+                    processed_image=proc_res,
                 )
                 duration = time.time() - start_t
                 
@@ -921,6 +1014,7 @@ class BatchOrchestrator:
                 norm_result['timestamp'] = datetime.now().isoformat()
                 norm_result['duration'] = round(duration, 2)
                 norm_result['run_id'] = run_id
+                norm_result = enrich_result_for_review(norm_result)
                 
                 # Generate thumbnail for frontend display
                 norm_result['thumb_b64'] = self.img_proc.create_thumbnail(img_path, max_size=400)
@@ -966,7 +1060,8 @@ class BatchOrchestrator:
                 # Append to Run CSV for backup
                 self.evaluator.generate_csv_report(
                     [norm_result], 
-                    os.path.join(run_dir, "results.csv")
+                    os.path.join(run_dir, "results.csv"),
+                    append=True
                 )
 
                 # [v11.2] Save to DYNAMIC Session File
@@ -1053,7 +1148,7 @@ class BatchOrchestrator:
             self.log_system("🛑 批次處理已被用戶中斷。")
         else:
             self.log_system("✅ 批次處理已完成。")
-        self.stream_buffer = "" # [v14.5 Fix] Clear on completion
+        self.stream_buffer = "" # [v14.5 Fix] Clear buffer after completion
 
     def log_system(self, msg: str, with_timestamp: bool = False):
         """Log system message. Only add timestamp if with_timestamp=True"""
@@ -1077,10 +1172,17 @@ class BatchOrchestrator:
             
         # 2. Last Duration
         last_duration = results[0]['duration'] if results else 0.0
+
+        # [OCG-v2.3] Average cost per image across all tracked inferences
+        if self.cost_image_count > 0:
+            avg_cost = self.total_image_cost / self.cost_image_count
+        else:
+            avg_cost = None
         
         return {
             "avg_duration": round(avg_duration, 2),
             "last_duration": round(last_duration, 2),
+            "avg_cost": round(avg_cost, 6) if avg_cost is not None else None,
             "total_processed": self.stats['processed']
         }
 

@@ -1,0 +1,24 @@
+[
+  {
+    "name": "new-edge-遠距FollowMe4K-TK3C-大甲-844",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-844.jpg",
+    "note": "遠一點的 Samsung FollowMe 4K 實體展示，底下價牌 12,990，應判 FollowMe M7 32，不可因支架局部被遮住而當一般單機。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "new-edge-商品價與月付同畫面-神腦-大里中興-629",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-神腦-大里中興-629.jpg",
+    "note": "FollowMe M5 32，底部商品價 10,990 有效；旁邊月付 999 是方案價，不能拿來清掉 10,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M5 32\"",
+      "price": "10990"
+    }
+  }
+]

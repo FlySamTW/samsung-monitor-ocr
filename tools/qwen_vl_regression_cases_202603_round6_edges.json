@@ -1,0 +1,24 @@
+[
+  {
+    "name": "round6-edge-集雅社-台中新光-1600-S32FM702UC非FollowMe",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-集雅社-台中新光-1600.jpg",
+    "note": "人工檢視：右下標籤可讀 S32FM702UC / 10,990；畫面沒有 FollowMe 白色支架或圓形底座，這是一般 Smart Monitor，不可標準化成 FollowMe。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S32FM702UC",
+      "price": "10990"
+    }
+  },
+  {
+    "name": "round6-edge-eLife-逢甲-322-遠景不救價格",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-西屯區-eLife-逢甲-322.jpg",
+    "note": "人工檢視：多台螢幕與多張價牌的展示區遠景；即使模型描述『其中一台』有價格，也不可把零散價牌 39,990 救回正式答案。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  }
+]

@@ -9,8 +9,11 @@
 
 系統會自動：
 - 清理快取
+- 用 LM Studio CLI 啟動本機 LLM（不需要開 LM Studio 視窗）
 - 啟動 OCR 伺服器 (Port 5000)
 - 開啟 Dashboard (http://localhost:5000)
+
+若只想先啟動本機 LLM，可雙擊 `start_local_llm.bat`。預設會優先載入 `qwen3vl8b-ocr`，找不到 8B 時改用 `qwen3vl4b-ocr`。
 
 ### 2. 使用 Dashboard
 1. 選擇照片資料夾（如：商化照片-202512）
@@ -24,11 +27,75 @@
 | 檔案 | 說明 |
 |------|------|
 | run_ocr.bat | **唯一啟動腳本** |
+| start_local_llm.bat | 只啟動本機 LM Studio CLI / Qwen3-VL |
 | samsung_ocr_batch_processor.py | 主程式 (v18.99) |
 | samsung_ocr_prompt.txt | OCR Prompt |
 | 型號表.txt | 型號清單 |
 | skills/ | 功能模組 |
 | dashboard/ | Web 介面 |
+| tools/local_llm_manager.py | 本機 LLM 啟動與檢查 |
+| tools/run_qwen_vl_guard.py | Prompt 守門測試 |
+| tools/photo_rename_planner.py | 依 OCR 結果產生照片改名計畫，預設不改照片 |
+
+## 🏷️ 歷年照片改名規格
+
+改名目標是讓檔名保留門市資料，並追加 OCR 辨識出的類別、型號、價格；流水號永遠放最後。
+
+固定格式：
+
+```text
+M-年月-縣市-行政區-通路-店名-類別-型號-價格-原流水號.jpg
+```
+
+範例：
+
+```text
+M-202603-台中市-大甲區-SF-大甲-遠景-型號未辨識-無價格-911.jpg
+M-202603-台中市-大甲區-SF-大甲-單機-S27CG552EC-＄4990-914.jpg
+M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_M7_32吋-＄12990-915.jpg
+M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-＄17990-916.jpg
+```
+
+- `年月` 優先從資料夾名稱推得，例如 `商化照片-202603` 會產生 `202603`。
+- `FollowMe` 是型號，不是另一個檔名分類；類別仍以 `單機` 或 `遠景` 表示。
+- `FollowMe` 型號需細分為 `FollowMe_M5_32吋`、`FollowMe_M7_32吋`、`FollowMe_Pro_M7_43吋`。
+- 價格預設使用全形 `＄`，可用工具參數改成半形 `$`。
+- 正式改名以前，必須先產生 `rename_plan.csv`、`conflicts.csv`、`rollback.csv`。
+
+只產生改名計畫，不改照片：
+
+```powershell
+.\.venv\Scripts\python.exe tools\photo_rename_planner.py `
+  --image-dir "D:\00_歷年商化照片\商化照片-202603" `
+  --results "runs\<本次批次>\results.csv"
+```
+
+改用半形 `$`：
+
+```powershell
+.\.venv\Scripts\python.exe tools\photo_rename_planner.py `
+  --image-dir "D:\00_歷年商化照片\商化照片-202603" `
+  --results "runs\<本次批次>\results.csv" `
+  --price-symbol '$'
+```
+
+---
+
+## ✅ Prompt 守門測試
+
+修改 Prompt 或規則後，先跑快速檢查：
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_qwen_vl_guard.py --quick
+```
+
+正式檢查跑完整 52 張標準答案照片：
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_qwen_vl_guard.py
+```
+
+測試會確認 FollowMe、遠距 FollowMe、一般單機、遠景、3000 元以下價格排除、電信方案價、大於 3000 價格保留、五位數價格不可誤判低價、型號可讀但 3000 元以下時只清價格不清型號、多品牌價牌不可借價、LG 可移動螢幕不可算 Samsung FollowMe、Samsung Smart Monitor M5/M7 不可誤判 LG、Smart Monitor 桌上型短支架不可誤判 FollowMe、Smart Monitor 不硬配 G5、Smart Monitor 無 FollowMe 支架時不可標準化成 FollowMe、品牌名不等於型號、FollowMe 排除語句、Follow Me 4K 上牌不可誤升 Pro 43、G5/G7 型號讀取、型號尾碼錯讀校正、遠景不可救回零散價牌、非三星遠景排除與 Odyssey Ark 等規則沒有被改壞。守門工具預設會加一張「下方整條價牌帶」輔助圖，避免非置中的價牌漏讀；若個別照片失敗，會自動只針對失敗案例加下方中央放大圖重跑一次，再合併報告。
 
 ---
 
@@ -58,5 +125,5 @@ run_ocr.bat 會自動清理
 
 ---
 
-版本：v18.99 (UI 日誌去重版)
-更新：2026-03-05
+版本：v19.x (Qwen-VL Prompt Guard)
+更新：2026-06-06

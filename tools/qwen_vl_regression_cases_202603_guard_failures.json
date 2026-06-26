@@ -1,0 +1,24 @@
+[
+  {
+    "name": "guard-failure-遠景不可因商品標籤改單機-SF-大甲-1232",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1232.jpg",
+    "note": "完整守門曾失敗：模型 JSON 已判遠景，但回歸後處理因描述含商品標籤誤改單機。商品標籤本身不能當作單機鐵證。",
+    "expected": {
+      "view_type": "遠景",
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "guard-failure-描述價格為4990需救回-SF-大甲-1234",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1234.jpg",
+    "note": "完整守門曾失敗：描述讀到 S27CG552EC 與價格為 4,990，但 JSON 漏填，後處理需補回型號與有效價格。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27CG552EC",
+      "price": "4990"
+    }
+  }
+]

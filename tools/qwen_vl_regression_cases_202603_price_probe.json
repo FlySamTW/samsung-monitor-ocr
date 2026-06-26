@@ -1,0 +1,13 @@
+[
+  {
+    "name": "202603價格確認-FollowMe-M7-12990",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-TK3C-大甲-838.jpg",
+    "note": "確認 FollowMe M7 價格小字是否可在整張高解析度下讀成 12,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe M7 32\"",
+      "price": "12990"
+    }
+  }
+]

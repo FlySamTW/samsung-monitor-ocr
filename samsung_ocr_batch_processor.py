@@ -6,6 +6,8 @@ import time
 import json
 import base64
 import logging
+import re
+import subprocess
 import psutil
 from flask import Flask, jsonify, request, send_file, send_from_directory, Response
 from flask_cors import CORS
@@ -24,7 +26,8 @@ def force_reload_skills():
         'skills.model_matching',
         'skills.field_extraction',
         'skills.evaluation',
-        'skills.official_price'  # [v18.67] 官方價格驗證
+        'skills.official_price',  # [v18.67] 官方價格驗證
+        'skills.followme_reference'
     ]
     
     for module_name in skills_modules:
@@ -38,11 +41,459 @@ force_reload_skills()
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager 
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
+from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
-VERSION = "v18.99 (FollowMe-Logic-Fix)"
+VERSION = "v18.99 (FollowMe-Logic-Fix-OCG-v2.3)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+
+# [OCG-v2.3] Per-model token pricing (USD per 1M tokens) for OpenCode Go / Zen
+# Local models (LM Studio) are treated as $0. Update via env vars if prices change.
+OPENCODE_GO_PRICING = {
+    "qwen3.7-plus": {"input": 0.40, "output": 1.60},
+    "qwen3.7-max": {"input": 2.50, "output": 7.50},
+    "qwen3.6-plus": {"input": 0.50, "output": 3.00},
+    "qwen3.5-plus": {"input": 0.20, "output": 1.20},
+    "claude-sonnet-4": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-1": {"input": 15.00, "output": 75.00},
+    "gpt-5": {"input": 1.07, "output": 8.50},
+    "gpt-5.4": {"input": 2.50, "output": 15.00},
+}
+
+def calculate_image_cost(model_name, input_tokens, output_tokens):
+    """Calculate estimated USD cost for one image inference."""
+    if not model_name:
+        return None
+    # Local models (LM Studio) have no cloud cost
+    if model_name == "qwen3vl8b-ocr" or "lm-studio" in str(model_name).lower():
+        return 0.0
+    rates = OPENCODE_GO_PRICING.get(model_name)
+    if not rates:
+        # Try to load from env as fallback: OCR_PRICE_INPUT_1M / OCR_PRICE_OUTPUT_1M
+        try:
+            rates = {
+                "input": float(os.environ.get("OCR_PRICE_INPUT_1M", "0")),
+                "output": float(os.environ.get("OCR_PRICE_OUTPUT_1M", "0"))
+            }
+        except Exception:
+            return None
+    if input_tokens is None or output_tokens is None:
+        return None
+    cost = (input_tokens / 1_000_000.0) * rates["input"] + (output_tokens / 1_000_000.0) * rates["output"]
+    return round(cost, 6)
+
+
+def simulate_streaming_buffer(text, orchestrator_ref, char_delay=0.04):
+    """Gradually populate orchestrator.stream_buffer to mimic real-time typing."""
+    if not text or not orchestrator_ref:
+        return
+    import threading
+    import time
+
+    target = text[:800]
+
+    def _type():
+        displayed = ""
+        for ch in target:
+            # Stop if stream_buffer was reset (e.g., new image started)
+            if orchestrator_ref.stream_buffer == "":
+                return
+            displayed += ch
+            orchestrator_ref.stream_buffer = displayed
+            time.sleep(char_delay)
+
+    threading.Thread(target=_type, daemon=True).start()
+
+
+def clean_stream_display(text):
+    """[v19.15] 即時清理 stream 顯示文字，濾掉模型 echo 指令的殘留。"""
+    if not text:
+        return ""
+    text = text.strip()
+    # 移除常見的指令 echo
+    for phrase in [
+        "描述畫面內容，然後輸出JSON",
+        "描述畫面內容，然後輸出 JSON",
+        "描述畫面，然後輸出JSON",
+        "描述畫面，然後輸出 JSON",
+        "然後輸出JSON",
+        "然後輸出 JSON",
+        "輸出JSON",
+        "輸出 JSON",
+        "根據規則",
+        "根據上述規則",
+        "用戶希望我分析",
+        "用户希望我分析",
+        "作為三星門市店員",
+        "作為台灣三星門市",
+    ]:
+        text = text.replace(phrase, "")
+    # 去掉開頭的無意義標點
+    text = text.lstrip("，,、.．。 ")
+    return text.strip()
+
+
+def extract_natural_monologue(text):
+    """Extract the natural-language monologue part from model reasoning text.
+
+    Models often output a structured analysis followed by a line like:
+    '獨白：我看到...'. We prefer that sentence over the whole reasoning dump.
+    Handles both Traditional and Simplified Chinese outputs.
+    """
+    if not text:
+        return ""
+    text = text.strip()
+
+    def _clean_candidate(candidate):
+        candidate = candidate.strip()
+        for stop in ["\nJSON", "JSON 結構", "JSON结构", "\n{", "view_type:", "view_type：", "```"]:
+            stop_idx = candidate.find(stop)
+            if stop_idx != -1:
+                candidate = candidate[:stop_idx].strip()
+        # Keep only the first paragraph/line
+        candidate = candidate.split("\n")[0].strip()
+        # Remove common draft prefixes
+        for prefix in ["草稿：", "草稿:", "草稿", "獨白：", "独白：", "獨白:", "独白:", "獨白", "独白"]:
+            if candidate.startswith(prefix):
+                candidate = candidate[len(prefix):].strip()
+        return candidate
+
+    # 1. Explicit monologue markers (with or without colon)
+    for marker in ["獨白：", "独白：", "獨白:", "独白:", "獨白", "独白", "自言自語：", "自言自语：", "自言自語", "自言自语"]:
+        idx = text.find(marker)
+        if idx != -1:
+            candidate = _clean_candidate(text[idx + len(marker):])
+            if candidate and len(candidate) >= 10:
+                return candidate
+
+    # 2. Draft marker
+    for marker in ["草稿：", "草稿:", "草稿"]:
+        idx = text.find(marker)
+        if idx != -1:
+            candidate = _clean_candidate(text[idx + len(marker):])
+            if candidate and len(candidate) >= 10:
+                return candidate
+
+    # 3. Find the sentence containing "我看到/我看" closest to the JSON block
+    json_start = text.find("\n{")
+    if json_start == -1:
+        json_start = len(text)
+    best_line = ""
+    best_dist = float("inf")
+    for line in text[:json_start].split("\n"):
+        line = line.strip()
+        if not line or len(line) < 15:
+            continue
+        # Skip structured / meta lines
+        if line.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.", "#", "##", "###", "【", "[", "(", "`")):
+            continue
+        if any(k in line for k in ["用戶", "用户", "分析", "判斷", "判断", "分類", "分类", "提取", "構建", "构建", "確定", "确定", "最終檢查", "最终检查", "View Type", "Category", "Model:", "Price:", "Screen Status", "Quality Issue"]):
+            continue
+        if "我看到" in line or "我看" in line or "這台" in line or "这台" in line or "這張" in line or "这张" in line:
+            dist = json_start - text.find(line)
+            if dist >= 0 and dist < best_dist:
+                best_line = line
+                best_dist = dist
+
+    if best_line:
+        return _clean_candidate(best_line)
+
+    return ""
+
+
+
+def normalize_followme_model(raw_model, price=None, context_text=""):
+    """Standardize Samsung FollowMe names when the model already detected FollowMe."""
+    raw_model_text = str(raw_model or "").upper()
+    context_upper = str(context_text or "").upper()
+    text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
+    if has_negative_followme_context(text):
+        return None
+    if "FOLLOWME" not in text and "FOLLOW ME" not in text:
+        return None
+    if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+        return None
+
+    price_int = None
+    if price is not None:
+        digits = "".join(c for c in str(price) if c.isdigit())
+        if digits:
+            try:
+                price_int = int(digits)
+            except ValueError:
+                price_int = None
+
+    products = get_followme_products()
+    price_name = match_followme_by_price(price_int, products)
+    code_name = match_followme_by_code(text, products)
+
+    if code_name:
+        return code_name
+    if "PRO" in context_upper or "43" in context_upper or "S43FM" in context_upper or "PRO" in raw_model_text:
+        return 'FollowMe Pro M7 43"'
+    if "M5" in context_upper or "S32FM50" in context_upper:
+        return 'FollowMe M5 32"'
+    if "M7" in context_upper or "S32FM70" in context_upper or "S32DM70" in context_upper or "4K" in context_upper:
+        return 'FollowMe M7 32"'
+    if price_name:
+        return price_name
+    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
+        return 'FollowMe M5 32"'
+    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
+        return 'FollowMe M7 32"'
+    if price_int and price_int >= 15000:
+        return 'FollowMe Pro M7 43"'
+    if price_int and 9900 <= price_int <= 11000:
+        return 'FollowMe M5 32"'
+    return 'FollowMe M7 32"'
+
+
+def infer_followme_from_physical_clues(price=None, context_text=""):
+    """Infer FollowMe when the model describes the physical stand/tray but outputs 遠景."""
+    text = str(context_text or "").upper()
+    if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+        return None
+    if has_negative_followme_context(text):
+        return None
+    if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", str(context_text or "")):
+        return None
+
+    raw_text = str(context_text or "")
+    has_followme_word = "FOLLOWME" in text or "FOLLOW ME" in text
+    has_stand = any(token in raw_text for token in ["白色支架", "垂直支架", "白色垂直", "圓形底座", "白色底座"])
+    has_tray = any(token in raw_text for token in ["托盤", "展示立牌", "底部價牌", "價牌", "價格"])
+    if not has_followme_word and not (has_stand and has_tray):
+        return None
+
+    digits = "".join(c for c in str(price or "") if c.isdigit())
+    price_int = int(digits) if digits else None
+    price_name = match_followme_by_price(price_int, get_followme_products())
+    if price_name:
+        return price_name
+    if price_int and price_int >= 15000:
+        return 'FollowMe Pro M7 43"'
+    if price_int and 9900 <= price_int <= 11000:
+        return 'FollowMe M5 32"'
+    if price_int and 12000 <= price_int <= 14000:
+        return 'FollowMe M7 32"'
+    if price_int:
+        return None
+    if has_followme_word:
+        return normalize_followme_model(None, price, context_text)
+    return None
+
+
+def match_followme_by_price(price_int, products):
+    if not price_int:
+        return None
+    candidates = []
+    for product in products:
+        price_info = product.get("price", {})
+        low, high = price_info.get("range_twd") or price_info.get("expected_range_twd") or [None, None]
+        if low is not None and high is not None and low <= price_int <= high:
+            candidates.append(product.get("name"))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def match_followme_by_code(text, products):
+    for product in products:
+        for code in product.get("model_codes", []):
+            compact = code.upper().replace("LS", "").replace("XZW", "")
+            if compact and compact in text:
+                return product.get("name")
+    return None
+
+
+def has_negative_followme_context(text):
+    normalized = str(text or "").upper().replace(" ", "")
+    if re.search(r"(非|不是|不屬於|不符合|均非)FOLLOWME", normalized):
+        return True
+    if re.search(r"(沒有|無|不是|非)FOLLOWME.*(支架|底座|特徵|結構)", normalized):
+        return True
+    return any(token in normalized for token in [
+        "非FOLLOWME",
+        "不是FOLLOWME",
+        "不適用FOLLOWME",
+        "不屬於FOLLOWME",
+        "不符合FOLLOWME",
+        "不採用FOLLOWME",
+        "沒有FOLLOWME特徵",
+        "無FOLLOWME特徵",
+        "沒有FOLLOWME支架",
+        "無FOLLOWME支架",
+        "沒有FOLLOWME底座",
+        "無FOLLOWME底座",
+    ])
+
+
+def is_followme_standard_name(model):
+    return str(model or "").upper().startswith("FOLLOWME")
+
+
+def has_strong_single_unit_evidence(text):
+    raw_text = str(text or "")
+    return any(term in raw_text for term in [
+        "同一台主角",
+        "只有一台",
+        "單一主角",
+        "不是遠景",
+        "不屬於遠景",
+        "不符合遠景",
+        "一般單機",
+        "單機條件",
+    ])
+
+
+def should_block_rescue_from_distant_view(view_type, context_text=""):
+    """When the model explicitly ends as 遠景, do not rescue stray labels from a display wall."""
+    raw_text = str(context_text or "")
+    if view_type != "遠景":
+        return False
+    if "整體符合「遠景」條件" not in raw_text and "遠景" not in raw_text:
+        return False
+    return not has_strong_single_unit_evidence(raw_text)
+
+
+def normalize_followme_price(model, price=None, context_text=""):
+    """Correct the common 17,990 -> 11,990 OCR slip for FollowMe Pro 43 only."""
+    text = " ".join(str(part or "") for part in [model, context_text]).upper()
+    if "FOLLOWME PRO M7 43" not in text and not ("FOLLOWME" in text and "43" in text):
+        return None
+    digits = "".join(c for c in str(price or "") if c.isdigit())
+    if digits == "11990":
+        return "17990"
+    return None
+
+
+def clean_monitor_price(price, min_price=3000):
+    """Return a numeric monitor price string, or None for impossible/plan/accessory prices."""
+    if price in (None, "", "null", "None"):
+        return None
+    digits = "".join(c for c in str(price) if c.isdigit())
+    if len(digits) not in [4, 5]:
+        return None
+    try:
+        price_int = int(digits)
+    except ValueError:
+        return None
+    if price_int <= min_price:
+        return None
+    return digits
+
+
+def should_clear_non_samsung_price(model, context_text=""):
+    """Do not keep a visible price when the model itself says the subject is not Samsung."""
+    if model:
+        return False
+    text = str(context_text or "").upper()
+    if re.search(r"(不是|非)\s*(LG|ASUS|ROG|BENQ|ACER)", text, re.IGNORECASE):
+        return False
+    if any(token in text for token in ["非三星產品", "非SAMSUNG產品", "不是三星產品", "不是SAMSUNG產品"]):
+        return True
+    return bool(re.search(r"(主角|主體|這台|此台|商品).{0,12}(LG|ASUS|ROG|BENQ|ACER)", text, re.IGNORECASE))
+
+
+def should_block_borrowed_model_rescue(context_text=""):
+    text = str(context_text or "").upper().replace(" ", "")
+    return any(token in text for token in [
+        "不可借用",
+        "不能借用",
+        "不可拿",
+        "不能拿",
+        "旁邊小牌",
+        "旁邊小螢幕",
+        "旁邊其他",
+        "活動立牌",
+        "立牌",
+    ])
+
+
+def extract_main_label_model(context_text=""):
+    raw_text = str(context_text or "")
+    patterns = [
+        r"(?:主角|主體|這台|此台).{0,30}(?:標籤|價牌).{0,20}\b(S\d{2}[A-Z][A-Z0-9]{4,})\b",
+        r"(?:標籤|價牌).{0,12}(?:寫|寫著|標示|顯示|型號(?:是|為)?).{0,30}\b(S\d{2}[A-Z][A-Z0-9]{4,})\b",
+        r"(?:主角|主體|中間).{0,40}(?:SAMSUNG|三星).{0,18}\b(S\d{2}[A-Z][A-Z0-9]{4,})\b.{0,30}(?:OLED|電競|遊戲|GAMING)",
+        r"型號(?:是|為)?\s*\b(S\d{2}[A-Z][A-Z0-9]{4,})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw_text, re.IGNORECASE)
+        if not match:
+            continue
+        prefix = raw_text[max(0, match.start() - 18):match.start()]
+        if any(term in prefix for term in ["旁邊", "小牌", "小螢幕", "其他", "活動立牌", "贈品立牌"]):
+            continue
+        return match.group(1).upper()
+    return None
+
+
+def correct_common_model_price_conflict(model, price, context_text=""):
+    """Fix common OCR/model mismatch when a known low-end monitor price is paired with G5."""
+    model_text = str(model or "").upper()
+    cleaned_price = clean_monitor_price(price)
+    text = str(context_text or "").upper()
+    has_g5_series_word = bool(re.search(r"(?<![A-Z0-9])G5(?![A-Z0-9])", text))
+    common_ocr_model_fixes = {
+        "S27CG552": "S27CG552EC",
+        "S27CG552ZK": "S27CG552EC",
+        "S27FQ532EC": "S27FG532EC",
+        "S27D500GAC": "S27D300GAC",
+    }
+    if model_text in common_ocr_model_fixes:
+        return common_ocr_model_fixes[model_text]
+    if model_text == "S32FGS02EC" and (cleaned_price == "26900" or "OLED" in text):
+        return "S32DG802SC"
+    if not model_text and cleaned_price in {"3090", "3290"} and ("SAMSUNG" in text or "三星" in text) and ("27" in text or "27型" in text) and not has_g5_series_word and "ODYSSEY" not in text:
+        return "S27D300GAC"
+    if model_text == "S27CG552EC" and cleaned_price == "3090" and not has_g5_series_word and "ODYSSEY" not in text:
+        return "S27D300GAC"
+    if model_text == "S27CG552EC" and cleaned_price == "3290" and not has_g5_series_word and "ODYSSEY" not in text:
+        return "S27D300GAC"
+    if model_text == "S27CG552EC" and cleaned_price and int(cleaned_price) >= 9000 and not has_g5_series_word and "ODYSSEY" not in text:
+        return None
+    return model
+
+
+def ensure_followme_reference_fresh(max_age_hours=24):
+    """Refresh the FollowMe reference once at startup when the local copy is stale."""
+    if not reference_is_stale(max_age_hours=max_age_hours):
+        return "fresh"
+
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "update_followme_reference.py")
+    if not os.path.exists(script_path):
+        return "missing_script"
+
+    try:
+        result = subprocess.run(
+            [sys.executable, script_path],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+        )
+    except Exception as exc:
+        return f"failed: {exc}"
+
+    if result.returncode == 0:
+        return "updated"
+    detail = (result.stderr or result.stdout or "").strip().splitlines()
+    return f"failed: {detail[-1] if detail else 'unknown error'}"
+
+
+def should_clear_borrowed_odyssey_ark_model(model, context_text=""):
+    """Avoid borrowing a nearby small-monitor S model when the visible label is Odyssey Ark."""
+    text = str(context_text or "").upper()
+    model_text = str(model or "").upper()
+    if "ODYSSEY ARK" not in text:
+        return False
+    return model_text.startswith(("S24", "S27", "S32"))
+
+
+def has_odyssey_ark_context(context_text=""):
+    return "ODYSSEY ARK" in str(context_text or "").upper()
 
 # --- Logging Setup (必須在函數定義前) ---
 console = Console()
@@ -61,7 +512,7 @@ def print_version_info():
 CONFIG_FILE = ".last_run_config.json"
 
 def load_last_config():
-    """載入上次執行的設定 (目錄與模型)"""
+    """載入上次執行的設定 (目錄、模型、API 端點)"""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -70,7 +521,7 @@ def load_last_config():
             console.print(f"[yellow]⚠️ 無法讀取設定檔: {e}[/yellow]")
     return {}
 
-def save_last_config(image_dir, model_name):
+def save_last_config(image_dir, model_name, api_base=None, api_key=None):
     """儲存本次執行的設定"""
     try:
         data = {
@@ -78,6 +529,10 @@ def save_last_config(image_dir, model_name):
             "last_model": model_name,
             "updated_at": datetime.now().isoformat()
         }
+        if api_base is not None:
+            data["last_api_base"] = api_base
+        if api_key is not None:
+            data["last_api_key"] = api_key
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         # console.print(f"[dim]💾 設定已儲存: {image_dir}[/dim]")
@@ -254,12 +709,125 @@ def sanitize_json(json_str):
 try:
     from opencc import OpenCC
     cc = OpenCC('s2t')
+    cc_t2s = OpenCC('t2s')  # 反向轉換,用於偵測殘留簡體
 except ImportError:
     cc = None
+    cc_t2s = None
     log.warning("OpenCC not installed.")
 
+# 台灣慣用詞替換表(簡體/通用 → 台灣繁體)
+TAIWAN_WORD_MAP = [
+    ("臺", "台"),          # 一臺 -> 一台
+    ("裏", "裡"),          # OpenCC s2t 用「裏」,台灣慣用「裡」
+    ("屏幕", "螢幕"),
+    ("顯示器", "螢幕"),    # 簡體「显示器」經 OpenCC 轉成「顯示器」,再統一為「螢幕」
+    ("信息", "資訊"),
+    ("图片", "照片"),
+    ("圖片", "照片"),
+    ("中间", "中央"),
+    ("中間", "中央"),
+    ("左边", "左側"),
+    ("左邊", "左側"),
+    ("右边", "右側"),
+    ("右邊", "右側"),
+    ("视频", "影片"),
+    ("視頻", "影片"),
+    ("软件", "軟體"),
+    ("軟件", "軟體"),
+    ("网络", "網路"),
+    ("網絡", "網路"),
+    ("菜单", "選單"),
+    ("菜單", "選單"),
+    ("鼠标", "滑鼠"),
+    ("打印", "列印"),
+    ("默认", "預設"),
+    ("数据", "資料"),
+    ("數據", "資料"),
+    ("质量", "品質"),
+    ("用户", "使用者"),
+    ("用戶", "使用者"),
+    ("点击", "點擊"),
+    ("链接", "連結"),
+    ("访问", "存取"),
+    ("支持", "支援"),
+    ("程序", "程式"),
+    ("服务器", "伺服器"),
+    ("宽带", "寬頻"),
+    ("文档", "文件"),
+    ("文檔", "文件"),
+    ("硬盘", "硬碟"),
+    ("光盘", "光碟"),
+    ("保存", "儲存"),
+    ("发现", "發現"),
+    ("发現", "發現"),
+    ("型号", "型號"),
+    ("价格", "價格"),
+    ("标签", "標籤"),
+    ("货架", "貨架"),
+    ("店里", "店裡"),
+    ("里面", "裡面"),
+    ("干净", "乾淨"),
+    ("仔细", "仔細"),
+    ("说明", "說明"),
+    ("资料", "資料"),
+]
+
+# 高置信度「簡體專用字元」黑名單
+# 這些字是簡化字,現代繁體中文幾乎不會使用(繁體有完全不同的對應字)。
+# 用於在 OpenCC 轉換後做殘留檢查,若仍出現表示含未轉換的簡體字。
+SIMPLIFIED_ONLY_CHARS = set(
+    "们这吗么对时过关东问间办动场岁飞风个给将讲结进经开类两马没难气区实数万闻务显写学压亚样业应营优与语远运则种钟专观汉说见车电论读买卖产网练纪维绿编讯设计讨训诉评证识试诚详误谁临为丽举义习乡书乱争于亏仓从仅仆仑仪价众会伟传伤伦伪体余佣侠侦侧侨俭债偿储兑党兴兽册军农冲况冻净凉减"
+)
+
 def to_tc(text):
-    return cc.convert(text) if cc else text
+    if not text:
+        return text
+    if cc:
+        text = cc.convert(text)
+    # 台灣 3C 用詞偏好
+    for src, dst in TAIWAN_WORD_MAP:
+        text = text.replace(src, dst)
+    return text
+
+def _detect_simplified_residual(text):
+    """檢查文字中是否殘留簡體專用字元,回傳違規字元清單。"""
+    if not text:
+        return []
+    return [ch for ch in text if ch in SIMPLIFIED_ONLY_CHARS]
+
+def ensure_traditional_chinese(text, source_label=""):
+    """在顯示 LLM 自言自語前,確保文字為台灣繁體中文。
+
+    流程:
+    1. 用 OpenCC s2t 轉換簡體 → 繁體。
+    2. 套用台灣慣用詞替換。
+    3. 檢查殘留簡體專用字元,若仍有違規則記錄警告並標記。
+
+    回傳 (converted_text, violation_chars)。
+    violation_chars 為殘留的簡體字元清單(空清單表示通過)。
+    """
+    if not text:
+        return text, []
+    original = text
+    converted = to_tc(text)
+    violations = _detect_simplified_residual(converted)
+    if violations:
+        # 記錄警告,協助除錯
+        unique_violations = sorted(set(violations))
+        warning = f"[繁中檢查] {'來源:' + source_label if source_label else ''} 偵測到殘留簡體字元: {' '.join(unique_violations)}"
+        try:
+            log.warning(warning)
+        except Exception:
+            pass
+        # 嘗試把殘留簡體字逐一用 OpenCC 強制轉換
+        if cc:
+            for ch in unique_violations:
+                converted_ch = cc.convert(ch)
+                if converted_ch != ch:
+                    converted = converted.replace(ch, converted_ch)
+            # 再次檢查
+            violations = _detect_simplified_residual(converted)
+    return converted, violations
 
 # --- Main Processor Function (Single Stage v6.8) ---
 
@@ -301,7 +869,344 @@ def _detect_repetition(text: str) -> bool:
                 
     return False
 
-def process_single_image(fname, image_b64, prompt_mgr, image_processor):
+
+# === [v19.10] OpenCode Go (Anthropic Messages API) helper ===
+
+def _convert_to_anthropic_messages(messages, max_image_px=1024):
+    """Convert OpenAI-format messages to Anthropic Messages format. Optionally resize images."""
+    import io as _io
+    from PIL import Image as PILImage
+    anthropic_msgs = []
+    system_text = ""
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "system":
+            system_text = str(msg.get("content", ""))
+            continue
+        if role == "user":
+            content_blocks = []
+            raw_content = msg.get("content", "")
+            if isinstance(raw_content, list):
+                for item in raw_content:
+                    if item.get("type") == "text":
+                        content_blocks.append({"type": "text", "text": item.get("text", "")})
+                    elif item.get("type") == "image_url":
+                        data_uri = item.get("image_url", {}).get("url", "")
+                        parts = data_uri.split(",", 1)
+                        b64 = parts[1] if len(parts) == 2 else data_uri
+                        # Resize image to reduce payload size
+                        if max_image_px:
+                            try:
+                                img_data = base64.b64decode(b64)
+                                img = PILImage.open(_io.BytesIO(img_data)).convert('RGB')
+                                w, h = img.size
+                                if max(w, h) > max_image_px:
+                                    ratio = max_image_px / max(w, h)
+                                    img = img.resize((int(w*ratio), int(h*ratio)), PILImage.LANCZOS)
+                                buf = _io.BytesIO()
+                                img.save(buf, format='JPEG', quality=75)
+                                b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+                            except Exception:
+                                pass  # If resize fails, use original
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}
+                        })
+            else:
+                content_blocks.append({"type": "text", "text": str(raw_content)})
+            anthropic_msgs.append({"role": "user", "content": content_blocks})
+        elif role == "assistant":
+            anthropic_msgs.append({"role": "assistant", "content": str(msg.get("content", ""))})
+    return anthropic_msgs, system_text
+
+
+def _extract_balanced_json(text):
+    """Extract the largest balanced JSON object from text, handling nested braces."""
+    if not text:
+        return None
+    text_stripped = text.strip()
+    # Try direct parse first (whole text)
+    try:
+        json.loads(text_stripped)
+        return text_stripped
+    except Exception:
+        pass
+    # Try markdown code block
+    code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text_stripped)
+    if code_block_match:
+        candidate = code_block_match.group(1).strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+    # Brace-balanced scan: find first '{' and track depth to find matching '}'
+    start = text_stripped.find('{')
+    if start == -1:
+        return None
+    best_candidate = None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text_stripped)):
+        ch = text_stripped[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text_stripped[start:i+1]
+                try:
+                    json.loads(candidate)
+                    best_candidate = candidate
+                    # Continue scanning for a later (often better) valid object
+                except Exception:
+                    pass
+    if best_candidate:
+        return best_candidate
+    # Fallback: simple regex, prefer candidate with view_type/model
+    candidates = re.findall(r'(\{[\s\S]*?\})', text_stripped)
+    for candidate in reversed(candidates):
+        if '"view_type"' in candidate or '"model"' in candidate:
+            try:
+                json.loads(candidate)
+                return candidate
+            except Exception:
+                pass
+    if candidates:
+        for candidate in reversed(candidates):
+            try:
+                json.loads(candidate)
+                return candidate
+            except Exception:
+                pass
+    return None
+
+
+def _fallback_extract_fields(text, valid_models=None):
+    """[OCG-v2.4] 當模型未輸出 JSON(僅輸出 Markdown/純文字)時,從文字中提取欄位。
+
+    針對 OpenCode Go 模型偶發不遵循「獨白+JSON」格式、改輸出 Markdown 長文的情況,
+    用 regex 從文字中搶救型號、價格、視角等資訊,避免 28% 的照片型號價格遺失。
+
+    Args:
+        text: 模型回應的純文字(Markdown 或自由格式)。
+        valid_models: 型號表清單,用於 fuzzy match 提升型號準確度。
+
+    Returns:
+        dict 或 None。若無法提取任何關鍵欄位則回傳 None。
+    """
+    if not text:
+        return None
+    result = {
+        "view_type": None, "category": None, "model": None,
+        "price": None, "screen_status": None, "quality_issue": None,
+        "black_screen": False, "thinking": "", "extraction_source": "fallback_regex",
+    }
+    text_tc = to_tc(text)
+
+    # 1. 視角判斷
+    if "遠景" in text_tc:
+        result["view_type"] = "遠景"
+        result["category"] = "遠景"
+    elif "FollowMe" in text_tc or "Followme" in text_tc or "follow me" in text_tc.lower():
+        result["view_type"] = "單機"
+        result["category"] = "FollowMe"
+    elif "單機" in text_tc:
+        result["view_type"] = "單機"
+        result["category"] = "單機"
+
+    # 2. 型號提取(多種模式)
+    model_candidates = []
+    # 模式 A:「型號：XXX」「型號:XXX」後的值,容忍 **、空格、引號
+    for m in re.finditer(r'型號\s*[：:]\s*\**\s*[*]*([A-Za-z][A-Za-z0-9\-]+)', text_tc):
+        model_candidates.append(m.group(1).strip('*'))
+    # 模式 B:直接找 Samsung 型號格式 S + 大寫字母數字(至少 8 碼)
+    for m in re.finditer(r'\b(S\d[A-Z]{1,3}\d?[A-Z0-9]{5,15})\b', text_tc):
+        model_candidates.append(m.group(1))
+    # 模式 C:從型號表 fuzzy match
+    if valid_models:
+        for vm in valid_models:
+            if vm and vm in text_tc:
+                model_candidates.append(vm)
+
+    # 去重、過濾太短、選最長(最完整)的
+    seen = set()
+    unique_models = []
+    for mc in model_candidates:
+        mc_clean = mc.strip().rstrip('()').strip()
+        if len(mc_clean) >= 8 and mc_clean not in seen:
+            seen.add(mc_clean)
+            unique_models.append(mc_clean)
+    if unique_models:
+        # 偏好與型號表完全吻合的;其次選最長的
+        if valid_models:
+            exact = [m for m in unique_models if m in valid_models]
+            if exact:
+                result["model"] = max(exact, key=len)
+            else:
+                result["model"] = max(unique_models, key=len)
+        else:
+            result["model"] = max(unique_models, key=len)
+
+    # 3. 價格提取
+    price_candidates = []
+    # 模式 A:「**價格**：**4,990**」「售價:4990」——容忍 Markdown 星號、引號、空白
+    for m in re.finditer(r'(?:價格|售價|現金價|特價|標價)\**\s*[：:]\s*\**\s*[「「"]*([\d,]+)\**\s*[」」"]*', text_tc):
+        val = m.group(1).replace(',', '').replace('*', '').strip()
+        if val.isdigit():
+            price_candidates.append(int(val))
+    # 模式 B:帶千分位逗號的 4-6 位數字(如 4,990、17,990),排除月付/分期小額
+    for m in re.finditer(r'(?<![\d])(\d{1,3}(?:,\d{3}){1,2})(?![\d])', text_tc):
+        val = int(m.group(1).replace(',', ''))
+        if val >= 2000:  # 排除 2000 元以下無效價格
+            price_candidates.append(val)
+    # 模式 C:獨立 4-5 位無逗號數字
+    for m in re.finditer(r'(?<![\d\w])(\d{4,5})(?![\d])', text_tc):
+        val = int(m.group(1))
+        if val >= 2000:
+            price_candidates.append(val)
+    if price_candidates:
+        # 選出現次數最多或最小的合理價格
+        from collections import Counter
+        cnt = Counter(price_candidates)
+        result["price"] = cnt.most_common(1)[0][0]
+
+    # 4. 螢幕狀態
+    if "黑屏" in text_tc or "黑畫面" in text_tc or "沒亮" in text_tc:
+        result["screen_status"] = "黑屏"
+        result["black_screen"] = True
+    elif "正常" in text_tc:
+        result["screen_status"] = "正常"
+
+    # 5. 品質問題
+    if "沒有規格" in text_tc or "沒有價格牌" in text_tc or "找不到" in text_tc and "標籤" in text_tc:
+        result["quality_issue"] = "沒有規格和價格牌"
+    elif "拍不清楚" in text_tc or "糊" in text_tc or "反光" in text_tc:
+        result["quality_issue"] = "拍不清楚"
+
+    # 判斷是否搶救到任何關鍵欄位
+    has_key_info = any([result["model"], result["price"] is not None, result["view_type"]])
+    if not has_key_info:
+        return None
+    return result
+
+
+# [OCG-v2.5] 保守型號補抓:JSON 成功但 model=null 時,從自言自語低風險搶救型號
+# 風險控制:只在三個條件「全部」成立時才補,缺一不可
+_RISKY_CONTEXT_WORDS = ["模糊", "不清楚", "看不到", "看不清", "糊掉", "反光", "被遮", "無法判讀", "無法讀", "讀不到"]
+# 明確可讀詞必須是「動詞/形容詞」,表示模型確實從標籤讀到字;單獨「型號」不算(太泛)
+_CLEAR_CONTEXT_WORDS = ["清楚", "清晰", "印著", "寫著", "標示", "貼紙", "規格牌"]
+# 不確定詞:模型用這些詞表示在猜測,不是確實讀到
+_HEDGE_WORDS = ["好像", "似乎", "可能", "應該是", "好像是", "估計", "猜", "大概", "也許"]
+
+
+def _rescue_model_conservative(text, valid_models):
+    """JSON 成功但 model=null 時,從模型自言自語保守補抓型號。
+
+    三個嚴格條件全部成立才補,缺一不可:
+    1. 型號必須在型號表中完全吻合(防止抓到非三星型號或記憶中的型號)
+    2. 型號所在的「同一句」必須含「清楚/清晰/印著/寫著」等明確可讀動詞
+    3. 型號所在的「同一句」不能含「模糊/不清楚/看不到/反光」等風險詞
+       (用中文標點「，。；！？」分句,避免遠處描述價牌模糊被誤判為型號模糊)
+
+    回傳 (model_or_None, reason_str)。
+    """
+    if not text or not valid_models:
+        return None, "無文字或無型號表"
+    text_tc = to_tc(text)
+
+    for vm in valid_models:
+        if not vm or len(vm) < 8:
+            continue
+        idx = text_tc.find(vm)
+        if idx < 0:
+            continue
+        # 以中文標點分句,找出型號所在的句子
+        # 往前找最近的標點(初始化為 0,取所有標點中最大的位置)
+        sent_start = 0
+        for ch in "，。；！？\n":
+            p = text_tc.rfind(ch, 0, idx)
+            if p != -1 and p + 1 > sent_start:
+                sent_start = p + 1
+        # 往後找最近的標點(初始化為文末,取所有標點中最小的位置)
+        sent_end = len(text_tc)
+        for ch in "，。；！？\n":
+            p = text_tc.find(ch, idx + len(vm))
+            if p != -1 and p < sent_end:
+                sent_end = p
+        sentence = text_tc[sent_start:sent_end].strip()
+
+        # 條件 2:同一句必須含明確可讀動詞
+        clear_found = [w for w in _CLEAR_CONTEXT_WORDS if w in sentence]
+        if not clear_found:
+            continue
+
+        # 條件 3:同一句不能含風險詞
+        risky_found = [w for w in _RISKY_CONTEXT_WORDS if w in sentence]
+        if risky_found:
+            continue
+
+        # 條件 1 已滿足(vm 在型號表中)
+        reason = f"型號 {vm} 在型號表中,所在句子明確可讀({', '.join(clear_found[:3])})且無模糊詞"
+        return vm, reason
+
+    return None, "自言自語中的型號皆不符合保守補抓條件(需同時:在型號表+同句明確可讀+同句無模糊詞)"
+
+
+def _call_opencode_go_api(api_base, api_key, model, messages, max_tokens=800, timeout=180, max_image_px=1024):
+    """Call OpenCode Go Anthropic Messages API. Returns (status_code, response_text, response_json, thinking_text)."""
+    import requests as _requests
+
+    anthropic_url = api_base.rstrip('/').replace('/v1', '') + '/v1/messages'
+    anthropic_msgs, system_text = _convert_to_anthropic_messages(messages, max_image_px=max_image_px)
+
+    payload = {"model": model, "max_tokens": max_tokens, "messages": anthropic_msgs, "temperature": 0}
+    if system_text:
+        payload["system"] = system_text
+    # [OCG-v2.4] 嘗試設定 thinking 預算,避免 reasoning 無上限導致成本失控。
+    # OpenCode Go 的 Anthropic API 會自動啟用 extended thinking,thinking tokens 不計入 max_tokens,
+    # 因此 output_tokens 常遠超 max_tokens。這裡設定 budget_tokens 限制 thinking 預算。
+    # 若 API 不支援此參數會被忽略,不影響功能。
+    thinking_budget = int(os.environ.get("OCR_OCG_THINKING_BUDGET", "2000"))
+    payload["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+
+    api_key_str = str(api_key) if api_key else ""
+    resp = _requests.post(anthropic_url, json=payload, headers={
+        "x-api-key": api_key_str,
+        "anthropic-version": "2023-06-01"
+    }, timeout=timeout)
+
+    if resp.status_code != 200:
+        return resp.status_code, f"API error {resp.status_code}: {resp.text[:300]}", None, ""
+
+    resp_data = resp.json()
+    content_blocks = resp_data.get("content", [])
+    text_blocks = []
+    thinking_blocks = []
+    for b in content_blocks:
+        btype = b.get("type", "")
+        if btype == "text":
+            text_blocks.append(b.get("text", ""))
+        elif btype in ("thinking", "reasoning_content"):
+            thinking_blocks.append(b.get("thinking", b.get("text", "")))
+    full_text = "".join(text_blocks)
+    thinking_text = "".join(thinking_blocks)
+    return resp.status_code, full_text, resp_data, thinking_text
+
+
+def process_single_image(fname, image_b64, prompt_mgr, image_processor, processed_image=None):
     """
     Two-Stage Pipeline with Dual Resolution Strategy (Currently Single Stage):
     1. Low-Res (1024px) for fast & stable locating (Stage 1).
@@ -339,18 +1244,26 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     thinking_text = "" # [v17.18 Fix] Initialize early to prevent UnboundLocalError
     
     # RESTORE ORIGINAL RESOLUTION (No Constraint)
-    # [IRON RULE] User said: "Do NOT compress images!!!" 
-    # [v18.99 Critical Fix] However, 12MP images (4000x3000) consume ~12k tokens, causing Context Overflow (8k limit).
-    # We MUST cap at a reasonable high-res limit (e.g. 2560px) to survive.
-    # 2560px is still > 2K resolution, sufficient for OCR.
-    image_processor.config["max_size"] = 2560
+    # [IRON RULE] User said: "Do NOT crop images for bulk processing."
+    # For overnight bulk runs, keep one full image per request so a single hard photo cannot
+    # stall LM Studio with multiple vision payloads.
+    fast_batch_mode = os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}
+    fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1920" if fast_batch_mode else "2560"))
+    image_processor.config["max_size"] = fast_max_size if fast_batch_mode else (2200 if image_processor.config.get("bottom_label_strip") else 2560)
     
     # [v16.3 DEBUG] Force Print to see if we enter
     print(f"[DEBUG] process_single_image called for: {fname}")
 
     # [v16.3 Optimization] Use pre-loaded b64 to avoid double reading/path errors
     label_b64 = None
-    if image_b64:
+    bottom_label_b64 = None
+    bottom_center_b64 = None
+    if processed_image:
+        full_image_b64 = processed_image['base64']
+        label_b64 = processed_image.get('label_base64')
+        bottom_label_b64 = processed_image.get('bottom_label_base64')
+        bottom_center_b64 = processed_image.get('bottom_center_base64')
+    elif image_b64:
         full_image_b64 = image_b64
         # print(f"[DEBUG] Using provided image_b64, len={len(image_b64)}")
     else:
@@ -361,9 +1274,17 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             return {"error": "Image processing failed"}
         full_image_b64 = result['base64'] 
         label_b64 = result.get('label_base64') # [v18.25] Dual Vision: Get High-Res Crop
+        bottom_label_b64 = result.get('bottom_label_base64')
+        bottom_center_b64 = result.get('bottom_center_base64')
+    if fast_batch_mode:
+        label_b64 = None
+        bottom_label_b64 = None
+        bottom_center_b64 = None
     if orchestrator:
         msg = f"▶️ 正在分析圖片: {fname} (Model: {model_name_global})..."
         if label_b64: msg += " (偵測到價牌，啟用雙重視野放大 🔍)"
+        if bottom_label_b64: msg += " (下方整條價牌帶)"
+        if bottom_center_b64: msg += " (下方價牌帶放大)"
         orchestrator.log_system(msg)
         console.print(f"[cyan]{msg}[/cyan]")
     
@@ -379,9 +1300,21 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     # [v18.75 FIX] Load System Prompt from PromptManager (Bundle System)
     # 🔴 徹底修復：不再硬編碼 txt 檔案路徑，使用版本化的 Bundle 系統
     # [v18.76 動態讀取] 每張照片都重新讀取 prompt.txt，修改後不需重啟！
+    # [v19.11] OpenCode Go 使用專用簡化 prompt + few-shot
+    is_opencode_go = False
+    try:
+        if (api_client and hasattr(api_client, 'base_url')
+                and 'opencode.ai' in str(api_client.base_url or '')):
+            is_opencode_go = True
+    except Exception:
+        pass
+
     try:
         # 🔥 強制每次都從檔案讀取，不使用快取
-        prompt_file = 'samsung_ocr_prompt.txt'
+        if is_opencode_go:
+            prompt_file = 'samsung_ocr_prompt_opencode_go.txt'
+        else:
+            prompt_file = 'samsung_ocr_prompt.txt'
         with open(prompt_file, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
         # 可選：記錄檔案修改時間，方便 debug
@@ -397,7 +1330,25 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     # [v18.12] Disabled Injection to prevent Hallucination
     # system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
     #                                .replace("{examples_section}", "") 
-    system_prompt = prompt_template # Raw Prompt (No List)
+    followme_daily_reference = build_followme_prompt_section()
+    if (not is_opencode_go) and fast_batch_mode and os.environ.get("OCR_FAST_PROMPT", "1").lower() in {"1", "true", "yes", "on"}:
+        prompt_template = (
+            "你是三星商化照片 OCR 助理。每張照片都是全新任務，只看目前圖片。\n"
+            "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
+            "分類規則：\n"
+            "1. 遠景：完全看不到清楚型號或價格，且畫面主要是多台螢幕陳列。遠景不填 model/price。\n"
+            "2. FollowMe：主角螢幕有白色/銀色直立支架、圓形底座或托盤，才可判定。只用下方參考表輔助，不可把 LG 或其他品牌當三星。\n"
+            "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
+            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件或 3000 元以下價格不可當螢幕價格。\n"
+            "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
+            "JSON 格式固定為："
+            "{\"view_type\":\"遠景或單機\",\"category\":\"遠景或單機或FollowMe\","
+            "\"model\":null,\"price\":null,\"screen_status\":\"\",\"quality_issue\":\"\","
+            "\"black_screen\":false,\"thinking\":\"\"}\n"
+            "model 可讀才填字串，price 可讀才填整數；不確定就用 null，不要猜。"
+        )
+    system_prompt = prompt_template + followme_daily_reference
+
 
     # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
     import uuid
@@ -409,19 +1360,59 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
     # 3. 確保每次都建立全新 messages
     
     # Construct User Context
-    user_content = []
-    
-    # Image 1: Context (Full Image)
-    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
-    
-    # Image 2: High-Resolution (Crop) if detected
-    if label_b64:
-        user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
-        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。請執行『視覺歸屬』檢查。」\n圖片: {fname}\nRequestID: {random_salt}\n[提示]\n圖 1 (全景): 用於確認標籤相對於螢幕底座的位置歸屬。\n圖 2 (特寫): 用於讀取該標籤上的細微文字。\n請結合兩者，確保讀到的文字是來自於『歸屬於該螢幕的同一張標籤』。"
-    else:
-        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
+    user_images = []
 
-    user_content.append({"type": "text", "text": user_prompt})
+    # Image 1: Context (Full Image)
+    user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}})
+
+    # [v19.11] OpenCode Go: disable dual vision to reduce cost/latency; single full image is enough
+    if is_opencode_go:
+        label_b64 = None
+        bottom_label_b64 = None
+        bottom_center_b64 = None
+        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
+    else:
+        # Image 2: High-Resolution (Crop) if detected.
+        # When bottom-label strip is enabled, skip the auto label crop because it can grab a huge
+        # unrelated region; full image + deterministic lower strip is more stable for batch OCR.
+        if label_b64 and not bottom_label_b64:
+            user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
+            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。請執行『視覺歸屬』檢查。」\n圖片: {fname}\nRequestID: {random_salt}\n[提示]\n圖 1 (全景): 用於確認標籤相對於螢幕底座的位置歸屬。\n圖 2 (特寫): 用於讀取該標籤上的細微文字。\n請結合兩者，確保讀到的文字是來自於『歸屬於該螢幕的同一張標籤』。"
+        else:
+            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
+
+        if bottom_label_b64:
+            user_images.append({
+                "type": "text",
+                "text": "補充圖：這是原圖下方整條商品標籤/價牌區域的自動裁切，請用它輔助尋找不在正中央的價牌。",
+            })
+            user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_label_b64}"}})
+
+        if bottom_center_b64:
+            user_images.append({
+                "type": "text",
+                "text": "補充圖：這是原圖下方中間商品價牌區域的自動放大裁切，請優先用它讀主角型號與價格。",
+            })
+            user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_center_b64}"}})
+
+
+    # [Phase 2] Dynamic Mistake Book Injection
+    if orchestrator and orchestrator.image_dir:
+        mistake_file = os.path.join(orchestrator.image_dir, "mistake_book.json")
+        if os.path.exists(mistake_file):
+            try:
+                with open(mistake_file, 'r', encoding='utf-8') as mf:
+                    mistakes = json.load(mf)
+                if mistakes:
+                    mistake_str = "\n\n⚠️ 【歷史糾錯紀錄】請務必注意以下過去常犯的錯誤：\n"
+                    for m in mistakes[-10:]: # 限制最多 10 條以防 token 爆炸
+                        mistake_str += f"- 過去曾有將 {m.get('wrong')} 誤判的紀錄，正確應該是 {m.get('correct')}。請特別仔細比對這兩個型號的字元形狀。\n"
+                    user_prompt += mistake_str
+                    console.print(f"[bold yellow]🧠 已從錯題本載入 {min(len(mistakes), 10)} 條除錯紀錄至 Prompt 中！[/bold yellow]")
+            except Exception as e:
+                log.error(f"Failed to load mistake book: {e}")
+
+    user_content = [{"type": "text", "text": user_prompt}] + user_images
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -455,6 +1446,162 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         pass
 
     try:
+        # [v19.10] OpenCode Go routing: early return after Anthropic API call
+        use_opencode_go = False
+        try:
+            if (api_client and hasattr(api_client, 'base_url')
+                    and 'opencode.ai' in str(api_client.base_url or '')):
+                use_opencode_go = True
+        except:
+            pass
+
+        if use_opencode_go:
+            try:
+                api_key_raw = api_client.api_key if hasattr(api_client, 'api_key') else ""
+                # qwen3.7-plus needs fewer tokens than mimo; 1536px keeps bezel logo readable
+                if model_name_global == "qwen3.7-plus":
+                    ocg_max_tokens = 600
+                    ocg_max_image_px = 1536
+                else:
+                    ocg_max_tokens = 2000
+                    ocg_max_image_px = 1024
+                status_code, full_response_text, resp_data, reasoning_text = _call_opencode_go_api(
+                    str(api_client.base_url), str(api_key_raw),
+                    model_name_global, messages,
+                    max_tokens=ocg_max_tokens, timeout=180, max_image_px=ocg_max_image_px
+                )
+                if orchestrator:
+                    # Show natural monologue before JSON as self-talk; reasoning as fallback.
+                    # If the model already put the monologue in the content (text before JSON),
+                    # use it directly. Otherwise extract from reasoning_text.
+                    display_buffer = ""
+                    if full_response_text:
+                        json_start = full_response_text.find('{')
+                        if json_start > 0:
+                            # The model followed the "monologue first, then JSON" format
+                            display_buffer = to_tc(full_response_text[:json_start].strip())
+                        elif reasoning_text:
+                            extracted = extract_natural_monologue(reasoning_text)
+                            display_buffer = to_tc(extracted) if extracted else ""
+                        else:
+                            display_buffer = to_tc(full_response_text.strip())
+                    elif reasoning_text:
+                        extracted = extract_natural_monologue(reasoning_text)
+                        display_buffer = to_tc(extracted) if extracted else ""
+                    # [繁中檢查] 顯示前確保為台灣繁體,攔截模型誤用簡體
+                    display_buffer, zh_violations = ensure_traditional_chinese(
+                        display_buffer, source_label=f"{fname} 自言自語"
+                    )
+                    if zh_violations:
+                        orchestrator.log_system(
+                            f"⚠️ [繁中檢查] {fname} 自言自語偵測到簡體字元已自動轉換: {' '.join(sorted(set(zh_violations)))}"
+                        )
+                    simulate_streaming_buffer(display_buffer, orchestrator, char_delay=0.04)
+
+                # Debug log raw response so we can inspect mimo-v2.5 output
+                try:
+                    debug_log_path = os.path.join(os.getcwd(), "opencode_go_debug.log")
+                    usage = resp_data.get("usage", {}) if isinstance(resp_data, dict) else {}
+                    input_tokens = usage.get("input_tokens")
+                    output_tokens = usage.get("output_tokens")
+                    with open(debug_log_path, "a", encoding="utf-8") as dbg:
+                        dbg.write(f"\n--- {model_name_global} | {fname} | status={status_code} ---\n")
+                        dbg.write(f"TOKENS: input={input_tokens}, output={output_tokens}\n")
+                        dbg.write(f"RAW:\n{full_response_text}\n")
+                        if reasoning_text:
+                            dbg.write(f"REASONING:\n{reasoning_text}\n")
+                    # [OCG-v2.3] Track token usage and cost for UI display
+                    if orchestrator:
+                        orchestrator.last_model_name = model_name_global
+                        orchestrator.last_token_usage = {"input": input_tokens, "output": output_tokens}
+                        cost = calculate_image_cost(model_name_global, input_tokens, output_tokens)
+                        orchestrator.last_image_cost = cost
+                        if isinstance(cost, (int, float)):
+                            orchestrator.total_image_cost += float(cost)
+                            orchestrator.cost_image_count += 1
+                except Exception:
+                    pass
+
+                # Robust JSON extraction
+                args_str = _extract_balanced_json(full_response_text)
+                if args_str:
+                    try:
+                        parsed = json.loads(sanitize_json(args_str))
+                    except Exception:
+                        parsed = None
+                else:
+                    parsed = None
+
+                # [OCG-v2.4] JSON 解析失敗時,啟用 fallback 從 Markdown/文字搶救欄位
+                if not parsed:
+                    try:
+                        valid_models = []
+                        if orchestrator and orchestrator.model_matcher:
+                            valid_models = getattr(orchestrator.model_matcher, 'valid_models', []) or []
+                        fallback_result = _fallback_extract_fields(full_response_text, valid_models)
+                    except Exception:
+                        fallback_result = None
+                    if fallback_result:
+                        parsed = fallback_result
+                        if orchestrator:
+                            orchestrator.log_system(
+                                f"🆘 [Fallback] {fname} 模型未輸出 JSON,已從文字搶救: 型號={parsed.get('model')} 價格={parsed.get('price')} 視角={parsed.get('view_type')}"
+                            )
+                        console.print(f"[yellow]🆘 [Fallback] {fname}: 從 Markdown 搶救型號/價格[/yellow]")
+
+                if parsed and isinstance(parsed, dict):
+                    # [OCG-v2.5] JSON 成功但 model=null 時,保守補抓型號(低風險)
+                    parsed_model = parsed.get("model")
+                    if (parsed_model is None or parsed_model == "") and parsed.get("view_type") == "單機":
+                        try:
+                            valid_models = []
+                            if orchestrator and orchestrator.model_matcher:
+                                valid_models = getattr(orchestrator.model_matcher, 'valid_models', []) or []
+                            rescue_source = (reasoning_text or "") + "\n" + (full_response_text or "")
+                            rescued_model, rescue_reason = _rescue_model_conservative(rescue_source, valid_models)
+                        except Exception:
+                            rescued_model, rescue_reason = None, "補抓例外"
+                        if rescued_model:
+                            parsed["model"] = rescued_model
+                            parsed["model_rescued"] = True  # 標記供人工審核
+                            if orchestrator:
+                                orchestrator.log_system(
+                                    f"🔬 [型號補抓] {fname} 模型填 null,從自言自語保守補抓: {rescued_model} ({rescue_reason})"
+                                )
+                            console.print(f"[cyan]🔬 [型號補抓] {fname}: {rescued_model}[/cyan]")
+                    # Capture reasoning BEFORE update() overwrites thinking with model's empty string
+                    combined_thinking = reasoning_text.strip() if reasoning_text else ""
+                    text_prefix = ""
+                    if args_str and full_response_text:
+                        text_prefix = full_response_text.split(args_str)[0].strip()
+                    if not combined_thinking and text_prefix:
+                        combined_thinking = text_prefix
+                    # [繁中檢查] 存入 thinking 前確保為台灣繁體
+                    combined_thinking, _ = ensure_traditional_chinese(
+                        combined_thinking, source_label=f"{fname} thinking"
+                    )
+                    result_json.update(parsed)
+                    # Restore reasoning as thinking/self-talk
+                    result_json["thinking"] = combined_thinking
+                    # Set module-level thinking_text so final persistence (line ~1838) keeps it
+                    thinking_text = combined_thinking
+                    console.print(f"[green]✅ OpenCode Go: {parsed.get('view_type')}/{parsed.get('model')}/{parsed.get('price')}[/green]")
+                    return result_json
+                else:
+                    console.print(f"[yellow]⚠️ OpenCode Go 無效 JSON (status={status_code})[/yellow]")
+                    # Return a recoverable result so the batch can continue
+                    fallback_thinking = (reasoning_text.strip() + "\n" + (full_response_text or "")).strip()
+                    # [繁中檢查] 失敗分支的 thinking 也要轉繁體
+                    fallback_thinking, _ = ensure_traditional_chinese(
+                        fallback_thinking, source_label=f"{fname} failed-thinking"
+                    )
+                    result_json["thinking"] = fallback_thinking
+                    result_json["quality_issue"] = "OpenCode Go returned non-JSON"
+                    return result_json
+            except Exception as e:
+                console.print(f"[red]❌ OpenCode Go 失敗: {e}[/red]")
+                return {"error": f"OpenCode Go API: {e}"}
+
         # [v17.16 Fix] Pre-Flight Check for Stop Signal
         if orchestrator and not orchestrator.is_running:
              return {"error": "Stopped by user"}
@@ -464,7 +1611,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         
         # [v18.90] Price Consistency Retry Loop
         # 包裝 LLM 呼叫與解析，當價格/型號矛盾時給予二次機會
-        max_retries = 1
+        max_retries = int(os.environ.get("OCR_MAX_RETRIES", "0" if fast_batch_mode else "1"))
         final_result = None
         
         for attempt in range(max_retries + 1):
@@ -473,19 +1620,23 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                 console.print(f"[bold yellow]🔄 觸發重試 (Attempt {attempt+1}/{max_retries+1}) - 加入價格警告提示...[/bold yellow]")
                 orchestrator.log_system(f"🔄 [Auto-Retry] 觸發價格與型號不一致的重試機制...")
             
+            request_kwargs = {
+                "model": model_name_global,
+                "messages": messages,
+                "stream": True,
+                "temperature": 0,
+                "stream_options": {"include_usage": True},
+            }
+            fast_max_tokens = os.environ.get("OCR_FAST_MAX_TOKENS")
+            if fast_batch_mode:
+                request_kwargs["max_tokens"] = int(fast_max_tokens or "500")
+
             stream = api_client.chat.completions.create(
-                model=model_name_global,
-                messages=messages,
-                stream=True,
-                temperature=0.1,  # Keep low for OCR precision
+                **request_kwargs
                 # top_p=0.8,      # Removed to allow model defaults
                 # max_tokens=1024, # Let model decide or use default
                 # presence_penalty=1.5, # Removed: harmful for OCR (forces diversity)
-                stream_options={"include_usage": True}
             )
-            
-            tool_calls_buffer = []
-            full_response_text = "" # Reset for retry
             
             for chunk in stream:
                 # ... (Stream handling code remains same, omitted for brevity but conceptually here) ...
@@ -525,6 +1676,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                     # 獨白欄不需要顯示「思考:」標題前綴
                     import re as _re
                     current_display = _re.sub(r'^思考[:：]\s*', '', current_display).strip()
+                    # [v19.15] 即時濾除模型 echo 指令的殘留
+                    current_display = clean_stream_display(current_display)
                     if orchestrator: orchestrator.stream_buffer = current_display
 
             # Anti-Loop Check
@@ -694,38 +1847,25 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             # 即使 clean_model 被洗掉，只要 raw_model 或 thinking_text 有跡象，就啟動救援
             followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
+            negative_followme_context = has_negative_followme_context(" ".join(str(part or "") for part in [raw_model, thinking_text]))
+            borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
             
             # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
             # 1. clean_model 明確包含 "FOLLOWME" 
             # 2. 或者 clean_model 為空/無效，且 raw_model/thinking_text 有 FollowMe 關鍵字
-            if "FOLLOWME" in clean_model: 
+            if "FOLLOWME" in clean_model and not negative_followme_context and not borrowed_model_context:
                 is_followme_candidate = True
-            elif not has_valid_s_model:  # 只有當沒有有效 S 型號時才檢查其他線索
+            elif not has_valid_s_model and not negative_followme_context and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
                 if raw_model and any(h in raw_model.upper() for h in followme_hints): 
                     is_followme_candidate = True
                 elif thinking_text and any(h in thinking_text.upper() for h in followme_hints): 
                     is_followme_candidate = True
             
             if is_followme_candidate:
-                 # Default to M7
-                 mapped_model = 'FollowMe M7 32"'
-                 
-                 # Use Price to disambiguate if available
                  p_val = data_obj.get("price")
-                 if p_val and str(p_val).isdigit():
-                     p_int = int(p_val)
-                     if p_int < 11500: # User said 9900
-                         mapped_model = 'FollowMe M5 32"'
-                     elif p_int > 14500: # User said 15999
-                         mapped_model = 'FollowMe Pro M7 43"'
-                     else: # User said 12990
-                         mapped_model = 'FollowMe M7 32"'
-                 
-                 # Fallback to text heuristics if price invalid
-                 elif "PRO" in clean_model or "43" in clean_model:
-                     mapped_model = 'FollowMe Pro M7 43"'
-                 elif "M5" in clean_model:
-                     mapped_model = 'FollowMe M5 32"'
+                 mapped_model = normalize_followme_model(raw_model, p_val, thinking_text)
+                 if not mapped_model:
+                     mapped_model = 'FollowMe M7 32"'
                      
                  clean_model = mapped_model
                  is_followme_bypass = True # [v18.44] Enable Bypass
@@ -769,8 +1909,21 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
         # [v18.66] 尺寸描述 vs 型號 交叉驗證
         # 如果思考文字提到「43型」但型號卻是 S32...，表示混搭標籤
         final_model = data_obj.get("model")
+        model_rescue_blocked = has_odyssey_ark_context(thinking_text) or should_block_borrowed_model_rescue(thinking_text)
         if final_model and thinking_text:
             import re
+            if should_clear_borrowed_odyssey_ark_model(final_model, thinking_text):
+                console.print(f"[yellow]⚠️ [Odyssey Ark 保護] 偵測到 Ark 系列名，清除疑似借用的小螢幕型號 {final_model}[/yellow]")
+                data_obj["model"] = None
+                data_obj["price"] = None
+                final_model = None
+                model_rescue_blocked = True
+
+            corrected_followme_price = normalize_followme_price(final_model, data_obj.get("price"), thinking_text)
+            if corrected_followme_price:
+                console.print(f"[yellow]⚠️ [FollowMe Pro 價格校正] {data_obj.get('price')} → {corrected_followme_price}[/yellow]")
+                data_obj["price"] = corrected_followme_price
+
             # 從思考文字中抓取尺寸描述（如「43型」、「32型」、「27型」）
             size_in_desc = re.search(r'(\d{2})型', thinking_text)
             if size_in_desc:
@@ -808,11 +1961,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                 
                 try:
                     p_int = int(clean_price)
-                    # [v18.94] 1000R 防呆：價格不可能低於 2000 (除非是配件，但我們只抓螢幕)
-                    min_price = 2000
+                    # [v19.0] 價格防呆：三星螢幕 3000 元以下一律視為方案/月付/配件價，不是商品售價
+                    min_price = 3000
                     
-                    if p_int < min_price:
-                         console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) < {min_price} -> 過低 (可能是曲率 1000R/1500R)[/dim]")
+                    if p_int <= min_price:
+                         console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) <= {min_price} -> 過低 (方案/月付/配件價，不是螢幕商品售價)[/dim]")
                          data_obj["price"] = None
                     # [v18.97] Strict Symbol Check for low-ish numbers to be safe
                     elif p_int < 10000 and not has_currency_symbol:
@@ -845,23 +1998,43 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
                 if match:
                     desc_model = match.group(1).strip().upper()
                     break
+            desc_model_is_speculative = bool(re.search(r"(應為|可能|類似|推測).{0,20}" + re.escape(desc_model or ""), thinking_text, re.IGNORECASE)) or bool(re.search(r"沒有.{0,8}完整.{0,6}型號", thinking_text))
             
             # 從獨白提取價格
             desc_price_patterns = [
-                r'價格[是為標籤上寫著]?\s*[「」\"]?(\d{4,5})[」\"]?',
+                r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*寫\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
+                r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*寫\s*[「」\"]?(\d{4,5})[」\"]?',
+                r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*(?:是|為|:|：)?\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
+                r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*(?:是|為|:|：)?\s*[「」\"]?(\d{4,5})[」\"]?',
+                r'寫著[「」]?(\d{1,2},\d{3})[」]?',
                 r'寫著[「」]?(\d{4,5})[」]?',
+                r'\$\s*(\d{1,2},\d{3})',
                 r'\$\s*(\d{4,5})',
             ]
             desc_price = None
             for pattern in desc_price_patterns:
                 match = re.search(pattern, thinking_text)
                 if match:
-                    desc_price = match.group(1).strip()
+                    desc_price = match.group(1).strip().replace(",", "")
                     break
 
             # 驗證型號一致性
             current_model = data_obj.get("model")
-            if current_model and desc_model:
+            rescue_blocked_by_distant_view = should_block_rescue_from_distant_view(data_obj.get("view_type"), thinking_text)
+            if is_followme_standard_name(current_model) and has_negative_followme_context(thinking_text):
+                console.print(f"[yellow]⚠️ [FollowMe 排除] 獨白明確說沒有 FollowMe 支架/底座，清除標準化 FollowMe 型號[/yellow]")
+                data_obj["model"] = None
+                current_model = None
+            main_label_model = extract_main_label_model(thinking_text)
+            if not current_model and main_label_model and not rescue_blocked_by_distant_view:
+                console.print(f"[green]✅ [主角標籤救援] 從描述補回型號: {main_label_model}[/green]")
+                data_obj["model"] = main_label_model
+                current_model = main_label_model
+            if not current_model and desc_model and desc_model in valid_models_list and not desc_model_is_speculative and not model_rescue_blocked and not rescue_blocked_by_distant_view:
+                console.print(f"[green]✅ [獨白救援] 從描述補回型號: {desc_model}[/green]")
+                data_obj["model"] = desc_model
+                current_model = desc_model
+            elif current_model and desc_model:
                 # 簡單清理
                 c_curr = current_model.replace('-', '').strip().upper()
                 c_desc = desc_model.replace('-', '').strip().upper()
@@ -871,17 +2044,56 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             
             # 驗證價格一致性
             current_price = data_obj.get("price")
-            if not current_price and desc_price: # 如果 JSON 沒抓到但獨白有
-                console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {desc_price}[/green]")
-                data_obj["price"] = desc_price
+            if not current_price and desc_price and not rescue_blocked_by_distant_view: # 如果 JSON 沒抓到但獨白有
+                rescued_price = clean_monitor_price(desc_price)
+                if rescued_price:
+                    console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
+                    data_obj["price"] = rescued_price
+                else:
+                    console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 3000 元以下或格式不合，未補回[/dim]")
+
+        cleaned_final_price = clean_monitor_price(data_obj.get("price"))
+        if data_obj.get("price") and not cleaned_final_price:
+            console.print(f"[dim]⚠️ [價格攔截] 最終價格 {data_obj.get('price')} 3000 元以下或格式不合 -> 清除[/dim]")
+            data_obj["price"] = None
+        elif cleaned_final_price:
+            data_obj["price"] = cleaned_final_price
+
+        if should_block_rescue_from_distant_view(data_obj.get("view_type"), thinking_text):
+            if data_obj.get("model") or data_obj.get("price"):
+                console.print("[dim]⚠️ [遠景保護] 遠景描述中的零散型號/價格不補入正式答案[/dim]")
+            data_obj["model"] = None
+            data_obj["price"] = None
+
+        corrected_model = correct_common_model_price_conflict(data_obj.get("model"), data_obj.get("price"), thinking_text)
+        if corrected_model != data_obj.get("model"):
+            console.print(f"[yellow]⚠️ [型號價格校正] {data_obj.get('model')} + {data_obj.get('price')} 不合理，改為 {corrected_model}[/yellow]")
+            data_obj["model"] = corrected_model
+
+        if should_clear_non_samsung_price(data_obj.get("model"), thinking_text):
+            console.print("[dim]⚠️ [非三星攔截] 主體被描述為非三星且無三星型號，清除價格[/dim]")
+            data_obj["price"] = None
+            if any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"]):
+                data_obj["view_type"] = "遠景"
+
+        inferred_followme = None if should_block_borrowed_model_rescue(thinking_text) else infer_followme_from_physical_clues(data_obj.get("price"), thinking_text)
+        if inferred_followme and data_obj.get("view_type") == "遠景":
+            console.print(f"[yellow]⚠️ [FollowMe 遠景救援] 獨白描述支架/托盤/價牌，遠景改為單機: {inferred_followme}[/yellow]")
+            data_obj["view_type"] = "單機"
+            data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
+            data_obj["model"] = inferred_followme
+        elif inferred_followme and not data_obj.get("model"):
+            console.print(f"[green]✅ [FollowMe 實體線索救援] 補回型號: {inferred_followme}[/green]")
+            data_obj["model"] = inferred_followme
+
         # 4. Auto-Calculate Quality Issue
         p_val = data_obj.get("price")
         m_val = data_obj.get("model")
         
         if p_val and not m_val:
-            data_obj["quality_issue"] = "缺型號(規格牌不清/不在表內)"
+            data_obj["quality_issue"] = "不合格-沒有規格牌"
         elif m_val and not p_val:
-            data_obj["quality_issue"] = "缺價格(價牌不清/不對齊)"
+            data_obj["quality_issue"] = "不合格-沒有價格牌"
         elif m_val and p_val:
              data_obj["quality_issue"] = "無"
         else:
@@ -1037,10 +2249,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             
             # [v18.99 Backup] 獨白關鍵字備援檢測：若 JSON 沒說遠景，但獨白明確說了，則強制修正
             if thinking_text and '整體符合「遠景」條件' in thinking_text:
-                if view_type != '遠景':
+                has_single_unit_evidence = has_strong_single_unit_evidence(thinking_text)
+                if view_type != '遠景' and not has_single_unit_evidence:
                     console.print(f"[yellow]⚠️ [獨白備援] JSON 寫 {view_type} 但獨白說遠景 → 強制修正為遠景[/yellow]")
                     view_type = '遠景'
                     result_json['view_type'] = '遠景'
+                elif has_single_unit_evidence:
+                    console.print("[yellow]⚠️ [獨白備援] 偵測到單機線索（台數/標籤/價格牌），略過遠景強制修正[/yellow]")
             
             if view_type == '遠景':
                 result_json['category'] = '遠景'
@@ -1126,7 +2341,14 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor):
             if blk:
                 summary_line += " / 黑屏"
             orchestrator.log_system(summary_line)
-            orchestrator.stream_buffer = "" # [v14.4 Fix] Clear buffer after log done
+            # [v14.4 Fix] Keep self-talk visible, but don't clobber a monologue already being streamed.
+            # If the buffer is empty, try to extract the natural-language monologue from saved thinking.
+            if not orchestrator.stream_buffer:
+                if result_json.get('thinking'):
+                    mono = extract_natural_monologue(str(result_json.get('thinking', '')))
+                    orchestrator.stream_buffer = to_tc(mono[:800]) if mono else ""
+                else:
+                    orchestrator.stream_buffer = ""
 
     except Exception as e:
         import traceback
@@ -1196,12 +2418,32 @@ def get_status():
             "total": orchestrator.stats.get('total', 0)
         }
         
+        # [v19.11] Show OpenCode Go self-talk. Prefer the already-streamed monologue,
+        # but if the buffer was cleared after completion, extract the natural-language
+        # monologue from the saved reasoning instead of dumping the full structured text.
+        stream_buffer = str(orchestrator.stream_buffer)
+        if not stream_buffer and orchestrator.recent_results:
+            last_thinking = orchestrator.recent_results[0].get('thinking', '')
+            if last_thinking:
+                mono = extract_natural_monologue(str(last_thinking))
+                stream_buffer = to_tc(mono[:800]) if mono else ""
+        
+        # [OCG-v2.3] Expose current model and per-image cost info
+        current_model = getattr(orchestrator, 'last_model_name', None) or model_name_global or "未知"
+        last_token_usage = getattr(orchestrator, 'last_token_usage', None) or {}
+        last_image_cost = getattr(orchestrator, 'last_image_cost', None)
+        if current_model == "qwen3vl8b-ocr" or "lm-studio" in str(current_model).lower():
+            last_image_cost = 0.0
+
         status_obj = {
             "version": VERSION,
             "current_file": getattr(orchestrator, 'current_file', 'None'),
+            "current_model": current_model,
+            "last_token_usage": last_token_usage,
+            "last_image_cost": last_image_cost,
             "stats": stats,
             "metrics": metrics,
-            "stream_buffer": str(orchestrator.stream_buffer), # 強制轉字串避免類型錯誤
+            "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             "recent_results": orchestrator.recent_results,
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
@@ -1316,6 +2558,27 @@ def serve_optimized_dashboard():
         error_detail = traceback.format_exc()
         return f"Error loading dashboard: {str(e)}\n\n{error_detail}", 500
 
+@flask_app.route('/api/check_existing_results', methods=['POST'])
+def check_existing_results():
+    """Check if the target image directory already has OCR result JSON files."""
+    if not orchestrator:
+        return jsonify({"error": "系統未初始化"}), 500
+    try:
+        req_data = request.json or {}
+        target_dir = req_data.get('dir') or orchestrator.image_dir
+        if not target_dir or not os.path.isdir(target_dir):
+            return jsonify({"exists": False, "files": [], "message": "資料夾不存在"})
+        files = [f for f in os.listdir(target_dir) if f.endswith('OCR成功.json')]
+        return jsonify({
+            "exists": len(files) > 0,
+            "files": files[:10],
+            "count": len(files),
+            "message": f"找到 {len(files)} 個既有結果檔" if files else "沒有既有結果檔"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @flask_app.route('/api/start_batch', methods=['POST'])
 def start_batch():
     """啟動批次處理 (可指定資料夾)"""
@@ -1340,6 +2603,7 @@ def start_batch():
         target_dir = req_data.get('dir')
         restart = req_data.get('restart', False)
         reprocess_last_n = req_data.get('reprocess_last_n', 0)
+        confirmed = req_data.get('confirmed', False)
         
         if target_dir:
             if os.path.exists(target_dir):
@@ -1348,14 +2612,25 @@ def start_batch():
             else:
                 return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
 
-        # [v15.0] Interactive Check: If no files to process, ask to re-run last 5
-        if not restart and reprocess_last_n == 0:
+        # [v19.15] Interactive Check: If user clicked Continue and there are existing results,
+        # always ask for confirmation so they can choose rerun all / test last 5 / continue pending.
+        if not confirmed and not restart and reprocess_last_n == 0:
             scan_res = orchestrator.get_pending_files()
-            if not scan_res['pending_files']:
+            existing_files = []
+            if orchestrator.image_dir and os.path.isdir(orchestrator.image_dir):
+                existing_files = [
+                    f for f in os.listdir(orchestrator.image_dir)
+                    if f.endswith(('OCR成功.json', 'OCR失敗.json'))
+                ]
+            # Show dialog when no pending files OR when there are existing results
+            if not scan_res['pending_files'] or existing_files:
                 return jsonify({
-                    "status": "needs_confirmation", 
-                    "message": "已全部處理完畢，是否要重跑最後 5 張圖片？",
-                    "files_count": len(scan_res['all_files'])
+                    "status": "needs_confirmation",
+                    "message": "請選擇處理方式：",
+                    "files_count": len(scan_res['all_files']),
+                    "pending_files_count": len(scan_res['pending_files']),
+                    "existing_results_count": len(existing_files),
+                    "existing_files": existing_files[:3]
                 })
 
         # 開始批次處理
@@ -1398,12 +2673,85 @@ def set_work_dir():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@flask_app.route('/api/set_llm_config', methods=['POST'])
+def set_llm_config():
+    """[v19.10] 熱切換 LLM 引擎 (本機 LM Studio / OpenCode Go 等)"""
+    global api_client, model_name_global
+
+    if orchestrator and orchestrator.is_running:
+        return jsonify({"error": "批次處理執行中，請先停止後再切換引擎"}), 400
+
+    try:
+        data = request.json or {}
+        new_api_base = data.get('api_base', '').strip()
+        new_api_key = data.get('api_key', '').strip()
+        new_model = data.get('model', '').strip()
+
+        if not new_api_base or not new_model:
+            return jsonify({"error": "缺少 api_base 或 model 參數"}), 400
+
+        if not new_api_key:
+            new_api_key = 'lm-studio' if '127.0.0.1' in new_api_base or 'localhost' in new_api_base else ''
+
+        old_model = model_name_global
+        try:
+            new_client = OpenAI(base_url=new_api_base, api_key=new_api_key, timeout=180.0, max_retries=1)
+        except Exception as e:
+            return jsonify({"error": f"建立 OpenAI client 失敗: {e}"}), 500
+
+        api_client = new_client
+        model_name_global = new_model
+        save_last_config(orchestrator.image_dir if orchestrator else '', model_name_global,
+                         api_base=new_api_base, api_key=new_api_key)
+
+        orchestrator.log_system(
+            f"🔄 LLM 引擎已切換: {old_model} → {new_model} (API: {new_api_base})",
+            with_timestamp=True
+        )
+        console.print(f"[bold green]🔄 LLM 引擎已切換: {old_model} → {new_model}[/bold green]")
+        console.print(f"[green]   API Base: {new_api_base}[/green]")
+
+        return jsonify({
+            "status": "success",
+            "message": f"已切換至 {new_model}",
+            "model": new_model,
+            "api_base": new_api_base
+        })
+    except Exception as e:
+        return jsonify({"error": f"切換失敗: {str(e)}"}), 500
+
+
+@flask_app.route('/api/llm_config', methods=['GET'])
+def get_llm_config():
+    """[v19.10] 取得目前 LLM 引擎設定"""
+    try:
+        last_config = load_last_config()
+        return jsonify({
+            "model": model_name_global,
+            "api_base": last_config.get("last_api_base", "http://127.0.0.1:1234/v1"),
+            "api_key_set": bool(last_config.get("last_api_key")),
+            "available_engines": [
+                {"id": "local_lm_studio", "name": "本機 LM Studio (Qwen3-VL)", "vision": True,
+                 "api_base": "http://127.0.0.1:1234/v1", "model": "qwen3vl8b-ocr"},
+                {"id": "opencode_mimo_omni", "name": "OpenCode Go: mimo-v2-omni (多模態)", "vision": True,
+                 "api_base": "https://opencode.ai/zen/go/v1", "model": "mimo-v2-omni"},
+                {"id": "opencode_qwen37_max", "name": "OpenCode Go: qwen3.7-max", "vision": True,
+                 "api_base": "https://opencode.ai/zen/go/v1", "model": "qwen3.7-max"},
+                {"id": "opencode_qwen37_plus", "name": "OpenCode Go: qwen3.7-plus", "vision": True,
+                 "api_base": "https://opencode.ai/zen/go/v1", "model": "qwen3.7-plus"},
+            ]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @flask_app.route('/api/stop', methods=['POST'])
 def stop_batch():
     """停止批次處理"""
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
-    
+
     try:
         orchestrator.stop_batch()
         return jsonify({"status": "stopped", "message": "批次處理已停止"})
@@ -1564,29 +2912,51 @@ def main():
     parser = argparse.ArgumentParser()
     # Change default to the actual target directory to avoid CLI encoding issues
     parser.add_argument("--dir", default="商化照片-202601", help="Image directory")
-    parser.add_argument("--api_base", default="http://192.168.0.234:1234/v1", help="LM Studio/OpenAI Base URL")
+    parser.add_argument("--api_base", default=os.environ.get("LOCAL_LLM_API_BASE", "http://127.0.0.1:1234/v1"), help="LM Studio/OpenAI Base URL")
     parser.add_argument("--api_key", default="lm-studio", help="API Key")
-    parser.add_argument("--model", default="qwen/qwen3-vl-4b", help="Model Name")
+    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen3vl8b-ocr"), help="Model Name")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
     parser.add_argument("--timeout", type=int, default=180, help="API request timeout in seconds")
+    parser.add_argument("--bottom_label_strip", action="store_true", help="Add an automatic lower full-width price-label strip crop for difficult retail shelves")
+    parser.add_argument("--bottom_center_zoom", action="store_true", help="Add an automatic enlarged lower-center price-label crop for reruns")
+    parser.add_argument("--no_followme_auto_update", action="store_true", help="Skip the startup refresh for the daily FollowMe reference")
     args = parser.parse_args()
 
     # [v19.1] Load Last Config (Override defaults if not specified via CLI)
     # Priority: CLI Args > Last Config > Hardcoded Default
     last_config = load_last_config()
-    
+
     # If user didn't specify --dir (it equals default), try to load from config
     # Note: argparse default is processed before this, so we check if it matches the hardcoded default
     if args.dir == "商化照片-202601" and "last_image_dir" in last_config:
         args.dir = last_config["last_image_dir"]
-    
+
+    # [v19.10] Restore last API base/key if user didn't override via CLI
+    # argparse default = 本機 LM Studio, so we check if it matches the default
+    if args.api_base == "http://127.0.0.1:1234/v1" and "last_api_base" in last_config:
+        args.api_base = last_config["last_api_base"]
+    if args.api_key == "lm-studio" and "last_api_key" in last_config:
+        args.api_key = last_config["last_api_key"]
+
     # [v19.2 Fix] Start using absolute path to prevent CWD/Relative path issues in Orchestrator
     if not os.path.isabs(args.dir):
         args.dir = os.path.abspath(args.dir)
-    
+
     console.print(f"[Init] 📂 Loaded last used directory: [cyan]{args.dir}[/cyan]")
+    console.print(f"[Init] 🤖 LLM endpoint: [cyan]{args.api_base}[/cyan] model={args.model}")
+
+    if args.no_followme_auto_update:
+        console.print("[Init] FollowMe 每日表自動更新已略過。")
+    else:
+        refresh_status = ensure_followme_reference_fresh(max_age_hours=24)
+        if refresh_status == "fresh":
+            console.print("[Init] FollowMe 每日表仍在 24 小時內，直接使用本機快取。")
+        elif refresh_status == "updated":
+            console.print("[Init] FollowMe 每日表已自動更新。")
+        else:
+            console.print(f"[Init] ⚠️ FollowMe 每日表更新未完成：{refresh_status}，改用現有本機資料。")
     
-    if args.model == "qwen/qwen3-vl-4b" and "last_model" in last_config:
+    if args.model == "qwen3vl8b-ocr" and "last_model" in last_config:
          # Optional: override model if desired, but auto-detect usually handles this
          pass
 
@@ -1606,9 +2976,20 @@ def main():
             data = resp.json()
             models = data.get('data', [])
             if models:
-                detected_id = models[0]['id']
-                print(f"[Init] 🟢 Auto-Detected Active Model: {detected_id}")
-                args.model = detected_id # Override command line arg
+                detected_ids = [item.get('id') for item in models if item.get('id')]
+                preferred = [
+                    args.model,
+                    os.environ.get("LOCAL_LLM_MODEL", ""),
+                    "qwen3vl8b-ocr",
+                    os.environ.get("LOCAL_LLM_FALLBACK_MODEL", ""),
+                    "qwen3vl4b-ocr",
+                ]
+                detected_id = next((item for item in preferred if item and item in detected_ids), detected_ids[0])
+                if detected_id == args.model:
+                    print(f"[Init] 🟢 Requested model is active: {detected_id}")
+                else:
+                    print(f"[Init] 🟢 Auto-Detected Active Model: {detected_id}")
+                    args.model = detected_id # Override command line arg only when requested model is not loaded
             else:
                 print(f"[Init] ⚠️ No models found in response. Using default: {args.model}")
         else:
@@ -1627,6 +3008,8 @@ def main():
         "output_file": "final_results_v4.csv", # Legacy
         "assets_dir": "assets",
         "model_list_file": "型號表.txt",
+        "bottom_label_strip": args.bottom_label_strip,
+        "bottom_center_zoom": args.bottom_center_zoom,
         "clean_config": str(args)
     }
 
@@ -1639,20 +3022,23 @@ def main():
         orchestrator.log_system(msg, with_timestamp=False)
     set_price_log_callback(price_log_to_dashboard)
     
-    prompt_file = 'samsung_ocr_prompt.txt'
+    is_ocg = 'opencode.ai' in str(args.api_base or '')
+    prompt_file = 'samsung_ocr_prompt_opencode_go.txt' if is_ocg else 'samsung_ocr_prompt.txt'
     if os.path.exists(prompt_file):
         prompt_mtime = os.path.getmtime(prompt_file)
         prompt_time_str = datetime.fromtimestamp(prompt_mtime).strftime('%Y-%m-%d %H:%M:%S')
         orchestrator.log_system(f"📜 Prompt 版本: {prompt_time_str}", with_timestamp=False)
-        console.print(f"[bold green]📜 Prompt 版本: {prompt_time_str}[/bold green]")
+        console.print(f"[bold green]📜 Prompt 版本 ({prompt_file}): {prompt_time_str}[/bold green]")
     else:
         orchestrator.log_system(f"❌ 找不到 Prompt 檔案: {prompt_file}", with_timestamp=False)
         console.print(f"[bold red]❌ 找不到 Prompt 檔案: {prompt_file}[/bold red]")
     
-    # [v18.67] 啟動時清空價格快取 TXT
+    # [v18.67] 啟動時初始化價格管理器
     try:
         pm = get_price_manager()
         pm.clear_and_init()
+        # [v19.12] 啟動背景預抓型號表內所有型號的官網價格，讓後續辨識時價格比對更即時
+        pm.prefetch_all_models()
     except Exception as e:
         console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
     
@@ -1697,9 +3083,9 @@ def main():
 if __name__ == "__main__":
     # === 鐵律：最終版本確認 ===
     console.print("\n" + "="*60)
-    console.print(f"🎯 [bold green]最終確認：正在執行 {VERSION}[/bold green]")
-    console.print(f"📊 Session ID: {SESSION_ID}")
-    console.print(f"⚡ 強制重載模式：已確保所有模組為最新版本")
+    console.print(f"    [bold green]最終確認：正在執行 {VERSION}[/bold green]")
+    console.print(f"    Session ID: {SESSION_ID}")
+    console.print(f"[bold green]強制重載模式：已確保所有模組為最新版本[/bold green]")
     console.print("="*60 + "\n")
     
     main()

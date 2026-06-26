@@ -1,0 +1,33 @@
+[
+  {
+    "name": "202603-8B對照-FollowMe-Pro-43",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大里區-eLife-大里-344.jpg",
+    "note": "4B 常把價格或 Pro 型號讀錯；確認 8B 是否能讀出 FollowMe Pro M7 43 與 17,990。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "FollowMe Pro M7 43\"",
+      "price": "17990"
+    }
+  },
+  {
+    "name": "202603-8B對照-三台並排有標籤",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-大甲區-SF-大甲-1236.jpg",
+    "note": "4B 有時誤判遠景；放大確認主角價牌為 S27D300GAC 與 3,090。",
+    "expected": {
+      "view_type": "單機",
+      "quality_issue": "無",
+      "model": "S27D300GAC",
+      "price": "3090"
+    }
+  },
+  {
+    "name": "202603-8B對照-Odyssey-Ark-不可抓旁邊標籤",
+    "file": "D:\\00_歷年商化照片\\商化照片-202603\\M-台中市-東　區-集雅社-台中LalaportSES-1550.jpg",
+    "note": "4B 有時抓到錯誤主角/旁邊標籤；確認 8B 是否保持 model null。",
+    "expected": {
+      "view_type": "單機",
+      "model": null
+    }
+  }
+]

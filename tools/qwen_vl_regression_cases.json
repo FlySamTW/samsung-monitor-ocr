@@ -1,0 +1,62 @@
+[
+  {
+    "name": "遠景-北屯",
+    "file": "photos/M-台中市-北屯區-SF-北屯-446.jpg",
+    "note": "舊結果為遠景。",
+    "expected": {
+      "view_type": "遠景",
+      "screen_status": null,
+      "quality_issue": null,
+      "model": null,
+      "price": null
+    }
+  },
+  {
+    "name": "單機-M7-南京旗艦",
+    "file": "photos/M-台北市-中山區-TK3C-南京旗艦-1128.jpg",
+    "note": "舊結果為 S32DM703UC / 12990。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S32DM703UC",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "單機-G5-南京松江",
+    "file": "photos/M-台北市-中山區-eLife-南京松江-318.jpg",
+    "note": "舊結果為 S27FG502SC / 11900。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S27FG502SC",
+      "price": "11900"
+    }
+  },
+  {
+    "name": "單機-M7-台南",
+    "file": "photos/M-台南市-中西區-SF-台南-463.jpg",
+    "note": "舊結果為 S32BM703UC / 12990。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S32BM703UC",
+      "price": "12990"
+    }
+  },
+  {
+    "name": "單機-G8-高雄",
+    "file": "photos/M-高雄市-三民區-SF-高雄-576.jpg",
+    "note": "舊結果為 S32DG802SC / 32900。",
+    "expected": {
+      "view_type": "單機",
+      "screen_status": "正常",
+      "quality_issue": "無",
+      "model": "S32DG802SC",
+      "price": "32900"
+    }
+  }
+]
