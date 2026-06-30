@@ -33,7 +33,8 @@ class BatchOrchestrator:
         # Initializes Skills
         self.prompt_mgr = PromptManager(config['assets_dir'])
         self.img_proc = ImageProcessor({
-            "max_size": None,  # [v18.57] 不壓縮原圖
+            "max_size": None,
+            "max_dimensions": config.get("max_dimensions", (2560, 1440)),
             "bottom_label_strip": config.get("bottom_label_strip", False),
             "bottom_center_zoom": config.get("bottom_center_zoom", False),
         })
@@ -47,6 +48,7 @@ class BatchOrchestrator:
         self.system_logs = []
         self.stream_buffer = "" # Real-time streaming buffer
         self.recent_results = []
+        self.session_results = []
         self.retry_queue = []
         self.priority_queue = [] # [v16.12] Priority Queue
         self.session_processed = set() # [v19.1] Session-level deduplication to prevent "Infinite Loop" ghosts
@@ -58,6 +60,7 @@ class BatchOrchestrator:
         self.log_system("批次處理已停止。") # Added as per instruction
         self.save_data_file = None 
         self.recent_results = []
+        self.session_results = []
         self.retry_queue = []
         self.failed_files = [] 
         self.failed_files = [] 
@@ -115,6 +118,7 @@ class BatchOrchestrator:
         try:
             # [v19.6 Fix] Purge memory to prevent ghost records from previous folder
             self.recent_results = []
+            self.session_results = []
             self.failed_files = []
             
             scan_res = self.get_pending_files()
@@ -196,6 +200,9 @@ class BatchOrchestrator:
         
         # Overlay Memory
         for res in self.recent_results:
+            if res['file_name'] in actual_files:
+                record_map[res['file_name']] = res
+        for res in self.session_results:
             if res['file_name'] in actual_files:
                 record_map[res['file_name']] = res
         
@@ -289,14 +296,19 @@ class BatchOrchestrator:
                         if not filename: continue
                         
                         # Initial default values
+                        meta = item.get('data', {}).get('ocr_meta', {}) or item.get('ocr_meta', {}) or {}
                         res = {
                             "file_name": filename,
-                            "view_type": "單機",        # Default View
-                            "screen_status": "",      # Default Empty
-                            "quality_issue": "",      # Default Empty
+                            "view_type": meta.get("view_type") or "單機",        # Default View
+                            "screen_status": meta.get("screen_status") or "",      # Default Empty
+                            "quality_issue": meta.get("quality_issue") or "",      # Default Empty
                             "note": "",               # Default Empty
                             "model": "",
                             "price": "",
+                            "price_status": meta.get("price_status") or "",
+                            "price_symbol": meta.get("price_symbol") or "",
+                            "official_price": meta.get("official_price") or "",
+                            "price_diff_percent": meta.get("price_diff_percent") or "",
                             "timestamp": item.get('annotations', [{}])[0].get('created_at', ''),
                             "thumb_b64": None
                         }
@@ -657,6 +669,7 @@ class BatchOrchestrator:
         # Previous logic was inverted/confused. New Batch = New Stats.
         self.failed_files = []
         self.recent_results = []
+        self.session_results = []
         self.stats['success'] = 0
         self.stats['failed'] = 0
         self.stats['processed'] = 0 # [v11.91 Fix] Reset to 0, thread will update base count
@@ -901,6 +914,7 @@ class BatchOrchestrator:
         
         # [v11.2] We start clean for THIS file output, but we keep idempotency.
         self.recent_results = [] 
+        self.session_results = []
         
         # --- Loop ---
         work_queue = list(pending_files)
@@ -967,6 +981,7 @@ class BatchOrchestrator:
                 if os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}:
                     fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1280"))
                     self.img_proc.config["max_size"] = fast_max_size
+                    self.img_proc.config["max_dimensions"] = None
                     self.img_proc.config["detect_label_card"] = False
                     self.img_proc.config["bottom_label_strip"] = False
                     self.img_proc.config["bottom_center_zoom"] = False
@@ -1053,9 +1068,11 @@ class BatchOrchestrator:
 
                 # [v16.9 Fix] Deduplicate recent results (Remove old entry if exists)
                 self.recent_results = [r for r in self.recent_results if r['file_name'] != norm_result['file_name']]
+                self.session_results = [r for r in self.session_results if r['file_name'] != norm_result['file_name']]
                 
                 self.recent_results.insert(0, norm_result)
                 if len(self.recent_results) > 50: self.recent_results.pop()
+                self.session_results.insert(0, norm_result)
                 
                 # Append to Run CSV for backup
                 self.evaluator.generate_csv_report(
@@ -1065,8 +1082,8 @@ class BatchOrchestrator:
                 )
 
                 # [v11.2] Save to DYNAMIC Session File
-                # Note: norm_result already insert(0) above, do NOT append again
-                self.evaluator.export_to_label_studio_json(self.recent_results, self.current_success_file)
+                # UI recent_results is capped; session_results preserves the full batch for rename/export.
+                self.evaluator.export_to_label_studio_json(self.session_results, self.current_success_file)
 
                 # [v17.15 Fix] Save Thinking Process to Single Session TXT file
                 if 'thinking' in norm_result and norm_result['thinking']:

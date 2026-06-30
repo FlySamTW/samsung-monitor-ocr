@@ -1,5 +1,5 @@
 ---
-description: Technial Rulebook & Post-Mortem for Samsung OCR Project
+description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 ---
 
 # SAMSUNG_OCR_EXPERIENCE (Project Bible)
@@ -7,6 +7,25 @@ description: Technial Rulebook & Post-Mortem for Samsung OCR Project
 **Purpose**: To document critical engineering failures and strict rules for future development, ensuring mistakes are never repeated.
 
 ## 🔄 最新改動日誌 (v18.99+)
+
+### [2026-06-30] 歷年接力與改名規格鎖定
+
+**使用者已確認的邊界**：
+- 可實作工具與文件，但不可直接開始跑全量歷年照片；全量執行要由使用者指定來源與輸出資料夾。
+- 2K 指 `2560x1440`；橫向照片最多 `2560x1440`，直向照片最多 `1440x2560`，都必須等比例縮放。
+- `HEIC`、`WebP` 可以不處理；工具要列出略過，不可算進完成率。
+- 改名後照片可以全部放同一層新資料夾，因為新檔名已包含年月。
+- `去年以前不需要比價` 的工作解讀：以 2026 年執行時，`2025` 含以前不做 Samsung 官網價格比對。
+- 當年度有官網比價時，檔名價格欄必須保留 `↑/↓/✓/？`，例如 `S27CG552EC-↑＄4990-1005.jpg`；歷史年度不比價時不加符號。
+- `D:\00_歷年商化照片` 是這台電腦的外部照片資料位置，不是專案固定路徑；另一台電腦 pull 專案後可能使用不同照片根目錄。
+
+**接力實作方向**：
+1. 沿用現有 Dashboard / Flask 後端機制，不重寫 OCR 核心。
+2. 自動化應呼叫 `/api/set_work_dir`、`/api/start_batch`、`/api/status`，讓一個資料匣跑完後自動切下一個。
+3. 排序從最新月份往前。
+4. 完成後用正式 `results.csv` 產改名計畫，再複製到同一層新輸出資料夾；不原地裸改照片。
+5. 正式接力工具是 `tools/recursive_ocr_flat_export.py`，可由 `run_recursive_ocr_flat_export.bat` 啟動。
+6. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
 
 ### [2026-03-05] 日誌與結果列表去重修復
 

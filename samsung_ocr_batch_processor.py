@@ -84,6 +84,35 @@ def calculate_image_cost(model_name, input_tokens, output_tokens):
     return round(cost, 6)
 
 
+def infer_period_from_text(*parts):
+    for part in parts:
+        text = str(part or "")
+        month_match = re.search(r"(20\d{4})", text)
+        if month_match:
+            return month_match.group(1)
+        year_match = re.search(r"(20\d{2})", text)
+        if year_match:
+            return year_match.group(1)
+    return ""
+
+
+def should_compare_official_price(fname=""):
+    override = os.environ.get("OCR_COMPARE_OFFICIAL_PRICE", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+
+    active_dir = getattr(orchestrator, "image_dir", "") if "orchestrator" in globals() else ""
+    period = infer_period_from_text(fname, active_dir)
+    if not period:
+        return True
+    try:
+        return int(period[:4]) >= datetime.now().year
+    except ValueError:
+        return True
+
+
 def simulate_streaming_buffer(text, orchestrator_ref, char_delay=0.04):
     """Gradually populate orchestrator.stream_buffer to mimic real-time typing."""
     if not text or not orchestrator_ref:
@@ -1249,7 +1278,12 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # stall LM Studio with multiple vision payloads.
     fast_batch_mode = os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}
     fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1920" if fast_batch_mode else "2560"))
-    image_processor.config["max_size"] = fast_max_size if fast_batch_mode else (2200 if image_processor.config.get("bottom_label_strip") else 2560)
+    if fast_batch_mode:
+        image_processor.config["max_size"] = fast_max_size
+        image_processor.config["max_dimensions"] = None
+    else:
+        image_processor.config["max_size"] = None
+        image_processor.config["max_dimensions"] = (2560, 1440)
     
     # [v16.3 DEBUG] Force Print to see if we enter
     print(f"[DEBUG] process_single_image called for: {fname}")
@@ -1747,7 +1781,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 model_check = parsed.get("model")
                 price_check = parsed.get("price")
                 
-                if model_check and price_check:
+                if should_compare_official_price(fname) and model_check and price_check:
                     # Get Official Price
                     from skills.official_price import get_price_manager
                     pm = get_price_manager()
@@ -1884,7 +1918,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                  else:
                     # [v18.92] 最後一道防線：嘗試官網即時驗證 (Auto-Discover)
                     # 這是為了回答 User "以後怎麼避免" 的終極方案。即使型號表忘了更，官網有就算數。
-                    if try_discover_model(clean_model):
+                    if should_compare_official_price(fname) and try_discover_model(clean_model):
                          console.print(f"[bold green]✨ [Auto-Discover] 官網驗證成功！型號 {clean_model} 已自動加入型號表。[/bold green]")
                          data_obj["model"] = clean_model
                          # 更新記憶體中的 valid_models_list 以防本次 Batch 後續又遇到
@@ -2300,12 +2334,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         try:
             model_for_price = result_json.get("model")
             price_for_validate = result_json.get("price")
+            compare_official = should_compare_official_price(fname)
             
             # [v18.69] 自動發現新型號
-            if model_for_price:
+            if compare_official and model_for_price:
                 try_discover_model(model_for_price)
             
-            if model_for_price and price_for_validate and str(price_for_validate).isdigit():
+            if compare_official and model_for_price and price_for_validate and str(price_for_validate).isdigit():
                 price_int = int(price_for_validate)
                 price_check = validate_ocr_price(model_for_price, price_int)
                 result_json['price_status'] = price_check['status']
@@ -2320,6 +2355,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     symbol = price_check['symbol']
                     if orchestrator:
                         orchestrator.log_system(f"⚠️ 價格警告: {model_for_price} OCR=${price_int:,} {symbol} 官方=${official:,} (差異{diff:+.1f}%)")
+            elif not compare_official and price_for_validate:
+                result_json['price_status'] = 'not_compared'
+                result_json['price_symbol'] = ''
+                result_json['official_price'] = ''
+                result_json['price_diff_percent'] = ''
         except Exception as e:
             log.warning(f"Price validation error: {e}")
             
@@ -2589,15 +2629,6 @@ def start_batch():
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
         
-        # [v18.67] 每次啟動時重置價格查詢快取，確保重新從官網抓最新價格
-        try:
-            from skills.official_price import get_price_manager
-            pm = get_price_manager()
-            pm.session_fetched.clear()  # 清空「本次已查詢」記錄
-            console.print("[dim]🔄 已重置價格查詢狀態，將從官網抓取最新價格[/dim]")
-        except Exception as e:
-            console.print(f"[yellow]⚠️ 重置價格查詢失敗: {e}[/yellow]")
-        
         # Get params from request
         req_data = request.json or {}
         target_dir = req_data.get('dir')
@@ -2611,6 +2642,18 @@ def start_batch():
                 orchestrator.config['image_dir'] = target_dir # [v16.7 Fix] Update detailed config too
             else:
                 return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
+
+        if should_compare_official_price(orchestrator.image_dir):
+            # [v18.67] 每次啟動當年度批次時重置價格查詢快取，確保重新從官網抓最新價格
+            try:
+                from skills.official_price import get_price_manager
+                pm = get_price_manager()
+                pm.session_fetched.clear()  # 清空「本次已查詢」記錄
+                console.print("[dim]🔄 已重置價格查詢狀態，將從官網抓取最新價格[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ 重置價格查詢失敗: {e}[/yellow]")
+        else:
+            console.print("[dim]⏭️ 歷史年度資料夾：略過官網價格查詢快取重置[/dim]")
 
         # [v19.15] Interactive Check: If user clicked Continue and there are existing results,
         # always ask for confirmation so they can choose rerun all / test last 5 / continue pending.
@@ -3008,6 +3051,7 @@ def main():
         "output_file": "final_results_v4.csv", # Legacy
         "assets_dir": "assets",
         "model_list_file": "型號表.txt",
+        "max_dimensions": (2560, 1440),
         "bottom_label_strip": args.bottom_label_strip,
         "bottom_center_zoom": args.bottom_center_zoom,
         "clean_config": str(args)
@@ -3033,12 +3077,15 @@ def main():
         orchestrator.log_system(f"❌ 找不到 Prompt 檔案: {prompt_file}", with_timestamp=False)
         console.print(f"[bold red]❌ 找不到 Prompt 檔案: {prompt_file}[/bold red]")
     
-    # [v18.67] 啟動時初始化價格管理器
+    # [v18.67] 啟動時初始化價格管理器；歷史年度資料夾不預抓官網價格
     try:
-        pm = get_price_manager()
-        pm.clear_and_init()
-        # [v19.12] 啟動背景預抓型號表內所有型號的官網價格，讓後續辨識時價格比對更即時
-        pm.prefetch_all_models()
+        if should_compare_official_price(args.dir):
+            pm = get_price_manager()
+            pm.clear_and_init()
+            # [v19.12] 啟動背景預抓型號表內所有型號的官網價格，讓後續辨識時價格比對更即時
+            pm.prefetch_all_models()
+        else:
+            console.print("[dim]⏭️ 啟動資料夾屬歷史年度，略過官網價格預抓[/dim]")
     except Exception as e:
         console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
     

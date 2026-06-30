@@ -30,6 +30,7 @@ results.json
 project-output.json
 *.tmp
 *.log
+.local_llm_runtime.json
 
 # IDE / OS
 .vscode/
@@ -37,4 +38,7 @@ project-output.json
 Thumbs.db
 .DS_Store
 .agent/
+.playwright-mcp/
 .gemini/
+OK.TXT
+tmp_*.txt

@@ -2,6 +2,7 @@ import argparse
 import csv
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -16,6 +17,15 @@ NO_CHANGE_STATUS = "no_change"
 CONFLICT_STATUS = "conflict"
 MISSING_SOURCE_STATUS = "missing_source"
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
+COMPARE_SYMBOLS_FOR_FILENAME = {
+    "↑": "↑",
+    "↓": "↓",
+    "✓": "✓",
+    "?": "？",
+    "？": "？",
+    "-": "停產",
+    "停產": "停產",
+}
 
 
 def read_results_csv(path: Path) -> Dict[str, Dict[str, str]]:
@@ -99,7 +109,14 @@ def price_segment(row: Dict[str, str], price_symbol: str) -> str:
     digits = "".join(ch for ch in str(price or "") if ch.isdigit())
     if not digits:
         return UNKNOWN_PRICE
-    return f"{price_symbol}{digits}" if price_symbol else digits
+    compare_symbol = value_or_none(row.get("price_symbol")) or ""
+    price_status = value_or_none(row.get("price_status")) or ""
+    if price_status in {"", "not_compared", "未比價"}:
+        compare_symbol = ""
+    compare_symbol = COMPARE_SYMBOLS_FOR_FILENAME.get(compare_symbol, compare_symbol)
+    if compare_symbol not in {"↑", "↓", "✓", "？", "停產"}:
+        compare_symbol = ""
+    return f"{compare_symbol}{price_symbol}{digits}" if price_symbol else f"{compare_symbol}{digits}"
 
 
 def sanitize_segment(segment: str) -> str:
@@ -290,6 +307,51 @@ def apply_plan(plan: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return applied
 
 
+def unique_target_path(output_dir: Path, target_name: str) -> Path:
+    candidate = output_dir / target_name
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        candidate = output_dir / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def copy_plan_to_flat_output(plan: List[Dict[str, str]], output_dir: Path) -> List[Dict[str, str]]:
+    unsafe = [row for row in plan if row["status"] not in {READY_STATUS, NO_CHANGE_STATUS}]
+    if unsafe:
+        raise RuntimeError(
+            f"仍有 {len(unsafe)} 筆不是 ready/no_change，請先處理 rename_plan.csv。"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    copied: List[Dict[str, str]] = []
+    for row in plan:
+        source = Path(row["original_path"])
+        target_name = row["target_name"] or row["original_name"]
+        target = unique_target_path(output_dir, target_name)
+        shutil.copy2(source, target)
+        copied.append(
+            {
+                "status": "copied",
+                "reason": "",
+                "period": row["period"],
+                "original_name": row["original_name"],
+                "target_name": target.name,
+                "category": row["category"],
+                "model": row["model"],
+                "price": row["price"],
+                "original_path": str(source),
+                "target_path": str(target),
+            }
+        )
+    return copied
+
+
 def summarize(plan: List[Dict[str, str]]) -> Dict[str, int]:
     summary: Dict[str, int] = {}
     for row in plan:
@@ -313,7 +375,11 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", help="輸出 rename_plan.csv 的資料夾；預設建立在照片資料夾內")
     parser.add_argument("--apply", action="store_true", help="正式原地改名。沒有這個參數時只產生計畫表。")
+    parser.add_argument("--copy-to", help="把改名後照片複製到指定單一資料夾，不原地改名。")
     args = parser.parse_args()
+
+    if args.apply and args.copy_to:
+        parser.error("--apply 與 --copy-to 不能同時使用；請選擇原地改名或複製到新資料夾。")
 
     image_dir = Path(args.image_dir).resolve()
     results_path = Path(args.results).resolve()
@@ -334,6 +400,10 @@ def main() -> int:
     applied: List[Dict[str, str]] = []
     if args.apply:
         applied = apply_plan(plan)
+    if args.copy_to:
+        copied = copy_plan_to_flat_output(plan, Path(args.copy_to).resolve())
+        copy_path = output_dir / "copied.csv"
+        write_csv(copy_path, copied)
     write_csv(rollback_path, applied)
 
     print(f"period={period}")
@@ -343,10 +413,14 @@ def main() -> int:
     for status, count in sorted(summarize(plan).items()):
         print(f"{status}={count}")
 
-    if not args.apply:
+    if args.copy_to:
+        print("mode=copy")
+    elif not args.apply:
         print("mode=dry-run")
     else:
         print(f"mode=apply renamed={len(applied)}")
+    if args.copy_to:
+        print(f"copy_to={Path(args.copy_to).resolve()}")
     return 0
 
 

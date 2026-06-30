@@ -15,7 +15,8 @@ class ImageProcessor:
     """
     def __init__(self, config: dict = None):
         defaults = {
-            "max_size": 4096, 
+            "max_size": 4096,
+            "max_dimensions": None,
             "contrast_factor": 1.2,
             "sharpness_factor": 1.5,
             "auto_orient": True,
@@ -26,6 +27,32 @@ class ImageProcessor:
         self.config = defaults
         if config:
             self.config.update(config)
+
+    def _resize_box_for(self, img: Image.Image):
+        max_dimensions = self.config.get("max_dimensions")
+        if max_dimensions:
+            width, height = max_dimensions
+            width = int(width)
+            height = int(height)
+            if img.height > img.width and width > height:
+                return height, width
+            return width, height
+
+        max_size = self.config.get("max_size")
+        if max_size is None:
+            return None
+        max_size = int(max_size)
+        return max_size, max_size
+
+    def _resize_if_needed(self, img: Image.Image, applied_transforms: list, label: str) -> bool:
+        box = self._resize_box_for(img)
+        if not box:
+            return False
+        if img.width <= box[0] and img.height <= box[1]:
+            return False
+        img.thumbnail(box)
+        applied_transforms.append(f"{label}_resize_to_{box[0]}x{box[1]}")
+        return True
 
     def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
         """
@@ -178,7 +205,6 @@ class ImageProcessor:
                 label_b64 = None
                 bottom_label_b64 = None
                 bottom_center_b64 = None
-                max_size = self.config.get("max_size")
                 if self.config.get("detect_label_card"):
                     img_array = np.array(img)
                     cropped, bbox = self.detect_label_card(img_array)
@@ -186,9 +212,7 @@ class ImageProcessor:
                     if cropped is not None:
                         # Encode Label to Base64
                         label_img = Image.fromarray(cropped)
-                        if max_size is not None and (label_img.width > max_size or label_img.height > max_size):
-                            label_img.thumbnail((max_size, max_size))
-                            applied_transforms.append(f"label_resize_to_{max_size}")
+                        self._resize_if_needed(label_img, applied_transforms, "label")
                         lbl_buffered = io.BytesIO()
                         label_img.convert("RGB").save(lbl_buffered, format="JPEG", quality=95)
                         label_b64 = base64.b64encode(lbl_buffered.getvalue()).decode('utf-8')
@@ -199,9 +223,7 @@ class ImageProcessor:
                         bottom_cropped, bottom_bbox = self.crop_bottom_label_strip(img_array)
                         if bottom_cropped is not None:
                             bottom_img = Image.fromarray(bottom_cropped)
-                            if max_size is not None and (bottom_img.width > max_size or bottom_img.height > max_size):
-                                bottom_img.thumbnail((max_size, max_size))
-                                applied_transforms.append(f"bottom_label_resize_to_{max_size}")
+                            self._resize_if_needed(bottom_img, applied_transforms, "bottom_label")
                             bottom_buffered = io.BytesIO()
                             bottom_img.convert("RGB").save(bottom_buffered, format="JPEG", quality=95)
                             bottom_label_b64 = base64.b64encode(bottom_buffered.getvalue()).decode('utf-8')
@@ -211,9 +233,7 @@ class ImageProcessor:
                         center_cropped, center_bbox = self.crop_bottom_center_zoom(img_array)
                         if center_cropped is not None:
                             center_img = Image.fromarray(center_cropped)
-                            if max_size is not None and (center_img.width > max_size or center_img.height > max_size):
-                                center_img.thumbnail((max_size, max_size))
-                                applied_transforms.append(f"bottom_center_resize_to_{max_size}")
+                            self._resize_if_needed(center_img, applied_transforms, "bottom_center")
                             center_buffered = io.BytesIO()
                             center_img.convert("RGB").save(center_buffered, format="JPEG", quality=95)
                             bottom_center_b64 = base64.b64encode(center_buffered.getvalue()).decode('utf-8')
@@ -221,12 +241,7 @@ class ImageProcessor:
 
                 # 3. Resize Full Image if too large (KEEP as context)
                 full_img = img.copy()
-                needs_reencode = False
-                
-                if max_size is not None and (full_img.width > max_size or full_img.height > max_size):
-                    full_img.thumbnail((max_size, max_size))
-                    applied_transforms.append(f"resize_to_{max_size}")
-                    needs_reencode = True
+                needs_reencode = self._resize_if_needed(full_img, applied_transforms, "resize")
                 
                 # [v18.65] 只在必要時重新編碼，避免畫質損失
                 if needs_reencode:

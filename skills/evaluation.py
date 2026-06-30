@@ -63,6 +63,7 @@ class Evaluator:
                 'model',
                 'price',
                 'price_status',
+                'price_symbol',
                 'official_price',
                 'price_diff_percent',
                 'black_screen',
@@ -104,6 +105,7 @@ class Evaluator:
                         r.get('model','') or 'null', 
                         r.get('price','') or 'null', 
                         r.get('price_status',''),
+                        r.get('price_symbol',''),
                         r.get('official_price',''),
                         r.get('price_diff_percent',''),
                         r.get('black_screen',''),
@@ -172,7 +174,16 @@ class Evaluator:
             task = {
                 "id": i + 1,
                 "data": {
-                    "image": f"/data/upload/1/{file_upload}" 
+                    "image": f"/data/upload/1/{file_upload}",
+                    "ocr_meta": {
+                        "view_type": r.get('view_type', ''),
+                        "screen_status": r.get('screen_status', ''),
+                        "quality_issue": r.get('quality_issue', ''),
+                        "price_status": r.get('price_status', ''),
+                        "price_symbol": r.get('price_symbol', ''),
+                        "official_price": r.get('official_price', ''),
+                        "price_diff_percent": r.get('price_diff_percent', ''),
+                    }
                 },
                 "annotations": [{
                     "id": i + 1,
