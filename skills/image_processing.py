@@ -32,11 +32,8 @@ class ImageProcessor:
         max_dimensions = self.config.get("max_dimensions")
         if max_dimensions:
             width, height = max_dimensions
-            width = int(width)
-            height = int(height)
-            if img.height > img.width and width > height:
-                return height, width
-            return width, height
+            max_edge = max(int(width), int(height))
+            return max_edge, max_edge
 
         max_size = self.config.get("max_size")
         if max_size is None:
@@ -44,15 +41,23 @@ class ImageProcessor:
         max_size = int(max_size)
         return max_size, max_size
 
-    def _resize_if_needed(self, img: Image.Image, applied_transforms: list, label: str) -> bool:
+    def _resize_if_needed(
+        self,
+        img: Image.Image,
+        applied_transforms: list,
+        label: str,
+    ):
         box = self._resize_box_for(img)
         if not box:
-            return False
-        if img.width <= box[0] and img.height <= box[1]:
-            return False
-        img.thumbnail(box)
-        applied_transforms.append(f"{label}_resize_to_{box[0]}x{box[1]}")
-        return True
+            return img, False
+        target_edge = max(box)
+        if max(img.width, img.height) <= target_edge:
+            return img, False
+
+        resized = img.copy()
+        resized.thumbnail(box)
+        applied_transforms.append(f"{label}_resize_long_edge_{target_edge}_to_{resized.width}x{resized.height}")
+        return resized, True
 
     def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
         """
@@ -212,7 +217,7 @@ class ImageProcessor:
                     if cropped is not None:
                         # Encode Label to Base64
                         label_img = Image.fromarray(cropped)
-                        self._resize_if_needed(label_img, applied_transforms, "label")
+                        label_img, _ = self._resize_if_needed(label_img, applied_transforms, "label")
                         lbl_buffered = io.BytesIO()
                         label_img.convert("RGB").save(lbl_buffered, format="JPEG", quality=95)
                         label_b64 = base64.b64encode(lbl_buffered.getvalue()).decode('utf-8')
@@ -223,7 +228,7 @@ class ImageProcessor:
                         bottom_cropped, bottom_bbox = self.crop_bottom_label_strip(img_array)
                         if bottom_cropped is not None:
                             bottom_img = Image.fromarray(bottom_cropped)
-                            self._resize_if_needed(bottom_img, applied_transforms, "bottom_label")
+                            bottom_img, _ = self._resize_if_needed(bottom_img, applied_transforms, "bottom_label")
                             bottom_buffered = io.BytesIO()
                             bottom_img.convert("RGB").save(bottom_buffered, format="JPEG", quality=95)
                             bottom_label_b64 = base64.b64encode(bottom_buffered.getvalue()).decode('utf-8')
@@ -233,7 +238,7 @@ class ImageProcessor:
                         center_cropped, center_bbox = self.crop_bottom_center_zoom(img_array)
                         if center_cropped is not None:
                             center_img = Image.fromarray(center_cropped)
-                            self._resize_if_needed(center_img, applied_transforms, "bottom_center")
+                            center_img, _ = self._resize_if_needed(center_img, applied_transforms, "bottom_center")
                             center_buffered = io.BytesIO()
                             center_img.convert("RGB").save(center_buffered, format="JPEG", quality=95)
                             bottom_center_b64 = base64.b64encode(center_buffered.getvalue()).decode('utf-8')
@@ -241,7 +246,7 @@ class ImageProcessor:
 
                 # 3. Resize Full Image if too large (KEEP as context)
                 full_img = img.copy()
-                needs_reencode = self._resize_if_needed(full_img, applied_transforms, "resize")
+                full_img, needs_reencode = self._resize_if_needed(full_img, applied_transforms, "resize")
                 
                 # [v18.65] 只在必要時重新編碼，避免畫質損失
                 if needs_reencode:
