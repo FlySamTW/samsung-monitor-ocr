@@ -1,6 +1,14 @@
 # 另一台電腦安裝與接手手冊
 
-本手冊給另一台電腦上的 Codex 使用，目標是把本專案跑起來、用 LM Studio 本機視覺模型辨識照片，最後產生歷年照片改名計畫。不要一開始就改照片。
+本手冊給另一台電腦上的 Codex 使用，目標是把本專案跑起來、用 LM Studio 本機視覺模型辨識照片，最後把改名後照片複製到單一新輸出資料夾。
+
+AI 接手執行時，先讀：
+
+```text
+docs\ai_handoff_runbook.md
+```
+
+該文件是實際接力執行清單；本文件主要補安裝與環境設定。
 
 ## 目標資料夾
 
@@ -202,7 +210,15 @@ D:\00_歷年商化照片_OCR整理\M-202512-嘉義市-東區-TK3C-垂楊-單機-
 run_recursive_ocr_flat_export.bat
 ```
 
-或手動執行：
+建議 AI 用環境變數指定路徑後執行，避免互動輸入卡住：
+
+```powershell
+$env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
+$env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+.\run_recursive_ocr_flat_export.bat
+```
+
+若手動執行 Python 接力器，必須先啟動 `samsung_ocr_batch_processor.py` 後端；完整步驟以 `docs\ai_handoff_runbook.md` 為準：
 
 ```powershell
 .\.venv\Scripts\python.exe tools\recursive_ocr_flat_export.py `

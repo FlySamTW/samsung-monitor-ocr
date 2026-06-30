@@ -5,6 +5,8 @@ chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
 set "PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;%PATH%"
 pushd "%~dp0"
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 
 if not defined LOCAL_LLM_API_BASE set "LOCAL_LLM_API_BASE=http://127.0.0.1:1234/v1"
 if not defined LOCAL_LLM_MODEL set "LOCAL_LLM_MODEL=qwen3vl8b-ocr"
@@ -19,9 +21,10 @@ echo ==========================================
 echo API:   %LOCAL_LLM_API_BASE%
 echo Model: %LOCAL_LLM_MODEL%
 echo Dir:   %OCR_IMAGE_DIR%
+echo Python: %PY%
 echo.
 
-python tools\local_llm_manager.py ensure
+"%PY%" tools\local_llm_manager.py ensure
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 本機 LLM 啟動失敗，請確認 LM Studio CLI 與模型。
@@ -30,5 +33,5 @@ if "%errorlevel%" NEQ "0" (
 )
 
 start http://localhost:5000
-python samsung_ocr_batch_processor.py --api_base "%LOCAL_LLM_API_BASE%" --api_key "lm-studio" --model "%LOCAL_LLM_MODEL%" --dir "%OCR_IMAGE_DIR%"
+"%PY%" samsung_ocr_batch_processor.py --api_base "%LOCAL_LLM_API_BASE%" --api_key "lm-studio" --model "%LOCAL_LLM_MODEL%" --dir "%OCR_IMAGE_DIR%"
 pause

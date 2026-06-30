@@ -44,6 +44,8 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 
 ## 歷年接力規則
 
+另一台電腦上的 AI 要先讀 `docs/ai_handoff_runbook.md`。那份文件是正式執行清單；本節只記錄開發規則。
+
 1. 正式批次應沿用既有 Dashboard / Flask 後端機制，不重寫 OCR 核心。
 2. 接力器應使用 `/api/set_work_dir`、`/api/start_batch`、`/api/status` 逐一切資料夾、繼續執行、等待完成。
 3. 處理順序由最新月份往前，例如 `商化照片-202605`、`商化照片-202604`、`商化照片-202603`。
@@ -51,16 +53,17 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 5. 官網價格比對只適用執行當年度照片；以 2026 年執行時，`2025` 含以前只做 OCR 與改名，不做 Samsung 官網價格比對。
 6. 年度判斷應從資料夾或檔名年月取得，不可用外部照片根路徑推斷。
 
-正式接力工具：
+正式接力入口：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\recursive_ocr_flat_export.py `
-  --source-root "D:\你的照片根資料夾" `
-  --output-dir "D:\你的照片根資料夾_OCR整理" `
-  --ensure-llm
+$env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
+$env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+.\run_recursive_ocr_flat_export.bat
 ```
 
-此工具會把審計檔寫到輸出資料夾的 `_ocr_audit`，包含 `folder_discovery.csv`、`skipped_unsupported.csv`、每個資料匣的 `rename_plan.csv` 與總表 `folder_summary.csv`。
+批次檔會啟動 LM Studio 檢查、OCR 後端與接力器。若要拆成手動兩步，照 `docs/ai_handoff_runbook.md`；不要只單跑 `tools/recursive_ocr_flat_export.py` 後就以為後端會自動啟動。
+
+接力器會把審計檔寫到輸出資料夾的 `_ocr_audit`，包含 `folder_discovery.csv`、`skipped_unsupported.csv`、每個資料匣的 `rename_plan.csv` 與總表 `folder_summary.csv`。
 
 ## 改名工具
 

@@ -26,7 +26,8 @@
 
 | 檔案 | 說明 |
 |------|------|
-| run_ocr.bat | **唯一啟動腳本** |
+| run_ocr.bat | Dashboard / 單資料夾 OCR 啟動腳本 |
+| run_recursive_ocr_flat_export.bat | 歷年照片遞迴接力與單一資料夾輸出啟動腳本 |
 | start_local_llm.bat | 只啟動本機 LM Studio CLI / Qwen3-VL |
 | samsung_ocr_batch_processor.py | 主程式 (v18.99) |
 | samsung_ocr_prompt.txt | OCR Prompt |
@@ -37,6 +38,7 @@
 | tools/run_qwen_vl_guard.py | Prompt 守門測試 |
 | tools/photo_rename_planner.py | 依 OCR 結果產生照片改名計畫，預設不改照片 |
 | tools/recursive_ocr_flat_export.py | 遞迴接力 OCR，完成後複製改名照片到單一資料夾 |
+| docs/ai_handoff_runbook.md | 另一台電腦上的 AI 接手執行手冊 |
 
 ## 🏷️ 歷年照片改名規格
 
@@ -79,19 +81,24 @@ D:\00_歷年商化照片_OCR整理\M-202512-嘉義市-東區-TK3C-垂楊-單機-
 
 ### 遞迴接力 OCR 並輸出到單一新資料夾
 
+另一台電腦的 Codex / AI 接手時，先讀：
+
+```text
+docs/ai_handoff_runbook.md
+```
+
 另一台電腦 pull 專案後，可雙擊：
 
 ```text
 run_recursive_ocr_flat_export.bat
 ```
 
-或用命令列指定來源與輸出：
+AI 或非互動環境建議用 PowerShell 先指定路徑，再跑批次檔：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\recursive_ocr_flat_export.py `
-  --source-root "D:\你的照片根資料夾" `
-  --output-dir "D:\你的照片根資料夾_OCR整理" `
-  --ensure-llm
+$env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
+$env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+.\run_recursive_ocr_flat_export.bat
 ```
 
 此工具會從最新月份往前處理含子資料夾的照片，使用既有 Dashboard/Flask 後端 API 跑 OCR，完成後把改名照片複製到同一層輸出資料夾。審計檔會放在輸出資料夾的 `_ocr_audit`。
