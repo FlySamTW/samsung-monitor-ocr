@@ -62,6 +62,7 @@ PowerShell 中設定來源與輸出，再執行接力批次檔：
 ```powershell
 $env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
 $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+$env:OCR_NO_PAUSE = "1"
 .\run_recursive_ocr_flat_export.bat
 ```
 

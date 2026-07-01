@@ -101,6 +101,7 @@ AI 或非互動環境建議用 PowerShell 先指定路徑，再跑批次檔：
 ```powershell
 $env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
 $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+$env:OCR_NO_PAUSE = "1"
 .\run_recursive_ocr_flat_export.bat
 ```
 

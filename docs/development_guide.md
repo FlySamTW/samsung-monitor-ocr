@@ -58,6 +58,7 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 ```powershell
 $env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
 $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
+$env:OCR_NO_PAUSE = "1"
 .\run_recursive_ocr_flat_export.bat
 ```
 

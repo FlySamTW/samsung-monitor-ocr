@@ -28,7 +28,7 @@ echo.
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 清理既有 OCR 後端失敗，請關閉舊的 Python 後再重試。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -36,10 +36,10 @@ if "%errorlevel%" NEQ "0" (
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 本機 LLM 啟動失敗，請確認 LM Studio CLI 與模型。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
 start http://localhost:5000
 "%PY%" samsung_ocr_batch_processor.py --api_base "%LOCAL_LLM_API_BASE%" --api_key "lm-studio" --model "%LOCAL_LLM_MODEL%" --dir "%OCR_IMAGE_DIR%"
-pause
+if not "%OCR_NO_PAUSE%"=="1" pause

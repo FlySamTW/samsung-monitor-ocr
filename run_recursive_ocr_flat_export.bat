@@ -34,7 +34,7 @@ echo.
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 來源或輸出路徑預檢失敗；尚未啟動 LLM 或 OCR 後端。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -42,7 +42,7 @@ if "%errorlevel%" NEQ "0" (
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 清理既有 OCR 後端失敗，請關閉舊的 Python 後再重試。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -50,7 +50,7 @@ if "%errorlevel%" NEQ "0" (
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 本機 LLM 啟動失敗，請確認 LM Studio CLI 與模型。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -60,7 +60,7 @@ start "Samsung OCR Server" /min "%PY%" samsung_ocr_batch_processor.py --api_base
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 接力批次未完成，請查看輸出資料夾中的 _ocr_audit。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -68,10 +68,10 @@ if "%errorlevel%" NEQ "0" (
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 輸出驗收未通過，請查看 %OCR_OUTPUT_DIR%\_ocr_audit\audit_report.csv。
-    pause
+    if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
 echo.
 echo [完成] 接力批次與輸出驗收都已通過：%OCR_OUTPUT_DIR%
-pause
+if not "%OCR_NO_PAUSE%"=="1" pause
