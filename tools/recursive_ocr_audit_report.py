@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
 
@@ -254,6 +255,17 @@ def main() -> int:
     audit_dir = Path(str(summary.get("audit_dir") or output_dir / "_ocr_audit"))
     report_path = audit_dir / "audit_report.csv"
     summary_path = audit_dir / "audit_summary.json"
+    summary.update(
+        {
+            "audit_schema_version": 1,
+            "audited_at": datetime.now().isoformat(timespec="seconds"),
+            "audit_summary_path": str(summary_path),
+            "audit_report_path": str(report_path),
+            "folder_discovery_path": str(audit_dir / "folder_discovery.csv"),
+            "folder_summary_path": str(audit_dir / "folder_summary.csv"),
+            "skipped_unsupported_path": str(audit_dir / "skipped_unsupported.csv"),
+        }
+    )
 
     if not args.no_write and audit_dir.exists():
         write_dict_csv(report_path, issues, ["severity", "code", "folder", "path", "message"])

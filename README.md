@@ -118,7 +118,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
   --output-dir "D:\你的照片根資料夾_OCR整理"
 ```
 
-驗收通過時會顯示 `status=passed`，摘要會寫到 `_ocr_audit\audit_summary.json`；若失敗，批次檔會停在錯誤狀態，細節會寫到 `_ocr_audit\audit_report.csv`。
+驗收通過時會顯示 `status=passed`，摘要會寫到 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量；若失敗，批次檔會停在錯誤狀態，細節會寫到 `_ocr_audit\audit_report.csv`。
 
 只產生改名計畫，不改照片：
 
