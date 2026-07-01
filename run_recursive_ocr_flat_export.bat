@@ -60,6 +60,7 @@ start "Samsung OCR Server" /min "%PY%" samsung_ocr_batch_processor.py --api_base
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 接力批次未完成，請查看輸出資料夾中的 _ocr_audit。
+    call :cleanup_server
     if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
@@ -68,10 +69,24 @@ if "%errorlevel%" NEQ "0" (
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 輸出驗收未通過，請查看 %OCR_OUTPUT_DIR%\_ocr_audit\audit_report.csv。
+    call :cleanup_server
     if not "%OCR_NO_PAUSE%"=="1" pause
     exit /b 1
 )
 
 echo.
 echo [完成] 接力批次與輸出驗收都已通過：%OCR_OUTPUT_DIR%
+call :cleanup_server
 if not "%OCR_NO_PAUSE%"=="1" pause
+exit /b 0
+
+:cleanup_server
+if "%OCR_KEEP_SERVER%"=="1" (
+    echo [收尾] 已依 OCR_KEEP_SERVER=1 保留 OCR 後端。
+    exit /b 0
+)
+"%PY%" tools\stop_ocr_server.py
+if errorlevel 1 (
+    echo [警告] OCR 後端收尾清理失敗；下次啟動前仍會再次清理。
+)
+exit /b 0

@@ -75,6 +75,7 @@ $env:OCR_NO_PAUSE = "1"
 5. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
 6. 執行 `tools\recursive_ocr_flat_export.py`，逐資料夾接力 OCR 並輸出改名照片。
 7. 執行 `tools\recursive_ocr_audit_report.py` 驗收輸出資料夾；驗收失敗時批次檔會以錯誤狀態結束。
+8. 預設清理本次 OCR 後端；若要保留後端觀察狀態，執行前設定 `$env:OCR_KEEP_SERVER = "1"`。
 
 接力器預設會續跑：若 `_ocr_audit\folder_summary.csv` 顯示某資料夾已成功複製、來源照片數與最新修改時間未變，且對應 `copied.csv` 裡的目標檔案仍存在，該資料夾會標為 `skipped_existing`，不重跑 OCR，也不再複製出 `_2` 重複檔。只有明確需要全部重跑時才加 `--no-resume`，並應改用新的輸出資料夾。
 

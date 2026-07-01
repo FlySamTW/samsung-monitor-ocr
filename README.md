@@ -110,6 +110,7 @@ $env:OCR_NO_PAUSE = "1"
 
 此工具會從最新月份往前處理含子資料夾的照片，使用既有 Dashboard/Flask 後端 API 跑 OCR，完成後把改名照片複製到同一層輸出資料夾。審計檔會放在輸出資料夾的 `_ocr_audit`。
 批次檔啟動前會先預檢來源、輸出路徑與是否至少有一張 `.jpg/.jpeg/.png`；預檢失敗時不會啟動 LLM 或 OCR 後端。預檢通過後才清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式或被舊程序佔用連接埠。
+遞迴接力結束後會自動清理本次 OCR 後端；若需要保留後端觀察狀態，可先設定 `$env:OCR_KEEP_SERVER = "1"`。
 接力器預設會續跑：已成功複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾會標為 `skipped_existing`，避免重跑時產生 `_2` 重複檔。
 
 `run_recursive_ocr_flat_export.bat` 跑完會自動執行驗收工具；只有手動拆開執行 Python 接力器，或要重驗舊輸出資料夾時，才需要另外執行：

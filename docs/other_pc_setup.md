@@ -223,6 +223,7 @@ $env:OCR_NO_PAUSE = "1"
 輸出資料夾第一層若已有 jpg/jpeg/png，但沒有 `_ocr_audit\folder_summary.csv`，請改用新的輸出資料夾，或先移開既有照片。
 中斷後重跑同一個輸出資料夾時，已完整複製、來源照片數與最新修改時間未變的資料夾會被標為 `skipped_existing`，不會再複製出 `_2` 重複檔。
 批次檔啟動前會先預檢來源、輸出路徑與是否至少有一張 `.jpg/.jpeg/.png`；預檢通過後才清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
+遞迴接力結束後會自動清理本次 OCR 後端；若需要保留後端觀察狀態，可先設定 `$env:OCR_KEEP_SERVER = "1"`。
 
 若手動執行 Python 接力器，必須先啟動 `samsung_ocr_batch_processor.py` 後端；完整步驟以 `docs\ai_handoff_runbook.md` 為準：
 
