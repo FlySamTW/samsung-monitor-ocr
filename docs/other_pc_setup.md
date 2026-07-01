@@ -231,6 +231,14 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 ```
 
 完成後，所有改名照片會在同一層輸出資料夾；審計表在 `_ocr_audit`。
+跑完後請先驗收輸出資料夾；通過才回報全量完成：
+
+```powershell
+.\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
+  --output-dir "D:\你的照片根資料夾_OCR整理"
+```
+
+若驗收失敗，先看 `_ocr_audit\audit_report.csv`，不要直接宣稱完成。
 
 正式改名以前要確認：
 

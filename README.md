@@ -38,6 +38,7 @@
 | tools/run_qwen_vl_guard.py | Prompt 守門測試 |
 | tools/photo_rename_planner.py | 依 OCR 結果產生照片改名計畫，預設不改照片 |
 | tools/recursive_ocr_flat_export.py | 遞迴接力 OCR，完成後複製改名照片到單一資料夾 |
+| tools/recursive_ocr_audit_report.py | 驗收遞迴接力輸出是否完整 |
 | docs/ai_handoff_runbook.md | 另一台電腦上的 AI 接手執行手冊 |
 
 ## 🏷️ 歷年照片改名規格
@@ -105,6 +106,15 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 
 此工具會從最新月份往前處理含子資料夾的照片，使用既有 Dashboard/Flask 後端 API 跑 OCR，完成後把改名照片複製到同一層輸出資料夾。審計檔會放在輸出資料夾的 `_ocr_audit`。
 接力器預設會續跑：已成功複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾會標為 `skipped_existing`，避免重跑時產生 `_2` 重複檔。
+
+跑完後用驗收工具檢查，不要只看終端機的「完成」：
+
+```powershell
+.\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
+  --output-dir "D:\你的照片根資料夾_OCR整理"
+```
+
+驗收通過時會顯示 `status=passed`；若失敗，細節會寫到 `_ocr_audit\audit_report.csv`。
 
 只產生改名計畫，不改照片：
 

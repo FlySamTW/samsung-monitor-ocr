@@ -138,22 +138,31 @@ M-202512-嘉義市-東區-TK3C-垂楊-單機-FollowMe_M7_32吋-＄12990-1172.jpg
 
 ## 完成判定
 
-不能只看終端機寫「完成」。要檢查輸出資料夾中的 `_ocr_audit`：
+不能只看終端機寫「完成」。接力器跑完後先執行驗收工具：
+
+```powershell
+.\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
+  --output-dir "D:\你的照片根資料夾_OCR整理"
+```
+
+驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；若失敗，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：
 
 ```text
 _ocr_audit\folder_discovery.csv
 _ocr_audit\skipped_unsupported.csv
 _ocr_audit\folder_summary.csv
+_ocr_audit\audit_report.csv
 ```
 
 完成回報必須包含：
 
-1. `folder_discovery.csv` 中找到幾個含照片資料夾。
-2. `folder_summary.csv` 中每個資料夾的狀態是否為 `copied` 或 `skipped_existing`。
-3. `missing_result`、`missing_source`、`conflict` 是否為 0。
-4. `copied_count` 加總與輸出資料夾內改名照片數是否一致。
-5. `skipped_unsupported.csv` 中 HEIC/WebP 略過數。
-6. 是否有 `status=error` 或 `status=blocked`。
+1. 驗收工具輸出的 `status` 是否為 `passed`。
+2. `folder_discovery.csv` 中找到幾個含照片資料夾。
+3. `folder_summary.csv` 中每個資料夾的狀態是否為 `copied` 或 `skipped_existing`。
+4. `missing_result`、`missing_source`、`conflict` 是否為 0。
+5. `copied_count` 加總與輸出資料夾內改名照片數是否一致。
+6. `skipped_unsupported.csv` 中 HEIC/WebP 略過數。
+7. 是否有 `status=error` 或 `status=blocked`。
 
 若有錯誤，不要宣稱全量完成；回報阻塞資料夾、錯誤訊息與對應審計檔路徑。
 
