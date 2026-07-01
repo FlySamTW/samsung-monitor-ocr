@@ -230,8 +230,9 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
   --ensure-llm
 ```
 
-完成後，所有改名照片會在同一層輸出資料夾；審計表在 `_ocr_audit`。
-跑完後請先驗收輸出資料夾；通過才回報全量完成：
+完成後，所有改名照片會在同一層輸出資料夾；審計表在 `_ocr_audit`。批次檔會自動驗收輸出資料夾；通過才回報全量完成。
+
+若手動執行 Python 接力器，或要重驗舊輸出資料夾，請另外執行：
 
 ```powershell
 .\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `

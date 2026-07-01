@@ -48,6 +48,14 @@ if "%errorlevel%" NEQ "0" (
     exit /b 1
 )
 
+"%PY%" tools\recursive_ocr_audit_report.py --output-dir "%OCR_OUTPUT_DIR%"
+if "%errorlevel%" NEQ "0" (
+    echo.
+    echo [錯誤] 輸出驗收未通過，請查看 %OCR_OUTPUT_DIR%\_ocr_audit\audit_report.csv。
+    pause
+    exit /b 1
+)
+
 echo.
-echo [完成] 請查看：%OCR_OUTPUT_DIR%
+echo [完成] 接力批次與輸出驗收都已通過：%OCR_OUTPUT_DIR%
 pause

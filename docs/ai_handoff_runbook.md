@@ -70,6 +70,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 2. 用 `tools\local_llm_manager.py ensure` 確認 LM Studio 與模型已啟動。
 3. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
 4. 執行 `tools\recursive_ocr_flat_export.py`，逐資料夾接力 OCR 並輸出改名照片。
+5. 執行 `tools\recursive_ocr_audit_report.py` 驗收輸出資料夾；驗收失敗時批次檔會以錯誤狀態結束。
 
 接力器預設會續跑：若 `_ocr_audit\folder_summary.csv` 顯示某資料夾已成功複製、來源照片數與最新修改時間未變，且對應 `copied.csv` 裡的目標檔案仍存在，該資料夾會標為 `skipped_existing`，不重跑 OCR，也不再複製出 `_2` 重複檔。只有明確需要全部重跑時才加 `--no-resume`，並應改用新的輸出資料夾。
 
@@ -138,14 +139,14 @@ M-202512-嘉義市-東區-TK3C-垂楊-單機-FollowMe_M7_32吋-＄12990-1172.jpg
 
 ## 完成判定
 
-不能只看終端機寫「完成」。接力器跑完後先執行驗收工具：
+不能只看終端機寫「完成」。`run_recursive_ocr_flat_export.bat` 會自動執行驗收工具；若是手動拆開跑 Python 接力器，或要重驗舊輸出資料夾，請另外執行：
 
 ```powershell
 .\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
   --output-dir "D:\你的照片根資料夾_OCR整理"
 ```
 
-驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；若失敗，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：
+驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；若失敗，批次檔會停在錯誤狀態，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：
 
 ```text
 _ocr_audit\folder_discovery.csv
