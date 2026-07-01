@@ -1,7 +1,7 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from recursive_ocr_flat_export import IMAGE_EXTENSIONS, UNSUPPORTED_EXTENSIONS, validate_source_output_paths
 
@@ -19,6 +19,16 @@ def find_supported_image(source_root: Path) -> Tuple[Optional[Path], int]:
     return None, unsupported_count
 
 
+def root_output_images(output_dir: Path) -> List[Path]:
+    if not output_dir.exists() or not output_dir.is_dir():
+        return []
+    return [
+        path
+        for path in output_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="預檢遞迴 OCR 的來源與輸出路徑，不啟動 LLM 或 OCR 後端。")
     parser.add_argument("--source-root", required=True, help="要遞迴處理的照片根資料夾")
@@ -34,6 +44,17 @@ def main() -> int:
         raise SystemExit(f"來源路徑不是資料夾：{source_root}")
 
     validate_source_output_paths(source_root, output_dir)
+    if output_dir.exists() and not output_dir.is_dir():
+        raise SystemExit(f"輸出路徑已存在但不是資料夾：{output_dir}")
+
+    existing_output_images = root_output_images(output_dir)
+    summary_path = output_dir / "_ocr_audit" / "folder_summary.csv"
+    if existing_output_images and not summary_path.exists():
+        raise SystemExit(
+            f"輸出資料夾第一層已有 {len(existing_output_images)} 張 jpg/jpeg/png，"
+            "但找不到 _ocr_audit\\folder_summary.csv；請改用新的輸出資料夾，或先移開既有照片。"
+        )
+
     supported_image, unsupported_count = find_supported_image(source_root)
     if not supported_image:
         if unsupported_count:
