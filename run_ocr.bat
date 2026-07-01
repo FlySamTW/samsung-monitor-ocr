@@ -24,6 +24,14 @@ echo Dir:   %OCR_IMAGE_DIR%
 echo Python: %PY%
 echo.
 
+"%PY%" tools\stop_ocr_server.py
+if "%errorlevel%" NEQ "0" (
+    echo.
+    echo [錯誤] 清理既有 OCR 後端失敗，請關閉舊的 Python 後再重試。
+    pause
+    exit /b 1
+)
+
 "%PY%" tools\local_llm_manager.py ensure
 if "%errorlevel%" NEQ "0" (
     echo.

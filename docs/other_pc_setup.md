@@ -220,6 +220,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 
 輸出資料夾不可等於來源根資料夾，也不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片。
 中斷後重跑同一個輸出資料夾時，已完整複製、來源照片數與最新修改時間未變的資料夾會被標為 `skipped_existing`，不會再複製出 `_2` 重複檔。
+批次檔啟動前會先清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
 
 若手動執行 Python 接力器，必須先啟動 `samsung_ocr_batch_processor.py` 後端；完整步驟以 `docs\ai_handoff_runbook.md` 為準：
 
