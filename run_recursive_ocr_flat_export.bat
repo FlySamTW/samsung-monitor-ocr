@@ -30,6 +30,14 @@ echo Model:  %LOCAL_LLM_MODEL%
 echo Python: %PY%
 echo.
 
+"%PY%" tools\validate_recursive_ocr_inputs.py --source-root "%OCR_SOURCE_ROOT%" --output-dir "%OCR_OUTPUT_DIR%"
+if "%errorlevel%" NEQ "0" (
+    echo.
+    echo [錯誤] 來源或輸出路徑預檢失敗；尚未啟動 LLM 或 OCR 後端。
+    pause
+    exit /b 1
+)
+
 "%PY%" tools\stop_ocr_server.py
 if "%errorlevel%" NEQ "0" (
     echo.

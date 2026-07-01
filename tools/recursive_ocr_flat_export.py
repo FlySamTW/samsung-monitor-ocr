@@ -89,6 +89,11 @@ def validate_source_output_paths(source_root: Path, output_dir: Path) -> None:
             "輸出資料夾不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片；"
             "請改用來源資料夾旁邊的新資料夾，例如：來源資料夾_OCR整理。"
         )
+    if path_is_relative_to(source_root, output_dir):
+        raise SystemExit(
+            "輸出資料夾不可是來源根資料夾的上層資料夾，避免把無關照片與審計檔算進輸出；"
+            "請指定來源資料夾旁邊的新資料夾，例如：來源資料夾_OCR整理。"
+        )
 
 
 def copied_manifest_complete(copied_path: Path, expected_count: int) -> bool:

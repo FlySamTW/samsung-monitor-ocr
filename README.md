@@ -35,6 +35,7 @@
 | skills/ | 功能模組 |
 | dashboard/ | Web 介面 |
 | tools/local_llm_manager.py | 本機 LLM 啟動與檢查 |
+| tools/validate_recursive_ocr_inputs.py | 啟動前預檢來源與輸出路徑 |
 | tools/stop_ocr_server.py | 啟動前清理既有 OCR 後端，避免連到舊程式 |
 | tools/run_qwen_vl_guard.py | Prompt 守門測試 |
 | tools/photo_rename_planner.py | 依 OCR 結果產生照片改名計畫，預設不改照片 |
@@ -103,10 +104,10 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 .\run_recursive_ocr_flat_export.bat
 ```
 
-輸出資料夾不可放在來源資料夾底下，避免下次重跑時掃到自己輸出的改名照片。
+輸出資料夾不可等於來源資料夾、不可放在來源資料夾底下、也不可是來源資料夾的上層；請使用來源旁邊的新資料夾，避免掃到自己輸出的照片或混入無關檔案。
 
 此工具會從最新月份往前處理含子資料夾的照片，使用既有 Dashboard/Flask 後端 API 跑 OCR，完成後把改名照片複製到同一層輸出資料夾。審計檔會放在輸出資料夾的 `_ocr_audit`。
-批次檔啟動前會先清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式或被舊程序佔用連接埠。
+批次檔啟動前會先預檢來源與輸出路徑；預檢失敗時不會啟動 LLM 或 OCR 後端。預檢通過後才清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式或被舊程序佔用連接埠。
 接力器預設會續跑：已成功複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾會標為 `skipped_existing`，避免重跑時產生 `_2` 重複檔。
 
 `run_recursive_ocr_flat_export.bat` 跑完會自動執行驗收工具；只有手動拆開執行 Python 接力器，或要重驗舊輸出資料夾時，才需要另外執行：

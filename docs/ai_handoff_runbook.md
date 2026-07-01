@@ -67,11 +67,12 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 這個批次檔會：
 
 1. 優先使用 `.venv\Scripts\python.exe`，找不到才用系統 `python`。
-2. 用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
-3. 用 `tools\local_llm_manager.py ensure` 確認 LM Studio 與模型已啟動。
-4. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
-5. 執行 `tools\recursive_ocr_flat_export.py`，逐資料夾接力 OCR 並輸出改名照片。
-6. 執行 `tools\recursive_ocr_audit_report.py` 驗收輸出資料夾；驗收失敗時批次檔會以錯誤狀態結束。
+2. 用 `tools\validate_recursive_ocr_inputs.py` 預檢來源與輸出路徑；預檢失敗時不啟動 LLM 或 OCR 後端。
+3. 用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
+4. 用 `tools\local_llm_manager.py ensure` 確認 LM Studio 與模型已啟動。
+5. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
+6. 執行 `tools\recursive_ocr_flat_export.py`，逐資料夾接力 OCR 並輸出改名照片。
+7. 執行 `tools\recursive_ocr_audit_report.py` 驗收輸出資料夾；驗收失敗時批次檔會以錯誤狀態結束。
 
 接力器預設會續跑：若 `_ocr_audit\folder_summary.csv` 顯示某資料夾已成功複製、來源照片數與最新修改時間未變，且對應 `copied.csv` 裡的目標檔案仍存在，該資料夾會標為 `skipped_existing`，不重跑 OCR，也不再複製出 `_2` 重複檔。只有明確需要全部重跑時才加 `--no-resume`，並應改用新的輸出資料夾。
 
@@ -177,7 +178,8 @@ _ocr_audit\audit_report.csv
 5. `conflict > 0`：代表改名後會撞檔名，不能覆蓋，需先看該資料夾的 `conflicts.csv`。
 6. WebP/HEIC：照規格略過，只要列在 `skipped_unsupported.csv`，不要算入完成照片數。
 7. 輸出資料夾在來源資料夾內：更換為來源資料夾旁邊的新資料夾，例如 `<來源>_OCR整理`。
-8. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
+8. 輸出資料夾是來源資料夾上層：更換為來源資料夾旁邊的新資料夾，避免把無關照片與審計檔算進輸出。
+9. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
 
 ## Git 規則
 
