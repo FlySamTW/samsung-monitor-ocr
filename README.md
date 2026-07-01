@@ -101,6 +101,8 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 .\run_recursive_ocr_flat_export.bat
 ```
 
+輸出資料夾不可放在來源資料夾底下，避免下次重跑時掃到自己輸出的改名照片。
+
 此工具會從最新月份往前處理含子資料夾的照片，使用既有 Dashboard/Flask 後端 API 跑 OCR，完成後把改名照片複製到同一層輸出資料夾。審計檔會放在輸出資料夾的 `_ocr_audit`。
 
 只產生改名計畫，不改照片：

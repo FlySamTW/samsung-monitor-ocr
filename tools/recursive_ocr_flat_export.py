@@ -53,6 +53,26 @@ def write_dict_csv(path: Path, rows: List[Dict[str, object]], headers: List[str]
             writer.writerow({header: row.get(header, "") for header in headers})
 
 
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_source_output_paths(source_root: Path, output_dir: Path) -> None:
+    if output_dir == source_root:
+        raise SystemExit(
+            "輸出資料夾不可等於來源根資料夾；請指定新的單一輸出資料夾，例如：來源資料夾_OCR整理。"
+        )
+    if path_is_relative_to(output_dir, source_root):
+        raise SystemExit(
+            "輸出資料夾不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片；"
+            "請改用來源資料夾旁邊的新資料夾，例如：來源資料夾_OCR整理。"
+        )
+
+
 def find_period_in_text(text: str) -> str:
     month_matches = re.findall(r"20\d{4}", text)
     if month_matches:
@@ -327,6 +347,7 @@ def main() -> int:
     output_dir = Path(args.output_dir).resolve()
     if not source_root.exists():
         raise SystemExit(f"來源資料夾不存在：{source_root}")
+    validate_source_output_paths(source_root, output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     audit_dir = output_dir / "_ocr_audit"

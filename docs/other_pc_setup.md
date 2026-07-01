@@ -218,6 +218,8 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 .\run_recursive_ocr_flat_export.bat
 ```
 
+輸出資料夾不可等於來源根資料夾，也不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片。
+
 若手動執行 Python 接力器，必須先啟動 `samsung_ocr_batch_processor.py` 後端；完整步驟以 `docs\ai_handoff_runbook.md` 為準：
 
 ```powershell

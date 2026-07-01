@@ -26,7 +26,8 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 4. 完成後用正式 `results.csv` 產改名計畫，再複製到同一層新輸出資料夾；不原地裸改照片。
 5. 正式接力工具是 `tools/recursive_ocr_flat_export.py`，可由 `run_recursive_ocr_flat_export.bat` 啟動。
 6. 另一台電腦上的 AI 接手執行時，先讀 `docs/ai_handoff_runbook.md`。
-7. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
+7. 輸出資料夾不可等於來源根資料夾，也不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片。
+8. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
 
 ### [2026-03-05] 日誌與結果列表去重修復
 
