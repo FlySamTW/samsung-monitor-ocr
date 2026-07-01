@@ -217,3 +217,13 @@ runs\
 *.log
 .local_llm_runtime.json
 ```
+# Dashboard Live Sync Handoff Note (2026-07-01)
+
+The live UI must keep photo preview, LLM self-talk, and parsed OCR result aligned by filename:
+
+- Backend exposes `current_file`, `stream_file`, and `latest_result_file`.
+- Frontend displays the main photo from `current_file`.
+- Frontend displays live `stream_buffer` only when `stream_file === current_file`.
+- `recent_results[0]` is history/latest completed output and must not drive the main preview while the batch is running.
+
+If a user reports that photos switch faster than self-talk/results, inspect this contract first before changing prompt/model code.

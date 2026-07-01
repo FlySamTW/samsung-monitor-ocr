@@ -4,6 +4,16 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 
 # SAMSUNG_OCR_EXPERIENCE (Project Bible)
 
+## Dashboard Live Sync Rule (2026-07-01)
+
+For live OCR runs, preview image, LLM self-talk, and parsed result must never be mixed across filenames.
+
+- `current_file`: the active image being processed and shown in the main preview.
+- `stream_file`: the image that owns `stream_buffer`.
+- `latest_result_file`: the newest completed OCR record for history/recent-results UI.
+
+Do not use `recent_results[0]` to update the main preview while a batch is running. It is usually the previous completed image and will make the UI look one image out of sync. The frontend should update the main image only when `current_file` changes, and should show live self-talk only if `stream_file === current_file`.
+
 **Purpose**: To document critical engineering failures and strict rules for future development, ensuring mistakes are never repeated.
 
 ## 🔄 最新改動日誌 (v18.99+)

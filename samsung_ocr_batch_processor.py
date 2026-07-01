@@ -1251,6 +1251,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # RESET STREAM BUFFER FOR NEW IMAGE
     if orchestrator:
         orchestrator.stream_buffer = "" # Reset to empty (remove '...')
+        orchestrator.stream_file = fname
 
     # Load Valid Models for Injection
     # Load Valid Models for Injection
@@ -2458,15 +2459,11 @@ def get_status():
             "total": orchestrator.stats.get('total', 0)
         }
         
-        # [v19.11] Show OpenCode Go self-talk. Prefer the already-streamed monologue,
-        # but if the buffer was cleared after completion, extract the natural-language
-        # monologue from the saved reasoning instead of dumping the full structured text.
-        stream_buffer = str(orchestrator.stream_buffer)
-        if not stream_buffer and orchestrator.recent_results:
-            last_thinking = orchestrator.recent_results[0].get('thinking', '')
-            if last_thinking:
-                mono = extract_natural_monologue(str(last_thinking))
-                stream_buffer = to_tc(mono[:800]) if mono else ""
+        # Keep live self-talk tied to the active image. Showing the previous
+        # result here makes the dashboard appear one image out of sync.
+        current_file = getattr(orchestrator, 'current_file', None)
+        stream_file = getattr(orchestrator, 'stream_file', None)
+        stream_buffer = str(orchestrator.stream_buffer) if stream_file == current_file else ""
         
         # [OCG-v2.3] Expose current model and per-image cost info
         current_model = getattr(orchestrator, 'last_model_name', None) or model_name_global or "未知"
@@ -2477,7 +2474,9 @@ def get_status():
 
         status_obj = {
             "version": VERSION,
-            "current_file": getattr(orchestrator, 'current_file', 'None'),
+            "current_file": current_file or 'None',
+            "stream_file": stream_file,
+            "latest_result_file": getattr(orchestrator, 'latest_result_file', None),
             "current_model": current_model,
             "last_token_usage": last_token_usage,
             "last_image_cost": last_image_cost,

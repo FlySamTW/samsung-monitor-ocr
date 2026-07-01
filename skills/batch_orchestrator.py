@@ -57,6 +57,8 @@ class BatchOrchestrator:
         self.is_running = False
         self.stop_event = Event() # Retained for functionality
         self.current_file = None # [v9.92] Initialize to prevent AttributeError
+        self.stream_file = None
+        self.latest_result_file = None
         self.log_system("批次處理已停止。") # Added as per instruction
         self.save_data_file = None 
         self.recent_results = []
@@ -698,6 +700,8 @@ class BatchOrchestrator:
             "lm_logs": self.system_logs[-100:],
             "stream_buffer": self.stream_buffer,
             "current_file": self.current_file,
+            "stream_file": self.stream_file,
+            "latest_result_file": self.latest_result_file,
             "failed_files": self.failed_files,  # [v11.0] Include failed files
             "recent_results": self.recent_results, # [v16.9 Fix] Add missing sync
             "unknown_models": sorted(list(self.unknown_models)) # [v16.10]
@@ -971,6 +975,7 @@ class BatchOrchestrator:
                 
             self.current_file = fname
             self.stream_buffer = "" # Reset buffer for new file
+            self.stream_file = fname
             self.log_system("━━━━━━━━━━━━━━━")
             self.log_system(f"▶️ 載入圖片: {fname}")
             
@@ -1071,6 +1076,7 @@ class BatchOrchestrator:
                 self.session_results = [r for r in self.session_results if r['file_name'] != norm_result['file_name']]
                 
                 self.recent_results.insert(0, norm_result)
+                self.latest_result_file = norm_result['file_name']
                 if len(self.recent_results) > 50: self.recent_results.pop()
                 self.session_results.insert(0, norm_result)
                 
@@ -1166,6 +1172,7 @@ class BatchOrchestrator:
         else:
             self.log_system("✅ 批次處理已完成。")
         self.stream_buffer = "" # [v14.5 Fix] Clear buffer after completion
+        self.stream_file = None
 
     def log_system(self, msg: str, with_timestamp: bool = False):
         """Log system message. Only add timestamp if with_timestamp=True"""

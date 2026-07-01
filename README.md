@@ -194,3 +194,12 @@ run_ocr.bat 會自動清理
 
 版本：v19.x (Qwen-VL Prompt Guard)
 更新：2026-06-06
+# Dashboard Live Sync Rule (2026-07-01)
+
+The live dashboard keeps three UI surfaces tied to the same filename:
+
+- `current_file`: the photo currently being processed and displayed in the main preview.
+- `stream_file`: the filename that owns the live LLM self-talk in `stream_buffer`.
+- `latest_result_file`: the most recently completed OCR result.
+
+The frontend must not replace the main preview with `recent_results[0]` while a new `current_file` is already active. That makes the photo change faster than the LLM self-talk/result text and creates an off-by-one display. Only update the preview when `current_file` changes, and only show `stream_buffer` when `stream_file === current_file`.

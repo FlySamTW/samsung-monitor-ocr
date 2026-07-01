@@ -37,6 +37,8 @@ const App = () => {
       stats: { success: 0, failed: 0, total: 0, processed: 0, is_running: false },
       lm_logs: ["系統初始化完成，等待連線..."],
       current_file: null,
+      stream_file: null,
+      latest_result_file: null,
       sys: { cpu: 0, mem: 0 },
       recent_results: [],
       dynamic_examples_list: [],
@@ -78,41 +80,33 @@ const App = () => {
   const streamBufferRef = useRef(null);
   const messagesEndRef = useRef(null);
   const lastProcessedRef = useRef(null);
+  const currentImageFileRef = useRef(null);
 
   const fetchData = async () => {
     try {
       const response = await fetch('/api/status');
       if (!response.ok) throw new Error('API Error');
-      const apiResult = await response.json(); 
-      
-      setData(prev => ({...prev, ...apiResult}));
+      const apiResult = await response.json();
+      const activeFile = apiResult.current_file && apiResult.current_file !== 'None'
+        ? apiResult.current_file
+        : null;
+      const isStreamSynced = activeFile && apiResult.stream_file === activeFile;
+      const syncedResult = {
+        ...apiResult,
+        stream_buffer: isStreamSynced ? (apiResult.stream_buffer || "") : ""
+      };
 
-      if (apiResult.current_file) {
-        const timestamp = new Date().getTime();
-        const newImageUrl = `/api/image/${encodeURIComponent(apiResult.current_file)}?t=${timestamp}`;
-        if (newImageUrl !== currentImage) {
-          setImageLoaded(false); 
-          setCurrentImage(newImageUrl);
-        }
+      setData(prev => ({...prev, ...syncedResult}));
+
+      if (activeFile && activeFile !== currentImageFileRef.current) {
+        currentImageFileRef.current = activeFile;
+        setImageLoaded(false);
+        setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
         if (apiResult.current_thumb) {
             setCurrentThumb(apiResult.current_thumb);
+        } else {
+            setCurrentThumb(null);
         }
-      }
-
-      
-      // Auto-Sync Phase 2: If recent_results exists and is different from last sync, update preview
-      if (apiResult.recent_results && apiResult.recent_results.length > 0) {
-          const latestFile = apiResult.recent_results[0].file_name;
-          // Use a ref to track the last auto-synced file to allow manual override
-          // But user requested: "Preview should be the same as the rightmost thumbnail"
-          // This implies "Always Sync" or "Sync on Change".
-          // Let's implement: If header file changed, sync it.
-          if (latestFile !== lastProcessedRef.current) {
-               lastProcessedRef.current = latestFile;
-               const timestamp = new Date().getTime();
-               setCurrentImage(`/api/image/${encodeURIComponent(latestFile)}?t=${timestamp}`);
-               setCurrentThumb(null); 
-          }
       }
 
       setError(null);

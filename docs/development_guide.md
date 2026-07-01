@@ -146,3 +146,12 @@ $env:OCR_NO_PAUSE = "1"
 ```
 
 守門失敗時，不要直接改全域 Prompt；先確認是否是模型版本、圖片裁切、後處理或特定案例標準答案問題。
+# Dashboard Live Sync Contract (2026-07-01)
+
+When changing the live dashboard, keep the preview, LLM self-talk, and OCR result scoped by filename:
+
+- `current_file` is the active photo and owns the main preview.
+- `stream_file` is the active photo that owns `stream_buffer`.
+- `latest_result_file` is only the newest completed result for history/side panels.
+
+Never use `recent_results[0]` to drive the main preview during a running batch. It is normally the previous completed image, while `current_file` has already advanced to the next image. The frontend should change the preview only when `current_file` changes, and should blank live self-talk unless `stream_file === current_file`.

@@ -7,8 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from PIL import Image, ImageOps
+
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+OUTPUT_MAX_LONG_EDGE = 2560
+OUTPUT_JPEG_QUALITY = 88
 UNKNOWN_MODEL = "型號未辨識"
 UNKNOWN_PRICE = "無價格"
 MISSING_RESULT_STATUS = "missing_result"
@@ -351,6 +355,30 @@ def unique_target_path(output_dir: Path, target_name: str) -> Path:
         counter += 1
 
 
+def copy_image_for_flat_output(source: Path, target: Path) -> None:
+    try:
+        with Image.open(source) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((OUTPUT_MAX_LONG_EDGE, OUTPUT_MAX_LONG_EDGE), Image.Resampling.LANCZOS)
+            suffix = target.suffix.lower()
+            if suffix in {".jpg", ".jpeg"}:
+                if image.mode not in {"RGB", "L"}:
+                    image = image.convert("RGB")
+                image.save(
+                    target,
+                    format="JPEG",
+                    quality=OUTPUT_JPEG_QUALITY,
+                    optimize=True,
+                    progressive=True,
+                )
+            elif suffix == ".png":
+                image.save(target, format="PNG", optimize=True)
+            else:
+                shutil.copy2(source, target)
+    except Exception:
+        shutil.copy2(source, target)
+
+
 def copy_plan_to_flat_output(plan: List[Dict[str, str]], output_dir: Path) -> List[Dict[str, str]]:
     unsafe = [row for row in plan if row["status"] not in {READY_STATUS, NO_CHANGE_STATUS}]
     if unsafe:
@@ -364,7 +392,7 @@ def copy_plan_to_flat_output(plan: List[Dict[str, str]], output_dir: Path) -> Li
         source = Path(row["original_path"])
         target_name = row["target_name"] or row["original_name"]
         target = unique_target_path(output_dir, target_name)
-        shutil.copy2(source, target)
+        copy_image_for_flat_output(source, target)
         copied.append(
             {
                 "status": "copied",
