@@ -67,7 +67,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 這個批次檔會：
 
 1. 優先使用 `.venv\Scripts\python.exe`，找不到才用系統 `python`。
-2. 用 `tools\validate_recursive_ocr_inputs.py` 預檢來源與輸出路徑；預檢失敗時不啟動 LLM 或 OCR 後端。
+2. 用 `tools\validate_recursive_ocr_inputs.py` 預檢來源、輸出路徑與是否至少有一張 `.jpg/.jpeg/.png`；預檢失敗時不啟動 LLM 或 OCR 後端。
 3. 用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
 4. 用 `tools\local_llm_manager.py ensure` 確認 LM Studio 與模型已啟動。
 5. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
@@ -179,7 +179,8 @@ _ocr_audit\audit_report.csv
 6. WebP/HEIC：照規格略過，只要列在 `skipped_unsupported.csv`，不要算入完成照片數。
 7. 輸出資料夾在來源資料夾內：更換為來源資料夾旁邊的新資料夾，例如 `<來源>_OCR整理`。
 8. 輸出資料夾是來源資料夾上層：更換為來源資料夾旁邊的新資料夾，避免把無關照片與審計檔算進輸出。
-9. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
+9. 來源資料夾沒有 `.jpg/.jpeg/.png`：確認是否選錯資料夾；只有 HEIC/WebP 依目前規格不會處理，也不能宣稱完成。
+10. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
 
 ## Git 規則
 

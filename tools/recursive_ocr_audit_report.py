@@ -149,6 +149,15 @@ def audit_output(output_dir: Path) -> Tuple[Dict[str, object], List[Dict[str, st
     discovered_set = set(discovered_folders)
     summary_set = set(summary_folders)
 
+    if not discovery_rows:
+        add_issue(
+            issues,
+            "error",
+            "no_supported_images_discovered",
+            "folder_discovery.csv 沒有任何含支援照片的資料夾；不能宣稱全量完成。",
+            path=str(discovery_path),
+        )
+
     for folder in sorted(duplicate_values(discovered_folders)):
         add_issue(issues, "error", "duplicate_discovery_folder", "folder_discovery.csv 有重複資料夾。", folder)
     for folder in sorted(duplicate_values(summary_folders)):
