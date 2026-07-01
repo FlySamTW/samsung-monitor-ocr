@@ -71,6 +71,8 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 3. 啟動 `samsung_ocr_batch_processor.py` 作為本機 OCR 後端。
 4. 執行 `tools\recursive_ocr_flat_export.py`，逐資料夾接力 OCR 並輸出改名照片。
 
+接力器預設會續跑：若 `_ocr_audit\folder_summary.csv` 顯示某資料夾已成功複製、來源照片數與最新修改時間未變，且對應 `copied.csv` 裡的目標檔案仍存在，該資料夾會標為 `skipped_existing`，不重跑 OCR，也不再複製出 `_2` 重複檔。只有明確需要全部重跑時才加 `--no-resume`，並應改用新的輸出資料夾。
+
 如果要先只看資料夾排序與略過清單，不跑 OCR：
 
 ```powershell
@@ -147,7 +149,7 @@ _ocr_audit\folder_summary.csv
 完成回報必須包含：
 
 1. `folder_discovery.csv` 中找到幾個含照片資料夾。
-2. `folder_summary.csv` 中每個資料夾的狀態是否為 `copied`。
+2. `folder_summary.csv` 中每個資料夾的狀態是否為 `copied` 或 `skipped_existing`。
 3. `missing_result`、`missing_source`、`conflict` 是否為 0。
 4. `copied_count` 加總與輸出資料夾內改名照片數是否一致。
 5. `skipped_unsupported.csv` 中 HEIC/WebP 略過數。
@@ -164,6 +166,7 @@ _ocr_audit\folder_summary.csv
 5. `conflict > 0`：代表改名後會撞檔名，不能覆蓋，需先看該資料夾的 `conflicts.csv`。
 6. WebP/HEIC：照規格略過，只要列在 `skipped_unsupported.csv`，不要算入完成照片數。
 7. 輸出資料夾在來源資料夾內：更換為來源資料夾旁邊的新資料夾，例如 `<來源>_OCR整理`。
+8. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
 
 ## Git 規則
 

@@ -53,6 +53,24 @@ def write_dict_csv(path: Path, rows: List[Dict[str, object]], headers: List[str]
             writer.writerow({header: row.get(header, "") for header in headers})
 
 
+def read_dict_csv(path: Path) -> List[Dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def int_value(value: object, default: int = 0) -> int:
+    try:
+        return int(str(value or "").strip())
+    except ValueError:
+        return default
+
+
+def iso_from_mtime(mtime: float) -> str:
+    return datetime.fromtimestamp(mtime).isoformat()
+
+
 def path_is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -71,6 +89,65 @@ def validate_source_output_paths(source_root: Path, output_dir: Path) -> None:
             "輸出資料夾不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片；"
             "請改用來源資料夾旁邊的新資料夾，例如：來源資料夾_OCR整理。"
         )
+
+
+def copied_manifest_complete(copied_path: Path, expected_count: int) -> bool:
+    rows = read_dict_csv(copied_path)
+    if expected_count and len(rows) != expected_count:
+        return False
+    if not rows:
+        return False
+    for row in rows:
+        target_path = row.get("target_path") or ""
+        if not target_path or not Path(target_path).exists():
+            return False
+    return True
+
+
+def build_resume_index(summary_path: Path) -> Dict[str, Dict[str, str]]:
+    resume: Dict[str, Dict[str, str]] = {}
+    for row in read_dict_csv(summary_path):
+        folder = row.get("folder") or ""
+        if not folder:
+            continue
+        if row.get("status") not in {"copied", "skipped_existing"}:
+            continue
+        if any(int_value(row.get(key)) for key in ["missing_result", "missing_source", "conflict"]):
+            continue
+        copied_path_text = row.get("copied_path") or ""
+        if not copied_path_text:
+            continue
+        copied_path = Path(copied_path_text)
+        copied_count = int_value(row.get("copied_count"))
+        if not copied_path or not copied_manifest_complete(copied_path, copied_count):
+            continue
+        resume[folder] = row
+    return resume
+
+
+def summary_from_resume(row: Dict[str, str], current: dict) -> Dict[str, object]:
+    summary = dict(row)
+    summary.update(
+        {
+            "folder": str(current["folder"]),
+            "period": current["period"],
+            "image_count": current["image_count"],
+            "source_latest_mtime": iso_from_mtime(current["latest_mtime"]),
+            "status": "skipped_existing",
+            "copy_error": "",
+            "start_response": "resume_skip_existing",
+        }
+    )
+    return summary
+
+
+def resume_row_matches_current(row: Dict[str, str], current: dict) -> bool:
+    if int_value(row.get("image_count"), default=-1) != int(current["image_count"]):
+        return False
+    previous_mtime = row.get("source_latest_mtime") or ""
+    if previous_mtime and previous_mtime != iso_from_mtime(current["latest_mtime"]):
+        return False
+    return True
 
 
 def find_period_in_text(text: str) -> str:
@@ -301,6 +378,7 @@ def process_folder(args, source_root: Path, output_dir: Path, audit_dir: Path, r
         "folder": str(folder),
         "period": period,
         "image_count": row["image_count"],
+        "source_latest_mtime": iso_from_mtime(row["latest_mtime"]),
         "success_records": len(records),
         "status": "copied" if copied_count else ("blocked" if copy_error else "planned"),
         "copied_count": copied_count,
@@ -340,6 +418,7 @@ def main() -> int:
     parser.add_argument("--restart", action="store_true", help="要求後端重跑資料匣既有結果")
     parser.add_argument("--dry-run", action="store_true", help="只列出資料匣順序與略過清單，不呼叫 OCR")
     parser.add_argument("--no-copy", action="store_true", help="只產生改名計畫，不複製照片")
+    parser.add_argument("--no-resume", action="store_true", help="不使用既有 _ocr_audit 續跑狀態，重新處理所有資料匣")
     parser.add_argument("--ensure-llm", action="store_true", help="開始前先用 LM Studio CLI 確認本機模型已載入")
     args = parser.parse_args()
 
@@ -368,7 +447,7 @@ def main() -> int:
             "folder": str(item["folder"]),
             "period": item["period"],
             "image_count": item["image_count"],
-            "latest_mtime": datetime.fromtimestamp(item["latest_mtime"]).isoformat(),
+            "latest_mtime": iso_from_mtime(item["latest_mtime"]),
         }
         for index, item in enumerate(folders, start=1)
     ]
@@ -384,6 +463,7 @@ def main() -> int:
         "folder",
         "period",
         "image_count",
+        "source_latest_mtime",
         "success_records",
         "status",
         "copied_count",
@@ -416,31 +496,48 @@ def main() -> int:
     write_state(state_path, state)
 
     if args.dry_run:
-        write_dict_csv(summary_path, [], summary_headers)
         print(f"[接力] dry-run folders={len(folders)} unsupported={len(unsupported)}")
         print(f"[接力] discovery={audit_dir / 'folder_discovery.csv'}")
         print(f"[接力] skipped={audit_dir / 'skipped_unsupported.csv'}")
         return 0
 
-    if args.ensure_llm:
+    resume_enabled = not args.no_resume and not args.restart and not args.no_copy
+    resume_index = build_resume_index(summary_path) if resume_enabled else {}
+    pending_folders = [
+        row for row in folders
+        if not (
+            str(row["folder"]) in resume_index
+            and resume_row_matches_current(resume_index[str(row["folder"])], row)
+        )
+    ]
+
+    if args.ensure_llm and pending_folders:
         ensure_local_llm(args)
 
-    wait_for_backend(args.backend_url, timeout_seconds=90)
-    configure_llm(args)
+    if pending_folders:
+        wait_for_backend(args.backend_url, timeout_seconds=90)
+        configure_llm(args)
 
     summaries: List[Dict[str, object]] = []
     for index, folder_row in enumerate(folders, start=1):
         print(f"[接力] ({index}/{len(folders)}) 開始：{folder_row['folder']}", flush=True)
-        try:
-            summary = process_folder(args, source_root, output_dir, audit_dir, folder_row, index)
-        except Exception as exc:
-            summary = {
-                "folder": str(folder_row["folder"]),
-                "period": folder_row["period"],
-                "image_count": folder_row["image_count"],
-                "status": "error",
-                "copy_error": str(exc),
-            }
+        resume_row = resume_index.get(str(folder_row["folder"]))
+        if resume_row and not resume_row_matches_current(resume_row, folder_row):
+            resume_row = None
+        if resume_row:
+            summary = summary_from_resume(resume_row, folder_row)
+        else:
+            try:
+                summary = process_folder(args, source_root, output_dir, audit_dir, folder_row, index)
+            except Exception as exc:
+                summary = {
+                    "folder": str(folder_row["folder"]),
+                    "period": folder_row["period"],
+                    "image_count": folder_row["image_count"],
+                    "source_latest_mtime": iso_from_mtime(folder_row["latest_mtime"]),
+                    "status": "error",
+                    "copy_error": str(exc),
+                }
         summaries.append(summary)
         write_dict_csv(summary_path, summaries, summary_headers)
         state["completed"].append(summary)

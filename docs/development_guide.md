@@ -65,6 +65,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 
 接力器會把審計檔寫到輸出資料夾的 `_ocr_audit`，包含 `folder_discovery.csv`、`skipped_unsupported.csv`、每個資料匣的 `rename_plan.csv` 與總表 `folder_summary.csv`。
 輸出資料夾不可等於來源根資料夾，也不可放在來源根資料夾底下，避免重跑時掃到自己輸出的改名照片。
+接力器預設使用 `_ocr_audit\folder_summary.csv` 與各資料匣的 `copied.csv` 續跑；已完整複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料匣會標成 `skipped_existing`，不再重跑 OCR 或複製 `_2` 檔。除非使用新的輸出資料夾，否則不要輕易使用 `--no-resume`。
 
 ## 改名工具
 
