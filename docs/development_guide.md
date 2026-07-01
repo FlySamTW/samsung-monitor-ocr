@@ -51,7 +51,8 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 3. 處理順序由最新月份往前，例如 `商化照片-202605`、`商化照片-202604`、`商化照片-202603`。
 4. 2K 縮放定義為：大於 2K 時長邊縮到 `2560`，短邊按原比例自然縮放；不裁切、不補白、不硬拉伸。例：`4000x3000` 會變成 `2560x1920`。
 5. 官網價格比對只適用執行當年度照片；以 2026 年執行時，`2025` 含以前只做 OCR 與改名，不做 Samsung 官網價格比對。
-6. 年度判斷應從資料夾或檔名年月取得，不可用外部照片根路徑推斷。
+6. 改名階段必須用 `period` 再擋一次；歷史年度就算 OCR 結果有 `price_symbol`，檔名也不得輸出 `↑/↓/✓/？`。
+7. 年度判斷應從資料夾或檔名年月取得，不可用外部照片根路徑推斷。
 
 正式接力入口：
 
@@ -60,6 +61,12 @@ $env:OCR_SOURCE_ROOT = "D:\你的照片根資料夾"
 $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
 $env:OCR_NO_PAUSE = "1"
 .\run_recursive_ocr_flat_export.bat
+```
+
+價格符號規則改動後，至少跑：
+
+```powershell
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
 ```
 
 批次檔會先預檢來源、輸出路徑與是否至少有一張 `.jpg/.jpeg/.png`；預檢通過後才清理既有 `samsung_ocr_batch_processor.py` 後端，再啟動 LM Studio 檢查、OCR 後端、接力器與輸出驗收。接力結束後預設清理本次 OCR 後端；需要保留時設定 `OCR_KEEP_SERVER=1`。若要拆成手動兩步，照 `docs/ai_handoff_runbook.md`；不要只單跑 `tools/recursive_ocr_flat_export.py` 後就以為後端會自動啟動或自動驗收。

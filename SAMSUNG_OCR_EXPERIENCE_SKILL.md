@@ -34,6 +34,7 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 12. 接力器預設用 `_ocr_audit\folder_summary.csv` + `copied.csv` 續跑；已完整複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾標為 `skipped_existing`，避免中斷重跑時產生 `_2` 重複檔。
 13. `run_recursive_ocr_flat_export.bat` 會在接力器跑完後自動用 `tools\recursive_ocr_audit_report.py --output-dir <輸出資料夾>` 驗收；手動拆跑 Python 接力器時也必須補跑驗收，通過才可回報全量完成。驗收摘要在 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量；失敗時看 `_ocr_audit\audit_report.csv`。
 14. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
+15. `tools\photo_rename_planner.py` 必須用 `period` 決定價格欄是否可帶比價符號；歷史年度即使 `results.csv` 殘留 `price_symbol`，輸出檔名也只能保留店內價格。修改後至少執行 `tools\test_photo_rename_planner.py`。
 
 ### [2026-03-05] 日誌與結果列表去重修復
 

@@ -73,6 +73,7 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 - 只處理 `.jpg`、`.jpeg`、`.png`；`HEIC`、`WebP` 可記錄為未支援並略過。
 - 送本機視覺模型前，照片若大於 2K，長邊縮到 `2560`，短邊按原比例自然縮放；不裁切、不補白、不硬拉伸。例：`4000x3000` 會變成 `2560x1920`。
 - 官網價格比對只適用當年度照片；以 2026 年執行時，`2025` 含以前都不做官網價格比對，但仍保留 OCR 讀到的店內價格。
+- 改名工具會再依 `年月` 做一次防線：歷史年度即使舊 OCR 結果殘留 `↑/↓/✓/？`，輸出檔名仍會自動移除，只保留店內價格。
 
 同一層輸出範例：
 
@@ -118,6 +119,12 @@ $env:OCR_NO_PAUSE = "1"
 ```powershell
 .\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
   --output-dir "D:\你的照片根資料夾_OCR整理"
+```
+
+價格符號規則的最小回歸測試：
+
+```powershell
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
 ```
 
 驗收通過時會顯示 `status=passed`，摘要會寫到 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量；若失敗，批次檔會停在錯誤狀態，細節會寫到 `_ocr_audit\audit_report.csv`。

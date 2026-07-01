@@ -1,0 +1,62 @@
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from photo_rename_planner import make_plan, price_segment
+
+
+def assert_equal(actual, expected, label):
+    if actual != expected:
+        raise AssertionError(f"{label}: expected {expected!r}, got {actual!r}")
+
+
+def sample_row():
+    return {
+        "category": "單機",
+        "model": "S27CG552EC",
+        "price": "4990",
+        "price_status": "high",
+        "price_symbol": "↑",
+    }
+
+
+def test_price_symbol_by_period():
+    row = sample_row()
+    assert_equal(
+        price_segment(row, "＄", period="202512", current_year=2026),
+        "＄4990",
+        "歷史年度不得保留比價符號",
+    )
+    assert_equal(
+        price_segment(row, "＄", period="202605", current_year=2026),
+        "↑＄4990",
+        "當年度要保留比價符號",
+    )
+
+
+def test_make_plan_uses_period_for_price_symbol():
+    with tempfile.TemporaryDirectory() as tmp:
+        image_dir = Path(tmp)
+        image_path = image_dir / "M-台北市-萬華區-TK3C-萬大-1005.jpg"
+        image_path.write_bytes(b"fake")
+        plan = make_plan(
+            image_dir,
+            {image_path.name: sample_row()},
+            "202512",
+            "＄",
+            current_year=2026,
+        )
+    assert_equal(len(plan), 1, "應只產生一筆改名計畫")
+    assert_equal(plan[0]["price"], "＄4990", "歷史年度計畫價格")
+    if "-↑＄4990-" in plan[0]["target_name"]:
+        raise AssertionError(f"歷史年度目標檔名不應含比價符號: {plan[0]['target_name']}")
+    if "-＄4990-" not in plan[0]["target_name"]:
+        raise AssertionError(f"歷史年度目標檔名應保留店內價格: {plan[0]['target_name']}")
+
+
+if __name__ == "__main__":
+    test_price_symbol_by_period()
+    test_make_plan_uses_period_for_price_symbol()
+    print("photo_rename_planner historical price-symbol tests passed")

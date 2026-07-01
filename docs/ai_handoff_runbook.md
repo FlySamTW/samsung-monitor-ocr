@@ -135,6 +135,8 @@ M-年月-縣市-行政區-通路-店名-類別-型號-價格-原流水號.jpg
 ＄4990
 ```
 
+`tools\photo_rename_planner.py` 會用 `年月` 再檢查一次；歷史年度即使舊 OCR 結果有殘留的 `↑/↓/✓/？`，檔名也不能帶出比價符號。
+
 範例：
 
 ```text
@@ -149,6 +151,12 @@ M-202512-嘉義市-東區-TK3C-垂楊-單機-FollowMe_M7_32吋-＄12990-1172.jpg
 ```powershell
 .\.venv\Scripts\python.exe tools\recursive_ocr_audit_report.py `
   --output-dir "D:\你的照片根資料夾_OCR整理"
+```
+
+若只要確認歷史年度價格符號規則，跑：
+
+```powershell
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
 ```
 
 驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；摘要會寫到 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量。若失敗，批次檔會停在錯誤狀態，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：

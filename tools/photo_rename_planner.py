@@ -71,6 +71,27 @@ def choose_field(row: Dict[str, str], human_field: str, model_field: str) -> Opt
     return value_or_none(row.get(human_field)) or value_or_none(row.get(model_field))
 
 
+def period_year(period: str) -> Optional[int]:
+    match = re.search(r"(20\d{2})", str(period or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def should_include_price_compare_symbol(
+    period: str,
+    current_year: Optional[int] = None,
+) -> bool:
+    year = period_year(period)
+    if year is None:
+        return True
+    baseline_year = current_year or datetime.now().year
+    return year >= baseline_year
+
+
 def display_category(row: Dict[str, str]) -> str:
     human_category = value_or_none(row.get("human_category"))
     view_type = value_or_none(row.get("view_type"))
@@ -104,7 +125,12 @@ def model_segment(row: Dict[str, str]) -> str:
     return followme or model.strip().upper()
 
 
-def price_segment(row: Dict[str, str], price_symbol: str) -> str:
+def price_segment(
+    row: Dict[str, str],
+    price_symbol: str,
+    period: Optional[str] = None,
+    current_year: Optional[int] = None,
+) -> str:
     price = choose_field(row, "human_price", "price")
     digits = "".join(ch for ch in str(price or "") if ch.isdigit())
     if not digits:
@@ -112,6 +138,8 @@ def price_segment(row: Dict[str, str], price_symbol: str) -> str:
     compare_symbol = value_or_none(row.get("price_symbol")) or ""
     price_status = value_or_none(row.get("price_status")) or ""
     if price_status in {"", "not_compared", "未比價"}:
+        compare_symbol = ""
+    if period and not should_include_price_compare_symbol(period, current_year):
         compare_symbol = ""
     compare_symbol = COMPARE_SYMBOLS_FOR_FILENAME.get(compare_symbol, compare_symbol)
     if compare_symbol not in {"↑", "↓", "✓", "？", "停產"}:
@@ -160,6 +188,7 @@ def build_target_name(
     row: Dict[str, str],
     period: str,
     price_symbol: str,
+    current_year: Optional[int] = None,
 ) -> str:
     marker, store_parts, serial = split_source_name(source_path)
     segments = [
@@ -168,7 +197,7 @@ def build_target_name(
         *store_parts,
         display_category(row),
         model_segment(row),
-        price_segment(row, price_symbol),
+        price_segment(row, price_symbol, period, current_year),
         serial,
     ]
     safe_segments = [sanitize_segment(segment) for segment in segments]
@@ -180,6 +209,7 @@ def make_plan(
     results: Dict[str, Dict[str, str]],
     period: str,
     price_symbol: str,
+    current_year: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     plan: List[Dict[str, str]] = []
     image_by_name = {path.name: path for path in iter_images(image_dir)}
@@ -203,7 +233,7 @@ def make_plan(
             )
             continue
 
-        target_name = build_target_name(image_path, row, period, price_symbol)
+        target_name = build_target_name(image_path, row, period, price_symbol, current_year)
         target_path = image_dir / target_name
         status = NO_CHANGE_STATUS if target_name == image_name else READY_STATUS
         reason = ""
@@ -220,7 +250,7 @@ def make_plan(
                 "target_name": target_name,
                 "category": display_category(row),
                 "model": model_segment(row),
-                "price": price_segment(row, price_symbol),
+                "price": price_segment(row, price_symbol, period, current_year),
                 "original_path": str(image_path),
                 "target_path": str(target_path),
             }
@@ -236,7 +266,7 @@ def make_plan(
                 "target_name": "",
                 "category": display_category(results[result_name]),
                 "model": model_segment(results[result_name]),
-                "price": price_segment(results[result_name], price_symbol),
+                "price": price_segment(results[result_name], price_symbol, period, current_year),
                 "original_path": str(image_dir / result_name),
                 "target_path": "",
             }
