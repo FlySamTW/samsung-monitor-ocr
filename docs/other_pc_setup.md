@@ -241,7 +241,7 @@ $env:OCR_OUTPUT_DIR = "D:\你的照片根資料夾_OCR整理"
   --output-dir "D:\你的照片根資料夾_OCR整理"
 ```
 
-若驗收失敗，先看 `_ocr_audit\audit_report.csv`，不要直接宣稱完成。
+驗收摘要會寫到 `_ocr_audit\audit_summary.json`；若驗收失敗，先看 `_ocr_audit\audit_report.csv`，不要直接宣稱完成。
 
 正式改名以前要確認：
 

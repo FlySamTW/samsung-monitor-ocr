@@ -30,7 +30,7 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 8. `run_recursive_ocr_flat_export.bat` 啟動前要先用 `tools\validate_recursive_ocr_inputs.py` 預檢來源、輸出路徑、是否至少有一張 `.jpg/.jpeg/.png`，以及輸出第一層是否已有照片但缺少 `_ocr_audit\folder_summary.csv`；預檢失敗時不可啟動 LLM 或 OCR 後端。
 9. `run_ocr.bat` 與 `run_recursive_ocr_flat_export.bat` 啟動前都要先用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
 10. 接力器預設用 `_ocr_audit\folder_summary.csv` + `copied.csv` 續跑；已完整複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾標為 `skipped_existing`，避免中斷重跑時產生 `_2` 重複檔。
-11. `run_recursive_ocr_flat_export.bat` 會在接力器跑完後自動用 `tools\recursive_ocr_audit_report.py --output-dir <輸出資料夾>` 驗收；手動拆跑 Python 接力器時也必須補跑驗收，通過才可回報全量完成，失敗時看 `_ocr_audit\audit_report.csv`。
+11. `run_recursive_ocr_flat_export.bat` 會在接力器跑完後自動用 `tools\recursive_ocr_audit_report.py --output-dir <輸出資料夾>` 驗收；手動拆跑 Python 接力器時也必須補跑驗收，通過才可回報全量完成。驗收摘要在 `_ocr_audit\audit_summary.json`，失敗時看 `_ocr_audit\audit_report.csv`。
 12. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
 
 ### [2026-03-05] 日誌與結果列表去重修復

@@ -149,18 +149,19 @@ M-202512-嘉義市-東區-TK3C-垂楊-單機-FollowMe_M7_32吋-＄12990-1172.jpg
   --output-dir "D:\你的照片根資料夾_OCR整理"
 ```
 
-驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；若失敗，批次檔會停在錯誤狀態，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：
+驗收工具會檢查 `folder_summary.csv`、各資料夾的 `copied.csv`、實際輸出照片是否一致；摘要會寫到 `_ocr_audit\audit_summary.json`。若失敗，批次檔會停在錯誤狀態，明細會寫到 `_ocr_audit\audit_report.csv`。必要時再人工檢查輸出資料夾中的 `_ocr_audit`：
 
 ```text
 _ocr_audit\folder_discovery.csv
 _ocr_audit\skipped_unsupported.csv
 _ocr_audit\folder_summary.csv
+_ocr_audit\audit_summary.json
 _ocr_audit\audit_report.csv
 ```
 
 完成回報必須包含：
 
-1. 驗收工具輸出的 `status` 是否為 `passed`。
+1. `audit_summary.json` 中的 `status` 是否為 `passed`。
 2. `folder_discovery.csv` 中找到幾個含照片資料夾。
 3. `folder_summary.csv` 中每個資料夾的狀態是否為 `copied` 或 `skipped_existing`。
 4. `missing_result`、`missing_source`、`conflict` 是否為 0。

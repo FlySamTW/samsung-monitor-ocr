@@ -253,20 +253,22 @@ def main() -> int:
     summary, issues = audit_output(output_dir)
     audit_dir = Path(str(summary.get("audit_dir") or output_dir / "_ocr_audit"))
     report_path = audit_dir / "audit_report.csv"
+    summary_path = audit_dir / "audit_summary.json"
 
     if not args.no_write and audit_dir.exists():
         write_dict_csv(report_path, issues, ["severity", "code", "folder", "path", "message"])
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if issues:
-        print(f"[驗收] status=failed issues={len(issues)} report={report_path}")
+        print(f"[驗收] status=failed issues={len(issues)} summary={summary_path} report={report_path}")
         for issue in issues[:20]:
             location = issue.get("folder") or issue.get("path") or ""
             print(f"[{issue['severity']}] {issue['code']} {location} {issue['message']}")
         if len(issues) > 20:
             print(f"[驗收] 其餘 {len(issues) - 20} 筆請看 {report_path}")
     else:
-        print("[驗收] status=passed")
+        print(f"[驗收] status=passed summary={summary_path}")
 
     return 0 if summary.get("status") == "passed" else 1
 
