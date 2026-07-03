@@ -2133,11 +2133,21 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             dv_keywords = [
                 "遠景", "多台", "展示區", "展示牆", "貨架", "海報", "廣告",
                 "整排", "一排", "一整排", "牆上", "多支", "多螢幕", "陳列架",
-                "非三星", "其他品牌", "多品牌",
+                "非三星", "其他品牌", "多品牌", "多台螢幕", "數台", "並排",
+                "陳列", "展示", "左邊", "中間", "右邊", "三台", "四台", "五台", "六台",
             ]
-            dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰"]
+            dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰", "主角是"]
             has_dv_clue = thinking_text and any(kw in thinking_text for kw in dv_keywords)
             has_single_clue = thinking_text and any(excl in thinking_text for excl in dv_exclusions)
+
+            # [v19.8] Count distinct prices mentioned in thinking (e.g. 3,290 / 3290)
+            distinct_thinking_prices = set()
+            if thinking_text:
+                for m in re.finditer(r"(\d{1,2},\d{3}|\d{4,5})", thinking_text):
+                    p_int = int(m.group(1).replace(",", ""))
+                    if 2000 <= p_int <= 200000:
+                        distinct_thinking_prices.add(p_int)
+            multi_price_dv = len(distinct_thinking_prices) >= 2
 
             # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
             if not has_model and not has_price and has_dv_clue and not has_single_clue:
@@ -2149,6 +2159,14 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 data_obj["screen_status"] = ""
             elif not has_model and has_price and has_dv_clue and not has_single_clue:
                 console.print("[yellow]⚠️ [遠景守衛] 無型號+有價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
+                data_obj["view_type"] = "遠景"
+                data_obj["category"] = "遠景"
+                data_obj["model"] = None
+                data_obj["price"] = None
+                data_obj["screen_status"] = ""
+            # [v19.8] Multi-price clue: thinking mentions 2+ monitor prices but no model => 遠景
+            elif not has_model and multi_price_dv and not has_single_clue:
+                console.print(f"[yellow]⚠️ [遠景守衛] 無型號+獨白含多組價格 {sorted(distinct_thinking_prices)} → 改遠景、清 model/price[/yellow]")
                 data_obj["view_type"] = "遠景"
                 data_obj["category"] = "遠景"
                 data_obj["model"] = None
