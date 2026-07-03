@@ -203,3 +203,37 @@ The live dashboard keeps three UI surfaces tied to the same filename:
 - `latest_result_file`: the most recently completed OCR result.
 
 The frontend must not replace the main preview with `recent_results[0]` while a new `current_file` is already active. That makes the photo change faster than the LLM self-talk/result text and creates an off-by-one display. Only update the preview when `current_file` changes, and only show `stream_buffer` when `stream_file === current_file`.
+
+# 2026-07-02 HANDOFF - Current State And Known Issues
+
+Read this before continuing the overnight OCR job.
+
+Current live run:
+- Backend is running on `http://127.0.0.1:5000` with model `qwen/qwen3-vl-8b`.
+- Recursive runner is running in watch mode against source `D:\00_商化\00_未整理商化照片` and flat output `D:\00_商化\00_已OCR照片`.
+- Last checked status: active file around `M-台南市-永康區-TK3C-鹽行-786.jpg`; runner/backend were alive.
+- Hourly monitor automation exists: `samsung-ocr-hourly-monitor-and-email`; it checks progress and emails `sam.lai@live.com`.
+
+Completed/partial output:
+- 2026 root flat output had 5951 images regenerated once. Earlier bad no-price-compare output was backed up under `_bad_no_compare_2026_backup_*`.
+- Do not rerun all 5951 OCR files just to fix filenames. Use audit `success_records.csv` and planner/repair scripts where possible.
+- `tools/repair_current_year_price_compare_outputs.py` now preflights current-year unknown price rows before moving/copying files. It currently blocks because 202605 has 79 prices with no Samsung/PChome reference.
+
+Critical unresolved issues (updated 2026-07-03):
+- Current-year price `?`: For 2026 and future folders, if OCR has a store price but Samsung/PChome reference is unknown, the export stops and writes `price_review_required.csv`; use `--allow-no-symbol-for-unknown` only when the business rule accepts outputting 2026 records without a price symbol.
+- PChome fallback: `skills/official_price.py` now tries PChome 24h Shopping after Samsung. FollowMe generic names are mapped to product codes (`FollowMe Pro M7 43"` -> `S43FM703UC`). Verify this before trusting old `？` filenames such as `FollowMe_Pro_M7_43吋-？＄12990`.
+- Low price bug: The old 3000 cutoff wrongly erased real prices like `S24F332EAC / 2390`. Code was changed to allow prices >= 2000 when a Samsung monitor label is clear. Existing completed rows with `(無價格)` may still need rerun or thinking-text rescue.
+- UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder; right-panel sync with the display queue is implemented but needs click-testing.
+- Distant-view classification: A stronger guard was added (`samsung_ocr_batch_processor.py`): no Samsung model + no price + thinking mentions distant-view keywords => force `view_type=遠景` and clear model/price. Already-processed misclassified rows still need repair or rerun.
+- 91 null-model candidates remain after two targeted reruns; 8 S27CG552EC records have store prices much higher than the PChome reference price (4990) and need manual review.
+- Black-screen / unclear detections (`screen_status`, `quality_issue`) are not yet reflected in output filenames; naming rule and `photo_rename_planner.py` need updating.
+- Duplicate codex-runtime Python child processes persist on this machine; the long-running batch is currently started via a Windows scheduled task `SamsungOCR_ResumeBatch` as a workaround.
+
+Next recommended order:
+1. Keep the live qwen3-vl-8b run alive; restart only to load backend/dashboard code changes.
+2. Verify right-panel thumbnail sync and the inspection/correction modal after dashboard rebuild.
+3. Finish guard fixes for black-screen/unclear filename tagging.
+4. Run focused reruns for remaining null-model candidates if token budget allows, or mark them as distant-view/不合格 after sampling.
+5. Resolve the 8 S27CG552EC price-mismatch rows manually.
+6. Re-run `tools/repair_current_year_price_compare_outputs.py --dry-run`; only run non-dry when preflight passes or review CSV has been manually resolved.
+7. Update docs/tests, then commit/push.

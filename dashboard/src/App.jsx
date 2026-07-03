@@ -26,7 +26,7 @@ const formatDisplayPrice = (val) => {
 };
 
 // [v18.73] 超嚴格型號驗證（檢查標題）
-const UI_VERSION = "v19.7 (Cache & Sync Fix)";
+const UI_VERSION = "v19.8 (Display Queue & Typewriter)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -73,6 +73,8 @@ const App = () => {
   });
   const [selectedImage, setSelectedImage] = useState(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  // [v19.8] Track files queued for rerun so UI gives immediate feedback.
+  const [rerunQueue, setRerunQueue] = useState({});
 
   // Refs for auto-scroll
   const logsContainerRef = useRef(null);
@@ -98,17 +100,6 @@ const App = () => {
 
       setData(prev => ({...prev, ...syncedResult}));
 
-      if (activeFile && activeFile !== currentImageFileRef.current) {
-        currentImageFileRef.current = activeFile;
-        setImageLoaded(false);
-        setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
-        if (apiResult.current_thumb) {
-            setCurrentThumb(apiResult.current_thumb);
-        } else {
-            setCurrentThumb(null);
-        }
-      }
-
       setError(null);
       setIsConnected(true); // [v18.67] 連線成功
     } catch (err) {
@@ -117,36 +108,105 @@ const App = () => {
     }
   };
 
-  // [v16.9 UX] Typewriter Effect State
+  // [v19.8 UX] Display queue lets backend run ahead while UI plays completed
+  // results at typewriter speed. -1 means "live" (show current_file + stream_buffer).
+  const [displayQueueIndex, setDisplayQueueIndex] = useState(-1);
   const [displayedBuffer, setDisplayedBuffer] = useState("");
+  const isAdvancingRef = useRef(false);
 
-  // [v16.16 UX] Linear Typewriter Effect (Constant Speed)
+  // When new completed results arrive and we are in live mode, start draining queue.
   useEffect(() => {
-    if (!data.stream_buffer) {
+    const queue = data.display_queue || [];
+    if (displayQueueIndex === -1 && queue.length > 0) {
+      setDisplayQueueIndex(0);
+      setDisplayedBuffer("");
+    } else if (displayQueueIndex >= 0 && displayQueueIndex >= queue.length) {
+      // Queue overflow / caught up to live - switch back to live mode.
+      setDisplayQueueIndex(-1);
+      setDisplayedBuffer("");
+    }
+  }, [data.display_queue, displayQueueIndex]);
+
+  // Determine the current typewriter target (queued result or live stream).
+  const getDisplayTarget = () => {
+    const queue = data.display_queue || [];
+    if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
+      return { target: queue[displayQueueIndex].stream_buffer || "", isQueue: true };
+    }
+    return { target: data.stream_buffer || "", isQueue: false };
+  };
+
+  // [v19.8 UX] Linear Typewriter Effect (Constant Speed)
+  useEffect(() => {
+    const { target } = getDisplayTarget();
+    if (!target) {
         setDisplayedBuffer("");
         return;
     }
     
-    // If buffer reset (new image), reset display immediately
-    if (data.stream_buffer.length < displayedBuffer.length) {
-         setDisplayedBuffer(data.stream_buffer);
+    // If target reset/shrank, reset display immediately
+    if (target.length < displayedBuffer.length) {
+         setDisplayedBuffer(target);
          return;
     }
 
     const timer = setInterval(() => {
         setDisplayedBuffer((prev) => {
-            const target = data.stream_buffer || "";
-            if (prev.length < target.length) {
-                // [v16.18] Slower Speed: 1 char per tick
-                const step = 1; 
-                return target.slice(0, prev.length + step);
+            const { target: t } = getDisplayTarget();
+            if (prev.length < t.length) {
+                // [v19.8] 3 chars per tick for smooth but readable display
+                const step = 3; 
+                return t.slice(0, prev.length + step);
             }
             return prev;
         });
-    }, 60); // [v16.24] 60ms tick (Ultra-steady)
+    }, 24); // [v19.8] 24ms tick (~8ms per char)
 
     return () => clearInterval(timer);
-  }, [data.stream_buffer]);
+  }, [data.display_queue, data.stream_buffer, displayQueueIndex]);
+
+  // [v19.8 UX] Advance to next queued item when current one finishes typing.
+  useEffect(() => {
+    const queue = data.display_queue || [];
+    const { target, isQueue } = getDisplayTarget();
+    if (!target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
+
+    isAdvancingRef.current = true;
+    const timer = setTimeout(() => {
+      if (isQueue && displayQueueIndex < queue.length - 1) {
+        setDisplayQueueIndex(displayQueueIndex + 1);
+        setDisplayedBuffer("");
+      } else if (isQueue) {
+        // Drained queue - return to live mode.
+        setDisplayQueueIndex(-1);
+        setDisplayedBuffer("");
+      }
+      isAdvancingRef.current = false;
+    }, 600); // brief pause between images
+
+    return () => { clearTimeout(timer); isAdvancingRef.current = false; };
+  }, [displayedBuffer, displayQueueIndex, data.display_queue, data.stream_buffer]);
+
+  // [v19.8 UX] Choose displayed image: queued completed result, or live current_file.
+  useEffect(() => {
+    const queue = data.display_queue || [];
+    if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
+      const item = queue[displayQueueIndex];
+      setImageLoaded(false);
+      setCurrentThumb(item.thumb_b64 || null);
+      setCurrentImage(`/api/image/${encodeURIComponent(item.file_name)}`);
+    } else {
+      const activeFile = data.current_file && data.current_file !== 'None' ? data.current_file : null;
+      if (activeFile) {
+        setImageLoaded(false);
+        setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
+        setCurrentThumb(data.current_thumb || null);
+      } else {
+        setCurrentImage(null);
+        setCurrentThumb(null);
+      }
+    }
+  }, [displayQueueIndex, data.display_queue, data.current_file, data.current_thumb]);
 
 
 
@@ -156,8 +216,8 @@ const App = () => {
     let intervalId;
     const poll = async () => { await fetchData(); };
     poll();
-    // [v17.27 UX] Relax Polling to 1000ms to prevent UI Freeze / Net Congestion
-    const intervalMs = 1000;
+    // [v19.8] Faster polling (500ms) for smoother photo/self-talk sync.
+    const intervalMs = 500;
     // if (data?.stats?.is_running) console.log(`⏱️ 同步頻率證據: ${intervalMs}ms`);
     intervalId = setInterval(poll, intervalMs);
     return () => clearInterval(intervalId);
@@ -328,8 +388,14 @@ const App = () => {
       )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
-           <div style={{ padding: '8px 16px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+            <div style={{ padding: '8px 16px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                <span style={{fontSize:'0.75rem', color:'#aaa'}}>📁 來源路徑:</span>
+               {/* [v19.8] Show live backend folder when running, else fallback to dropdown */}
+               {stats.is_running && data.image_dir ? (
+                 <span style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                   {data.image_dir}
+                 </span>
+               ) : (
                <select 
                    value={targetDir} 
                    onChange={(e)=>setTargetDir(e.target.value)}
@@ -341,6 +407,7 @@ const App = () => {
                    {availableDirs.map(d => <option key={d} value={d}>{d}</option>)}
                    {targetDir && !availableDirs.includes(targetDir) && <option value={targetDir}>{targetDir}</option>}
                </select>
+               )}
                
                 <button onClick={() => handleStart(false)} disabled={stats.is_running} 
                     style={{ background: stats.is_running ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
@@ -369,14 +436,21 @@ const App = () => {
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ flex: '0 0 50%', position: 'relative', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
                       <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
-                          <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}><ImageIcon size={12}/> 即時預覽</span>
-                          <span style={{color: '#00f5ff', fontFamily: 'JetBrains Mono'}}>{data.current_file || '-'}</span>
+                          <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}>
+                            <ImageIcon size={12}/>
+                            {displayQueueIndex >= 0 ? `播放佇列 ${displayQueueIndex + 1}/${(data.display_queue || []).length}` : '即時預覽'}
+                          </span>
+                          <span style={{color: '#00f5ff', fontFamily: 'JetBrains Mono'}}>
+                            {displayQueueIndex >= 0 && (data.display_queue || []).length > displayQueueIndex
+                              ? data.display_queue[displayQueueIndex].file_name
+                              : (data.current_file || '-')}
+                          </span>
                       </div>
                       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
                           {(currentImage || currentThumb) ? (
                               <>
-                                  {currentThumb && <img src={`data:image/jpeg;base64,${currentThumb}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', filter: 'blur(4px)', opacity: imageLoaded ? 0 : 1, zIndex: 10 }} alt="T" />}
-                                  {currentImage && <img src={currentImage} onLoad={() => setImageLoaded(true)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
+                                  {currentThumb && !imageLoaded && <img src={`data:image/jpeg;base64,${currentThumb}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: 0.6, zIndex: 10 }} alt="T" />}
+                                  {currentImage && <img src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => setImageLoaded(true)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
                               </>
                           ) : (
                               <div style={{ color: '#333', display:'flex', flexDirection:'column', alignItems:'center' }}><Box size={24} /><span style={{fontSize:'0.7rem'}}>無訊號</span></div>
@@ -492,11 +566,12 @@ const App = () => {
                       )}
 
                       <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
-                          <Zap size={12} color="#f59e0b"/> 辨識紀錄
+                          <Zap size={12} color="#f59e0b"/> {displayQueueIndex >= 0 ? '播放佇列' : '辨識紀錄'}
                       </div>
                       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-                          {data.recent_results?.map((res, i) => (
-                             <div key={i} style={{ background: '#161616', border: '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background='#161616'}>
+                          {/* [v19.8] Sync right panel with display queue when playing queued results */}
+                          {(displayQueueIndex >= 0 ? (data.display_queue || []).slice(0, displayQueueIndex + 1).reverse().map((item, idx) => ({ ...item, _queueIndex: displayQueueIndex - idx, _isCurrent: idx === 0 })) : (data.recent_results || []).map((res, i) => ({ ...res, _queueIndex: null, _isCurrent: i === 0 }))).map((res, i) => (
+                             <div key={`${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                  <div style={{ display: 'flex', gap: '6px' }}>
                                      <img 
                                          src={`/api/image/${encodeURIComponent(res.file_name)}`} 
@@ -513,53 +588,72 @@ const App = () => {
                                                 </div>
                                                 <div style={{ fontSize: '0.7rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                     {formatDisplayPrice(res.price)}
-                                                    {res.price_symbol && (
+                                                    {res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                         <span 
-                                                            title={res.price_status === 'discontinued' ? '官網查無此型號 (已停產)' : res.official_price ? `官方價: $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : '官網查無價格'}
+                                                            title={res.official_price ? `官方價: $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : '官網/PChome 查無價格'}
                                                             style={{ 
                                                                 fontSize: '0.65rem', 
                                                                 fontWeight: '900',
                                                                 color: res.price_status === 'match' ? '#22c55e' : 
                                                                        res.price_status === 'high' ? '#ef4444' : 
-                                                                       res.price_status === 'low' ? '#3b82f6' : 
-                                                                       res.price_status === 'discontinued' ? '#888' : '#ff0000'
+                                                                       res.price_status === 'low' ? '#3b82f6' : '#ff0000'
                                                             }}
                                                         >
-                                                            {res.price_symbol}
+                                                            {res.price_symbol === '-' ? '？' : res.price_symbol}
                                                         </span>
                                                     )}
                                                 </div>
                                             </div>
                                          )}
-                                         <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                            <button 
-                                                title="重新辨識 (Force Rerun)"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    fetch('/api/rerun', {
-                                                        method: 'POST',
-                                                        headers: {'Content-Type': 'application/json'},
-                                                        body: JSON.stringify({filename: res.file_name})
-                                                    }).then(r=>r.json()).then(d=>{
-                                                        console.log(d.message);
-                                                    }).catch(err=>console.error(err));
-                                                }}
-                                                style={{ 
-                                                    background: 'transparent', border: '1px solid #444', 
-                                                    borderRadius: '3px', cursor: 'pointer', padding: '0 4px', 
-                                                    color: '#00f5ff', fontSize: '0.6rem', display: 'flex', alignItems: 'center' 
-                                                }}
-                                            >
-                                                🔄
-                                            </button>
+                                          <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                             <button 
+                                                 title="重新辨識"
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     setRerunQueue(prev => ({...prev, [res.file_name]: true}));
+                                                     fetch('/api/rerun', {
+                                                         method: 'POST',
+                                                         headers: {'Content-Type': 'application/json'},
+                                                         body: JSON.stringify({filename: res.file_name})
+                                                     }).then(r=>r.json()).then(d=>{
+                                                         console.log(d.message);
+                                                         // Clear queue indicator after backend has had time to process
+                                                         setTimeout(() => {
+                                                             setRerunQueue(prev => {
+                                                                 const next = {...prev};
+                                                                 delete next[res.file_name];
+                                                                 return next;
+                                                             });
+                                                         }, 8000);
+                                                     }).catch(err=>{
+                                                         console.error(err);
+                                                         setRerunQueue(prev => {
+                                                             const next = {...prev};
+                                                             delete next[res.file_name];
+                                                             return next;
+                                                         });
+                                                     });
+                                                 }}
+                                                 disabled={rerunQueue[res.file_name]}
+                                                 style={{ 
+                                                     background: rerunQueue[res.file_name] ? '#374151' : '#1f2937', 
+                                                     border: '1px solid #4b5563', 
+                                                     borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer', 
+                                                     padding: '0 4px', 
+                                                     color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb', 
+                                                     fontSize: '0.6rem', display: 'flex', alignItems: 'center' 
+                                                 }}
+                                             >
+                                                 {rerunQueue[res.file_name] ? '已排隊' : '重跑'}
+                                             </button>
                                             {res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
                                             {res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
                                             {res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
-                                            {/* [v18.67] 價格驗證符號 - 包含 ? 未知 */}
-                                            {res.view_type !== '遠景' && res.price && (
+                                             {/* [v18.67] 價格驗證符號 - 包含 ? 未知，但排除 not_compared */}
+                                             {res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                 <span 
                                                     title={
-                                                        res.price_status === 'unknown' ? '官網查無價格' :
+                                                        res.price_status === 'unknown' ? '官網/PChome 查無價格；需人工確認或重跑' :
                                                         res.official_price ? `官方 $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : ''
                                                     }
                                                     style={{ 
@@ -568,16 +662,15 @@ const App = () => {
                                                         borderRadius: '3px', 
                                                         background: res.price_status === 'match' ? '#22c55e' : 
                                                                    res.price_status === 'high' ? '#ef4444' : 
-                                                                   res.price_status === 'low' ? '#3b82f6' : 
-                                                                   res.price_status === 'discontinued' ? '#555' : '#dc2626',
+                                                                   res.price_status === 'low' ? '#3b82f6' : '#dc2626',
                                                         color: '#fff',
                                                         fontWeight: '900',
                                                         cursor: 'help'
                                                     }}
                                                 >
-                                                    {res.price_symbol || '?'}
+                                                    {res.price_symbol === '-' ? '？' : (res.price_symbol || '？')}
                                                 </span>
-                                            )}
+                                             )}
                                          </div>
                                      </div>
                                  </div>
@@ -690,28 +783,27 @@ const App = () => {
 
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>價格</span>
-                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                               <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
-                               {inspectImage.price_symbol && (
-                                   <span 
-                                       title={inspectImage.price_status === 'discontinued' ? '官網查無此型號 (已停產)' : inspectImage.official_price ? `官方價: $${inspectImage.official_price.toLocaleString()} (${inspectImage.price_diff_percent > 0 ? '+' : ''}${inspectImage.price_diff_percent}%)` : '官網查無價格'}
-                                       style={{ 
-                                           fontSize: '1rem', 
-                                           fontWeight: '900',
-                                           padding: '2px 6px',
-                                           borderRadius: '4px',
-                                           background: inspectImage.price_status === 'match' ? '#22c55e' : 
-                                                      inspectImage.price_status === 'high' ? '#ef4444' : 
-                                                      inspectImage.price_status === 'low' ? '#3b82f6' : 
-                                                      inspectImage.price_status === 'discontinued' ? '#555' : '#dc2626',
-                                           color: '#fff',
-                                           cursor: 'help'
-                                       }}
-                                   >
-                                       {inspectImage.price_symbol}
-                                   </span>
-                               )}
-                           </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
+                                {inspectImage.price_symbol && inspectImage.price_status && inspectImage.price_status !== 'not_compared' && (
+                                    <span 
+                                        title={inspectImage.official_price ? `官方價: $${inspectImage.official_price.toLocaleString()} (${inspectImage.price_diff_percent > 0 ? '+' : ''}${inspectImage.price_diff_percent}%)` : '官網/PChome 查無價格'}
+                                        style={{ 
+                                            fontSize: '1rem', 
+                                            fontWeight: '900',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            background: inspectImage.price_status === 'match' ? '#22c55e' : 
+                                                       inspectImage.price_status === 'high' ? '#ef4444' : 
+                                                       inspectImage.price_status === 'low' ? '#3b82f6' : '#dc2626',
+                                            color: '#fff',
+                                            cursor: 'help'
+                                        }}
+                                    >
+                                        {inspectImage.price_symbol === '-' ? '?' : inspectImage.price_symbol}
+                                    </span>
+                                )}
+                            </div>
                       </div>
                       <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
                       

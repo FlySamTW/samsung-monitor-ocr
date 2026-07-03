@@ -56,7 +56,46 @@ def test_make_plan_uses_period_for_price_symbol():
         raise AssertionError(f"歷史年度目標檔名應保留店內價格: {plan[0]['target_name']}")
 
 
+def test_discontinued_legacy_symbol_becomes_unknown():
+    row = sample_row()
+    row["price_status"] = "discontinued"
+    row["price_symbol"] = "-"
+    assert_equal(
+        price_segment(row, "＄", period="202605", current_year=2026),
+        "？＄4990",
+        "停產 legacy symbol must become unknown",
+    )
+
+
+def test_distant_view_filename_omits_model_and_price():
+    with tempfile.TemporaryDirectory() as tmp:
+        image_dir = Path(tmp)
+        image_path = image_dir / "M-台中市-大甲區-SF-大甲-184.jpg"
+        image_path.write_bytes(b"fake")
+        plan = make_plan(
+            image_dir,
+            {
+                image_path.name: {
+                    "category": "遠景",
+                    "view_type": "遠景",
+                    "model": "",
+                    "price": "",
+                }
+            },
+            "202605",
+            "＄",
+            current_year=2026,
+        )
+    assert_equal(
+        plan[0]["target_name"],
+        "M-202605-台中市-大甲區-SF-大甲-遠景-184.jpg",
+        "遠景 filename",
+    )
+
+
 if __name__ == "__main__":
     test_price_symbol_by_period()
     test_make_plan_uses_period_for_price_symbol()
+    test_discontinued_legacy_symbol_becomes_unknown()
+    test_distant_view_filename_omits_model_and_price()
     print("photo_rename_planner historical price-symbol tests passed")

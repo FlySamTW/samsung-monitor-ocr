@@ -115,7 +115,11 @@ def build_resume_index(summary_path: Path) -> Dict[str, Dict[str, str]]:
         folder = row.get("folder") or ""
         if not folder:
             continue
-        if row.get("status") not in {"copied", "skipped_existing"}:
+        status = row.get("status")
+        if status in {"blocked", "skipped_blocked"}:
+            resume[folder] = row
+            continue
+        if status not in {"copied", "skipped_existing"}:
             continue
         if any(int_value(row.get(key)) for key in ["missing_result", "missing_source", "conflict"]):
             continue
@@ -132,15 +136,16 @@ def build_resume_index(summary_path: Path) -> Dict[str, Dict[str, str]]:
 
 def summary_from_resume(row: Dict[str, str], current: dict) -> Dict[str, object]:
     summary = dict(row)
+    previous_status = row.get("status") or "skipped_existing"
     summary.update(
         {
             "folder": str(current["folder"]),
             "period": current["period"],
             "image_count": current["image_count"],
             "source_latest_mtime": iso_from_mtime(current["latest_mtime"]),
-            "status": "skipped_existing",
-            "copy_error": "",
-            "start_response": "resume_skip_existing",
+            "status": "skipped_blocked" if previous_status == "blocked" else "skipped_existing",
+            "copy_error": row.get("copy_error", "") if previous_status == "blocked" else "",
+            "start_response": "resume_skip_blocked" if previous_status == "blocked" else "resume_skip_existing",
         }
     )
     return summary
@@ -237,6 +242,28 @@ def records_to_map(records: Iterable[dict]) -> Dict[str, Dict[str, str]]:
         row["file_name"] = file_name
         results[file_name] = row
     return results
+
+
+def price_digits(row: dict) -> str:
+    value = row.get("human_price") or row.get("price") or ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def is_current_or_future_period(period: str) -> bool:
+    match = re.search(r"(20\d{2})", str(period or ""))
+    if not match:
+        return True
+    return int(match.group(1)) >= datetime.now().year
+
+
+def current_year_unknown_price_records(period: str, records: List[dict]) -> List[dict]:
+    if not is_current_or_future_period(period):
+        return []
+    return [
+        record
+        for record in records
+        if price_digits(record) and str(record.get("price_status") or "") == "unknown"
+    ]
 
 
 def write_results_snapshot(path: Path, records: List[dict]) -> None:
@@ -370,8 +397,15 @@ def process_folder(args, source_root: Path, output_dir: Path, audit_dir: Path, r
     counts = summarize(plan)
     copied_count = 0
     copy_error = ""
+    unknown_price_records = current_year_unknown_price_records(period, records)
+    if unknown_price_records:
+        review_path = folder_audit_dir / "price_review_required.csv"
+        write_results_snapshot(review_path, unknown_price_records)
+        copy_error = f"當年度價格查無 Samsung/PChome 參考價，需人工確認：{review_path}"
     if not args.no_copy:
         try:
+            if copy_error:
+                raise RuntimeError(copy_error)
             copied = copy_plan_to_flat_output(plan, output_dir)
             write_csv(copied_path, copied)
             copied_count = len(copied)
@@ -406,6 +440,39 @@ def write_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def child_args_without_watch(argv: List[str]) -> List[str]:
+    child = []
+    skip_next = False
+    options_with_values = {"--watch-sleep-seconds", "--watch-cycles"}
+    for item in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if item == "--watch":
+            continue
+        if item in options_with_values:
+            skip_next = True
+            continue
+        if any(item.startswith(f"{option}=") for option in options_with_values):
+            continue
+        child.append(item)
+    return child
+
+
+def watch_loop(args) -> int:
+    cycles = 0
+    child_argv = child_args_without_watch(sys.argv[1:])
+    while True:
+        cycles += 1
+        print(f"[接力] watch cycle={cycles} start {datetime.now().isoformat()}", flush=True)
+        completed = subprocess.run([sys.executable, str(Path(__file__).resolve()), *child_argv])
+        if completed.returncode != 0:
+            print(f"[接力] watch cycle={cycles} exit={completed.returncode}; sleep and retry", flush=True)
+        if args.watch_cycles and cycles >= args.watch_cycles:
+            return completed.returncode
+        time.sleep(max(5, args.watch_sleep_seconds))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="遞迴接力跑 Samsung OCR，完成後把改名照片複製到同一層新資料夾。"
@@ -425,6 +492,9 @@ def main() -> int:
     parser.add_argument("--no-copy", action="store_true", help="只產生改名計畫，不複製照片")
     parser.add_argument("--no-resume", action="store_true", help="不使用既有 _ocr_audit 續跑狀態，重新處理所有資料匣")
     parser.add_argument("--ensure-llm", action="store_true", help="開始前先用 LM Studio CLI 確認本機模型已載入")
+    parser.add_argument("--watch", action="store_true", help="keep traversing source-root; new or changed folders are picked up in later cycles")
+    parser.add_argument("--watch-sleep-seconds", type=int, default=300, help="seconds to sleep between watch traversal cycles")
+    parser.add_argument("--watch-cycles", type=int, default=0, help="maximum watch cycles; 0 means unlimited")
     args = parser.parse_args()
 
     source_root = Path(args.source_root).resolve()
@@ -432,6 +502,8 @@ def main() -> int:
     if not source_root.exists():
         raise SystemExit(f"來源資料夾不存在：{source_root}")
     validate_source_output_paths(source_root, output_dir)
+    if args.watch:
+        return watch_loop(args)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     audit_dir = output_dir / "_ocr_audit"

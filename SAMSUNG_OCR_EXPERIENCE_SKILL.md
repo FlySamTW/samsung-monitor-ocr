@@ -128,3 +128,71 @@ Do not use `recent_results[0]` to update the main preview while a batch is runni
 ---
 
 **This file serves as the memory of the project. Read it before writing code.**
+
+---
+
+## 2026-07-02 Active Handoff For Next AI
+
+Use this section when taking over the Samsung OCR overnight job.
+
+### Current live state
+
+- Backend is running on `http://127.0.0.1:5000`.
+- Model is `qwen/qwen3-vl-8b`.
+- Runner is `tools/recursive_ocr_flat_export.py --watch`.
+- Source is `D:\00_商化\00_未整理商化照片`.
+- Flat output is `D:\00_商化\00_已OCR照片`.
+- Hourly automation `samsung-ocr-hourly-monitor-and-email` should monitor and email `sam.lai@live.com`.
+
+### Non-negotiable business rules
+
+1. 2026/future photos require price comparison.
+   - Prefer Samsung Taiwan official price.
+   - If Samsung has no price, use PChome 24h Shopping, not marketplace.
+   - If no reference price is found, stop/export-block and ask for manual review; do not silently emit final `？` filenames.
+
+2. 2025 and older photos do not compare price.
+   - They must not show `↑`, `↓`, `✓`, or `？` price compare symbols.
+   - UI should not show a red `?` badge for historical/not-compared rows.
+
+3. Never output `停產`.
+   - Lookup failure is `unknown`, not discontinued.
+   - Legacy `-` or `discontinued` must be normalized to `？` or blocked review.
+
+4. `遠景` filenames omit model and price.
+   - Correct format: `M-period-city-district-channel-store-遠景-serial.jpg`.
+   - Do not output `遠景-型號未辨識-無價格`.
+
+5. Low real monitor prices are valid.
+   - `S24F332EAC / 2390` is a real monitor price.
+   - Do not use the old 3000 cutoff. Current cutoff is `<2000`, with context checks for plans/accessories.
+
+### Known unresolved defects
+
+- Current-year repaired export dry-run still blocks: 202605 has 79 rows with store price but unknown Samsung/PChome reference.
+- Some completed 2026 filenames still contain `？＄`; these must be repaired or moved to manual review.
+- Some completed rows are `model + 無價格` although thinking text contains a valid price. Use thinking rescue or focused rerun.
+- Some obvious distant views are still classified as `單機/(無型號)/price`, e.g. `M-台南市-永康區-TK3C-中華-362.jpg`.
+- Newer model comparison is not complete. qwen3-vl-8b is active; Gemma 4 12B QAT and Qwen3.5 9B VLM were downloading and not fully evaluated.
+
+### First actions for takeover
+
+1. Check status:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5000/api/status
+```
+
+2. Do not rerun all 5951 completed 2026 OCR files. Use audit CSVs first.
+
+3. Run verification:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+.\.venv\Scripts\python.exe -m py_compile samsung_ocr_batch_processor.py skills\official_price.py tools\recursive_ocr_flat_export.py tools\repair_current_year_price_compare_outputs.py
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
+npm.cmd --prefix dashboard run build
+.\.venv\Scripts\python.exe tools\repair_current_year_price_compare_outputs.py --output-dir "D:\00_商化\00_已OCR照片" --period-prefix 2026 --dry-run
+```
+
+4. If UI changes are not visible, refresh browser and ensure backend is serving the latest `dashboard/dist/assets/index-*.js`.

@@ -155,3 +155,67 @@ When changing the live dashboard, keep the preview, LLM self-talk, and OCR resul
 - `latest_result_file` is only the newest completed result for history/side panels.
 
 Never use `recent_results[0]` to drive the main preview during a running batch. It is normally the previous completed image, while `current_file` has already advanced to the next image. The frontend should change the preview only when `current_file` changes, and should blank live self-talk unless `stream_file === current_file`.
+
+# 2026-07-02 Development Handoff
+
+## Code Changes Already Made
+
+- `tools/photo_rename_planner.py`
+  - Current-year price symbols are allowed only for current/future periods.
+  - Legacy `discontinued` / `-` maps to `？`; filenames must never contain `停產`.
+  - `遠景` filename format was changed to omit model and price: `M-period-store...-遠景-serial.jpg`.
+
+- `skills/official_price.py`
+  - Lookup failure no longer means discontinued.
+  - PChome 24h Shopping fallback was added after Samsung lookup.
+  - FollowMe generic names are mapped to concrete query codes, especially `S43FM703UC` for FollowMe Pro 43.
+
+- `samsung_ocr_batch_processor.py`
+  - Low-price filter changed from `<=3000` to `<2000`.
+  - Prompt text was updated so clear Samsung monitor labels may keep prices >= 2000.
+
+- `dashboard/src/App.jsx`
+  - Rerun button text changed from icon to `重跑`.
+  - Price compare badge should render only when `price_symbol` exists.
+  - Unknown price tooltip says Samsung/PChome lookup needs confirmation.
+
+- `tools/repair_current_year_price_compare_outputs.py`
+  - Repairs existing current-year outputs using audit records without rerunning OCR.
+  - Preflights unknown current-year prices before moving/copying output.
+  - Rescues prices from thinking text when JSON price was cleared by old logic.
+
+- `tools/recursive_ocr_flat_export.py`
+  - Watch mode exists.
+  - Current/future rows with store price but `price_status=unknown` now write `price_review_required.csv` and block copy.
+
+## Remaining Work
+
+1. Add a stronger distant-view guard in backend and regression helper:
+   - If no Samsung model is found and only an isolated price exists, do not call it `單機`.
+   - If thinking mentions display area, many monitors, no spec label, poster, ad stand, or unclear store wall, set `view_type/category=遠景` and clear price.
+   - Known bad sample: `M-台南市-永康區-TK3C-中華-362.jpg`.
+
+2. Repair existing 2026 outputs:
+   - Current dry-run blocks on 202605 with 79 unknown reference prices.
+   - Resolve by improving PChome fallback/mappings or writing review CSV for manual values.
+   - Only run non-dry export after dry-run passes.
+
+3. Rerun focused bad classes, not all photos:
+   - `model + 無價格` where thinking contains a price.
+   - `(無型號) + price`.
+   - current-year `？＄` filenames.
+
+4. Model comparison is incomplete:
+   - `qwen/qwen3-vl-8b` is currently running and works.
+   - User reported Gemma 4 12B QAT and Qwen3.5 9B VLM downloads were still in progress.
+   - Do not claim those newer models were tested until real local runs are completed.
+
+## Verification Required Before Handoff Completion
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+.\.venv\Scripts\python.exe -m py_compile samsung_ocr_batch_processor.py skills\official_price.py tools\recursive_ocr_flat_export.py tools\repair_current_year_price_compare_outputs.py
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
+npm.cmd --prefix dashboard run build
+.\.venv\Scripts\python.exe tools\repair_current_year_price_compare_outputs.py --output-dir "D:\00_商化\00_已OCR照片" --period-prefix 2026 --dry-run
+```

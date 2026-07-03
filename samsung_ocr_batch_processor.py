@@ -395,7 +395,7 @@ def normalize_followme_price(model, price=None, context_text=""):
     return None
 
 
-def clean_monitor_price(price, min_price=3000):
+def clean_monitor_price(price, min_price=2000):
     """Return a numeric monitor price string, or None for impossible/plan/accessory prices."""
     if price in (None, "", "null", "None"):
         return None
@@ -406,7 +406,7 @@ def clean_monitor_price(price, min_price=3000):
         price_int = int(digits)
     except ValueError:
         return None
-    if price_int <= min_price:
+    if price_int < min_price:
         return None
     return digits
 
@@ -525,7 +525,11 @@ def has_odyssey_ark_context(context_text=""):
     return "ODYSSEY ARK" in str(context_text or "").upper()
 
 # --- Logging Setup (必須在函數定義前) ---
-console = Console()
+# [v19.8] Avoid cp950 crash when stdout is redirected to a file.
+if sys.stdout.isatty():
+    console = Console()
+else:
+    console = Console(file=sys.stdout, force_terminal=False, no_color=True, legacy_windows=False)
 
 # === 鐵律：版本追蹤與快取檢查 ===
 def print_version_info():
@@ -1374,7 +1378,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "1. 遠景：完全看不到清楚型號或價格，且畫面主要是多台螢幕陳列。遠景不填 model/price。\n"
             "2. FollowMe：主角螢幕有白色/銀色直立支架、圓形底座或托盤，才可判定。只用下方參考表輔助，不可把 LG 或其他品牌當三星。\n"
             "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
-            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件或 3000 元以下價格不可當螢幕價格。\n"
+            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留。\n"
             "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
             "JSON 格式固定為："
             "{\"view_type\":\"遠景或單機\",\"category\":\"遠景或單機或FollowMe\","
@@ -1996,11 +2000,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 
                 try:
                     p_int = int(clean_price)
-                    # [v19.0] 價格防呆：三星螢幕 3000 元以下一律視為方案/月付/配件價，不是商品售價
-                    min_price = 3000
+                    # Price guard: clear obvious plan/accessory prices, but keep low-end monitor sale prices.
+                    min_price = 2000
                     
-                    if p_int <= min_price:
-                         console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) <= {min_price} -> 過低 (方案/月付/配件價，不是螢幕商品售價)[/dim]")
+                    if p_int < min_price:
+                         console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) < {min_price} -> 過低 (方案/月付/配件價，不是螢幕商品售價)[/dim]")
                          data_obj["price"] = None
                     # [v18.97] Strict Symbol Check for low-ish numbers to be safe
                     elif p_int < 10000 and not has_currency_symbol:
@@ -2085,11 +2089,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
                     data_obj["price"] = rescued_price
                 else:
-                    console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 3000 元以下或格式不合，未補回[/dim]")
+                    console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
 
         cleaned_final_price = clean_monitor_price(data_obj.get("price"))
         if data_obj.get("price") and not cleaned_final_price:
-            console.print(f"[dim]⚠️ [價格攔截] 最終價格 {data_obj.get('price')} 3000 元以下或格式不合 -> 清除[/dim]")
+            console.print(f"[dim]⚠️ [價格攔截] 最終價格 {data_obj.get('price')} 2000 元以下或格式不合 -> 清除[/dim]")
             data_obj["price"] = None
         elif cleaned_final_price:
             data_obj["price"] = cleaned_final_price
@@ -2120,6 +2124,36 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         elif inferred_followme and not data_obj.get("model"):
             console.print(f"[green]✅ [FollowMe 實體線索救援] 補回型號: {inferred_followme}[/green]")
             data_obj["model"] = inferred_followme
+
+        if data_obj.get("view_type") != "遠景":
+            current_model = data_obj.get("model")
+            current_price = data_obj.get("price")
+            has_model = bool(current_model) and str(current_model).lower() not in ("null", "none", "")
+            has_price = bool(current_price) and str(current_price).lower() not in ("null", "none", "")
+            dv_keywords = [
+                "遠景", "多台", "展示區", "展示牆", "貨架", "海報", "廣告",
+                "整排", "一排", "一整排", "牆上", "多支", "多螢幕", "陳列架",
+                "非三星", "其他品牌", "多品牌",
+            ]
+            dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰"]
+            has_dv_clue = thinking_text and any(kw in thinking_text for kw in dv_keywords)
+            has_single_clue = thinking_text and any(excl in thinking_text for excl in dv_exclusions)
+
+            # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
+            if not has_model and not has_price and has_dv_clue and not has_single_clue:
+                console.print("[yellow]⚠️ [遠景守衛] 無型號+無價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
+                data_obj["view_type"] = "遠景"
+                data_obj["category"] = "遠景"
+                data_obj["model"] = None
+                data_obj["price"] = None
+                data_obj["screen_status"] = ""
+            elif not has_model and has_price and has_dv_clue and not has_single_clue:
+                console.print("[yellow]⚠️ [遠景守衛] 無型號+有價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
+                data_obj["view_type"] = "遠景"
+                data_obj["category"] = "遠景"
+                data_obj["model"] = None
+                data_obj["price"] = None
+                data_obj["screen_status"] = ""
 
         # 4. Auto-Calculate Quality Issue
         p_val = data_obj.get("price")
@@ -2289,6 +2323,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     console.print(f"[yellow]⚠️ [獨白備援] JSON 寫 {view_type} 但獨白說遠景 → 強制修正為遠景[/yellow]")
                     view_type = '遠景'
                     result_json['view_type'] = '遠景'
+                    result_json['model'] = None
+                    result_json['price'] = None
+                    result_json['quality_issue'] = ''
                 elif has_single_unit_evidence:
                     console.print("[yellow]⚠️ [獨白備援] 偵測到單機線索（台數/標籤/價格牌），略過遠景強制修正[/yellow]")
             
@@ -2361,6 +2398,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 result_json['price_symbol'] = ''
                 result_json['official_price'] = ''
                 result_json['price_diff_percent'] = ''
+            elif not compare_official:
+                result_json['price_status'] = 'not_compared'
+                result_json['price_symbol'] = ''
+                result_json['official_price'] = ''
+                result_json['price_diff_percent'] = ''
         except Exception as e:
             log.warning(f"Price validation error: {e}")
             
@@ -2425,10 +2467,18 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 def list_dirs():
     """列出可用資料夾"""
     try:
-        # 取得根目錄下所有資料夾
+        # [v19.8] List actual photo source folders instead of repo root
+        source_root = Path(r"D:\00_商化\00_未整理商化照片")
+        if source_root.exists():
+            dirs = sorted([
+                str(p.relative_to(source_root))
+                for p in source_root.iterdir()
+                if p.is_dir() and not p.name.startswith('.')
+            ], key=lambda x: ("商化" in x, "照片" in x, x), reverse=True)
+            return jsonify(dirs)
+        # Fallback to current directory
         entries = os.listdir('.')
         dirs = [e for e in entries if os.path.isdir(e) and not e.startswith('.') and e not in ['dashboard', 'runs', '__pycache__', '.venv', 'node_modules']]
-        # 優先排序列出包含「照片」或「商化」的資料夾
         dirs.sort(key=lambda x: ("照片" in x or "商化" in x), reverse=True)
         return jsonify(dirs)
     except Exception as e:
@@ -2483,10 +2533,12 @@ def get_status():
             "stats": stats,
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
+            "display_queue": getattr(orchestrator, 'display_queue', []), # [v19.8 UX] Completed results queued for UI
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             "recent_results": orchestrator.recent_results,
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
             "is_running": orchestrator.is_running,
+            "image_dir": getattr(orchestrator, 'image_dir', None), # [v19.8] Current source folder for dashboard
             "resources": {
                 "cpu": psutil.cpu_percent(interval=0.1),
                 "ram": psutil.virtual_memory().percent
@@ -2914,7 +2966,7 @@ def add_header(response):
     """
     Force browser to NOT cache index.html so updates are seen immediately.
     """
-    if request.path == '/' or request.path.endswith('index.html'):
+    if request.path == '/' or request.path.endswith('index.html') or request.path.startswith('/assets/'):
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'

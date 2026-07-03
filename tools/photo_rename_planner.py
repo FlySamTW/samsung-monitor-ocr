@@ -27,8 +27,9 @@ COMPARE_SYMBOLS_FOR_FILENAME = {
     "✓": "✓",
     "?": "？",
     "？": "？",
-    "-": "停產",
-    "停產": "停產",
+    "-": "？",
+    "停產": "？",
+    "discontinued": "？",
 }
 
 
@@ -143,10 +144,12 @@ def price_segment(
     price_status = value_or_none(row.get("price_status")) or ""
     if price_status in {"", "not_compared", "未比價"}:
         compare_symbol = ""
+    elif price_status == "discontinued":
+        compare_symbol = "？"
     if period and not should_include_price_compare_symbol(period, current_year):
         compare_symbol = ""
     compare_symbol = COMPARE_SYMBOLS_FOR_FILENAME.get(compare_symbol, compare_symbol)
-    if compare_symbol not in {"↑", "↓", "✓", "？", "停產"}:
+    if compare_symbol not in {"↑", "↓", "✓", "？"}:
         compare_symbol = ""
     return f"{compare_symbol}{price_symbol}{digits}" if price_symbol else f"{compare_symbol}{digits}"
 
@@ -195,11 +198,22 @@ def build_target_name(
     current_year: Optional[int] = None,
 ) -> str:
     marker, store_parts, serial = split_source_name(source_path)
+    category = display_category(row)
+    if category == "遠景":
+        segments = [
+            marker,
+            period,
+            *store_parts,
+            category,
+            serial,
+        ]
+        safe_segments = [sanitize_segment(segment) for segment in segments]
+        return "-".join(safe_segments) + source_path.suffix.lower()
     segments = [
         marker,
         period,
         *store_parts,
-        display_category(row),
+        category,
         model_segment(row),
         price_segment(row, price_symbol, period, current_year),
         serial,

@@ -59,6 +59,7 @@ class BatchOrchestrator:
         self.current_file = None # [v9.92] Initialize to prevent AttributeError
         self.stream_file = None
         self.latest_result_file = None
+        self.display_queue = [] # [v19.8 UX] Completed results waiting to be displayed
         self.log_system("批次處理已停止。") # Added as per instruction
         self.save_data_file = None 
         self.recent_results = []
@@ -1113,6 +1114,29 @@ class BatchOrchestrator:
                     except Exception as e:
                         self.log_system(f"⚠️ 儲存思考日誌失敗: {e}")
 
+                # [v19.8 UX] Queue completed result for delayed display.
+                # Backend keeps processing; UI drains this queue at typewriter speed.
+                try:
+                    self.display_queue.append({
+                        "file_name": fname,
+                        "thumb_b64": norm_result.get("thumb_b64", ""),
+                        "stream_buffer": str(self.stream_buffer or ""),
+                        "result": {
+                            "view_type": norm_result.get("view_type", ""),
+                            "screen_status": norm_result.get("screen_status", ""),
+                            "quality_issue": norm_result.get("quality_issue", ""),
+                            "model": norm_result.get("model", ""),
+                            "price": norm_result.get("price", ""),
+                            "category": norm_result.get("category", ""),
+                        },
+                        "completed_at": datetime.now().isoformat(),
+                    })
+                    # Cap queue to prevent memory bloat
+                    if len(self.display_queue) > 50:
+                        self.display_queue.pop(0)
+                except Exception as e:
+                    self.log_system(f"⚠️ 佇列完成結果失敗: {e}")
+
 
             except Exception as e:
                 import traceback
@@ -1157,7 +1181,7 @@ class BatchOrchestrator:
                 
                 # [v11.8] Slow down on errors to prevent log flooding / CPU lockup
                 time.sleep(0.2) # 0.2s is enough if we don't print to terminal
-        
+            
         self.is_running = False
         self.stats['is_running'] = False
         manifest["end_time"] = datetime.now().isoformat()

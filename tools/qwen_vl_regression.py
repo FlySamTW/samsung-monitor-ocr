@@ -225,7 +225,7 @@ def normalize_followme_price(model, price=None, context_text=""):
     return None
 
 
-def clean_monitor_price(price, min_price=3000):
+def clean_monitor_price(price, min_price=2000):
     if price in (None, "", "null", "None"):
         return None
     digits = "".join(c for c in str(price) if c.isdigit())
@@ -235,7 +235,7 @@ def clean_monitor_price(price, min_price=3000):
         price_int = int(digits)
     except ValueError:
         return None
-    if price_int <= min_price:
+    if price_int < min_price:
         return None
     return digits
 

@@ -24,6 +24,7 @@ SAMSUNG_PRODUCT_API = "https://www.samsung.com/tw/api/v1/product/{model_id}/spec
 SAMSUNG_SEARCH_API = "https://www.samsung.com/tw/searchProduct"
 # [v19.14] Samsung Product Finder API：一次取得所有顯示器型號與價格
 SAMSUNG_FINDER_API = "https://searchapi.samsung.com/v6/front/b2c/product/finder/global"
+PCHOME_SEARCH_API = "https://ecshweb.pchome.com.tw/search/v3.3/all/results"
 
 # 全域日誌回調函數
 _log_callback: Optional[Callable[[str], None]] = None
@@ -483,6 +484,78 @@ class OfficialPriceManager:
                 continue
         
         return None
+
+    def _fetch_from_pchome_24h(self, model: str) -> Optional[int]:
+        """Fallback to PChome 24h Shopping when Samsung Taiwan has no price."""
+        model_clean = model.upper().strip()
+        queries = [model_clean]
+        is_followme = "FOLLOW" in model_clean
+        if is_followme:
+            if "PRO" in model_clean or "43" in model_clean:
+                queries.insert(0, "S43FM703UC")
+                queries.append("FollowMe Pro M7 43")
+                queries.append("FollowMe Pro 43")
+            elif "M5" in model_clean or "FHD" in model_clean:
+                queries.insert(0, "S32FM501EC")
+                queries.append("FollowMe M5 32")
+            else:
+                queries.insert(0, "S32FM702UC")
+                queries.insert(1, "S32FM703UC")
+                queries.append("FollowMe M7 32")
+        else:
+            short_model = re.sub(r'[A-Z]$', '', model_clean)
+            if len(short_model) >= 6 and short_model != model_clean:
+                queries.append(short_model)
+            base_model = re.sub(r'[A-Z]{1,2}$', '', model_clean)
+            if len(base_model) >= 6 and base_model != model_clean and base_model != short_model:
+                queries.append(base_model)
+        samsung_keywords = {'SAMSUNG', '三星', 'MONITOR', '螢幕', '顯示器', 'SAMSUNG MONITOR'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json,text/plain,*/*',
+            'Referer': 'https://24h.pchome.com.tw/',
+        }
+        candidates = []
+        for query in dict.fromkeys(queries):
+            compact_query = re.sub(r"[^A-Z0-9]", "", query.upper())
+            try:
+                response = requests.get(
+                    PCHOME_SEARCH_API,
+                    params={"q": query, "page": 1, "sort": "sale/dc"},
+                    headers=headers,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                _log_price_status(f"[yellow]PChome 24h price lookup failed for {query}: {e}[/yellow]")
+                continue
+
+            products = data.get("prods", []) if isinstance(data, dict) else []
+            for product in products or []:
+                name = str(product.get("name") or "").upper()
+                product_id = str(product.get("Id") or product.get("Idno") or "").upper()
+                haystack = re.sub(r"[^A-Z0-9]", "", f"{name} {product_id}")
+                if compact_query not in haystack:
+                    continue
+                if not is_followme:
+                    name_upper = name.upper()
+                    if not any(kw in name_upper for kw in samsung_keywords):
+                        continue
+                price = product.get("price") or product.get("originPrice")
+                try:
+                    price_int = int(str(price).replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if 1000 < price_int < 200000:
+                    candidates.append(price_int)
+
+        if not candidates:
+            _log_price_status(f"[yellow]PChome 24h has no matched price for {model_clean}[/yellow]")
+            return None
+        final_price = min(candidates)
+        _log_price_status(f"[green]PChome 24h reference price {model_clean}: NT${final_price:,}[/green]")
+        return final_price
     
     def get_official_price(self, model: str) -> Optional[int]:
         """
@@ -506,9 +579,9 @@ class OfficialPriceManager:
         
         # 3. 檢查是否本次執行期間已嘗試上網抓過（避免重複請求）
         if model_clean in self.session_fetched:
-            # [v18.71] 檢查是否已確認停產
+            # Unknown price stays unknown; do not label products as discontinued.
             if model_clean in self.discontinued_models:
-                return -1  # 返回 -1 代表停產
+                return None
             return None  # 已經嘗試過，官網沒有
         
         self.session_fetched.add(model_clean)
@@ -524,12 +597,16 @@ class OfficialPriceManager:
         if price:
             self._save_to_cache(model_clean, price, "direct-url")
             return price
+
+        price = self._fetch_from_pchome_24h(model_clean)
+        if price:
+            self._save_to_cache(model_clean, price, "pchome-24h")
+            return price
         
-        # 5. 都沒有 → 認定為停產，返回 -1（顯示 -）
-        # [v18.71] 記錄為停產，避免重複查詢
+        # 5. 都沒有 → unknown. Do not infer discontinued from lookup failure.
         self.discontinued_models.add(model_clean)
-        _log_price_status(f"[red]❌ {model_clean} 官網查無此型號 (已停產)[/red]")
-        return -1  # 返回 -1 代表停產
+        _log_price_status(f"[yellow]⚠️ {model_clean} 官網查無價格，標記為未知[/yellow]")
+        return None
     
     def validate_price(self, model: str, ocr_price: int) -> Tuple[str, Optional[int]]:
         """
@@ -537,16 +614,15 @@ class OfficialPriceManager:
         
         Returns:
             Tuple[status, official_price]
-            status: "match" | "high" | "low" | "unknown" | "discontinued"
+            status: "match" | "high" | "low" | "unknown"
         """
         if not model or not ocr_price:
             return "unknown", None
         
         official_price = self.get_official_price(model)
         
-        # [v18.71] 停產型號
         if official_price == -1:
-            return "discontinued", None
+            return "unknown", None
         
         if not official_price:
             return "unknown", None
@@ -566,7 +642,7 @@ class OfficialPriceManager:
             "high": "↑",         # 高於官方
             "low": "↓",          # 低於官方
             "unknown": "?",       # 未知
-            "discontinued": "-"  # [v18.71] 停產
+            "discontinued": "?"   # Legacy rows: never emit discontinued in filenames/UI.
         }
         return symbols.get(status, "?")
 
@@ -789,14 +865,6 @@ class OfficialPriceManager:
                 if price and price > 0:
                     self.price_cache[model] = price
             self._rewrite_cache_file()
-
-            # 4. [v19.14] 把型號表中有、但 Finder API 沒有的型號標記為停產，避免後續慢速查詢又顯示問號
-            current_models = {m for m in prices.keys() if self._is_samsung_model_format(m)}
-            discontinued = existing - current_models
-            for m in discontinued:
-                self.discontinued_models.add(m)
-            if discontinued:
-                _log_price_status(f"[dim]ℹ️ 已標記 {len(discontinued)} 個型號為停產（不在目前官網清單中）[/dim]")
 
             _log_price_status(f"[cyan]✅ 背景價格刷新完成：已更新 {len(prices)} 筆價格紀錄[/cyan]")
 

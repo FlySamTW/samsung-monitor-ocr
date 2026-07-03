@@ -227,3 +227,85 @@ The live UI must keep photo preview, LLM self-talk, and parsed OCR result aligne
 - `recent_results[0]` is history/latest completed output and must not drive the main preview while the batch is running.
 
 If a user reports that photos switch faster than self-talk/results, inspect this contract first before changing prompt/model code.
+
+# 2026-07-02 HANDOFF - Live OCR Continuation
+
+## Live Processes
+
+- Backend: `samsung_ocr_batch_processor.py` on `http://127.0.0.1:5000`, model `qwen/qwen3-vl-8b`.
+- Runner: `tools\recursive_ocr_flat_export.py --watch`, source `D:\00_商化\00_未整理商化照片`, output `D:\00_商化\00_已OCR照片`.
+- Hourly monitor automation: `samsung-ocr-hourly-monitor-and-email`; it should email `sam.lai@live.com`.
+- Do not spend main-thread tokens watching logs unless there is a failure. Let the automation monitor.
+
+## Must Preserve
+
+- Do not delete source photos.
+- Do not rerun all completed 2026 OCR only to fix filenames; use `_ocr_audit\*\success_records.csv`.
+- Existing bad 2026 flat outputs have been backed up in `_bad_no_compare_2026_backup_*`.
+- The formal output folder is flat: `D:\00_商化\00_已OCR照片`.
+
+## Current Open Defects
+
+1. Current-year unknown price:
+   - 2026 and future outputs must include `↑`, `↓`, `✓`, or stop for manual review.
+   - `？` is acceptable only as a blocked review state, not as silent final output.
+   - `tools\repair_current_year_price_compare_outputs.py --dry-run` currently blocks on 202605 with 79 unknown reference prices.
+
+2. PChome fallback:
+   - Samsung official price lookup may fail for active products.
+   - Fallback is PChome 24h Shopping, not marketplace.
+   - Generic FollowMe names must query concrete models; `FollowMe Pro M7 43"` maps to `S43FM703UC`.
+
+3. Low-price OCR:
+   - Old logic removed prices `<=3000`; this was wrong for `S24F332EAC / 2390`.
+   - New threshold is `<2000`.
+   - Existing results with model but `(無價格)` may need rerun or thinking-text rescue.
+
+4. Distant view:
+   - Some obvious distant-view rows are still `單機/(無型號)/price`.
+   - Add/verify guard: no Samsung model + isolated price + no spec label or display-area context => `遠景`, clear model/price.
+
+5. UI:
+   - The blue icon button was changed to text `重跑`.
+   - Historical/not-compared rows must not show a red `?` price badge.
+   - If user still sees old UI, refresh browser and confirm `dashboard/dist/assets/index-*.js` is the latest build.
+
+## Recent Changes (2026-07-03)
+
+1. **Display queue** (`samsung_ocr_batch_processor.py` + `dashboard/src/App.jsx`): backend accumulates completed results while the UI drains them at typewriter speed, reducing blank gaps between photos.
+2. **Repair script improvements** (`tools/repair_current_year_price_compare_outputs.py`):
+   - Always merges `folder_summary.csv` rows with fallback audit-folder scan so all 2026 periods are repaired.
+   - `--allow-no-symbol-for-unknown` lets 2026 records with no Samsung/PChome reference price output without a price symbol instead of blocking flat output.
+   - Pre-marks `manual_reference_price` models to skip repeated slow network lookups.
+3. **Targeted rerun tooling** (`tools/prepare_targeted_rerun.py`, `tools/merge_targeted_rerun.py`, `tools/run_targeted_rerun_with_backend.py`) supports `--bottom-label-strip` and `--bottom-center-zoom`.
+4. **Distant-view guard** (`samsung_ocr_batch_processor.py`): no model + no price + thinking mentions distant-view keywords => force `view_type=遠景` and clear model/price.
+5. **Dashboard fixes**:
+   - Main preview now loads full-resolution image from `/api/image` instead of staying on the blurred 400 px thumbnail.
+   - Source path shows live `image_dir` from backend status when running.
+   - `/api/list_dirs` now lists actual photo source folders under `D:\00_商化\00_未整理商化照片` instead of repo subdirectories.
+6. **Resume script** (`tools/resume_original_batch.py`): watch sleep reduced from 1800 s to 60 s so the watcher moves to the next folder faster.
+
+## Known Issues for Next AI
+
+1. **右方縮圖與播放佇列同步**：已嘗試在播放佇列模式時讓右方面板顯示目前播放項目，但需實際點擊測試，確認縮圖點擊後的校正/檢視模式不會異常。
+2. **91 筆 null-model 候選**：兩輪 targeted rerun 後仍有 91 張照片 model 為空，thinking 中也無可救回型號。需決定是否第三輪 `--bottom-center-zoom` 重跑，或改標為遠景/不合格。
+3. **8 筆 S27CG552EC 價差**：thinking 可讀到 `S27CG552EC`，但店內價格（9990–29900）遠高於 PChome 參考價 4990，需人工確認是否為套組或誤判。
+4. **黑屏/照不清楚未寫入檔名**：`screen_status`（黑屏）與 `quality_issue`（照不清楚）目前未出現在輸出檔名中，需規劃命名規則並更新 `photo_rename_planner.py`。
+5. **codex-runtime 重複子程序**：本機 `python.exe` 會透過 codex-runtime 再啟動一層 `.venv\python.exe`，導致程序樹重複，需持續監控。
+6. **長期執行啟動方式**：目前使用 Windows 工作排程器 `SamsungOCR_ResumeBatch` 作為後端+接力器長駐的權宜方案，建議未來改用更穩定的服務/守護程序。
+
+## Recommended Recovery Commands
+
+```powershell
+# Status
+Invoke-RestMethod http://127.0.0.1:5000/api/status
+
+# Dry-run repaired 2026 exports; must pass before real copy
+$env:PYTHONIOENCODING='utf-8'
+.\.venv\Scripts\python.exe tools\repair_current_year_price_compare_outputs.py --output-dir "D:\00_商化\00_已OCR照片" --period-prefix 2026 --dry-run
+
+# Tests
+.\.venv\Scripts\python.exe -m py_compile samsung_ocr_batch_processor.py skills\official_price.py tools\recursive_ocr_flat_export.py tools\repair_current_year_price_compare_outputs.py
+.\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
+npm.cmd --prefix dashboard run build
+```
