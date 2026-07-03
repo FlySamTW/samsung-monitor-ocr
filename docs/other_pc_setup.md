@@ -274,3 +274,14 @@ Before running production photos on another PC, read `docs/handoff_2026_ocr_resu
 Use `samples/ocr_demo_50/photos` plus `samples/ocr_demo_50/labels.json` as the small smoke-test dataset. The full photo library and generated flat output are intentionally not committed to Git.
 
 Default local model is `qwen/qwen3-vl-8b`. Keep the conservative LM Studio context default unless the GPU has enough VRAM.
+# 2026-07-03 User-Friendly BAT Flow
+
+For non-Codex users, use the BAT files first:
+
+1. `SETUP_FIRST_TIME.bat`
+2. Edit `user_settings.cmd` if the source/output folders are different.
+3. `START_OCR.bat` for dashboard mode.
+4. `START_FULL_AUTO_OCR.bat` for recursive OCR + flat export.
+5. `CHECK_STATUS.bat` for a simple health check.
+
+The built dashboard is committed under `dashboard/dist`, so Node.js is not required for ordinary users. Developers only need Node.js when changing `dashboard/src`.

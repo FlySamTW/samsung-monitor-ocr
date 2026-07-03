@@ -32,6 +32,7 @@ project-output.json
 *.log
 .local_llm_runtime.json
 .last_run_config.json
+user_settings.cmd
 targeted_rerun_2026_temp/
 _tmp_success_records_snapshot.json
 questionable_rerun_*.csv
@@ -46,6 +47,10 @@ unknown_price_*.csv
 !samples/**/*.jpg
 !samples/**/*.jpeg
 !samples/**/*.png
+
+# Commit the built dashboard so non-Node users can run the BAT files.
+!dashboard/dist/
+!dashboard/dist/**
 
 # IDE / OS
 .vscode/

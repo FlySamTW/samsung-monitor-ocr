@@ -242,3 +242,13 @@ Next recommended order:
 
 For another PC or another AI agent, start from `docs/handoff_2026_ocr_resume.md`.
 The repo intentionally includes only the small portable sample set at `samples/ocr_demo_50`; do not add the full production photo folders or generated output folders to Git.
+# 一般使用者入口
+
+不用 Codex、不用手打 Python 指令：
+
+1. 第一次使用先雙擊 `SETUP_FIRST_TIME.bat`
+2. 平常開 dashboard 雙擊 `START_OCR.bat`
+3. 要整批遞迴 OCR 並輸出平面照片，雙擊 `START_FULL_AUTO_OCR.bat`
+4. 查目前狀態，雙擊 `CHECK_STATUS.bat`
+
+設定來源與輸出資料夾請改 `user_settings.cmd`。完整說明見 `docs/user_quick_start.md`。

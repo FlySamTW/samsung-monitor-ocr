@@ -208,3 +208,4 @@ npm.cmd --prefix dashboard run build
 - For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.
 - Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
 - `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.
+- Non-Codex users should use `SETUP_FIRST_TIME.bat`, `START_OCR.bat`, `START_FULL_AUTO_OCR.bat`, and `CHECK_STATUS.bat`. Do not tell ordinary users to type Python commands unless the BAT flow fails.

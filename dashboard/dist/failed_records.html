@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Samsung OCR - 失敗圖片清單</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #e5e5e5;
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #262626;
+            border-radius: 8px;
+            border: 1px solid #404040;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            border-bottom: 1px solid #404040;
+            padding-bottom: 15px;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .stats {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn {
+            background-color: #6366f1;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .btn:hover {
+            background-color: #4f46e5;
+        }
+        .btn:active {
+            transform: translateY(1px);
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        li {
+            padding: 12px;
+            border-bottom: 1px solid #404040;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        li:last-child {
+            border-bottom: none;
+        }
+        .filename {
+            font-family: monospace;
+            background: #111;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #ef5350;
+        }
+        .reason {
+            color: #9ca3af;
+            font-size: 0.9em;
+            margin-top: 4px;
+        }
+        .meta {
+            font-size: 0.8em;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #10b981;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>❌ 失敗圖片清單 <span id="count" style="font-size: 0.6em; background: #ef5350; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span> <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v19.7 (Cache Fix)</span></h1>
+
+        <div class="stats">
+            <span>以下列出所有從 <code>failed_files.json</code> 載入的失敗記錄：</span>
+            <button class="btn" onclick="copyList()">📋 複製所有檔名</button>
+        </div>
+
+        <div id="content">
+            <div class="loading">正在載入數據...</div>
+        </div>
+    </div>
+
+    <div id="lightbox" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.95); z-index:9999; justify-content:center; align-items:center; user-select:none;">
+        <div style="position:absolute; top:20px; right:20px; width:48px; height:48px; border-radius:50%; background:rgba(255,0,0,0.2); border:2px solid #fff; color:#fff; font-size:24px; display:flex; align-items:center; justify-content:center; cursor:pointer;" onclick="closeLightbox()">×</div>
+        <div id="lightboxImgContainer" style="cursor:grab;" onmousedown="startDrag(event)">
+            <img id="lightboxImg" src="" style="display:block; pointer-events:none; max-height:85vh; max-width:90vw; border:2px solid #555; border-radius:8px; box-shadow:0 0 50px rgba(0,0,0,0.8);">
+        </div>
+        <div class="controls-overlay" style="position:fixed; bottom:0; left:0; width:100%; background:#111; border-top:1px solid #333; padding:12px 24px; display:flex; align-items:center; justify-content:center; gap:20px; color:#ddd; font-family:monospace; z-index:10000;">
+            <div style="display:flex; flex-direction:column; alignItems:center;">
+                <span style="font-size:10px; color:#888;">檔名</span>
+                <span id="overlayFilename" style="color:#00f5ff; font-weight:bold; font-size:14px;">-</span>
+            </div>
+            <div style="width:1px; height:30px; background:#333; margin:0 10px;"></div>
+            <div style="display:flex; flex-direction:column; alignItems:center;">
+                <span style="font-size:10px; color:#888;">失敗原因</span>
+                <span id="overlayReason" style="color:#ef5350; font-weight:bold; font-size:14px;">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let failedFiles = [];
+        let isDragging = false;
+        let pan = { x: 0, y: 0 };
+        let startPos = { x: 0, y: 0 };
+
+        async function fetchData() {
+            try {
+                // [v19.6 Fix] Sync Directory from LocalStorage to ensure backend context is correct
+                const savedDir = localStorage.getItem('samsung_ocr_target_dir');
+                if (savedDir) {
+                    try {
+                        await fetch('/api/set_work_dir', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ dir: savedDir })
+                        });
+                        console.log("[Init] Synced dir:", savedDir);
+                    } catch(e) {
+                         console.error("Failed to sync dir", e);
+                    }
+                }
+
+                const response = await fetch('/api/failed_records');
+                failedFiles = await response.json();
+                render();
+            } catch (error) {
+                document.getElementById('content').innerHTML = `<div style="color: #ef5350; text-align: center; padding: 20px;">⚠️ 無法連接後端 API: ${error}</div>`;
+            }
+        }
+
+        function render() {
+            const container = document.getElementById('content');
+            const countEl = document.getElementById('count');
+            countEl.textContent = failedFiles.length;
+
+            if (failedFiles.length === 0) {
+                container.innerHTML = '<div class="empty">✅ 目前沒有失敗記錄</div>';
+                return;
+            }
+
+            const listHtml = failedFiles.map(file => `
+                <li style="display:flex; gap:15px; align-items:center;">
+                    <img src="/api/image/${encodeURIComponent(file.filename)}"
+                         style="width:50px; height:50px; object-fit:cover; border-radius:4px; border:1px solid #444; cursor:zoom-in;"
+                         onclick="openLightbox('${file.filename}', '${file.reason}')">
+                    <div style="flex:1;">
+                        <div class="filename">${file.filename}</div>
+                        <div class="reason">${file.reason}</div>
+                        <div class="meta">時間: ${file.timestamp} | 類型: ${file.error_type}</div>
+                    </div>
+                </li>
+            `).join('');
+            container.innerHTML = `<ul>${listHtml}</ul>`;
+        }
+
+        function openLightbox(filename, reason) {
+            document.getElementById('overlayFilename').textContent = filename;
+            document.getElementById('overlayReason').textContent = reason;
+            document.getElementById('lightboxImg').src = `/api/image/${encodeURIComponent(filename)}`;
+            document.getElementById('lightbox').style.display = 'flex';
+            pan = { x: 0, y: 0 };
+            document.getElementById('lightboxImgContainer').style.transform = 'translate(0,0)';
+            window.addEventListener('mousemove', onDrag);
+            window.addEventListener('mouseup', endDrag);
+        }
+
+        function closeLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            window.removeEventListener('mousemove', onDrag);
+            window.removeEventListener('mouseup', endDrag);
+        }
+
+        function startDrag(e) {
+            if (e.button !== 0) return;
+            isDragging = true;
+            startPos = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+            e.preventDefault();
+        }
+
+        function onDrag(e) {
+            if (!isDragging) return;
+            pan.x = e.clientX - startPos.x;
+            pan.y = e.clientY - startPos.y;
+            document.getElementById('lightboxImgContainer').style.transform = `translate(${pan.x}px, ${pan.y}px)`;
+        }
+
+        function endDrag() { isDragging = false; }
+
+        function copyList() {
+            const text = failedFiles.map(f => f.filename).join('\r\n');
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.querySelector('.btn');
+                btn.innerHTML = '✅ 已複製！';
+                setTimeout(() => btn.innerHTML = '📋 複製所有檔名', 2000);
+            });
+        }
+
+        setInterval(fetchData, 5000);
+        fetchData();
+    </script>
+</body>
+</html>
