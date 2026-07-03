@@ -96,10 +96,10 @@ python tools\rerun_questionable_records.py --input-csv remaining_candidates.csv 
 
 ## 2026-07-04 UI / Upload / Missing-Result Update
 
-- Dashboard version: `v19.12 (Staged Reveal)`.
+- Dashboard version: `v19.14 (LLM Log Restored)`.
 - Boss-facing sequence must stay: photo appears first, LLM self-talk types out, then the parsed thumbnail/result is revealed in `辨識紀錄`.
 - Backend is allowed to process ahead, but the UI must not reveal the next result early. Do not re-add immediate `presentedQueueCutoff` advancement when switching to the next displayed photo.
-- The lower-left panel must never look missing or expose raw `JSON Error` / debug logs. While the current result is still hidden, it shows a clean `辨識中` status with the current filename.
+- The lower-left panel must never look missing or expose raw `JSON Error` / debug logs. It must preserve the historical LLM record, including `[THINK]` summaries and final classification lines; do not replace it with result-summary rows only.
 - Google Drive upload can now use local rclone remote `samsung_ocr_drive`, rooted at the approved shared parent folder. Use year-only folders.
 - Batch file for non-Python users: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
 - Script entrypoint: `python tools\rclone_drive_upload.py --execute --repeat --limit 500 --transfers 4 --checkers 8`.

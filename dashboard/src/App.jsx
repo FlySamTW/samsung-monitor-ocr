@@ -78,7 +78,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.12 (Staged Reveal)";
+const UI_VERSION = "v19.14 (LLM Log Restored)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -488,16 +488,6 @@ const App = () => {
     ? queuedPanelItems
     : (data.recent_results || []).map((res, i) => ({ ...res, _queueKey: null, _isCurrent: i === 0 }));
   const displayedFileName = displayedQueueItem?.file_name || data.stream_file || data.current_file || "-";
-  const presentationLogItems = queuedPanelItems.slice(0, 8).map((res) => {
-    const view = res.view_type || res.category || "";
-    const model = res.model || (view === '遠景' ? '遠景' : '(無型號)');
-    const price = res.price ? formatDisplayPrice(res.price) : "";
-    return {
-      file_name: res.file_name || "",
-      summary: [view, model, price].filter(Boolean).join(" / "),
-    };
-  });
-
   console.log("App: Ready to render", { stats, dataExists: !!data });
 
   return (
@@ -639,28 +629,10 @@ const App = () => {
                        </div>
 
                       {/* 2. Bottom Pane: System Logs / History */}
-                      <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
-                           {presentationLogItems.map((item, i) => (
-                               <div key={`presentation-${i}`} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '6px', padding: '6px 8px', borderLeft: '2px solid #00f5ff', background: 'rgba(0,245,255,0.04)', borderRadius: '3px' }}>
-                                   <CheckCircle2 size={14} color="#22c55e" style={{ flex: '0 0 14px', marginTop: '2px' }} />
-                                  <div style={{ minWidth: 0 }}>
-                                      <div style={{ color: '#e5e7eb', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</div>
-                                      <div style={{ color: '#94a3b8', fontSize: '0.7rem', marginTop: '2px' }}>{item.summary}</div>
-                                   </div>
-                               </div>
-                           ))}
-                          {presentationLogItems.length === 0 && (
-                              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '6px', padding: '8px', borderLeft: '2px solid #f59e0b', background: 'rgba(245,158,11,0.08)', borderRadius: '4px', color: '#94a3b8' }}>
-                                  <Zap size={16} color="#f59e0b" style={{ flex: '0 0 16px' }} />
-                                  <div style={{ minWidth: 0 }}>
-                                      <div style={{ color: '#e5e7eb', fontSize: '0.82rem', fontWeight: 700 }}>辨識中</div>
-                                      <div style={{ fontSize: '0.72rem', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '320px' }}>{displayedFileName}</div>
-                                  </div>
-                              </div>
-                          )}
-                          {true ? null : data.lm_logs?.length > 0 ? (
+                      <div style={{ flex: 1, overflowY: 'auto' }}>
+                          {data.lm_logs?.length > 0 ? (
                                [...data.lm_logs]
-                                .filter(line => !line.includes('JSON Error') && !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('載入圖片:') && !line.includes('判斷是') && !line.includes('[THINK]') && !line.includes('━━━━━━━━') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
+                                .filter(line => !line.includes('JSON Error') && !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
                                .reverse()
                                .map((line, i) => {
                                   const isThink = line.includes('[THINK]');

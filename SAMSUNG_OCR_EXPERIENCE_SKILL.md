@@ -226,10 +226,10 @@ npm.cmd --prefix dashboard run build
 
 ## 2026-07-04 UI And Runner Rules
 
-- Current dashboard build: `v19.12 (Staged Reveal)`.
+- Current dashboard build: `v19.14 (LLM Log Restored)`.
 - Boss-facing sequence must look like: photo appears, LLM self-talk types, then the parsed result appears in `辨識紀錄`.
 - Backend may process ahead, but the visible filename, preview, self-talk, and lower-left `辨識中` panel must all refer to the same displayed photo.
-- Do not expose raw `JSON Error`, debug logs, batch start/stop messages, or internal queue wording in the main lower-left panel.
+- The lower-left panel must preserve the historical LLM record, including `[THINK]` summaries and final classification lines. Filter only raw `JSON Error`, initialization/debug messages, batch start/stop noise, and internal queue wording.
 - If the local VLM repeats a token/spec endlessly, backend must close that stream and retry instead of letting the UI loop forever.
 - Large Drive uploads use rclone remote `samsung_ocr_drive` through `tools\rclone_drive_upload.py` or `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`; keep year-only folders and use the `_drive_upload\rclone_drive_upload.lock` guard.
 - For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.

@@ -206,9 +206,9 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
 
 ## Dashboard Presentation Rule
 
-- Current production dashboard is `v19.12 (Staged Reveal)`.
+- Current production dashboard is `v19.14 (LLM Log Restored)`.
 - Boss-facing order must remain: photo first, LLM self-talk second, parsed thumbnail/result last.
-- The lower-left panel must always stay presentable. While no delayed result is public, show a clean `辨識中` state with current filename; never show raw `JSON Error` or internal playback/debug wording there.
+- The lower-left panel must always stay presentable and must preserve the historical LLM record (`[THINK]` summaries and final classification lines). Never replace it with blank space or result summaries only; filter only raw `JSON Error`, initialization/debug wording, and internal playback wording.
 
 ## Remaining Work
 

@@ -253,10 +253,10 @@ The repo intentionally includes only the small portable sample set at `samples/o
 
 # 2026-07-04 Operator Notes
 
-- Current dashboard build is `v19.12 (Staged Reveal)`.
+- Current dashboard build is `v19.14 (LLM Log Restored)`.
 - The user-facing flow must look sequential: main photo appears, LLM self-talk types out, then the thumbnail/result is revealed in `辨識紀錄`.
 - The backend may process the next photo early, but the UI must not show that parsed result before its self-talk finishes.
-- The lower-left status area is intentional. If no completed result is ready to reveal, it shows `辨識中` plus the current filename; do not replace it with raw JSON/debug logs.
+- The lower-left log area is intentional and must keep the historical LLM record visible (`[THINK]` and final classification lines). Filter only internal noise such as initialization/debug/JSON errors.
 - Google Drive upload is handled by rclone remote `samsung_ocr_drive`; use year folders only (`2026`, `2025`, ...).
 - Non-Python upload entrypoint: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
 - Missing-result rerun candidate builder: `tools\build_missing_result_rerun_candidates.py`.
