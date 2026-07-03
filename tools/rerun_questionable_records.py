@@ -478,6 +478,7 @@ def main() -> int:
         "period",
         "audit_folder",
         "source_folder",
+        "source_path",
         "file_name",
         "reason",
         "view_type",

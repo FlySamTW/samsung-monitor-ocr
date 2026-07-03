@@ -93,3 +93,15 @@ python tools\rerun_questionable_records.py --input-csv remaining_candidates.csv 
   - `logs/full_auto_recursive_20260703_194356.err.log`
 - At restart, completed folders were being marked `skipped_existing`; folder `2025-商化照片\商化照片-202502` resumed from `534/1906` and began increasing normally.
 - If this runner stops, inspect `/api/status`, the two log files above, and `_ocr_audit/folder_summary.csv`. Resume with the normal recursive launcher so completed folders remain preserved.
+
+## 2026-07-04 UI / Upload / Missing-Result Update
+
+- Dashboard version: `v19.12 (Staged Reveal)`.
+- Boss-facing sequence must stay: photo appears first, LLM self-talk types out, then the parsed thumbnail/result is revealed in `辨識紀錄`.
+- Backend is allowed to process ahead, but the UI must not reveal the next result early. Do not re-add immediate `presentedQueueCutoff` advancement when switching to the next displayed photo.
+- The lower-left panel must never look missing or expose raw `JSON Error` / debug logs. While the current result is still hidden, it shows a clean `辨識中` status with the current filename.
+- Google Drive upload can now use local rclone remote `samsung_ocr_drive`, rooted at the approved shared parent folder. Use year-only folders.
+- Batch file for non-Python users: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
+- Script entrypoint: `python tools\rclone_drive_upload.py --execute --repeat --limit 500 --transfers 4 --checkers 8`.
+- The uploader has a lock file under `_drive_upload\rclone_drive_upload.lock`; do not run multiple uploaders. It only uploads rows that `tools\prepare_drive_upload_manifest.py` marks `ready`.
+- Current missing-result helper: `tools\build_missing_result_rerun_candidates.py`. It reads `_ocr_audit\folder_summary.csv` and creates a safe candidate CSV for `tools\rerun_questionable_records.py`.

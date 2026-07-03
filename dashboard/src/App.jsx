@@ -78,7 +78,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.11 (Delayed Result Panel)";
+const UI_VERSION = "v19.12 (Staged Reveal)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -168,6 +168,8 @@ const App = () => {
   const isAdvancingRef = useRef(false);
   const playedQueueKeysRef = useRef(new Set());
   const [presentedQueueCutoff, setPresentedQueueCutoff] = useState(-1);
+  const [displayTargetKey, setDisplayTargetKey] = useState("");
+  const [typewriterReady, setTypewriterReady] = useState(false);
 
   const getQueueKey = (item) => `${item?.completed_at || ''}|${item?.file_name || ''}`;
   const getQueueDisplayText = (item) => {
@@ -197,14 +199,31 @@ const App = () => {
   const getDisplayTarget = () => {
     const queue = data.display_queue || [];
     if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
-      return { target: getQueueDisplayText(queue[displayQueueIndex]), isQueue: true };
+      const item = queue[displayQueueIndex];
+      return { target: getQueueDisplayText(item), isQueue: true, key: getQueueKey(item) };
     }
-    return { target: data.stream_buffer || "", isQueue: false };
+    return { target: data.stream_buffer || "", isQueue: false, key: `live|${data.stream_file || data.current_file || ""}` };
   };
 
-  // [v19.8 UX] Linear Typewriter Effect (Constant Speed)
+  // [v19.12 UX] Stage the illusion deliberately:
+  // 1) show the photo immediately,
+  // 2) give the viewer a tiny visual lead-in,
+  // 3) then start the self-talk,
+  // 4) reveal the thumbnail/result only after the self-talk completes.
+  useEffect(() => {
+    const { key } = getDisplayTarget();
+    if (!key || key === displayTargetKey) return;
+    setDisplayTargetKey(key);
+    setDisplayedBuffer("");
+    setTypewriterReady(false);
+    const leadIn = setTimeout(() => setTypewriterReady(true), 140);
+    return () => clearTimeout(leadIn);
+  }, [data.current_file, data.stream_file, data.display_queue, displayQueueIndex]);
+
+  // [v19.12 UX] Linear Typewriter Effect (Readable Speed)
   useEffect(() => {
     const { target } = getDisplayTarget();
+    if (!typewriterReady) return;
     if (!target) {
         setDisplayedBuffer("");
         return;
@@ -220,16 +239,14 @@ const App = () => {
         setDisplayedBuffer((prev) => {
             const { target: t } = getDisplayTarget();
             if (prev.length < t.length) {
-                // [v19.8] 3 chars per tick for smooth but readable display
-                const step = 3;
-                return t.slice(0, prev.length + step);
+                return t.slice(0, prev.length + 1);
             }
             return prev;
         });
-    }, 24); // [v19.8] 24ms tick (~8ms per char)
+    }, 18); // v19.12: readable but still brisk for supervisor viewing.
 
     return () => clearInterval(timer);
-  }, [data.display_queue, data.stream_buffer, displayQueueIndex]);
+  }, [data.display_queue, data.stream_buffer, displayQueueIndex, typewriterReady, displayTargetKey]);
 
   // [v19.8 UX] Advance to next queued item when current one finishes typing.
   useEffect(() => {
@@ -251,7 +268,6 @@ const App = () => {
 
       if (nextIndex !== -1) {
         setDisplayQueueIndex(nextIndex);
-        setPresentedQueueCutoff((prev) => Math.max(prev, nextIndex));
         setDisplayedBuffer("");
       } else {
         // Drained queue - return to live mode.
@@ -259,7 +275,7 @@ const App = () => {
         setDisplayedBuffer("");
       }
       isAdvancingRef.current = false;
-    }, 600); // brief pause between images
+    }, 120); // Must stay below the 500ms polling interval or reveal gets canceled.
 
     return () => { clearTimeout(timer); isAdvancingRef.current = false; };
   }, [displayedBuffer, displayQueueIndex, data.display_queue, data.stream_buffer]);
@@ -427,9 +443,19 @@ const App = () => {
   const stats = data.stats || defaultState.stats;
   const isRunning = Boolean(data.is_running || stats.is_running);
   const displayQueue = data.display_queue || [];
+  const displayedQueueItem = displayQueueIndex >= 0 && displayQueueIndex < displayQueue.length
+    ? displayQueue[displayQueueIndex]
+    : null;
+  const displayedQueueText = displayedQueueItem ? getQueueDisplayText(displayedQueueItem) : "";
+  const currentQueueTextDone = Boolean(displayedQueueText && displayedBuffer.length >= displayedQueueText.length);
+  const effectivePresentedQueueCutoff = Math.max(
+    presentedQueueCutoff,
+    displayQueueIndex > 0 ? displayQueueIndex - 1 : -1,
+    currentQueueTextDone ? displayQueueIndex : -1
+  );
   const queueCutoff = Math.min(
     displayQueue.length - 1,
-    presentedQueueCutoff
+    effectivePresentedQueueCutoff
   );
   const activeQueueKey = displayQueueIndex >= 0
     ? getQueueKey(displayQueue[displayQueueIndex])
@@ -461,6 +487,16 @@ const App = () => {
   const rightPanelItems = displayQueue.length > 0
     ? queuedPanelItems
     : (data.recent_results || []).map((res, i) => ({ ...res, _queueKey: null, _isCurrent: i === 0 }));
+  const displayedFileName = displayedQueueItem?.file_name || data.stream_file || data.current_file || "-";
+  const presentationLogItems = queuedPanelItems.slice(0, 8).map((res) => {
+    const view = res.view_type || res.category || "";
+    const model = res.model || (view === '遠景' ? '遠景' : '(無型號)');
+    const price = res.price ? formatDisplayPrice(res.price) : "";
+    return {
+      file_name: res.file_name || "",
+      summary: [view, model, price].filter(Boolean).join(" / "),
+    };
+  });
 
   console.log("App: Ready to render", { stats, dataExists: !!data });
 
@@ -558,9 +594,7 @@ const App = () => {
                             辨識預覽
                           </span>
                           <span style={{color: '#00f5ff', fontFamily: 'JetBrains Mono'}}>
-                            {displayQueueIndex >= 0 && (data.display_queue || []).length > displayQueueIndex
-                              ? data.display_queue[displayQueueIndex].file_name
-                              : (data.current_file || '-')}
+                            {displayedFileName}
                           </span>
                       </div>
                       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
@@ -605,10 +639,28 @@ const App = () => {
                        </div>
 
                       {/* 2. Bottom Pane: System Logs / History */}
-                      <div style={{ flex: 1, overflowY: 'auto' }}>
-                          {data.lm_logs?.length > 0 ? (
+                      <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+                           {presentationLogItems.map((item, i) => (
+                               <div key={`presentation-${i}`} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '6px', padding: '6px 8px', borderLeft: '2px solid #00f5ff', background: 'rgba(0,245,255,0.04)', borderRadius: '3px' }}>
+                                   <CheckCircle2 size={14} color="#22c55e" style={{ flex: '0 0 14px', marginTop: '2px' }} />
+                                  <div style={{ minWidth: 0 }}>
+                                      <div style={{ color: '#e5e7eb', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.file_name}</div>
+                                      <div style={{ color: '#94a3b8', fontSize: '0.7rem', marginTop: '2px' }}>{item.summary}</div>
+                                   </div>
+                               </div>
+                           ))}
+                          {presentationLogItems.length === 0 && (
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '6px', padding: '8px', borderLeft: '2px solid #f59e0b', background: 'rgba(245,158,11,0.08)', borderRadius: '4px', color: '#94a3b8' }}>
+                                  <Zap size={16} color="#f59e0b" style={{ flex: '0 0 16px' }} />
+                                  <div style={{ minWidth: 0 }}>
+                                      <div style={{ color: '#e5e7eb', fontSize: '0.82rem', fontWeight: 700 }}>辨識中</div>
+                                      <div style={{ fontSize: '0.72rem', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '320px' }}>{displayedFileName}</div>
+                                  </div>
+                              </div>
+                          )}
+                          {true ? null : data.lm_logs?.length > 0 ? (
                                [...data.lm_logs]
-                                .filter(line => !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('載入圖片:') && !line.includes('判斷是') && !line.includes('[THINK]') && !line.includes('━━━━━━━━') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
+                                .filter(line => !line.includes('JSON Error') && !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('載入圖片:') && !line.includes('判斷是') && !line.includes('[THINK]') && !line.includes('━━━━━━━━') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
                                .reverse()
                                .map((line, i) => {
                                   const isThink = line.includes('[THINK]');

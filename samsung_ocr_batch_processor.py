@@ -926,7 +926,29 @@ def _detect_repetition(text: str) -> bool:
     [v18.82] 簡易的重複語句偵測器 (Watchdog)
     如果發現長句子連續出現 2 次以上，判定為陷入迴圈。
     """
-    if not text: return False
+    if not text:
+        return False
+
+    # Catch single-line degeneration such as "1000000:1" repeated hundreds of
+    # times. The old line-based watchdog missed this because there were no
+    # newlines.
+    token_matches = re.findall(r"[A-Za-z0-9]+(?::[A-Za-z0-9]+)?|[\u4e00-\u9fff]{2,}", text)
+    if token_matches:
+        from collections import Counter
+        recent_tokens = [tok for tok in token_matches[-120:] if len(tok) >= 4]
+        token_counts = Counter(recent_tokens)
+        for token, count in token_counts.items():
+            if count >= 12:
+                print(f"[Watchdog] repetitive token detected: {token[:24]}... (x{count})")
+                return True
+
+    compact_tail = re.sub(r"\s+", "", text)[-1600:]
+    for window_size in (4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40):
+        if len(compact_tail) >= window_size * 8:
+            chunk = compact_tail[-window_size:]
+            if chunk and compact_tail.endswith(chunk * 6):
+                print(f"[Watchdog] repetitive tail detected: {chunk[:24]}...")
+                return True
 
     # 1. 簡單的逐行檢查
     lines = [L.strip() for L in text.split('\n') if len(L.strip()) > 15] # 忽略太短的行
@@ -1714,6 +1736,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
         for attempt in range(max_retries + 1):
             start_llm_t = time.time()
+            full_response_text = ""
+            args_str = None
+            parsed = None
+            loop_detected = False
             if attempt > 0:
                 console.print(f"[bold yellow]🔄 觸發重試 (Attempt {attempt+1}/{max_retries+1}) - 加入價格警告提示...[/bold yellow]")
                 orchestrator.log_system(f"🔄 [Auto-Retry] 觸發價格與型號不一致的重試機制...")
@@ -1728,6 +1754,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             fast_max_tokens = os.environ.get("OCR_FAST_MAX_TOKENS")
             if fast_batch_mode:
                 request_kwargs["max_tokens"] = int(fast_max_tokens or "500")
+            else:
+                request_kwargs["max_tokens"] = int(os.environ.get("OCR_MAX_TOKENS", "900"))
 
             stream = api_client.chat.completions.create(
                 **request_kwargs
@@ -1778,8 +1806,19 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     current_display = clean_stream_display(current_display)
                     if orchestrator: orchestrator.stream_buffer = current_display
 
+                    if len(full_response_text) > 1200 and _detect_repetition(full_response_text):
+                        loop_detected = True
+                        if orchestrator:
+                            orchestrator.stream_buffer = (current_display[:600] + "\n\n(模型輸出重複，正在重試...)").strip()
+                            orchestrator.log_system("⚠️ [Auto-Retry] LLM output repeated; closing stream and retrying.")
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                        break
+
             # Anti-Loop Check
-            if _detect_repetition(full_response_text):
+            if loop_detected or _detect_repetition(full_response_text):
                 if attempt < max_retries:
                     console.print(f"[red]⚠️ 偵測到跳針，重試...[/red]")
                     messages.append({"role": "user", "content": "你剛剛的回應陷入無限迴圈，請重試並只輸出 JSON。"})

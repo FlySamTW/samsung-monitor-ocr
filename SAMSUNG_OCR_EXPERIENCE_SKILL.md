@@ -223,6 +223,15 @@ npm.cmd --prefix dashboard run build
 - Keep boss-facing dashboard language polished. Do not expose internal wording such as playback queue.
 - Never enlarge `thumb_b64` in the main preview; show a clean loading/placeholder state until the full image loads.
 - Include `source_path` in new OCR records so cross-folder dashboard entries can load full images.
+
+## 2026-07-04 UI And Runner Rules
+
+- Current dashboard build: `v19.12 (Staged Reveal)`.
+- Boss-facing sequence must look like: photo appears, LLM self-talk types, then the parsed result appears in `辨識紀錄`.
+- Backend may process ahead, but the visible filename, preview, self-talk, and lower-left `辨識中` panel must all refer to the same displayed photo.
+- Do not expose raw `JSON Error`, debug logs, batch start/stop messages, or internal queue wording in the main lower-left panel.
+- If the local VLM repeats a token/spec endlessly, backend must close that stream and retry instead of letting the UI loop forever.
+- Large Drive uploads use rclone remote `samsung_ocr_drive` through `tools\rclone_drive_upload.py` or `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`; keep year-only folders and use the `_drive_upload\rclone_drive_upload.lock` guard.
 - For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.
 - Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
 - `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.

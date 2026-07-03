@@ -195,6 +195,21 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
   - Excludes internal `_` folders and questionable filenames, stages the next batch as ASCII `upload_0001.jpg` files, and uses `_drive_upload\drive_upload_uploaded.csv` as the resume/duplicate guard.
   - Keep Drive organization year-only (`2026`, `2025`, ...); filename carries month/store/search detail.
 
+- `tools/rclone_drive_upload.py`
+  - Uses rclone remote `samsung_ocr_drive` for large resumable uploads to the approved Google Drive parent folder.
+  - Calls `tools/prepare_drive_upload_manifest.py`, uploads only `ready` rows, groups by year folder, and records uploaded filenames in `_drive_upload\drive_upload_uploaded.csv`.
+  - Has a lock file at `_drive_upload\rclone_drive_upload.lock`; do not start a second uploader while it exists.
+
+- `tools/build_missing_result_rerun_candidates.py`
+  - Reads `_ocr_audit\folder_summary.csv` and emits a safe CSV for `tools\rerun_questionable_records.py`.
+  - Use it for folders blocked by `missing_result` instead of restarting everything.
+
+## Dashboard Presentation Rule
+
+- Current production dashboard is `v19.12 (Staged Reveal)`.
+- Boss-facing order must remain: photo first, LLM self-talk second, parsed thumbnail/result last.
+- The lower-left panel must always stay presentable. While no delayed result is public, show a clean `辨識中` state with current filename; never show raw `JSON Error` or internal playback/debug wording there.
+
 ## Remaining Work
 
 1. Add a stronger distant-view guard in backend and regression helper:
