@@ -2,6 +2,7 @@ import os
 import sys
 import importlib
 import argparse
+from pathlib import Path
 import time
 import json
 import base64
@@ -22,14 +23,14 @@ def force_reload_skills():
     skills_modules = [
         'skills.batch_orchestrator',
         'skills.prompt_versioning',
-        'skills.image_processing', 
+        'skills.image_processing',
         'skills.model_matching',
         'skills.field_extraction',
         'skills.evaluation',
         'skills.official_price',  # [v18.67] 官方價格驗證
         'skills.followme_reference'
     ]
-    
+
     for module_name in skills_modules:
         if module_name in sys.modules:
             importlib.reload(sys.modules[module_name])
@@ -39,7 +40,7 @@ force_reload_skills()
 
 # Import Skills (確保使用最新版本)
 from skills.batch_orchestrator import BatchOrchestrator
-from skills.prompt_versioning import PromptManager 
+from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
@@ -66,7 +67,7 @@ def calculate_image_cost(model_name, input_tokens, output_tokens):
     if not model_name:
         return None
     # Local models (LM Studio) have no cloud cost
-    if model_name == "qwen3vl8b-ocr" or "lm-studio" in str(model_name).lower():
+    if model_name in {"qwen/qwen3-vl-8b", "qwen3vl8b-ocr"} or "lm-studio" in str(model_name).lower():
         return 0.0
     rates = OPENCODE_GO_PRICING.get(model_name)
     if not rates:
@@ -259,6 +260,12 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
 
     if code_name:
         return code_name
+    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
+        return 'FollowMe M5 32"'
+    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
+        return 'FollowMe M7 32"'
+    if price_int and 12000 <= price_int <= 14000 and any(token in text for token in ["32", "M7", "S32FM70", "S32DM70", "4K"]):
+        return 'FollowMe M7 32"'
     if "PRO" in context_upper or "43" in context_upper or "S43FM" in context_upper or "PRO" in raw_model_text:
         return 'FollowMe Pro M7 43"'
     if "M5" in context_upper or "S32FM50" in context_upper:
@@ -267,10 +274,6 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
         return 'FollowMe M7 32"'
     if price_name:
         return price_name
-    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
-        return 'FollowMe M5 32"'
-    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
-        return 'FollowMe M7 32"'
     if price_int and price_int >= 15000:
         return 'FollowMe Pro M7 43"'
     if price_int and 9900 <= price_int <= 11000:
@@ -310,6 +313,22 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
         return None
     if has_followme_word:
         return normalize_followme_model(None, price, context_text)
+    return None
+
+
+def rescue_followme_32_from_side_label(context_text=""):
+    """Rescue FollowMe 32 when a side spec label and M7 price are clearly described."""
+    raw_text = str(context_text or "")
+    text = raw_text.upper()
+    if "FOLLOWME" not in text and "FOLLOW ME" not in text:
+        return None
+    has_product = "4K" in text or "移動式智慧聯網組" in raw_text
+    has_32 = bool(re.search(r'(?:32\s*(?:吋|型)|32\s*["”]|[(（]\s*32\s*["”]?\s*[)）])', raw_text, re.IGNORECASE))
+    has_side_label = any(token in raw_text for token in ["側標", "規格側標", "右側", "黑色規格", "3840x2160", "HDR10", "Type-C", "HDMI"])
+    prices = [int(value.replace(",", "")) for value in re.findall(r'(?<!\d)(1[23],?9[09]0)(?!\d)', raw_text)]
+    has_m7_price = any(price in {12900, 12990, 13900, 13990} for price in prices)
+    if has_product and has_32 and has_side_label and has_m7_price:
+        return {"model": 'FollowMe M7 32"', "price": str(next(price for price in prices if price in {12900, 12990, 13900, 13990}))}
     return None
 
 
@@ -577,7 +596,7 @@ def verify_no_cache():
     for root, dirs, files in os.walk('.'):
         if '__pycache__' in dirs:
             cache_dirs.append(os.path.join(root, '__pycache__'))
-    
+
     if cache_dirs:
         console.print(f"⚠️  [bold red]警告：發現 {len(cache_dirs)} 個快取目錄殘留[/bold red]")
         for cache_dir in cache_dirs:
@@ -611,6 +630,7 @@ CORS(flask_app)
 orchestrator: BatchOrchestrator = None
 api_client: OpenAI = None
 model_name_global = ""
+IMAGE_LOOKUP_CACHE = {}
 
 # [v17.09] Structured Output Schema (B-Mode)
 SAMSUNG_AUDIT_SCHEMA = {
@@ -624,10 +644,10 @@ SAMSUNG_AUDIT_SCHEMA = {
       "properties": {
         # [v17.14 Fix] Strict Pattern to ban English explanations
         # Allowed: Chinese, digits, punctuation, and valid model chars (including FollowMe mixed case)
-        "desc": { 
+        "desc": {
             "type": "string",
             "minLength": 60,
-            "maxLength": 200, 
+            "maxLength": 200,
             "pattern": "^[\\u4e00-\\u9fff0-9A-Za-z\\s，。、「」『』（）()：:；;！!？?\\-\\/,$]*$"
         },
         "data": {
@@ -668,7 +688,7 @@ def clamp_coordinates(x_pct, y_pct, w_pct, h_pct, img_w, img_h):
         top = int((y_pct / 100.0) * img_h)
         width = int((w_pct / 100.0) * img_w)
         height = int((h_pct / 100.0) * img_h)
-        
+
         right = left + width
         bottom = top + height
 
@@ -693,18 +713,18 @@ def sanitize_json(json_str):
     """
     import re
     if not json_str: return ""
-    
+
     # 1. Strip Markdown
     json_str = json_str.replace("```json", "").replace("```", "").strip()
-    
+
     # 2. Remove comments (// ...)
     lines = [line for line in json_str.split('\n') if not line.strip().startswith('//')]
     json_str = '\n'.join(lines)
-    
+
     # 3. Remove trailing commas
     json_str = re.sub(r',\s*}', '}', json_str)
     json_str = re.sub(r',\s*\]', ']', json_str)
-    
+
     # 4. Fix truncated JSON - specifically handle "price": truncation
     # Pattern: ends with "price": or "price": followed by incomplete value
     if re.search(r'"price"\s*:\s*$', json_str):
@@ -716,11 +736,11 @@ def sanitize_json(json_str):
     elif re.search(r'"price"\s*:\s*\d+$', json_str):
         # Price field has number but no closing brace
         json_str += '}'
-    
+
     # 5. General bracket/brace closing
     open_braces = json_str.count('{') - json_str.count('}')
     open_brackets = json_str.count('[') - json_str.count(']')
-    
+
     if open_braces > 0:
         # Check if we're in the middle of a string value
         last_colon = json_str.rfind(':')
@@ -729,13 +749,13 @@ def sanitize_json(json_str):
             # If value started but not closed
             if after_colon.startswith('"') and after_colon.count('"') % 2 == 1:
                 json_str += '"'
-        
+
         # Close any remaining open braces
         json_str += '}' * open_braces
-    
+
     if open_brackets > 0:
         json_str += ']' * open_brackets
-    
+
     return json_str
 
 # --- Helper: OpenCC Global ---
@@ -750,6 +770,10 @@ except ImportError:
 
 # 台灣慣用詞替換表(簡體/通用 → 台灣繁體)
 TAIWAN_WORD_MAP = [
+    ("電器行", "3C賣場"),
+    ("电器行", "3C賣場"),
+    ("家電賣場", "3C賣場"),
+    ("家电卖场", "3C賣場"),
     ("臺", "台"),          # 一臺 -> 一台
     ("裏", "裡"),          # OpenCC s2t 用「裏」,台灣慣用「裡」
     ("屏幕", "螢幕"),
@@ -870,16 +894,16 @@ def _detect_repetition(text: str) -> bool:
     如果發現長句子連續出現 2 次以上，判定為陷入迴圈。
     """
     if not text: return False
-    
+
     # 1. 簡單的逐行檢查
     lines = [L.strip() for L in text.split('\n') if len(L.strip()) > 15] # 忽略太短的行
     if len(lines) < 2: return False # [Modified] 至少要有2行才可能重複
-    
+
     # 檢查最後 15 行是否有重複
     recent_lines = lines[-15:]
     from collections import Counter
     counts = Counter(recent_lines)
-    
+
     # 如果任何一句話出現超過 2 次 [Modified]
     for line, count in counts.items():
         if count >= 2:
@@ -887,19 +911,19 @@ def _detect_repetition(text: str) -> bool:
             if len(line) > 10:
                 print(f"[Watchdog] 偵測到重複語句: {line[:20]}... (x{count})")
                 return True
-                
+
     # 2. 暴力 N-gram 檢查 (針對没換行的長段落)
     # 檢查長度為 30 的 substring 是否重複出現 3 次以上 [Modified]
     if len(text) > 200:
         window_size = 30
-        threshold = 3 
+        threshold = 3
         # 簡易採樣檢查
         for i in range(0, len(text) - window_size, 50): # 步長 50
             sub = text[i : i+window_size]
             if text.count(sub) >= threshold:
                 print(f"[Watchdog] 偵測到段落重複: {sub[:20]}... (x{text.count(sub)})")
                 return True
-                
+
     return False
 
 
@@ -1251,7 +1275,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
     # Init Orchestrator reference for logging
     global api_client, model_name_global, orchestrator
-    
+
     # RESET STREAM BUFFER FOR NEW IMAGE
     if orchestrator:
         orchestrator.stream_buffer = "" # Reset to empty (remove '...')
@@ -1273,10 +1297,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
     # Load Prompt
     prompt_bundle = prompt_mgr.get_prompt_bundle()
-    
+
     start_time = time.time()
     thinking_text = "" # [v17.18 Fix] Initialize early to prevent UnboundLocalError
-    
+
     # RESTORE ORIGINAL RESOLUTION (No Constraint)
     # [IRON RULE] User said: "Do NOT crop images for bulk processing."
     # For overnight bulk runs, keep one full image per request so a single hard photo cannot
@@ -1289,7 +1313,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     else:
         image_processor.config["max_size"] = None
         image_processor.config["max_dimensions"] = (2560, 1440)
-    
+
     # [v16.3 DEBUG] Force Print to see if we enter
     print(f"[DEBUG] process_single_image called for: {fname}")
 
@@ -1311,7 +1335,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         if not result:
             print(f"[ERROR] Image processing failed for {fname}")
             return {"error": "Image processing failed"}
-        full_image_b64 = result['base64'] 
+        full_image_b64 = result['base64']
         label_b64 = result.get('label_base64') # [v18.25] Dual Vision: Get High-Res Crop
         bottom_label_b64 = result.get('bottom_label_base64')
         bottom_center_b64 = result.get('bottom_center_base64')
@@ -1326,7 +1350,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         if bottom_center_b64: msg += " (下方價牌帶放大)"
         orchestrator.log_system(msg)
         console.print(f"[cyan]{msg}[/cyan]")
-    
+
     # Adopt User's "Samsung Manager" Persona Prompt + IRON RULE (v9.9)
     # Get model list for injection
     # v16.9 Fix: Actually load the list!
@@ -1335,7 +1359,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
              valid_models_str = f.read()
     except:
         valid_models_str = "(無法讀取型號表)"
-    
+
     # [v18.75 FIX] Load System Prompt from PromptManager (Bundle System)
     # 🔴 徹底修復：不再硬編碼 txt 檔案路徑，使用版本化的 Bundle 系統
     # [v18.76 動態讀取] 每張照片都重新讀取 prompt.txt，修改後不需重啟！
@@ -1368,7 +1392,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # v14.3: Use .replace() instead of .format() to avoid KeyError with JSON braces in prompt
     # [v18.12] Disabled Injection to prevent Hallucination
     # system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
-    #                                .replace("{examples_section}", "") 
+    #                                .replace("{examples_section}", "")
     followme_daily_reference = build_followme_prompt_section()
     if (not is_opencode_go) and fast_batch_mode and os.environ.get("OCR_FAST_PROMPT", "1").lower() in {"1", "true", "yes", "on"}:
         prompt_template = (
@@ -1376,7 +1400,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
             "分類規則：\n"
             "1. 遠景：完全看不到清楚型號或價格，且畫面主要是多台螢幕陳列。遠景不填 model/price。\n"
-            "2. FollowMe：主角螢幕有白色/銀色直立支架、圓形底座或托盤，才可判定。只用下方參考表輔助，不可把 LG 或其他品牌當三星。\n"
+            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；不要因為底座不完整入鏡而否定。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
             "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
             "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留。\n"
             "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
@@ -1392,12 +1416,12 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
     import uuid
     random_salt = str(uuid.uuid4())[:8]
-    
+
     # [v18.35 Stateless Purge]
     # 1. 強化無狀態提示 (Engineering Strategy)
     # 2. 恢復雙重視野 (Engineering Strategy)
     # 3. 確保每次都建立全新 messages
-    
+
     # Construct User Context
     user_images = []
 
@@ -1409,7 +1433,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         label_b64 = None
         bottom_label_b64 = None
         bottom_center_b64 = None
-        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
+        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。若是 FollowMe，FollowMe 字樣、FM 型號代碼、移動式支架/托盤線索都可作為判定依據；型號與價格盡量確認屬於同一主角商品。"
     else:
         # Image 2: High-Resolution (Crop) if detected.
         # When bottom-label strip is enabled, skip the auto label crop because it can grab a huge
@@ -1418,7 +1442,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
             user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。請執行『視覺歸屬』檢查。」\n圖片: {fname}\nRequestID: {random_salt}\n[提示]\n圖 1 (全景): 用於確認標籤相對於螢幕底座的位置歸屬。\n圖 2 (特寫): 用於讀取該標籤上的細微文字。\n請結合兩者，確保讀到的文字是來自於『歸屬於該螢幕的同一張標籤』。"
         else:
-            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊，並確認型號與價格位於同一張實體標籤上。"
+            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。若是 FollowMe，FollowMe 字樣、FM 型號代碼、移動式支架/托盤線索都可作為判定依據；型號與價格盡量確認屬於同一主角商品。"
 
         if bottom_label_b64:
             user_images.append({
@@ -1461,11 +1485,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     full_response_text = ""
     # [v17.30 Full Schema] Initialize with all required fields to avoid omission
     result_json = {
-        "view_type": "單機", 
-        "screen_status": "", 
+        "view_type": "單機",
+        "screen_status": "",
         "quality_issue": "",
-        "model": None, 
-        "price": None, 
+        "model": None,
+        "price": None,
         "category": "單機",
         "black_screen": False,
         "thinking": ""
@@ -1647,18 +1671,18 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
         # Move prompt loading inside try to catch formatting errors
         # ... actually already done above ...
-        
+
         # [v18.90] Price Consistency Retry Loop
         # 包裝 LLM 呼叫與解析，當價格/型號矛盾時給予二次機會
         max_retries = int(os.environ.get("OCR_MAX_RETRIES", "0" if fast_batch_mode else "1"))
         final_result = None
-        
+
         for attempt in range(max_retries + 1):
             start_llm_t = time.time()
             if attempt > 0:
                 console.print(f"[bold yellow]🔄 觸發重試 (Attempt {attempt+1}/{max_retries+1}) - 加入價格警告提示...[/bold yellow]")
                 orchestrator.log_system(f"🔄 [Auto-Retry] 觸發價格與型號不一致的重試機制...")
-            
+
             request_kwargs = {
                 "model": model_name_global,
                 "messages": messages,
@@ -1676,18 +1700,18 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 # max_tokens=1024, # Let model decide or use default
                 # presence_penalty=1.5, # Removed: harmful for OCR (forces diversity)
             )
-            
+
             for chunk in stream:
                 # ... (Stream handling code remains same, omitted for brevity but conceptually here) ...
                 # [Copied from original stream processing to ensure identical behavior]
                 if orchestrator and not orchestrator.is_running:
                     console.print("[red]🛑 用戶強制中斷串流[/red]")
-                    try: stream.close() 
+                    try: stream.close()
                     except: pass
                     return {"error": "Stopped by user"}
 
                 if not hasattr(chunk, 'choices') or not chunk.choices: continue
-                
+
                 if not full_response_text and attempt == 0: # Only log first char on first try to avoid spam
                      duration_llm_first = time.time() - start_llm_t
                      console.print(f"[bold green]✨ LLM 已回應 (首字耗時: {duration_llm_first:.2f}s)[/bold green]")
@@ -1698,19 +1722,19 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     content_piece = delta.content
                 elif hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                     content_piece = delta.reasoning_content
-                
+
                 if content_piece:
                     content_tc = to_tc(content_piece)
                     full_response_text += content_tc
                     VERSION = "v18.91 (Debug Log)" # Update locally for display
-                    
+
                     # Display Logic
                     if '{' in full_response_text:
                         clean_display = full_response_text.split('{')[0].strip()
                         current_display = clean_display
                     else:
                         current_display = full_response_text
-                    
+
                     current_display = current_display.lstrip('「').rstrip('」').replace('```json', '').replace('```', '').strip()
                     # 獨白欄不需要顯示「思考:」標題前綴
                     import re as _re
@@ -1731,7 +1755,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # Parse Result
             args_str = None
             thinking_text = full_response_text
-            
+
             # ... (Parsing Logic) ...
             lines = full_response_text.strip().split('\n')
             json_line = None
@@ -1742,7 +1766,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     json_line = line_stripped
                 elif line_stripped and not line_stripped.startswith('{'):
                     monologue_lines.append(line_stripped)
-            
+
             if json_line:
                 args_str = json_line
                 thinking_text = ' '.join(monologue_lines) if monologue_lines else "..."
@@ -1769,7 +1793,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     parsed = json.loads(args_str)
                 except:
                     pass
-            
+
             # [v18.99 Fix] Retry if JSON is completely missing
             if not parsed and attempt < max_retries:
                 console.print(f"[bold red]⚠️ 未偵測到有效 JSON，要求 LLM 補完...[/bold red]")
@@ -1779,28 +1803,28 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 # Prompt user to force JSON
                 messages.append({"role": "user", "content": "你忘了輸出 JSON！請依照格式要求，在最後補上 JSON 區塊。\n(只輸出 JSON，不要再解釋)"})
                 continue
-            
+
             # [v18.90] Price Consistency Check
             price_check_passed = True
             if parsed and isinstance(parsed, dict):
                 model_check = parsed.get("model")
                 price_check = parsed.get("price")
-                
+
                 if should_compare_official_price(fname) and model_check and price_check:
                     # Get Official Price
                     from skills.official_price import get_price_manager
                     pm = get_price_manager()
                     # [v18.93 Hotfix] Corrected method name and return type handling
                     off_price = pm.get_official_price(model_check)
-                    
+
                     if off_price and off_price > 0: # Check for valid price (ignore None or -1)
                         try:
                             # Parse OCR Price
                             ocr_p = int(str(price_check).replace(',', '').replace('$', '').replace('NT', '').strip())
-                            
+
                             # Diff Calculation (Official Price is single int now)
                             diff = abs(ocr_p - off_price)
-                            
+
                             # Threshold: 5000 TWD
                             if diff > 5000:
                                 console.print(f"[bold red]⚠️ 價格矛盾警報: 型號 {model_check} 官網價格 ${off_price}, 但 OCR 識別為 ${ocr_p}. 價差 ${int(diff)}[/bold red]")
@@ -1819,19 +1843,19 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                                     console.print(f"[yellow]⚠️ 已達重試上限，保留原始結果。[/yellow]")
                         except:
                             pass # Parse error, skip check
-            
+
             if price_check_passed:
                 final_result = parsed
                 break # Success!
-            
+
             # If we are here, we are retrying...
-        
+
         # End of Retry Loop - Use result from last attempt (parsed)
         # Re-assign parsed to ensure downstream logic works
         if not parsed and args_str: # Try parse one last time if loop finished
              try: parsed = json.loads(args_str)
              except: pass
-        
+
         # [v17.28] New Prompt puts 'desc' OUTSIDE JSON.
         # But if the model reverted to old schema (desc inside), handle it.
         if parsed and 'desc' in parsed and not thinking_text:
@@ -1850,17 +1874,17 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         data_obj = parsed # Default
         if parsed and isinstance(parsed, dict):
              data_obj = parsed.get('data', parsed)
-        
+
         if not isinstance(data_obj, dict): data_obj = {} # Fallback to empty dict to prevent AttributeError
 
         # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
         import difflib # Ensure import available (inline is safe)
         raw_model = data_obj.get("model")
-        
+
         # [v18.81] 移除 FollowMe 自動偵測邏輯
         # 原因：AI 幻覺說「圓形底座」時會誤觸發，導致錯誤的型號自動填入
         # FollowMe 判定應該只依據 AI 明確輸出的型號，不要從獨白關鍵字推斷
-        
+
         if raw_model and isinstance(raw_model, str) and raw_model.upper() != "NULL":
             # [v18.28] Enhanced Noise Removal for Raw OCR (Expanded)
             clean_model = raw_model.strip().upper()
@@ -1870,42 +1894,42 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             for noise in noise_patterns:
                 clean_model = clean_model.replace(noise, "")
             clean_model = clean_model.strip()
-            
+
             # [Debug] Trace Model Validation
             in_list = clean_model in valid_models_list
             console.print(f"[dim]🔍 [比對追蹤] Raw='{raw_model}' -> Clean='{clean_model}' -> InList={in_list}[/dim]")
 
             # [v18.15] FollowMe Logic (Price-Based Manual Mapping)
             is_followme_bypass = False # [v18.44] Flag to pass strict checking
-            
+
             # [v18.99] 修復：如果 AI 已識別出有效的 S 型號 (如 S32M703UC)，就不要強制覆蓋為 FollowMe
             # 只有當 clean_model 是空的、無效的、或明確包含 "FOLLOWME" 時才觸發 FollowMe 邏輯
             has_valid_s_model = bool(clean_model and clean_model.startswith('S') and len(clean_model) >= 8)
-            
+
             # [v18.94] Enhanced FollowMe Detection (Check Raw & Thinking)
             # 即使 clean_model 被洗掉，只要 raw_model 或 thinking_text 有跡象，就啟動救援
             followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
             negative_followme_context = has_negative_followme_context(" ".join(str(part or "") for part in [raw_model, thinking_text]))
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
-            
+
             # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
-            # 1. clean_model 明確包含 "FOLLOWME" 
+            # 1. clean_model 明確包含 "FOLLOWME"
             # 2. 或者 clean_model 為空/無效，且 raw_model/thinking_text 有 FollowMe 關鍵字
             if "FOLLOWME" in clean_model and not negative_followme_context and not borrowed_model_context:
                 is_followme_candidate = True
             elif not has_valid_s_model and not negative_followme_context and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
-                if raw_model and any(h in raw_model.upper() for h in followme_hints): 
+                if raw_model and any(h in raw_model.upper() for h in followme_hints):
                     is_followme_candidate = True
-                elif thinking_text and any(h in thinking_text.upper() for h in followme_hints): 
+                elif thinking_text and any(h in thinking_text.upper() for h in followme_hints):
                     is_followme_candidate = True
-            
+
             if is_followme_candidate:
                  p_val = data_obj.get("price")
-                 mapped_model = normalize_followme_model(raw_model, p_val, thinking_text)
+                 mapped_model = normalize_followme_model(raw_model or clean_model, p_val, thinking_text)
                  if not mapped_model:
                      mapped_model = 'FollowMe M7 32"'
-                     
+
                  clean_model = mapped_model
                  is_followme_bypass = True # [v18.44] Enable Bypass
                  # [v18.63] Silent log, no UI output
@@ -1931,12 +1955,12 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                              valid_models_list.append(clean_model)
                     else:
                         # [v18.56] Silently set to None if strictly invalid
-                        
+
                         # [v18.96] Safety Net for Discontinued Models (停產型號救星)
                         # 如果官網查不到 (404/停產)，但格式明明就是 S 型號 (S+8~15碼)，強制保留！
                         import re
                         is_valid_format = re.match(r'^S[A-Z0-9]{7,14}$', clean_model)
-                        
+
                         if is_valid_format:
                              console.print(f"[yellow]⚠️ [Auto-Discover Failed] 官網查無 {clean_model} (可能已停產)，但格式正確，強制信任！[/yellow]")
                              data_obj["model"] = clean_model
@@ -1994,15 +2018,15 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 # We check raw_price provided by LLM.
                 raw_str = str(raw_price)
                 has_currency_symbol = '$' in raw_str or ',' in raw_str or 'NT' in raw_str.upper()
-                
+
                 # Rule: If value is < 2000 AND has no currency symbol, it's likely curvature (1000, 1500, 1800)
                 # If value is > 2000 (e.g. 3290), we forgive missing symbol if clearly not curvature.
-                
+
                 try:
                     p_int = int(clean_price)
                     # Price guard: clear obvious plan/accessory prices, but keep low-end monitor sale prices.
                     min_price = 2000
-                    
+
                     if p_int < min_price:
                          console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) < {min_price} -> 過低 (方案/月付/配件價，不是螢幕商品售價)[/dim]")
                          data_obj["price"] = None
@@ -2038,7 +2062,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     desc_model = match.group(1).strip().upper()
                     break
             desc_model_is_speculative = bool(re.search(r"(應為|可能|類似|推測).{0,20}" + re.escape(desc_model or ""), thinking_text, re.IGNORECASE)) or bool(re.search(r"沒有.{0,8}完整.{0,6}型號", thinking_text))
-            
+
             # 從獨白提取價格
             desc_price_patterns = [
                 r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*寫\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
@@ -2080,14 +2104,21 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 if c_curr != c_desc and c_desc in valid_models_list:
                     console.print(f"[yellow]⚠️ [獨白驗證] JSON型號({c_curr}) 與 獨白型號({c_desc}) 不符! 採用獨白型號。[/yellow]")
                     data_obj["model"] = c_desc
-            
+
             # 驗證價格一致性
             current_price = data_obj.get("price")
-            if not current_price and desc_price and not rescue_blocked_by_distant_view: # 如果 JSON 沒抓到但獨白有
+            if desc_price and not rescue_blocked_by_distant_view:
                 rescued_price = clean_monitor_price(desc_price)
                 if rescued_price:
-                    console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
-                    data_obj["price"] = rescued_price
+                    current_digits = "".join(c for c in str(current_price or "") if c.isdigit())
+                    rescued_digits = "".join(c for c in str(rescued_price or "") if c.isdigit())
+                    followme_price_context = "FOLLOWME" in str(data_obj.get("model") or "").upper() or "FOLLOWME" in thinking_text.upper()
+                    if not current_price:
+                        console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
+                        data_obj["price"] = rescued_price
+                    elif current_digits and rescued_digits and current_digits != rescued_digits and followme_price_context:
+                        console.print(f"[yellow]⚠️ [FollowMe 價格校正] JSON價格({current_digits}) 與獨白價牌({rescued_digits}) 不符，採用獨白價牌[/yellow]")
+                        data_obj["price"] = rescued_price
                 else:
                     console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
 
@@ -2103,6 +2134,16 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 console.print("[dim]⚠️ [遠景保護] 遠景描述中的零散型號/價格不補入正式答案[/dim]")
             data_obj["model"] = None
             data_obj["price"] = None
+
+        side_label_followme = rescue_followme_32_from_side_label(thinking_text)
+        if side_label_followme and data_obj.get("view_type") == "遠景":
+            console.print("[yellow]⚠️ [FollowMe 側標救援] 讀到 FollowMe 4K/32 側標與 12,900-13,990 價牌，覆蓋遠景誤判[/yellow]")
+            data_obj["view_type"] = "單機"
+            data_obj["category"] = "單機"
+            data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
+            data_obj["quality_issue"] = ""
+            data_obj["model"] = side_label_followme["model"]
+            data_obj["price"] = side_label_followme["price"]
 
         corrected_model = correct_common_model_price_conflict(data_obj.get("model"), data_obj.get("price"), thinking_text)
         if corrected_model != data_obj.get("model"):
@@ -2130,18 +2171,16 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             current_price = data_obj.get("price")
             has_model = bool(current_model) and str(current_model).lower() not in ("null", "none", "")
             has_price = bool(current_price) and str(current_price).lower() not in ("null", "none", "")
-            # [v19.8] Conservative distant-view guard: only when no model and thinking explicitly
-            # describes a display wall / shelf / many monitors without a readable protagonist.
             dv_keywords = [
                 "遠景", "多台", "展示區", "展示牆", "貨架", "海報", "廣告",
                 "整排", "一排", "一整排", "牆上", "多支", "多螢幕", "陳列架",
                 "非三星", "其他品牌", "多品牌",
             ]
-            dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰", "主角是"]
+            dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰"]
             has_dv_clue = thinking_text and any(kw in thinking_text for kw in dv_keywords)
             has_single_clue = thinking_text and any(excl in thinking_text for excl in dv_exclusions)
 
-            # [v19.8] Strong guard: no model + no price + explicit distant-view clue => 遠景
+            # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
             if not has_model and not has_price and has_dv_clue and not has_single_clue:
                 console.print("[yellow]⚠️ [遠景守衛] 無型號+無價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
                 data_obj["view_type"] = "遠景"
@@ -2160,7 +2199,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         # 4. Auto-Calculate Quality Issue
         p_val = data_obj.get("price")
         m_val = data_obj.get("model")
-        
+
         if p_val and not m_val:
             data_obj["quality_issue"] = "不合格-沒有規格牌"
         elif m_val and not p_val:
@@ -2174,7 +2213,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                  # [v18.02] Distinguish 'Missing' vs 'Unclear' based on Description keywords
                  desc_keywords_unclear = ["不清", "模糊", "反光", "遮擋", "無法辨識", "看不到"]
                  is_unclear = any(k in thinking_text for k in desc_keywords_unclear) if thinking_text else False
-                 
+
                  if is_unclear:
                      data_obj["quality_issue"] = "不合格-照不清楚"
                  else:
@@ -2206,7 +2245,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
              # [v17.09] Thinking Text is already extracted from Schema 'desc' field
             if not thinking_text:
                 thinking_text = "..." # Fallback
-            
+
             # Remove any unwanted residue (like [思考] if AI ignores prompt)
             # [v17.18 Safety] Ensure string
             if thinking_text is None: thinking_text = "..."
@@ -2218,7 +2257,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             if thinking_text:
                 import re
                 thinking_text = re.sub(r'(?i)^observation:\s*', '', thinking_text).strip()
-                
+
                 # [v18.99] 去除重複的「整體符合「遠景」條件」（AI 有時會講兩次）
                 distant_phrase = '整體符合「遠景」條件'
                 if thinking_text.count(distant_phrase) > 1:
@@ -2241,7 +2280,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 }
                 for code_term, natural_term in replacements.items():
                     clean_think = re.sub(re.escape(code_term), natural_term, clean_think, flags=re.IGNORECASE)
-                
+
                 # [v17.26 Fix] Ensure what we show is what we save
                 # We update the 'thinking' field in result_json LATER, so we just log here.
                 orchestrator.log_system(f"[THINK] {clean_think}")
@@ -2250,7 +2289,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             parsed_model = result_json.get("model")
             if parsed_model:
                 parsed_model = parsed_model.strip().upper()
-            
+
             # ... (Model matching remains same) ...
             valid_models_list = orchestrator.model_matcher.valid_models if orchestrator and orchestrator.model_matcher else []
             if parsed_model and parsed_model not in valid_models_list:
@@ -2260,16 +2299,16 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     result_json["model"] = best_match
                 else:
                     result_json["model"] = parsed_model
-            
+
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
-            
+
             # [v17.23 Fix] Force Quality Issue if Model/Price missing in Single Unit
             if result_json.get("view_type") == "單機" or current_cat == "單機":
                  # If Model is missing and no specific failure reason given, it MUST be "No Spec Card"
                 if not result_json.get("model") and not result_json.get("quality_issue"):
                      result_json["quality_issue"] = "不合格-沒有規格牌"
-                
+
                 # If Price is missing and no failure reason, it might be "No Price Card"
                 # (But check if Spec Card logic took precedence? Standard says Spec > Price)
                 elif not result_json.get("price") and not result_json.get("quality_issue"):
@@ -2284,7 +2323,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 # [v16.33 Refinement] Strictly map requested 4 unqualified types
                 qi = result_json.get("quality_issue")
                 unqualified_types = ["照不清楚", "沒有規格牌", "沒有價格牌", "沒有規格和價格牌"]
-                
+
                 if qi in unqualified_types:
                     result_json["category"] = f"不合格-{qi}"
                 elif qi == "無標籤(正常)":
@@ -2308,7 +2347,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                      result_json["price"] = None
                 else:
                     # Proceed with digit cleaning
-                     pass 
+                     pass
             # if raw_price and isinstance(raw_price, str) and ',' not in raw_price and '$' not in raw_price and 'NT' not in raw_price:
             #     result_json["price"] = None
 
@@ -2317,7 +2356,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             view_type = result_json.get("view_type")
             screen_status = result_json.get("screen_status")
             quality_issue = result_json.get("quality_issue")
-            
+
             # [v18.99 Backup] 獨白關鍵字備援檢測：若 JSON 沒說遠景，但獨白明確說了，則強制修正
             if thinking_text and '整體符合「遠景」條件' in thinking_text:
                 has_single_unit_evidence = has_strong_single_unit_evidence(thinking_text)
@@ -2330,7 +2369,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     result_json['quality_issue'] = ''
                 elif has_single_unit_evidence:
                     console.print("[yellow]⚠️ [獨白備援] 偵測到單機線索（台數/標籤/價格牌），略過遠景強制修正[/yellow]")
-            
+
             if view_type == '遠景':
                 result_json['category'] = '遠景'
             elif screen_status == '黑屏':
@@ -2357,11 +2396,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 result_json["screen_status"] = ""
             if result_json.get("quality_issue") in ["無", "正常", "None", None, "null"]:
                 result_json["quality_issue"] = ""
-            
+
             # Trim whitespaces just in case
             if result_json.get("screen_status"): result_json["screen_status"] = result_json["screen_status"].strip()
             if result_json.get("quality_issue"): result_json["quality_issue"] = result_json["quality_issue"].strip()
-            
+
             # Final fallback if still nothing
             if not result_json.get('category'):
                  result_json['category'] = '失敗' if not result_json.get('model') else '單機'
@@ -2369,17 +2408,17 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         except Exception as e:
             log.error(f"Validation Error: {e}")
             if orchestrator: orchestrator.log_system(f"⚠️ 解析異常: {str(e)}")
-            
+
         # [v18.67] 官方價格驗證
         try:
             model_for_price = result_json.get("model")
             price_for_validate = result_json.get("price")
             compare_official = should_compare_official_price(fname)
-            
+
             # [v18.69] 自動發現新型號
             if compare_official and model_for_price:
                 try_discover_model(model_for_price)
-            
+
             if compare_official and model_for_price and price_for_validate and str(price_for_validate).isdigit():
                 price_int = int(price_for_validate)
                 price_check = validate_ocr_price(model_for_price, price_int)
@@ -2387,7 +2426,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 result_json['price_symbol'] = price_check['symbol']
                 result_json['official_price'] = price_check['official_price']
                 result_json['price_diff_percent'] = price_check['diff_percent']
-                
+
                 # 價格差異 > 20% 時觸發警告
                 if price_check['status'] in ['high', 'low'] and price_check['official_price']:
                     diff = price_check['diff_percent']
@@ -2407,8 +2446,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 result_json['price_diff_percent'] = ''
         except Exception as e:
             log.warning(f"Price validation error: {e}")
-            
-        # [v9.71 Universal Summary Log] 
+
+        # [v9.71 Universal Summary Log]
         # MOVED OUT OF ELSE BLOCK to guarantee execution.
         if orchestrator:
             # [THINK] log is already emitted in the validation block above via [THINK] prefix
@@ -2439,27 +2478,27 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         import traceback
         error_detail = traceback.format_exc()
         error_str = str(e).lower()
-        
+
         # [v18.99] 友善錯誤訊息：針對 LM Studio 常見錯誤
         if "failed to process image" in error_str:
             friendly_msg = "❌ LLM 回應「無法處理圖片」- 可能是圖片格式不支援或 LM Studio 模型問題"
             log.error(f"LM Studio 圖片處理失敗: {e}")
-            if orchestrator: 
+            if orchestrator:
                 orchestrator.log_system(friendly_msg)
                 console.print(f"[red]{friendly_msg}[/red]")
                 console.print(f"[dim]💡 建議: 確認 LM Studio 模型是否支援圖片輸入 (需要 Vision 模型如 Qwen-VL)[/dim]")
         else:
             log.error(f"Analysis Failed: {e}")
             log.error(f"詳細錯誤: {error_detail}")
-            if orchestrator: 
+            if orchestrator:
                 orchestrator.log_system(f"❌ 系統錯誤: {str(e)}")
                 console.print(f"[red]❌ 詳細錯誤追蹤:\n{error_detail}[/red]")
-    
+
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
     final_think = thinking_text if 'thinking_text' in locals() else ""
     result_json['thinking'] = final_think
-    
+
     return result_json
 
 # --- Flask API Routes ---
@@ -2491,37 +2530,37 @@ def get_status():
     """獲取系統狀態"""
     if not orchestrator:
         return jsonify({"error": "Orchestrator 未初始化"}), 500
-    
+
     try:
         # 構建狀態對象
         metrics = orchestrator.get_performance_metrics()
-        
+
         # [🔋 v14.9.1 DEDUPLICATED STATS]
         # Use full record aggregation for accurate, deduplicated counts
         total_success_list = orchestrator.get_all_records()
         total_failed_list = orchestrator.get_all_failed_records()
-        
+
         total_success = len(total_success_list)
         total_failed = len(total_failed_list)
-        
+
         stats = {
             "processed": total_success + total_failed,
             "success": total_success,
             "failed": total_failed,
             "total": orchestrator.stats.get('total', 0)
         }
-        
+
         # Keep live self-talk tied to the active image. Showing the previous
         # result here makes the dashboard appear one image out of sync.
         current_file = getattr(orchestrator, 'current_file', None)
         stream_file = getattr(orchestrator, 'stream_file', None)
         stream_buffer = str(orchestrator.stream_buffer) if stream_file == current_file else ""
-        
+
         # [OCG-v2.3] Expose current model and per-image cost info
         current_model = getattr(orchestrator, 'last_model_name', None) or model_name_global or "未知"
         last_token_usage = getattr(orchestrator, 'last_token_usage', None) or {}
         last_image_cost = getattr(orchestrator, 'last_image_cost', None)
-        if current_model == "qwen3vl8b-ocr" or "lm-studio" in str(current_model).lower():
+        if current_model in {"qwen/qwen3-vl-8b", "qwen3vl8b-ocr"} or "lm-studio" in str(current_model).lower():
             last_image_cost = 0.0
 
         status_obj = {
@@ -2541,6 +2580,8 @@ def get_status():
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
             "is_running": orchestrator.is_running,
             "image_dir": getattr(orchestrator, 'image_dir', None), # [v19.8] Current source folder for dashboard
+            "source_root": r"D:\00_商化\00_未整理商化照片",
+            "current_relative_dir": str(Path(getattr(orchestrator, 'image_dir', '')).resolve().relative_to(Path(r"D:\00_商化\00_未整理商化照片").resolve())) if getattr(orchestrator, 'image_dir', None) and str(Path(getattr(orchestrator, 'image_dir')).resolve()).startswith(str(Path(r"D:\00_商化\00_未整理商化照片").resolve())) else getattr(orchestrator, 'image_dir', None),
             "resources": {
                 "cpu": psutil.cpu_percent(interval=0.1),
                 "ram": psutil.virtual_memory().percent
@@ -2555,20 +2596,20 @@ def get_logs():
     """獲取系統日誌"""
     if not orchestrator:
         return jsonify({"error": "Orchestrator 未初始化"}), 500
-    
+
     try:
         # 使用分頁參數
         last = int(request.args.get('last', '0'))
         lines = int(request.args.get('lines', '50'))
-        
+
         all_logs = list(orchestrator.system_logs)
-        
+
         # 從last位置開始取logs
         start_idx = max(0, last)
         end_idx = min(len(all_logs), start_idx + lines)
-        
+
         logs_slice = all_logs[start_idx:end_idx]
-        
+
         return jsonify({
             "logs": logs_slice,
             "total": len(all_logs),
@@ -2577,12 +2618,62 @@ def get_logs():
     except Exception as e:
         return jsonify({"error": f"獲取日誌失敗: {str(e)}"}), 500
 
+def _resolve_dashboard_image_path(filename: str) -> str | None:
+    """Resolve dashboard image requests to the original photo whenever possible."""
+    if not filename:
+        return None
+
+    if os.path.isabs(filename) and os.path.exists(filename):
+        return filename
+
+    safe_name = os.path.basename(filename)
+    if not safe_name:
+        return None
+
+    current_dir = ""
+    if orchestrator:
+        current_dir = orchestrator.config.get("image_dir") or getattr(orchestrator, "image_dir", "") or ""
+
+    if current_dir:
+        current_candidate = os.path.join(current_dir, safe_name)
+        if os.path.exists(current_candidate):
+            return current_candidate
+
+    cached = IMAGE_LOOKUP_CACHE.get(safe_name)
+    if cached and os.path.exists(cached):
+        return cached
+
+    source_root = Path(r"D:\00_商化\00_未整理商化照片")
+    if source_root.exists():
+        try:
+            for path in source_root.rglob(safe_name):
+                if path.is_file():
+                    resolved = str(path)
+                    IMAGE_LOOKUP_CACHE[safe_name] = resolved
+                    return resolved
+        except OSError:
+            return None
+
+    return None
+
+
 @flask_app.route('/api/image/<path:filename>')
 def get_image(filename):
+    if not orchestrator:
+        return jsonify({"error": "Orchestrator is not ready"}), 503
+    img_path = _resolve_dashboard_image_path(filename)
+    if not img_path:
+        return jsonify({"error": f"Image not found: {filename}"}), 404
+    response = send_file(img_path, mimetype='image/jpeg')
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
     """提供圖片檔案"""
-    if not orchestrator: 
+    if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 503
-    
+
     try:
         # 安全路徑處理: 支援絕對路徑或相對路徑
         if os.path.isabs(filename) and os.path.exists(filename):
@@ -2590,10 +2681,10 @@ def get_image(filename):
         else:
             safe_name = os.path.basename(filename)
             img_path = os.path.join(orchestrator.config.get("image_dir", "photos"), safe_name)
-        
+
         if not os.path.exists(img_path):
             return jsonify({"error": f"圖片不存在: {filename}"}), 404
-            
+
         return send_file(img_path, mimetype='image/jpeg')
     except Exception as e:
         return jsonify({"error": f"讀取圖片失敗: {str(e)}"}), 500
@@ -2608,10 +2699,10 @@ def get_success_records():
     """提供本次 Session 的成功辨識紀錄 (全量)"""
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
-    
+
     # [DEBUG] Visible Proof for User
     print(f"[API] 🟢 /api/success_records called. Path: {orchestrator.image_dir}")
-    
+
     # Return full run results (in memory)
     # [v11.4] Aggregated History (Current + Legacy + Previous Sessions)
     results = orchestrator.get_all_records()
@@ -2635,17 +2726,17 @@ def serve_optimized_dashboard():
         import os
         current_dir = os.getcwd()
         dashboard_path = os.path.join(current_dir, 'dashboard_optimized.html')
-        
+
         if not os.path.exists(dashboard_path):
             return f"Error: dashboard_optimized.html 檔案不存在於 {current_dir}", 404
-            
+
         with open(dashboard_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+
         resp = Response(content, mimetype='text/html')
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         return resp
-        
+
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
@@ -2677,18 +2768,18 @@ def start_batch():
     """啟動批次處理 (可指定資料夾)"""
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
-    
+
     try:
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
-        
+
         # Get params from request
         req_data = request.json or {}
         target_dir = req_data.get('dir')
         restart = req_data.get('restart', False)
         reprocess_last_n = req_data.get('reprocess_last_n', 0)
         confirmed = req_data.get('confirmed', False)
-        
+
         if target_dir:
             if os.path.exists(target_dir):
                 orchestrator.image_dir = target_dir
@@ -2732,11 +2823,11 @@ def start_batch():
         # 開始批次處理
         # [v19.1] Save Config on Start
         save_last_config(orchestrator.image_dir, model_name_global)
-        
+
         orchestrator.start_batch(restart=restart, reprocess_last_n=reprocess_last_n)
         mode_text = "重新啟動" if restart else "繼續執行"
         return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
-        
+
     except Exception as e:
         return jsonify({"error": f"啟動失敗: {str(e)}"}), 500
 
@@ -2745,20 +2836,20 @@ def set_work_dir():
     """[v19.0] 允許前端在不啟動批次的情況下切換工作目錄，以便查看歷史紀錄"""
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
-    
+
     try:
         data = request.json
         target_dir = data.get('dir')
-        
+
         if not target_dir:
             return jsonify({"error": "Missing dir parameter"}), 400
-            
+
         if os.path.exists(target_dir):
             orchestrator.image_dir = target_dir
             orchestrator.config['image_dir'] = target_dir
             # [v19.1] Save Config on Switch
             save_last_config(target_dir, model_name_global)
-            
+
             # [v19.6 Fix] Refresh stats immediately for correct dashboard counts
             orchestrator.refresh_stats()
 
@@ -2829,7 +2920,7 @@ def get_llm_config():
             "api_key_set": bool(last_config.get("last_api_key")),
             "available_engines": [
                 {"id": "local_lm_studio", "name": "本機 LM Studio (Qwen3-VL)", "vision": True,
-                 "api_base": "http://127.0.0.1:1234/v1", "model": "qwen3vl8b-ocr"},
+                 "api_base": "http://127.0.0.1:1234/v1", "model": "qwen/qwen3-vl-8b"},
                 {"id": "opencode_mimo_omni", "name": "OpenCode Go: mimo-v2-omni (多模態)", "vision": True,
                  "api_base": "https://opencode.ai/zen/go/v1", "model": "mimo-v2-omni"},
                 {"id": "opencode_qwen37_max", "name": "OpenCode Go: qwen3.7-max", "vision": True,
@@ -2859,22 +2950,22 @@ def update_record():
     """[v11.6] Update a specific record by filename"""
     if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 500
-    
+
     try:
         data = request.json
         filename = data.get('filename')
         updates = data.get('updates', {})
-        
+
         if not filename or not updates:
             return jsonify({"error": "Missing filename or updates"}), 400
-            
+
         success, msg = orchestrator.update_record_by_filename(filename, updates)
-        
+
         if success:
             return jsonify({"status": "success", "message": msg})
         else:
             return jsonify({"error": msg}), 404
-            
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2886,15 +2977,15 @@ def rerun_file():
     """
     if not orchestrator:
         return jsonify({"error": "Orchestrator 未初始化"}), 500
-    
+
     try:
         data = request.json
         filename = data.get('filename')
         if not filename:
             return jsonify({"error": "Missing filename"}), 400
-            
+
         success = orchestrator.force_rerun(filename)
-        
+
         # [v16.51 Fix] Robust Auto-restart using standard start_batch logic
         if success:
              # Check if thread is alive. If not, start it using standard method.
@@ -2902,7 +2993,7 @@ def rerun_file():
                  print(f"[Run] Auto-starting batch for priority item: {filename}")
                  # Use start_batch to ensure all session variables and stop_events are handled correctly
                  orchestrator.start_batch(limit=None, restart=False)
-                 
+
              return jsonify({"status": "queued", "message": f"{filename} 已加入優先重跑佇列 (立即執行)"})
         else:
            return jsonify({"status": "exists", "message": "此檔案已在佇列中"}), 200
@@ -2915,7 +3006,7 @@ def get_failed_records():
     """Returns ALL unique failed records from history + current session."""
     if not orchestrator:
         return jsonify([])
-    
+
     try:
         # [v12.2 Fix] Return aggregated unique failures
         return jsonify(orchestrator.get_all_failed_records())
@@ -2926,39 +3017,39 @@ def get_failed_records():
 @flask_app.route('/api/correct', methods=['POST'])
 def correct_result():
     """新的修正API端點，用於整合dashboard (僅存檔，不學習)"""
-    if not orchestrator: 
+    if not orchestrator:
         return jsonify({"error": "系統未初始化"}), 503
-    
+
     try:
         data = request.json
         filename = data.get('filename')
-        
+
         if not filename:
             return jsonify({"error": "缺少檔名"}), 400
-        
+
         # 創建修正資料 [v11.5 New Schema]
         correction_data = {
             "view_type": data.get('view_type', '單機'), # Default View
-            "screen_status": data.get('screen_status', ''), 
+            "screen_status": data.get('screen_status', ''),
             "quality_issue": data.get('quality_issue', ''),
             "note": data.get('note', ''),
             "model": data.get('model', ''),
             "price": data.get('price', '')
         }
-        
+
         # [v14.7] 僅記錄到紀錄中，不進行動態學習
         orchestrator.update_record_by_filename(filename, correction_data)
-        
+
         # 記錄到日誌
         orchestrator.log_system(f"✅ 人工修正已儲存: {filename}")
-        
+
         return jsonify({
-            "status": "success", 
+            "status": "success",
             "message": "修正已提交並儲存",
             "filename": filename,
             "correction": correction_data
         })
-        
+
     except Exception as e:
         return jsonify({"error": f"修正失敗: {str(e)}"}), 500
 
@@ -2988,7 +3079,7 @@ def main():
     # === 鐵律：首先執行版本檢查 ===
     print_version_info()
     verify_no_cache()
-    
+
     # Fix for Windows Console Encoding (CP950 vs UTF-8)
     import sys
     try:
@@ -3004,13 +3095,13 @@ def main():
     flask_app.logger.setLevel(logging.WARNING)
 
     global orchestrator, api_client, model_name_global
-    
+
     parser = argparse.ArgumentParser()
     # Change default to the actual target directory to avoid CLI encoding issues
     parser.add_argument("--dir", default="商化照片-202601", help="Image directory")
     parser.add_argument("--api_base", default=os.environ.get("LOCAL_LLM_API_BASE", "http://127.0.0.1:1234/v1"), help="LM Studio/OpenAI Base URL")
     parser.add_argument("--api_key", default="lm-studio", help="API Key")
-    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen3vl8b-ocr"), help="Model Name")
+    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen/qwen3-vl-8b"), help="Model Name")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
     parser.add_argument("--timeout", type=int, default=180, help="API request timeout in seconds")
     parser.add_argument("--bottom_label_strip", action="store_true", help="Add an automatic lower full-width price-label strip crop for difficult retail shelves")
@@ -3051,8 +3142,8 @@ def main():
             console.print("[Init] FollowMe 每日表已自動更新。")
         else:
             console.print(f"[Init] ⚠️ FollowMe 每日表更新未完成：{refresh_status}，改用現有本機資料。")
-    
-    if args.model == "qwen3vl8b-ocr" and "last_model" in last_config:
+
+    if args.model in {"qwen/qwen3-vl-8b", "qwen3vl8b-ocr"} and "last_model" in last_config:
          # Optional: override model if desired, but auto-detect usually handles this
          pass
 
@@ -3065,7 +3156,7 @@ def main():
             chk_url = f"{api_base_url.rstrip('/')}/v1/models"
         else:
             chk_url = f"{api_base_url.rstrip('/')}/models"
-            
+
         print(f"[Init] Detecting active model from: {chk_url} ...")
         resp = requests.get(chk_url, timeout=3)
         if resp.status_code == 200:
@@ -3076,8 +3167,10 @@ def main():
                 preferred = [
                     args.model,
                     os.environ.get("LOCAL_LLM_MODEL", ""),
+                    "qwen/qwen3-vl-8b",
                     "qwen3vl8b-ocr",
                     os.environ.get("LOCAL_LLM_FALLBACK_MODEL", ""),
+                    "qwen/qwen3-vl-4b",
                     "qwen3vl4b-ocr",
                 ]
                 detected_id = next((item for item in preferred if item and item in detected_ids), detected_ids[0])
@@ -3113,12 +3206,12 @@ def main():
     orchestrator = BatchOrchestrator(config)
     orchestrator.set_processor_function(process_single_image)
     orchestrator.log_system(f"[{SESSION_ID}] 系統初始化完成... 後端已連線。", with_timestamp=True) # Immediate feedback
-    
+
     # [v18.70] 設定價格查詢日誌回調，讓儀錶板也能看到聯網狀態
     def price_log_to_dashboard(msg: str):
         orchestrator.log_system(msg, with_timestamp=False)
     set_price_log_callback(price_log_to_dashboard)
-    
+
     is_ocg = 'opencode.ai' in str(args.api_base or '')
     prompt_file = 'samsung_ocr_prompt_opencode_go.txt' if is_ocg else 'samsung_ocr_prompt.txt'
     if os.path.exists(prompt_file):
@@ -3129,7 +3222,7 @@ def main():
     else:
         orchestrator.log_system(f"❌ 找不到 Prompt 檔案: {prompt_file}", with_timestamp=False)
         console.print(f"[bold red]❌ 找不到 Prompt 檔案: {prompt_file}[/bold red]")
-    
+
     # [v18.67] 啟動時初始化價格管理器；歷史年度資料夾不預抓官網價格
     try:
         if should_compare_official_price(args.dir):
@@ -3141,7 +3234,7 @@ def main():
             console.print("[dim]⏭️ 啟動資料夾屬歷史年度，略過官網價格預抓[/dim]")
     except Exception as e:
         console.print(f"[yellow]⚠️ 初始化價格管理器失敗: {e}[/yellow]")
-    
+
     # [v18.75] Display Prompt Version on Startup
     try:
         prompt_bundle = prompt_mgr.get_prompt_bundle()
@@ -3151,7 +3244,7 @@ def main():
         console.print(f"[cyan]   Created: {prompt_created}[/cyan]")
     except Exception as e:
         console.print(f"[yellow]⚠️ 無法取得 Prompt 版本資訊[/yellow]")
-    
+
     # Replace standard print with console.print/log to avoid CP950 errors on Windows
     title = f"Samsung OCR Batch System {VERSION} [SID: {SESSION_ID}]"
     console.print(f"[bold yellow]>>> SESSION: {SESSION_ID} <<<[/bold yellow]")
@@ -3160,7 +3253,7 @@ def main():
     console.print(f"Model: {args.model}")
     console.print(f"API Base: {args.api_base}")
     console.print("--------------------------------------------------")
-    
+
     # [v18.54 Fix] Do NOT auto-start batch processing
     # Wait for user to click "Start" button in dashboard
     console.print("[yellow]⏳ 等待儀表板操作... 請在瀏覽器中選擇資料夾並點擊「繼續執行」[/yellow]")
@@ -3175,9 +3268,10 @@ def main():
             console.print("[green]🚀 Browser launch command sent.[/green]")
         except Exception as e:
             console.print(f"[red]⚠️ Browser launch failed: {e}[/red]")
-            
-    Timer(1.5, open_browser).start()
-    
+
+    if os.environ.get("SAMSUNG_OCR_NO_BROWSER") != "1":
+        Timer(1.5, open_browser).start()
+
     flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
@@ -3187,5 +3281,5 @@ if __name__ == "__main__":
     console.print(f"    Session ID: {SESSION_ID}")
     console.print(f"[bold green]強制重載模式：已確保所有模組為最新版本[/bold green]")
     console.print("="*60 + "\n")
-    
+
     main()

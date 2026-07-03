@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Activity, 
-  CheckCircle2, 
-  XCircle, 
-  Image as ImageIcon, 
-  Zap, 
+import {
+  Activity,
+  CheckCircle2,
+  XCircle,
+  Image as ImageIcon,
+  Zap,
   Box,
   Play,
   Square,
@@ -26,12 +26,64 @@ const formatDisplayPrice = (val) => {
 };
 
 // [v18.73] 超嚴格型號驗證（檢查標題）
-const UI_VERSION = "v19.8 (Display Queue & Typewriter)";
+const getResultThumbSrc = (res) => {
+  if (!res) return null;
+  if (res.source_path) return `/api/image/${encodeURIComponent(res.source_path)}`;
+  if (res.file_name) return `/api/image/${encodeURIComponent(res.file_name)}`;
+  if (res.thumb_b64) return `data:image/jpeg;base64,${res.thumb_b64}`;
+  return null;
+};
+
+const getResultImageSrc = (res) => {
+  if (!res) return null;
+  if (res.source_path) return `/api/image/${encodeURIComponent(res.source_path)}`;
+  if (res.file_name) return `/api/image/${encodeURIComponent(res.file_name)}`;
+  return null;
+};
+
+const ResultThumbnail = ({ res, onClick }) => {
+  const [failed, setFailed] = useState(false);
+  const src = failed ? null : getResultThumbSrc(res);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="檢視照片"
+      style={{
+        width: '56px',
+        height: '56px',
+        flex: '0 0 56px',
+        padding: 0,
+        border: '1px solid #333',
+        borderRadius: '4px',
+        background: '#0a0a0a',
+        overflow: 'hidden',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      {src ? (
+        <img
+          src={src}
+          onError={() => setFailed(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          alt=""
+        />
+      ) : (
+        <ImageIcon size={22} color="#666" />
+      )}
+    </button>
+  );
+};
+
+const UI_VERSION = "v19.9 (Presentation UI)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
   console.log("App: Component Initialize");
-  
+
   // Default State to prevent crash/white screen
   const defaultState = {
       stats: { success: 0, failed: 0, total: 0, processed: 0, is_running: false },
@@ -49,6 +101,7 @@ const App = () => {
   const [currentImage, setCurrentImage] = useState(null);
   const [currentThumb, setCurrentThumb] = useState(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
   const [error, setError] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
   const [availableDirs, setAvailableDirs] = useState([]);
@@ -58,18 +111,18 @@ const App = () => {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({ title: '', message: '', onConfirm: null });
   const [editingFile, setEditingFile] = useState(null);
-  
+
   // [v16.9] Image Inspection Modal State
   const [inspectImage, setInspectImage] = useState(null);
   const [modalPosition, setModalPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
-  const [correctionData, setCorrectionData] = useState({ 
-      view_type: '單機', 
-      screen_status: '', 
+  const [correctionData, setCorrectionData] = useState({
+      view_type: '單機',
+      screen_status: '',
       quality_issue: '',
-      model: '', 
-      price: '' 
+      model: '',
+      price: ''
   });
   const [selectedImage, setSelectedImage] = useState(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -143,7 +196,7 @@ const App = () => {
         setDisplayedBuffer("");
         return;
     }
-    
+
     // If target reset/shrank, reset display immediately
     if (target.length < displayedBuffer.length) {
          setDisplayedBuffer(target);
@@ -155,7 +208,7 @@ const App = () => {
             const { target: t } = getDisplayTarget();
             if (prev.length < t.length) {
                 // [v19.8] 3 chars per tick for smooth but readable display
-                const step = 3; 
+                const step = 3;
                 return t.slice(0, prev.length + step);
             }
             return prev;
@@ -193,17 +246,20 @@ const App = () => {
     if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
       const item = queue[displayQueueIndex];
       setImageLoaded(false);
+      setImageFailed(false);
       setCurrentThumb(item.thumb_b64 || null);
-      setCurrentImage(`/api/image/${encodeURIComponent(item.file_name)}`);
+      setCurrentImage(getResultImageSrc(item));
     } else {
       const activeFile = data.current_file && data.current_file !== 'None' ? data.current_file : null;
       if (activeFile) {
         setImageLoaded(false);
+        setImageFailed(false);
         setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
         setCurrentThumb(data.current_thumb || null);
       } else {
         setCurrentImage(null);
         setCurrentThumb(null);
+        setImageFailed(false);
       }
     }
   }, [displayQueueIndex, data.display_queue, data.current_file, data.current_thumb]);
@@ -252,7 +308,7 @@ const App = () => {
   useEffect(() => {
     if (targetDir) {
         localStorage.setItem('samsung_ocr_target_dir', targetDir);
-        
+
         // Call Backend to Switch Dir
         fetch('/api/set_work_dir', {
             method: 'POST',
@@ -297,21 +353,21 @@ const App = () => {
           const res = await fetch('/api/start_batch', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ 
-                  dir: targetDir, 
+              body: JSON.stringify({
+                  dir: targetDir,
                   restart: restart,
-                  reprocess_last_n: reprocessLast 
+                  reprocess_last_n: reprocessLast
               })
           });
           const json = await res.json();
-          
+
           if (json.status === 'needs_confirmation') {
               setConfirmModalConfig({
                   title: "📌 批次處理確認",
                   message: json.message,
                   onConfirm: () => {
                       setShowConfirmModal(false);
-                      handleStart(false, 5); 
+                      handleStart(false, 5);
                   }
               });
               setShowConfirmModal(true);
@@ -349,14 +405,14 @@ const App = () => {
   console.log("App: Ready to render", { stats, dataExists: !!data });
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      flexDirection: 'column', 
-      height: '100vh', 
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100vh',
       width: '100vw',
-      background: '#080808', 
-      color: '#e0e0e0', 
-      fontFamily: 'system-ui, -apple-system, sans-serif' 
+      background: '#080808',
+      color: '#e0e0e0',
+      fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       {/* 1. Header */}
       <header style={{ height: '50px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', borderBottom: '1px solid #333', background: '#111' }}>
@@ -380,7 +436,7 @@ const App = () => {
                </div>
           </div>
       </header>
-      
+
       {error && (
           <div style={{ background: '#b71c1c', color: '#fff', fontSize: '0.7rem', textAlign: 'center', padding: '2px' }}>
               ⚠️ 與後端伺服器失去連線... ({error})
@@ -389,18 +445,23 @@ const App = () => {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
             <div style={{ padding: '8px 16px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-               <span style={{fontSize:'0.75rem', color:'#aaa'}}>📁 來源路徑:</span>
-               {/* [v19.8] Show live backend folder when running, else fallback to dropdown */}
+               <span style={{fontSize:'0.75rem', color:'#aaa'}}>📁 來源根目錄:</span>
                {stats.is_running && data.image_dir ? (
-                 <span style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                   {data.image_dir}
-                 </span>
+                 <>
+                   <span style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.source_root || 'D:\\00_商化\\00_未整理商化照片'}>
+                     {data.source_root || 'D:\\00_商化\\00_未整理商化照片'}
+                   </span>
+                   <span style={{fontSize:'0.75rem', color:'#aaa'}}>目前資料夾:</span>
+                   <span style={{ color: '#fbbf24', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.image_dir}>
+                     {data.current_relative_dir || data.image_dir}
+                   </span>
+                 </>
                ) : (
-               <select 
-                   value={targetDir} 
+               <select
+                   value={targetDir}
                    onChange={(e)=>setTargetDir(e.target.value)}
-                   style={{ 
-                       background: '#111', border: '1px solid #444', color: '#00f5ff', 
+                   style={{
+                       background: '#111', border: '1px solid #444', color: '#00f5ff',
                        padding: '3px 6px', fontSize: '0.75rem', borderRadius: '3px', width: '180px'
                    }}
                >
@@ -408,12 +469,12 @@ const App = () => {
                    {targetDir && !availableDirs.includes(targetDir) && <option value={targetDir}>{targetDir}</option>}
                </select>
                )}
-               
-                <button onClick={() => handleStart(false)} disabled={stats.is_running} 
+
+                <button onClick={() => handleStart(false)} disabled={stats.is_running}
                     style={{ background: stats.is_running ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                     <Play size={12} /> 繼續執行
                 </button>
-                <button onClick={() => handleStart(true)} disabled={stats.is_running} 
+                <button onClick={() => handleStart(true)} disabled={stats.is_running}
                     style={{ background: stats.is_running ? '#333' : '#f59e0b', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                     <Zap size={12} /> 重新啟動
                 </button>
@@ -421,11 +482,11 @@ const App = () => {
                    style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <Square size={12} /> 停止
                </button>
-               <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')} 
+               <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')}
                    style={{ background: '#6366f1', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <AlertCircle size={12} /> 失敗記錄 ({stats.failed})
                </button>
-               <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')} 
+               <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
                    style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
                </button>
@@ -438,7 +499,7 @@ const App = () => {
                       <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
                           <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}>
                             <ImageIcon size={12}/>
-                            {displayQueueIndex >= 0 ? `播放佇列 ${displayQueueIndex + 1}/${(data.display_queue || []).length}` : '即時預覽'}
+                            辨識預覽
                           </span>
                           <span style={{color: '#00f5ff', fontFamily: 'JetBrains Mono'}}>
                             {displayQueueIndex >= 0 && (data.display_queue || []).length > displayQueueIndex
@@ -449,8 +510,19 @@ const App = () => {
                       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
                           {(currentImage || currentThumb) ? (
                               <>
-                                  {currentThumb && !imageLoaded && <img src={`data:image/jpeg;base64,${currentThumb}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: 0.6, zIndex: 10 }} alt="T" />}
-                                  {currentImage && <img src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => setImageLoaded(true)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
+                                  {!imageLoaded && !imageFailed && (
+                                      <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
+                                          <ImageIcon size={28} />
+                                          <span style={{fontSize:'0.75rem'}}>照片載入中</span>
+                                      </div>
+                                  )}
+                                  {currentImage && !imageFailed && <img src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => { setImageLoaded(false); setImageFailed(true); }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
+                                  {imageFailed && (
+                                      <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
+                                          <ImageIcon size={28} />
+                                          <span style={{fontSize:'0.75rem'}}>照片切換中</span>
+                                      </div>
+                                  )}
                               </>
                           ) : (
                               <div style={{ color: '#333', display:'flex', flexDirection:'column', alignItems:'center' }}><Box size={24} /><span style={{fontSize:'0.7rem'}}>無訊號</span></div>
@@ -494,24 +566,24 @@ const App = () => {
                                       content = trimmed.substring(iconMatch[0].length);
                                   }
 
-                                  let style = { 
+                                  let style = {
                                       display: 'flex',
                                       alignItems: 'flex-start',
-                                      wordBreak: 'break-all', 
-                                      whiteSpace: 'pre-wrap', 
-                                      marginBottom: '4px', 
+                                      wordBreak: 'break-all',
+                                      whiteSpace: 'pre-wrap',
+                                      marginBottom: '4px',
                                       fontSize: '0.8rem',
                                       color: '#aaaaaa',
-                                      paddingLeft: '4px', 
+                                      paddingLeft: '4px',
                                       borderLeft: '2px solid transparent'
                                   };
 
                                   if (isThink) {
                                       content = line.replace('[THINK]', '').trim();
                                       icon = null;
-                                      style.paddingLeft = '28px'; 
-                                      style.color = '#ffffff'; 
-                                      style.fontWeight = 'bold'; 
+                                      style.paddingLeft = '28px';
+                                      style.color = '#ffffff';
+                                      style.fontWeight = 'bold';
                                   } else if (line.includes('判斷是單機') || line.includes('判斷是遠景')) {
                                       style.color = '#ffd700';
                                       style.fontWeight = 'bold';
@@ -551,7 +623,7 @@ const App = () => {
                   </div>
 
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                      
+
                       {data.unknown_models && data.unknown_models.length > 0 && (
                         <div style={{ padding: '8px', borderBottom: '1px solid #333', background: '#1c1917' }}>
                             <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '4px', display:'flex', alignItems:'center', gap:'4px' }}>
@@ -566,19 +638,38 @@ const App = () => {
                       )}
 
                       <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
-                          <Zap size={12} color="#f59e0b"/> {displayQueueIndex >= 0 ? '播放佇列' : '辨識紀錄'}
+                          <Zap size={12} color="#f59e0b"/> 辨識紀錄
                       </div>
                       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-                          {/* [v19.8] Sync right panel with display queue when playing queued results */}
-                          {(displayQueueIndex >= 0 ? (data.display_queue || []).slice(0, displayQueueIndex + 1).reverse().map((item, idx) => ({ ...item, _queueIndex: displayQueueIndex - idx, _isCurrent: idx === 0 })) : (data.recent_results || []).map((res, i) => ({ ...res, _queueIndex: null, _isCurrent: i === 0 }))).map((res, i) => (
+                          {/* [v19.8] Sync right panel with display queue; flatten queue items to match recent_results shape */}
+                          {(displayQueueIndex >= 0
+                            ? (data.display_queue || [])
+                                .slice(0, displayQueueIndex + 1)
+                                .reverse()
+                                .map((item, idx) => {
+                                  const recent = (data.recent_results || []).find(r => r.file_name === item.file_name) || {};
+                                  const itemResult = item.result || {};
+                                  return {
+                                    ...recent,
+                                    ...itemResult,
+                                    file_name: item.file_name || recent.file_name,
+                                    source_path: item.source_path || recent.source_path,
+                                    thumb_b64: item.thumb_b64 || recent.thumb_b64,
+                                    stream_buffer: item.stream_buffer || recent.stream_buffer,
+                                    price_status: itemResult.price_status || recent.price_status,
+                                    price_symbol: itemResult.price_symbol || recent.price_symbol,
+                                    official_price: itemResult.official_price || recent.official_price,
+                                    price_diff_percent: itemResult.price_diff_percent || recent.price_diff_percent,
+                                    _queueIndex: displayQueueIndex - idx,
+                                    _isCurrent: idx === 0,
+                                  };
+                                })
+                            : (data.recent_results || [])
+                                .map((res, i) => ({ ...res, _queueIndex: null, _isCurrent: i === 0 }))
+                          ).map((res, i) => (
                              <div key={`${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                  <div style={{ display: 'flex', gap: '6px' }}>
-                                     <img 
-                                         src={`/api/image/${encodeURIComponent(res.file_name)}`} 
-                                         onClick={() => { setInspectImage(res); }}
-                                         style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '3px', border: '1px solid #333', cursor: 'pointer' }} 
-                                         alt="t" 
-                                     />
+                                     <ResultThumbnail res={res} onClick={() => { setInspectImage(res); }} />
                                      <div style={{ flex: 1, minWidth: 0 }}>
                                          <div style={{ color: '#fff', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.file_name}</div>
                                          {res.view_type !== '遠景' && (
@@ -589,13 +680,13 @@ const App = () => {
                                                 <div style={{ fontSize: '0.7rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                     {formatDisplayPrice(res.price)}
                                                     {res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
-                                                        <span 
+                                                        <span
                                                             title={res.official_price ? `官方價: $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : '官網/PChome 查無價格'}
-                                                            style={{ 
-                                                                fontSize: '0.65rem', 
+                                                            style={{
+                                                                fontSize: '0.65rem',
                                                                 fontWeight: '900',
-                                                                color: res.price_status === 'match' ? '#22c55e' : 
-                                                                       res.price_status === 'high' ? '#ef4444' : 
+                                                                color: res.price_status === 'match' ? '#22c55e' :
+                                                                       res.price_status === 'high' ? '#ef4444' :
                                                                        res.price_status === 'low' ? '#3b82f6' : '#ff0000'
                                                             }}
                                                         >
@@ -606,7 +697,7 @@ const App = () => {
                                             </div>
                                          )}
                                           <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                             <button 
+                                             <button
                                                  title="重新辨識"
                                                  onClick={(e) => {
                                                      e.stopPropagation();
@@ -635,13 +726,13 @@ const App = () => {
                                                      });
                                                  }}
                                                  disabled={rerunQueue[res.file_name]}
-                                                 style={{ 
-                                                     background: rerunQueue[res.file_name] ? '#374151' : '#1f2937', 
-                                                     border: '1px solid #4b5563', 
-                                                     borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer', 
-                                                     padding: '0 4px', 
-                                                     color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb', 
-                                                     fontSize: '0.6rem', display: 'flex', alignItems: 'center' 
+                                                 style={{
+                                                     background: rerunQueue[res.file_name] ? '#374151' : '#1f2937',
+                                                     border: '1px solid #4b5563',
+                                                     borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer',
+                                                     padding: '0 4px',
+                                                     color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
+                                                     fontSize: '0.6rem', display: 'flex', alignItems: 'center'
                                                  }}
                                              >
                                                  {rerunQueue[res.file_name] ? '已排隊' : '重跑'}
@@ -651,17 +742,17 @@ const App = () => {
                                             {res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
                                              {/* [v18.67] 價格驗證符號 - 包含 ? 未知，但排除 not_compared */}
                                              {res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
-                                                <span 
+                                                <span
                                                     title={
                                                         res.price_status === 'unknown' ? '官網/PChome 查無價格；需人工確認或重跑' :
                                                         res.official_price ? `官方 $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : ''
                                                     }
-                                                    style={{ 
-                                                        fontSize: '0.7rem', 
-                                                        padding: '1px 4px', 
-                                                        borderRadius: '3px', 
-                                                        background: res.price_status === 'match' ? '#22c55e' : 
-                                                                   res.price_status === 'high' ? '#ef4444' : 
+                                                    style={{
+                                                        fontSize: '0.7rem',
+                                                        padding: '1px 4px',
+                                                        borderRadius: '3px',
+                                                        background: res.price_status === 'match' ? '#22c55e' :
+                                                                   res.price_status === 'high' ? '#ef4444' :
                                                                    res.price_status === 'low' ? '#3b82f6' : '#dc2626',
                                                         color: '#fff',
                                                         fontWeight: '900',
@@ -696,11 +787,11 @@ const App = () => {
 
          {/* Image Inspection Modal [v18.16 Metadata UI] */}
          {inspectImage && (
-             <div 
-                style={{ 
-                    position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', 
-                    background: 'rgba(0,0,0,0.95)', zIndex: 10000, 
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
+             <div
+                style={{
+                    position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+                    background: 'rgba(0,0,0,0.95)', zIndex: 10000,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                     cursor: isDragging ? 'grabbing' : 'default'
                 }}
                 onMouseMove={(e) => {
@@ -713,12 +804,12 @@ const App = () => {
                 onMouseUp={() => setIsDragging(false)}
              >
                   {/* Close Button */}
-                  <button 
+                  <button
                          onClick={() => { setInspectImage(null); setModalPosition({x:0,y:0}); }}
                          style={{
-                             position: 'fixed', top: '20px', right: '40px', 
-                             background: '#ef4444', color: '#fff', border: '2px solid #fff', 
-                             borderRadius: '50%', width: '40px', height: '40px', 
+                             position: 'fixed', top: '20px', right: '40px',
+                             background: '#ef4444', color: '#fff', border: '2px solid #fff',
+                             borderRadius: '50%', width: '40px', height: '40px',
                              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                              zIndex: 10005, boxShadow: '0 0 15px rgba(0,0,0,0.5)'
                          }}
@@ -728,7 +819,7 @@ const App = () => {
                   </button>
 
                   {/* Image Container */}
-                      <div 
+                      <div
                          style={{
                              position: 'absolute',
                              transform: `translate(${modalPosition.x}px, ${modalPosition.y}px)`,
@@ -740,25 +831,25 @@ const App = () => {
                             dragStartRef.current = { x: e.clientX - modalPosition.x, y: e.clientY - modalPosition.y };
                          }}
                       >
-                          <img 
-                              src={`/api/image/${encodeURIComponent(inspectImage.file_name)}`} 
-                              style={{ 
+                          <img
+                              src={getResultImageSrc(inspectImage)}
+                              style={{
                                   display: 'block',
-                                  border: '4px solid #444', 
-                                  borderRadius: '4px', 
+                                  border: '4px solid #444',
+                                  borderRadius: '4px',
                                   boxShadow: '0 0 100px rgba(0,0,0,0.8)',
                                   userSelect: 'none',
                                   pointerEvents: 'auto'
-                              }} 
-                              alt="Inspection" 
+                              }}
+                              alt="Inspection"
                               draggable={false}
                           />
                       </div>
-                  
+
                    {/* Metadata Footer [v18.30 Fix: Stays at Bottom] */}
-                   <div style={{ 
+                   <div style={{
                        position: 'absolute', bottom: 0, left: 0,
-                       width: '100%', background: '#111', borderTop: '2px solid #333', 
+                       width: '100%', background: '#111', borderTop: '2px solid #333',
                        padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '20px',
                        color: '#ddd', fontFamily: 'JetBrains Mono', fontSize: '0.9rem', zIndex: 10005,
                        boxShadow: '0 -5px 25px rgba(0,0,0,0.8)'
@@ -768,7 +859,7 @@ const App = () => {
                            <span style={{ color:'#00f5ff', fontWeight:'bold' }}>{inspectImage.file_name}</span>
                       </div>
                       <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
-                      
+
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>視角</span>
                            <span style={{ color: inspectImage.view_type==='遠景'?'#3b82f6':'#22c55e', fontWeight:'bold' }}>{inspectImage.view_type||'-'}</span>
@@ -786,15 +877,15 @@ const App = () => {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span style={{ color:'#f59e0b', fontWeight:'bold', fontSize:'1.1rem' }}>{formatDisplayPrice(inspectImage.price)}</span>
                                 {inspectImage.price_symbol && inspectImage.price_status && inspectImage.price_status !== 'not_compared' && (
-                                    <span 
+                                    <span
                                         title={inspectImage.official_price ? `官方價: $${inspectImage.official_price.toLocaleString()} (${inspectImage.price_diff_percent > 0 ? '+' : ''}${inspectImage.price_diff_percent}%)` : '官網/PChome 查無價格'}
-                                        style={{ 
-                                            fontSize: '1rem', 
+                                        style={{
+                                            fontSize: '1rem',
                                             fontWeight: '900',
                                             padding: '2px 6px',
                                             borderRadius: '4px',
-                                            background: inspectImage.price_status === 'match' ? '#22c55e' : 
-                                                       inspectImage.price_status === 'high' ? '#ef4444' : 
+                                            background: inspectImage.price_status === 'match' ? '#22c55e' :
+                                                       inspectImage.price_status === 'high' ? '#ef4444' :
                                                        inspectImage.price_status === 'low' ? '#3b82f6' : '#dc2626',
                                             color: '#fff',
                                             cursor: 'help'
@@ -806,7 +897,7 @@ const App = () => {
                             </div>
                       </div>
                       <div style={{ width:'1px', height:'30px', background:'#333' }}></div>
-                      
+
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                             <span style={{ fontSize:'0.7rem', color:'#888' }}>狀態</span>
                             <span style={{ color: inspectImage.screen_status ? '#ec4899' : '#555', fontWeight:'bold' }}>{inspectImage.screen_status || '正常'}</span>

@@ -6,7 +6,7 @@
 
 要完成的工作：
 
-1. 使用該電腦上的 LM Studio 本機視覺模型，預設模型為 `qwen3vl8b-ocr`。
+1. 使用該電腦上的 LM Studio 本機視覺模型，預設模型為 `qwen/qwen3-vl-8b`。
 2. 讓使用者指定照片來源根資料夾，例如 `D:\00_歷年商化照片`；這個路徑不是專案常數。
 3. 遞迴處理來源資料夾與所有子資料夾中的 `.jpg`、`.jpeg`、`.png`。
 4. 照片大於 2K 時，長邊縮到 `2560`，短邊按原比例自然縮放；不裁切、不補白、不硬拉伸。
@@ -97,7 +97,7 @@ $env:OCR_NO_PAUSE = "1"
 start "Samsung OCR Server" /min .\.venv\Scripts\python.exe samsung_ocr_batch_processor.py `
   --api_base http://127.0.0.1:1234/v1 `
   --api_key lm-studio `
-  --model qwen3vl8b-ocr `
+  --model qwen/qwen3-vl-8b `
   --dir "D:\你的照片根資料夾"
 ```
 
@@ -109,7 +109,7 @@ start "Samsung OCR Server" /min .\.venv\Scripts\python.exe samsung_ocr_batch_pro
   --output-dir "D:\你的照片根資料夾_OCR整理" `
   --backend-url http://127.0.0.1:5000 `
   --api-base http://127.0.0.1:1234/v1 `
-  --model qwen3vl8b-ocr
+  --model qwen/qwen3-vl-8b
 ```
 
 ## 檔名規則
@@ -309,3 +309,19 @@ $env:PYTHONIOENCODING='utf-8'
 .\.venv\Scripts\python.exe tools\test_photo_rename_planner.py
 npm.cmd --prefix dashboard run build
 ```
+## 2026-07-03 Resume Pointer
+
+For the latest portable handoff, read `docs/handoff_2026_ocr_resume.md` first.
+
+Current portable sample set:
+
+- `samples/ocr_demo_50/photos`
+- `samples/ocr_demo_50/labels.json`
+
+Important dashboard rule: do not enlarge `thumb_b64` in the main preview. It made photos look blurry in front of users. Use full image URLs with `source_path`, otherwise show a clean loading/placeholder state.
+
+## 2026-07-03 No-Blur / Safe-Rerun Note
+
+- If the UI still looks blurry, first restart the backend and reload the browser. The current build serves original images via `/api/image` and uses `thumb_b64` only as a last-resort fallback.
+- Do not trust old risky-rerun CSV rows blindly. The rerun script must validate that each `file_name` exists inside the intended `source_folder` and period before queueing it.
+- If a candidate's period and resolved source path disagree, skip it and regenerate candidates; do not let the backend log those as corrupted photos.

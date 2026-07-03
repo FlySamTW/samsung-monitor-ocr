@@ -9,9 +9,9 @@ set "PY=python"
 if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 
 if not defined LOCAL_LLM_API_BASE set "LOCAL_LLM_API_BASE=http://127.0.0.1:1234/v1"
-if not defined LOCAL_LLM_MODEL set "LOCAL_LLM_MODEL=qwen3vl8b-ocr"
+if not defined LOCAL_LLM_MODEL set "LOCAL_LLM_MODEL=qwen/qwen3-vl-8b"
 if not defined LOCAL_LLM_MODEL_KEY set "LOCAL_LLM_MODEL_KEY=qwen/qwen3-vl-8b"
-if not defined LOCAL_LLM_FALLBACK_MODEL set "LOCAL_LLM_FALLBACK_MODEL=qwen3vl4b-ocr"
+if not defined LOCAL_LLM_FALLBACK_MODEL set "LOCAL_LLM_FALLBACK_MODEL=qwen/qwen3-vl-4b"
 if not defined LOCAL_LLM_FALLBACK_MODEL_KEY set "LOCAL_LLM_FALLBACK_MODEL_KEY=qwen/qwen3-vl-4b"
 if not defined OCR_IMAGE_DIR set "OCR_IMAGE_DIR=%~dp0"
 

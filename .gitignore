@@ -31,6 +31,21 @@ project-output.json
 *.tmp
 *.log
 .local_llm_runtime.json
+.last_run_config.json
+targeted_rerun_2026_temp/
+_tmp_success_records_snapshot.json
+questionable_rerun_*.csv
+price_review_required*.csv
+unknown_price_*.csv
+
+# Portable, curated sample set. Keep this small and intentional.
+!samples/
+!samples/**/
+!samples/**/*.md
+!samples/**/*.json
+!samples/**/*.jpg
+!samples/**/*.jpeg
+!samples/**/*.png
 
 # IDE / OS
 .vscode/

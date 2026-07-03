@@ -13,7 +13,7 @@
 - 啟動 OCR 伺服器 (Port 5000)
 - 開啟 Dashboard (http://localhost:5000)
 
-若只想先啟動本機 LLM，可雙擊 `start_local_llm.bat`。預設會優先載入 `qwen3vl8b-ocr`，找不到 8B 時改用 `qwen3vl4b-ocr`。
+若只想先啟動本機 LLM，可雙擊 `start_local_llm.bat`。預設會優先載入 `qwen/qwen3-vl-8b`，找不到 8B 時改用 `qwen/qwen3-vl-4b`。
 
 ### 2. 使用 Dashboard
 1. 選擇照片資料夾（如：商化照片-202512）
@@ -237,3 +237,8 @@ Next recommended order:
 5. Resolve the 8 S27CG552EC price-mismatch rows manually.
 6. Re-run `tools/repair_current_year_price_compare_outputs.py --dry-run`; only run non-dry when preflight passes or review CSV has been manually resolved.
 7. Update docs/tests, then commit/push.
+
+# 2026-07-03 Portable Resume
+
+For another PC or another AI agent, start from `docs/handoff_2026_ocr_resume.md`.
+The repo intentionally includes only the small portable sample set at `samples/ocr_demo_50`; do not add the full production photo folders or generated output folders to Git.

@@ -177,7 +177,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", required=True)
     parser.add_argument("--api-base", default=os.environ.get("LOCAL_LLM_API_BASE", "http://127.0.0.1:1234/v1"))
-    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen3vl8b-ocr"))
+    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen/qwen3-vl-8b"))
     parser.add_argument("--max-size", type=int, default=int(os.environ.get("OCR_FAST_MAX_SIZE", "640")))
     parser.add_argument("--timeout", type=int, default=45)
     parser.add_argument("--max-tokens", type=int, default=280)

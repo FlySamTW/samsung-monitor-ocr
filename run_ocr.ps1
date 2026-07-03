@@ -43,12 +43,12 @@ if (-not $choice) { $choice = "1" }
 
 $apiBase = "http://127.0.0.1:1234/v1"
 $apiKey = "lm-studio"
-$model = "qwen3vl8b-ocr"
+$model = "qwen/qwen3-vl-8b"
 $needLocalLLM = $true
 
 switch ($choice) {
-    "1" { $model = "qwen3vl8b-ocr" }
-    "2" { $model = "qwen3vl4b-ocr" }
+    "1" { $model = "qwen/qwen3-vl-8b" }
+    "2" { $model = "qwen/qwen3-vl-8b" }
     "3" { 
         $apiBase = "https://opencode.ai/zen/go/v1"
         $model = "mimo-v2.5"

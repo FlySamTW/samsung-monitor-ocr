@@ -12,7 +12,7 @@ import requests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = PROJECT_ROOT / "tools" / "qwen_vl_regression_cases_202603_all.json"
 DEFAULT_API_BASE = "http://127.0.0.1:1234/v1"
-DEFAULT_MODEL = os.environ.get("LOCAL_LLM_MODEL", "qwen3vl8b-ocr")
+DEFAULT_MODEL = os.environ.get("LOCAL_LLM_MODEL", "qwen/qwen3-vl-8b")
 
 
 def ensure_local_llm(api_base: str, model: str) -> None:

@@ -92,6 +92,12 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
 
     if code_name:
         return code_name
+    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
+        return 'FollowMe M5 32"'
+    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
+        return 'FollowMe M7 32"'
+    if price_int and 12000 <= price_int <= 14000 and any(token in text for token in ["32", "M7", "S32FM70", "S32DM70", "4K"]):
+        return 'FollowMe M7 32"'
     if "PRO" in context_upper or "43" in context_upper or "S43FM" in context_upper or "PRO" in raw_model_text:
         return 'FollowMe Pro M7 43"'
     if "M5" in context_upper or "S32FM50" in context_upper:
@@ -100,10 +106,6 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
         return 'FollowMe M7 32"'
     if price_name:
         return price_name
-    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
-        return 'FollowMe M5 32"'
-    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
-        return 'FollowMe M7 32"'
     if price_int and price_int >= 15000:
         return 'FollowMe Pro M7 43"'
     if price_int and 9900 <= price_int <= 11000:
@@ -522,7 +524,7 @@ def run_case(api_base, model, prompt_text, root, case, timeout, max_side, detect
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-base", default=os.environ.get("LOCAL_LLM_API_BASE", "http://127.0.0.1:1234/v1"))
-    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen3vl8b-ocr"))
+    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen/qwen3-vl-8b"))
     parser.add_argument("--prompt", default="samsung_ocr_prompt.txt")
     parser.add_argument("--cases", default=DEFAULT_CASES)
     parser.add_argument("--timeout", type=int, default=240)

@@ -93,6 +93,11 @@ class BatchOrchestrator:
         """
         self.log_system(f"🔄 收到強制重跑請求: {filename}")
         
+        image_path = os.path.join(self.image_dir, filename)
+        if not os.path.isfile(image_path):
+            self.log_system(f"   ⚠️ 重跑略過：目前來源資料夾找不到照片 {filename}")
+            return False
+
         # 1. Clean Memory State (Simple check, exact cleanup happens in loop)
         # We don't need to surgically remove from self.recent_results or stats immediately
         # because processing loop handles checking.
@@ -1032,6 +1037,7 @@ class BatchOrchestrator:
 
                 # Add Metadata
                 norm_result['file_name'] = fname
+                norm_result['source_path'] = str(Path(img_path).resolve())
                 norm_result['timestamp'] = datetime.now().isoformat()
                 norm_result['duration'] = round(duration, 2)
                 norm_result['run_id'] = run_id
@@ -1119,6 +1125,7 @@ class BatchOrchestrator:
                 try:
                     self.display_queue.append({
                         "file_name": fname,
+                        "source_path": norm_result.get("source_path", ""),
                         "thumb_b64": norm_result.get("thumb_b64", ""),
                         "stream_buffer": str(self.stream_buffer or ""),
                         "result": {

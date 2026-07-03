@@ -32,7 +32,7 @@
 - `tools\qwen_vl_regression_cases_202603_all.json`
 - 包含 FollowMe、遠距 FollowMe、一般單機、遠景、三台並排、3000 元以下價格排除、電信方案價排除、大於 3000 價格保留、五位數價格不可誤判低價、型號可讀但 3000 元以下時只清價格不清型號、多品牌價牌不可借價、LG 可移動螢幕不可算 Samsung FollowMe、Samsung Smart Monitor M5/M7 不可誤判 LG、Smart Monitor 桌上型短支架不可誤判 FollowMe、活動立牌非 FollowMe、FollowMe 排除語句、Follow Me 4K 上牌不可誤升 Pro 43、品牌名不等於型號、Smart Monitor 不硬配 G5、Smart Monitor 無 FollowMe 支架時不可標準化成 FollowMe、型號尾碼錯讀校正、遠景不可救回零散價牌、非三星遠景排除、G5/G7 型號讀取、Odyssey Ark 不借旁邊型號。
 - 守門工具第一輪預設使用 `--bottom-label-strip`，只加下方整條價牌帶，避免 16K context 爆掉；若有失敗案例，工具會自動只針對失敗案例用 `--bottom-center-zoom` 重跑一次並合併報告。
-- 守門工具會先呼叫 `tools\local_llm_manager.py`，用 LM Studio CLI 確認 `qwen3vl8b-ocr` 或備援模型已載入。
+- 守門工具會先呼叫 `tools\local_llm_manager.py`，用 LM Studio CLI 確認 `qwen/qwen3-vl-8b` 或備援模型已載入。
 
 ## 新增欄位
 
@@ -44,7 +44,7 @@
 - `human_notes`: 可記錄錯誤原因，例如「把 LG 認成 FollowMe」或「遠景其實是三台單機」。
 - `rerun_priority`: 自動判斷是否值得重跑，`P1` 優先。
 - `rerun_reason`: 自動列出疑難原因。
-- `rerun_recommended_model`: 目前預設建議用 `qwen3vl8b-ocr` 重跑。
+- `rerun_recommended_model`: 目前預設建議用 `qwen/qwen3-vl-8b` 重跑。
 
 ## 產生審核表與重跑名單
 
@@ -65,7 +65,7 @@
 
 ```powershell
 .\.venv\Scripts\python.exe samsung_ocr_batch_processor.py `
-  --model qwen3vl8b-ocr `
+  --model qwen/qwen3-vl-8b `
   --api_base http://127.0.0.1:1234/v1 `
   --dir "D:\00_歷年商化照片\商化照片-202603"
 ```
@@ -74,7 +74,7 @@
 
 ```powershell
 .\.venv\Scripts\python.exe samsung_ocr_batch_processor.py `
-  --model qwen3vl8b-ocr `
+  --model qwen/qwen3-vl-8b `
   --api_base http://127.0.0.1:1234/v1 `
   --dir "D:\00_歷年商化照片\商化照片-202603" `
   --bottom_label_strip
@@ -82,7 +82,7 @@
 
 若價牌確定在下方中間、但整條價牌帶仍讀不到，才加 `--bottom_center_zoom` 做更強的疑難重跑；不要第一輪大量使用兩種輔助圖，容易增加 context 與時間。
 
-2026-06-06 實測：52 張守門題已包含活動告示不可算 FollowMe、側標不可跨商品借用、3000 元以下價格排除、五位數價格保留、S32DG802SC/OLED G8 錯讀校正等案例。4B 仍可能偶發 `no_json` 或截斷，屬模型輸出穩定性問題；正式批次預設改用 `qwen3vl8b-ocr`，4B 作為硬體不足時備援。正式 OCR 與守門測試皆使用 `temperature=0`，降低同一照片重跑時的隨機漂移。
+2026-06-06 實測：52 張守門題已包含活動告示不可算 FollowMe、側標不可跨商品借用、3000 元以下價格排除、五位數價格保留、S32DG802SC/OLED G8 錯讀校正等案例。4B 仍可能偶發 `no_json` 或截斷，屬模型輸出穩定性問題；正式批次預設改用 `qwen/qwen3-vl-8b`，4B 作為硬體不足時備援。正式 OCR 與守門測試皆使用 `temperature=0`，降低同一照片重跑時的隨機漂移。
 
 ## 目前疑難判斷
 

@@ -99,7 +99,7 @@ npm run build
 優先使用現有基準：
 
 ```text
-qwen3vl8b-ocr
+qwen/qwen3-vl-8b
 ```
 
 可評估的新 8B 視覺模型：
@@ -137,7 +137,7 @@ Invoke-RestMethod http://127.0.0.1:1234/v1/models
 .\.venv\Scripts\python.exe samsung_ocr_batch_processor.py `
   --api_base http://127.0.0.1:1234/v1 `
   --api_key lm-studio `
-  --model qwen3vl8b-ocr `
+  --model qwen/qwen3-vl-8b `
   --dir "D:\00_歷年商化照片\商化照片-202603"
 ```
 
@@ -150,7 +150,7 @@ Invoke-RestMethod http://127.0.0.1:1234/v1/models
 基準模型：
 
 ```powershell
-setx LOCAL_LLM_MODEL qwen3vl8b-ocr
+setx LOCAL_LLM_MODEL qwen/qwen3-vl-8b
 .\.venv\Scripts\python.exe tools\run_qwen_vl_guard.py
 ```
 
@@ -267,3 +267,10 @@ conflict=0
 3. 不要一開始就用 `--apply`。
 4. 不要把照片複製進 Git。
 5. 不要把雲端模型跑出的整月結果直接當正式真值。
+## 2026-07-03 Portable Resume Note
+
+Before running production photos on another PC, read `docs/handoff_2026_ocr_resume.md`.
+
+Use `samples/ocr_demo_50/photos` plus `samples/ocr_demo_50/labels.json` as the small smoke-test dataset. The full photo library and generated flat output are intentionally not committed to Git.
+
+Default local model is `qwen/qwen3-vl-8b`. Keep the conservative LM Studio context default unless the GPU has enough VRAM.

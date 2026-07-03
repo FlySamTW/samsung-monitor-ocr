@@ -26,7 +26,7 @@ from photo_rename_planner import (
 UNSUPPORTED_EXTENSIONS = {".heic", ".heif", ".webp"}
 DEFAULT_BACKEND_URL = "http://127.0.0.1:5000"
 DEFAULT_API_BASE = "http://127.0.0.1:1234/v1"
-DEFAULT_MODEL = "qwen3vl8b-ocr"
+DEFAULT_MODEL = "qwen/qwen3-vl-8b"
 
 
 def json_request(base_url: str, path: str, payload: Optional[dict] = None, timeout: int = 30):

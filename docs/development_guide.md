@@ -112,7 +112,7 @@ $env:OCR_NO_PAUSE = "1"
 
 建議比較：
 
-1. 基準：目前正式本機模型 `qwen3vl8b-ocr`。
+1. 基準：目前正式本機模型 `qwen/qwen3-vl-8b`。
 2. 候選：新的 8B 視覺模型，例如 LM Studio 可載入的 Qwen3-VL 8B。
 
 控制變因：
@@ -219,3 +219,12 @@ $env:PYTHONIOENCODING='utf-8'
 npm.cmd --prefix dashboard run build
 .\.venv\Scripts\python.exe tools\repair_current_year_price_compare_outputs.py --output-dir "D:\00_商化\00_已OCR照片" --period-prefix 2026 --dry-run
 ```
+## 2026-07-03 Resume Development Notes
+
+- Portable handoff entrypoint: `docs/handoff_2026_ocr_resume.md`.
+- Demo/regression photos: `samples/ocr_demo_50/photos`.
+- Expected labels: `samples/ocr_demo_50/labels.json`.
+- Do not commit production photo folders, generated flat output, audit backups, temporary rerun CSVs, or logs.
+- Dashboard no-blur rule: never enlarge `thumb_b64` in the main preview. Show a loading/placeholder state until a full image URL loads.
+- Backend result records should include `source_path` so cross-folder dashboard queue entries can load the full source image.
+- `tools/rerun_questionable_records.py` supports `--input-csv` for safe resume from a filtered candidate list.

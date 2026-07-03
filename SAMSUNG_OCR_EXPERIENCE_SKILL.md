@@ -196,3 +196,15 @@ npm.cmd --prefix dashboard run build
 ```
 
 4. If UI changes are not visible, refresh browser and ensure backend is serving the latest `dashboard/dist/assets/index-*.js`.
+## 2026-07-03 Portable Handoff Rules
+
+- Start new handoffs from `docs/handoff_2026_ocr_resume.md`.
+- Use `samples/ocr_demo_50/photos` and `samples/ocr_demo_50/labels.json` for smoke tests on another PC.
+- Do not add production photo folders, generated flat output, audit backups, rerun CSVs, or logs to Git.
+- Preferred local model is `qwen/qwen3-vl-8b` through LM Studio at `http://127.0.0.1:1234/v1`.
+- Keep boss-facing dashboard language polished. Do not expose internal wording such as playback queue.
+- Never enlarge `thumb_b64` in the main preview; show a clean loading/placeholder state until the full image loads.
+- Include `source_path` in new OCR records so cross-folder dashboard entries can load full images.
+- For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.
+- Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
+- `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.

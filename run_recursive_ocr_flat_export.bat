@@ -9,9 +9,9 @@ set "PY=python"
 if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 
 if not defined LOCAL_LLM_API_BASE set "LOCAL_LLM_API_BASE=http://127.0.0.1:1234/v1"
-if not defined LOCAL_LLM_MODEL set "LOCAL_LLM_MODEL=qwen3vl8b-ocr"
+if not defined LOCAL_LLM_MODEL set "LOCAL_LLM_MODEL=qwen/qwen3-vl-8b"
 if not defined LOCAL_LLM_MODEL_KEY set "LOCAL_LLM_MODEL_KEY=qwen/qwen3-vl-8b"
-if not defined LOCAL_LLM_FALLBACK_MODEL set "LOCAL_LLM_FALLBACK_MODEL=qwen3vl4b-ocr"
+if not defined LOCAL_LLM_FALLBACK_MODEL set "LOCAL_LLM_FALLBACK_MODEL=qwen/qwen3-vl-4b"
 if not defined LOCAL_LLM_FALLBACK_MODEL_KEY set "LOCAL_LLM_FALLBACK_MODEL_KEY=qwen/qwen3-vl-4b"
 
 if not defined OCR_SOURCE_ROOT (
@@ -56,7 +56,10 @@ if "%errorlevel%" NEQ "0" (
 
 start "Samsung OCR Server" /min "%PY%" samsung_ocr_batch_processor.py --api_base "%LOCAL_LLM_API_BASE%" --api_key "lm-studio" --model "%LOCAL_LLM_MODEL%" --dir "%OCR_SOURCE_ROOT%"
 
-"%PY%" tools\recursive_ocr_flat_export.py --source-root "%OCR_SOURCE_ROOT%" --output-dir "%OCR_OUTPUT_DIR%" --backend-url "http://127.0.0.1:5000" --api-base "%LOCAL_LLM_API_BASE%" --api-key "lm-studio" --model "%LOCAL_LLM_MODEL%"
+set "OCR_WATCH_ARGS="
+if "%OCR_WATCH%"=="1" set "OCR_WATCH_ARGS=--watch"
+
+"%PY%" tools\recursive_ocr_flat_export.py --source-root "%OCR_SOURCE_ROOT%" --output-dir "%OCR_OUTPUT_DIR%" --backend-url "http://127.0.0.1:5000" --api-base "%LOCAL_LLM_API_BASE%" --api-key "lm-studio" --model "%LOCAL_LLM_MODEL%" %OCR_WATCH_ARGS%
 if "%errorlevel%" NEQ "0" (
     echo.
     echo [錯誤] 接力批次未完成，請查看輸出資料夾中的 _ocr_audit。
