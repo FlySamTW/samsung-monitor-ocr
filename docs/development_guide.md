@@ -173,11 +173,13 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
 - `samsung_ocr_batch_processor.py`
   - Low-price filter changed from `<=3000` to `<2000`.
   - Prompt text was updated so clear Samsung monitor labels may keep prices >= 2000.
+  - Handwritten clearance/sale exception was added: a physical card with `促銷價`, `展示出清`, `出清`, `展示機`, `福利品`, `清倉`, or `特賣` may keep a handwritten 4-digit price such as `1999`; plan/monthly/accessory keywords still block it.
 
 - `dashboard/src/App.jsx`
   - Rerun button text changed from icon to `重跑`.
   - Price compare badge should render only when `price_symbol` exists.
   - Unknown price tooltip says Samsung/PChome lookup needs confirmation.
+  - `辨識紀錄` must be delayed until the photo's LLM self-talk has finished typing. Do not show parsed thumbnail results for the current queue item while its self-talk is still playing.
 
 - `tools/repair_current_year_price_compare_outputs.py`
   - Repairs existing current-year outputs using audit records without rerunning OCR.
@@ -187,6 +189,11 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
 - `tools/recursive_ocr_flat_export.py`
   - Watch mode exists.
   - Current/future rows with store price but `price_status=unknown` now write `price_review_required.csv` and block copy.
+
+- `tools/prepare_drive_upload_manifest.py`
+  - Builds safe Google Drive upload batches from the flat OCR output folder.
+  - Excludes internal `_` folders and questionable filenames, stages the next batch as ASCII `upload_0001.jpg` files, and uses `_drive_upload\drive_upload_uploaded.csv` as the resume/duplicate guard.
+  - Keep Drive organization year-only (`2026`, `2025`, ...); filename carries month/store/search detail.
 
 ## Remaining Work
 

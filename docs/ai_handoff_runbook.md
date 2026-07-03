@@ -259,6 +259,7 @@ If a user reports that photos switch faster than self-talk/results, inspect this
 3. Low-price OCR:
    - Old logic removed prices `<=3000`; this was wrong for `S24F332EAC / 2390`.
    - New threshold is `<2000`.
+   - Narrow exception: if the same physical price card clearly says `促銷價`, `展示出清`, `出清`, `展示機`, `福利品`, `清倉`, or `特賣`, a handwritten 4-digit number such as `1999` is a valid in-store clearance price. Do not apply this exception to monthly plan/accessory/telecom prices.
    - Existing results with model but `(無價格)` may need rerun or thinking-text rescue.
 
 4. Distant view:
@@ -268,7 +269,15 @@ If a user reports that photos switch faster than self-talk/results, inspect this
 5. UI:
    - The blue icon button was changed to text `重跑`.
    - Historical/not-compared rows must not show a red `?` price badge.
+   - `辨識紀錄` is delayed on purpose: a photo's thumbnail/result must appear only after that photo's LLM self-talk has finished typing. Backend may run ahead, but the user-facing presentation must stay sequential.
    - If user still sees old UI, refresh browser and confirm `dashboard/dist/assets/index-*.js` is the latest build.
+
+6. Google Drive upload:
+   - User approved year-only folders, not month folders.
+   - Parent folder: `https://drive.google.com/drive/folders/1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK`
+   - Existing child folders: `2026` (`1JejKATTb7COE7qTP9mIC5F9IQbHWK2L4`) and `2025` (`1UluPo7m5HCq_iVpdkioOVq292E6LAbC-`).
+   - Use `tools/prepare_drive_upload_manifest.py --output-dir D:\00_商化\00_已OCR照片 --limit-ready 25` before each batch.
+   - Upload only `_drive_upload\staging_map.csv` rows, then append exact Drive-returned IDs to `_drive_upload\drive_upload_uploaded.csv` and rerun the manifest. Do not upload `drive_upload_review_required.csv` rows.
 
 ## Recent Changes (2026-07-03)
 
@@ -287,7 +296,7 @@ If a user reports that photos switch faster than self-talk/results, inspect this
 
 ## Known Issues for Next AI
 
-1. **右方縮圖與播放佇列同步**：已嘗試在播放佇列模式時讓右方面板顯示目前播放項目，但需實際點擊測試，確認縮圖點擊後的校正/檢視模式不會異常。
+1. **右方縮圖與播放佇列同步**：2026-07-03 已改為延後顯示結果，LLM 自言自語播完後該筆才進 `辨識紀錄`；已實測縮圖點擊會開完整 `/api/image/<source_path>` 檢視。後續若改 UI，需重新驗證這個順序。
 2. **91 筆 null-model 候選**：兩輪 targeted rerun 後仍有 91 張照片 model 為空，thinking 中也無可救回型號。需決定是否第三輪 `--bottom-center-zoom` 重跑，或改標為遠景/不合格。
 3. **8 筆 S27CG552EC 價差**：thinking 可讀到 `S27CG552EC`，但店內價格（9990–29900）遠高於 PChome 參考價 4990，需人工確認是否為套組或誤判。
 4. **黑屏/照不清楚未寫入檔名**：`screen_status`（黑屏）與 `quality_issue`（照不清楚）目前未出現在輸出檔名中，需規劃命名規則並更新 `photo_rename_planner.py`。

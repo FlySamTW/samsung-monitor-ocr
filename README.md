@@ -222,8 +222,8 @@ Completed/partial output:
 Critical unresolved issues (updated 2026-07-03):
 - Current-year price `?`: For 2026 and future folders, if OCR has a store price but Samsung/PChome reference is unknown, the export stops and writes `price_review_required.csv`; use `--allow-no-symbol-for-unknown` only when the business rule accepts outputting 2026 records without a price symbol.
 - PChome fallback: `skills/official_price.py` now tries PChome 24h Shopping after Samsung. FollowMe generic names are mapped to product codes (`FollowMe Pro M7 43"` -> `S43FM703UC`). Verify this before trusting old `？` filenames such as `FollowMe_Pro_M7_43吋-？＄12990`.
-- Low price bug: The old 3000 cutoff wrongly erased real prices like `S24F332EAC / 2390`. Code was changed to allow prices >= 2000 when a Samsung monitor label is clear. Existing completed rows with `(無價格)` may still need rerun or thinking-text rescue.
-- UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder; right-panel sync with the display queue is implemented but needs click-testing.
+- Low price bug: The old 3000 cutoff wrongly erased real prices like `S24F332EAC / 2390`. Code was changed to allow prices >= 2000 when a Samsung monitor label is clear. Handwritten clearance/sale tags are a narrow exception: if the physical card clearly says `促銷價` / `展示出清` / `出清` / `展示機` / `福利品` / `清倉` / `特賣`, a handwritten 4-digit price such as `1999` is valid. Existing completed rows with `(無價格)` may still need rerun or thinking-text rescue.
+- UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder. The right panel is intentionally delayed: it must not show a thumbnail's parsed result until that photo's LLM self-talk has finished playing.
 - Distant-view classification: A stronger guard was added (`samsung_ocr_batch_processor.py`): no Samsung model + no price + thinking mentions distant-view keywords => force `view_type=遠景` and clear model/price. Already-processed misclassified rows still need repair or rerun.
 - 91 null-model candidates remain after two targeted reruns; 8 S27CG552EC records have store prices much higher than the PChome reference price (4990) and need manual review.
 - Black-screen / unclear detections (`screen_status`, `quality_issue`) are not yet reflected in output filenames; naming rule and `photo_rename_planner.py` need updating.
@@ -231,12 +231,20 @@ Critical unresolved issues (updated 2026-07-03):
 
 Next recommended order:
 1. Keep the live qwen3-vl-8b run alive; restart only to load backend/dashboard code changes.
-2. Verify right-panel thumbnail sync and the inspection/correction modal after dashboard rebuild.
+2. If changing dashboard presentation again, verify that preview image, self-talk, and right-panel results stay sequential: the current photo must not appear in `辨識紀錄` until its self-talk finishes.
 3. Finish guard fixes for black-screen/unclear filename tagging.
 4. Run focused reruns for remaining null-model candidates if token budget allows, or mark them as distant-view/不合格 after sampling.
 5. Resolve the 8 S27CG552EC price-mismatch rows manually.
 6. Re-run `tools/repair_current_year_price_compare_outputs.py --dry-run`; only run non-dry when preflight passes or review CSV has been manually resolved.
 7. Update docs/tests, then commit/push.
+
+Google Drive upload handoff:
+- Target parent folder: `https://drive.google.com/drive/folders/1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK`
+- Folder policy: year folders only (`2026`, `2025`, ...), no month folders. Cross-month search relies on the full renamed filename.
+- Prepare upload manifests with: `python tools/prepare_drive_upload_manifest.py --output-dir D:\00_商化\00_已OCR照片 --limit-ready 25`
+- The script writes `_drive_upload\drive_upload_ready.csv`, `_drive_upload\drive_upload_review_required.csv`, `_drive_upload\drive_upload_next_batch.csv`, `_drive_upload\staging_map.csv`, and `_drive_upload\drive_upload_summary.json`.
+- Only upload rows from `drive_upload_next_batch.csv` / `staging_map.csv`. Do not upload `review_required` rows; they need rerun or manual review first.
+- Record completed uploads in `_drive_upload\drive_upload_uploaded.csv`; the next manifest run skips those files so uploads can resume safely on another machine.
 
 # 2026-07-03 Portable Resume
 

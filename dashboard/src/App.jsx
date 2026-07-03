@@ -78,7 +78,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.9 (Presentation UI)";
+const UI_VERSION = "v19.11 (Delayed Result Panel)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -166,12 +166,25 @@ const App = () => {
   const [displayQueueIndex, setDisplayQueueIndex] = useState(-1);
   const [displayedBuffer, setDisplayedBuffer] = useState("");
   const isAdvancingRef = useRef(false);
+  const playedQueueKeysRef = useRef(new Set());
+  const [presentedQueueCutoff, setPresentedQueueCutoff] = useState(-1);
+
+  const getQueueKey = (item) => `${item?.completed_at || ''}|${item?.file_name || ''}`;
+  const getQueueDisplayText = (item) => {
+    if (!item) return "";
+    if (item.stream_buffer && item.stream_buffer.trim()) return item.stream_buffer;
+    const result = item.result || {};
+    return `這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`;
+  };
 
   // When new completed results arrive and we are in live mode, start draining queue.
   useEffect(() => {
     const queue = data.display_queue || [];
     if (displayQueueIndex === -1 && queue.length > 0) {
-      setDisplayQueueIndex(0);
+      const nextIndex = queue.findIndex((item) => !playedQueueKeysRef.current.has(getQueueKey(item)));
+      if (nextIndex !== -1) {
+        setDisplayQueueIndex(nextIndex);
+      }
       setDisplayedBuffer("");
     } else if (displayQueueIndex >= 0 && displayQueueIndex >= queue.length) {
       // Queue overflow / caught up to live - switch back to live mode.
@@ -184,7 +197,7 @@ const App = () => {
   const getDisplayTarget = () => {
     const queue = data.display_queue || [];
     if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
-      return { target: queue[displayQueueIndex].stream_buffer || "", isQueue: true };
+      return { target: getQueueDisplayText(queue[displayQueueIndex]), isQueue: true };
     }
     return { target: data.stream_buffer || "", isQueue: false };
   };
@@ -222,14 +235,25 @@ const App = () => {
   useEffect(() => {
     const queue = data.display_queue || [];
     const { target, isQueue } = getDisplayTarget();
-    if (!target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
+    if (!isQueue || !target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
 
     isAdvancingRef.current = true;
     const timer = setTimeout(() => {
-      if (isQueue && displayQueueIndex < queue.length - 1) {
-        setDisplayQueueIndex(displayQueueIndex + 1);
+      const currentItem = queue[displayQueueIndex];
+      if (currentItem) {
+        playedQueueKeysRef.current.add(getQueueKey(currentItem));
+        setPresentedQueueCutoff((prev) => Math.max(prev, displayQueueIndex));
+      }
+
+      const nextIndex = queue.findIndex((item, idx) => (
+        idx > displayQueueIndex && !playedQueueKeysRef.current.has(getQueueKey(item))
+      ));
+
+      if (nextIndex !== -1) {
+        setDisplayQueueIndex(nextIndex);
+        setPresentedQueueCutoff((prev) => Math.max(prev, nextIndex));
         setDisplayedBuffer("");
-      } else if (isQueue) {
+      } else {
         // Drained queue - return to live mode.
         setDisplayQueueIndex(-1);
         setDisplayedBuffer("");
@@ -401,6 +425,42 @@ const App = () => {
   };
 
   const stats = data.stats || defaultState.stats;
+  const isRunning = Boolean(data.is_running || stats.is_running);
+  const displayQueue = data.display_queue || [];
+  const queueCutoff = Math.min(
+    displayQueue.length - 1,
+    presentedQueueCutoff
+  );
+  const activeQueueKey = displayQueueIndex >= 0
+    ? getQueueKey(displayQueue[displayQueueIndex])
+    : null;
+  const queuedPanelItems = queueCutoff >= 0
+    ? displayQueue
+        .slice(0, queueCutoff + 1)
+        .reverse()
+        .map((item) => {
+          const recent = (data.recent_results || []).find(r => r.file_name === item.file_name) || {};
+          const itemResult = item.result || {};
+          const itemKey = getQueueKey(item);
+          return {
+            ...recent,
+            ...itemResult,
+            file_name: item.file_name || recent.file_name,
+            source_path: item.source_path || recent.source_path,
+            thumb_b64: item.thumb_b64 || recent.thumb_b64,
+            stream_buffer: item.stream_buffer || recent.stream_buffer,
+            price_status: itemResult.price_status || recent.price_status,
+            price_symbol: itemResult.price_symbol || recent.price_symbol,
+            official_price: itemResult.official_price || recent.official_price,
+            price_diff_percent: itemResult.price_diff_percent || recent.price_diff_percent,
+            _queueKey: itemKey,
+            _isCurrent: itemKey === activeQueueKey,
+          };
+        })
+    : [];
+  const rightPanelItems = displayQueue.length > 0
+    ? queuedPanelItems
+    : (data.recent_results || []).map((res, i) => ({ ...res, _queueKey: null, _isCurrent: i === 0 }));
 
   console.log("App: Ready to render", { stats, dataExists: !!data });
 
@@ -431,8 +491,8 @@ const App = () => {
                </div>
                <span style={{ fontSize: '0.7rem', color: '#888' }}>{stats.processed}/{stats.total || 0}</span>
                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: stats.is_running ? '#22c55e' : '#ff4b2b', boxShadow: stats.is_running ? '0 0 10px #22c55e' : 'none' }}></div>
-                  <span style={{ fontSize: '0.7rem', color: '#888' }}>{stats.is_running ? '正在執行' : '待機中'}</span>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
+                  <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>
                </div>
           </div>
       </header>
@@ -446,7 +506,7 @@ const App = () => {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
             <div style={{ padding: '8px 16px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                <span style={{fontSize:'0.75rem', color:'#aaa'}}>📁 來源根目錄:</span>
-               {stats.is_running && data.image_dir ? (
+                {isRunning && data.image_dir ? (
                  <>
                    <span style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.source_root || 'D:\\00_商化\\00_未整理商化照片'}>
                      {data.source_root || 'D:\\00_商化\\00_未整理商化照片'}
@@ -470,8 +530,8 @@ const App = () => {
                </select>
                )}
 
-                <button onClick={() => handleStart(false)} disabled={stats.is_running}
-                    style={{ background: stats.is_running ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                <button onClick={() => handleStart(false)} disabled={isRunning}
+                    style={{ background: isRunning ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: isRunning?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                     <Play size={12} /> 續跑
                 </button>
                <button onClick={handleStop}
@@ -523,7 +583,7 @@ const App = () => {
                           ) : (
                               <div style={{ color: '#333', display:'flex', flexDirection:'column', alignItems:'center' }}><Box size={24} /><span style={{fontSize:'0.7rem'}}>無訊號</span></div>
                           )}
-                          {stats.is_running && (
+                          {isRunning && (
                               <div style={{ position: 'absolute', bottom: 0, left: 0, height: '4px', width: '100%', zIndex: 30, background: '#111', overflow: 'hidden' }}>
                                   <div style={{ width: '30%', height: '100%', background: 'linear-gradient(90deg, transparent, #ff0000, transparent)', animation: 'scan 1.5s ease-in-out infinite alternate', boxShadow: '0 0 10px #ff0000', borderRadius: '50%' }}></div>
                               </div>
@@ -548,7 +608,7 @@ const App = () => {
                       <div style={{ flex: 1, overflowY: 'auto' }}>
                           {data.lm_logs?.length > 0 ? (
                                [...data.lm_logs]
-                               .filter(line => !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
+                                .filter(line => !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('載入圖片:') && !line.includes('判斷是') && !line.includes('[THINK]') && !line.includes('━━━━━━━━') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
                                .reverse()
                                .map((line, i) => {
                                   const isThink = line.includes('[THINK]');
@@ -637,32 +697,8 @@ const App = () => {
                           <Zap size={12} color="#f59e0b"/> 辨識紀錄
                       </div>
                       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-                          {/* [v19.8] Sync right panel with display queue; flatten queue items to match recent_results shape */}
-                          {(displayQueueIndex >= 0
-                            ? (data.display_queue || [])
-                                .slice(0, displayQueueIndex + 1)
-                                .reverse()
-                                .map((item, idx) => {
-                                  const recent = (data.recent_results || []).find(r => r.file_name === item.file_name) || {};
-                                  const itemResult = item.result || {};
-                                  return {
-                                    ...recent,
-                                    ...itemResult,
-                                    file_name: item.file_name || recent.file_name,
-                                    source_path: item.source_path || recent.source_path,
-                                    thumb_b64: item.thumb_b64 || recent.thumb_b64,
-                                    stream_buffer: item.stream_buffer || recent.stream_buffer,
-                                    price_status: itemResult.price_status || recent.price_status,
-                                    price_symbol: itemResult.price_symbol || recent.price_symbol,
-                                    official_price: itemResult.official_price || recent.official_price,
-                                    price_diff_percent: itemResult.price_diff_percent || recent.price_diff_percent,
-                                    _queueIndex: displayQueueIndex - idx,
-                                    _isCurrent: idx === 0,
-                                  };
-                                })
-                            : (data.recent_results || [])
-                                .map((res, i) => ({ ...res, _queueIndex: null, _isCurrent: i === 0 }))
-                          ).map((res, i) => (
+                          {/* [v19.10] Right panel follows the presentation queue, not the faster backend. */}
+                          {rightPanelItems.map((res, i) => (
                              <div key={`${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                  <div style={{ display: 'flex', gap: '6px' }}>
                                      <ResultThumbnail res={res} onClick={() => { setInspectImage(res); }} />

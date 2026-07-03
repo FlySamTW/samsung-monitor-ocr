@@ -14,6 +14,16 @@ For live OCR runs, preview image, LLM self-talk, and parsed result must never be
 
 Do not use `recent_results[0]` to update the main preview while a batch is running. It is usually the previous completed image and will make the UI look one image out of sync. The frontend should update the main image only when `current_file` changes, and should show live self-talk only if `stream_file === current_file`.
 
+## Delayed Result Panel Rule (2026-07-03)
+
+The user-facing sequence must be:
+
+1. Show the photo in the main preview.
+2. Play that photo's LLM self-talk/typewriter text to completion.
+3. Only then add that photo's thumbnail and parsed result to `辨識紀錄`.
+
+The backend may finish multiple photos ahead, but the right panel must never reveal a photo's model/price/status before its self-talk has finished. In `dashboard/src/App.jsx`, prefer the display queue and already-presented cutoff over `recent_results` whenever a queue exists. `recent_results` is backend-speed data and will confuse viewers if shown early.
+
 **Purpose**: To document critical engineering failures and strict rules for future development, ensuring mistakes are never repeated.
 
 ## 🔄 最新改動日誌 (v18.99+)
@@ -166,6 +176,14 @@ Use this section when taking over the Samsung OCR overnight job.
 5. Low real monitor prices are valid.
    - `S24F332EAC / 2390` is a real monitor price.
    - Do not use the old 3000 cutoff. Current cutoff is `<2000`, with context checks for plans/accessories.
+   - Handwritten clearance exception: if the same physical card clearly says `促銷價`, `展示出清`, `出清`, `展示機`, `福利品`, `清倉`, or `特賣`, a handwritten 4-digit price such as `1999` is valid. Without that context, low plan/monthly/accessory prices remain invalid.
+
+### Google Drive upload rule
+
+- Upload destination is the user's shared Drive folder. Use year-only child folders (`2026`, `2025`, ...); do not create month folders.
+- Run `tools/prepare_drive_upload_manifest.py` against `D:\00_商化\00_已OCR照片` before each upload batch.
+- Upload only `ready` rows staged under `_drive_upload\staging`. Rows in `_drive_upload\drive_upload_review_required.csv` must be rerun or reviewed first.
+- After each successful upload, append the exact Drive-returned file name and ID to `_drive_upload\drive_upload_uploaded.csv`, then rerun the manifest. This is the resume guard and prevents duplicate uploads.
 
 ### Known unresolved defects
 

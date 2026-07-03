@@ -1123,12 +1123,22 @@ class BatchOrchestrator:
 
                 # [v19.8 UX] Queue completed result for delayed display.
                 # Backend keeps processing; UI drains this queue at typewriter speed.
+                display_text = str(self.stream_buffer or "")
+                thinking_text = str(norm_result.get("thinking") or "")
+                if thinking_text and len(display_text) < min(len(thinking_text), 80):
+                    display_text = thinking_text[:800]
+                if not display_text.strip():
+                    display_text = (
+                        f"這張已完成辨識：{norm_result.get('view_type') or '單機'}，"
+                        f"{norm_result.get('model') or '無型號'}，"
+                        f"{norm_result.get('price') or '無價格'}。"
+                    )
                 try:
                     self.display_queue.append({
                         "file_name": fname,
                         "source_path": norm_result.get("source_path", ""),
                         "thumb_b64": norm_result.get("thumb_b64", ""),
-                        "stream_buffer": str(self.stream_buffer or ""),
+                        "stream_buffer": display_text,
                         "result": {
                             "view_type": norm_result.get("view_type", ""),
                             "screen_status": norm_result.get("screen_status", ""),

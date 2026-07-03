@@ -414,7 +414,38 @@ def normalize_followme_price(model, price=None, context_text=""):
     return None
 
 
-def clean_monitor_price(price, min_price=2000):
+_CLEARANCE_PRICE_KEYWORDS = (
+    "手寫",
+    "促銷價",
+    "出清",
+    "展示出清",
+    "展示機",
+    "福利品",
+    "清倉",
+    "特賣",
+)
+_LOW_PRICE_BLOCK_KEYWORDS = (
+    "月付",
+    "月租",
+    "方案",
+    "分期",
+    "搭配價",
+    "電信",
+    "配件",
+)
+
+
+def has_clearance_price_context(context_text=""):
+    """True when a low 4-digit number is visibly a handwritten/clearance shelf price."""
+    text = str(context_text or "")
+    if not text:
+        return False
+    if any(token in text for token in _LOW_PRICE_BLOCK_KEYWORDS):
+        return False
+    return any(token in text for token in _CLEARANCE_PRICE_KEYWORDS)
+
+
+def clean_monitor_price(price, min_price=2000, context_text=""):
     """Return a numeric monitor price string, or None for impossible/plan/accessory prices."""
     if price in (None, "", "null", "None"):
         return None
@@ -425,6 +456,8 @@ def clean_monitor_price(price, min_price=2000):
         price_int = int(digits)
     except ValueError:
         return None
+    if has_clearance_price_context(context_text):
+        min_price = min(min_price, 1000)
     if price_int < min_price:
         return None
     return digits
@@ -1119,20 +1152,22 @@ def _fallback_extract_fields(text, valid_models=None):
 
     # 3. 價格提取
     price_candidates = []
+    clearance_context = has_clearance_price_context(text_tc)
+    min_candidate_price = 1000 if clearance_context else 2000
     # 模式 A:「**價格**：**4,990**」「售價:4990」——容忍 Markdown 星號、引號、空白
-    for m in re.finditer(r'(?:價格|售價|現金價|特價|標價)\**\s*[：:]\s*\**\s*[「「"]*([\d,]+)\**\s*[」」"]*', text_tc):
+    for m in re.finditer(r'(?:價格|售價|現金價|特價|標價|促銷價|出清價|展示出清價|手寫價|清倉價)\**\s*[：:]\s*\**\s*[「「"]*([\d,]+)\**\s*[」」"]*', text_tc):
         val = m.group(1).replace(',', '').replace('*', '').strip()
         if val.isdigit():
             price_candidates.append(int(val))
     # 模式 B:帶千分位逗號的 4-6 位數字(如 4,990、17,990),排除月付/分期小額
     for m in re.finditer(r'(?<![\d])(\d{1,3}(?:,\d{3}){1,2})(?![\d])', text_tc):
         val = int(m.group(1).replace(',', ''))
-        if val >= 2000:  # 排除 2000 元以下無效價格
+        if val >= min_candidate_price:  # 出清手寫價可低於一般商品售價門檻
             price_candidates.append(val)
     # 模式 C:獨立 4-5 位無逗號數字
     for m in re.finditer(r'(?<![\d\w])(\d{4,5})(?![\d])', text_tc):
         val = int(m.group(1))
-        if val >= 2000:
+        if val >= min_candidate_price:
             price_candidates.append(val)
     if price_candidates:
         # 選出現次數最多或最小的合理價格
@@ -1402,7 +1437,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "1. 遠景：完全看不到清楚型號或價格，且畫面主要是多台螢幕陳列。遠景不填 model/price。\n"
             "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；不要因為底座不完整入鏡而否定。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
             "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
-            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留。\n"
+            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"
             "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
             "JSON 格式固定為："
             "{\"view_type\":\"遠景或單機\",\"category\":\"遠景或單機或FollowMe\","
@@ -2018,6 +2053,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 # We check raw_price provided by LLM.
                 raw_str = str(raw_price)
                 has_currency_symbol = '$' in raw_str or ',' in raw_str or 'NT' in raw_str.upper()
+                price_context_text = "\n".join([
+                    raw_str,
+                    str(data_obj.get("thinking") or ""),
+                    str(thinking_text or ""),
+                    str(full_response_text or ""),
+                ])
+                clearance_price_context = has_clearance_price_context(price_context_text)
 
                 # Rule: If value is < 2000 AND has no currency symbol, it's likely curvature (1000, 1500, 1800)
                 # If value is > 2000 (e.g. 3290), we forgive missing symbol if clearly not curvature.
@@ -2025,7 +2067,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 try:
                     p_int = int(clean_price)
                     # Price guard: clear obvious plan/accessory prices, but keep low-end monitor sale prices.
-                    min_price = 2000
+                    min_price = 1000 if clearance_price_context else 2000
 
                     if p_int < min_price:
                          console.print(f"[dim]⚠️ [價格攔截] {raw_price} ({p_int}) < {min_price} -> 過低 (方案/月付/配件價，不是螢幕商品售價)[/dim]")
@@ -2033,7 +2075,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     # [v18.97] Strict Symbol Check for low-ish numbers to be safe
                     elif p_int < 10000 and not has_currency_symbol:
                         # Double check: is it 1000, 1500, 1800? (Common Curvatures)
-                        if p_int in [1000, 1500, 1800]:
+                        if p_int in [1000, 1500, 1800] and not clearance_price_context:
                              console.print(f"[yellow]⚠️ [價格攔截] {raw_price} 數值像曲率且無貨幣符號 -> 視為幻覺[/yellow]")
                              data_obj["price"] = None
                         else:
@@ -2065,6 +2107,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
             # 從獨白提取價格
             desc_price_patterns = [
+                r'(?:手寫|促銷價|出清|展示出清|福利品|展示機|清倉|特賣).{0,12}?(?:寫|標|是|為|:|：)?\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
+                r'(?:手寫|促銷價|出清|展示出清|福利品|展示機|清倉|特賣).{0,12}?(?:寫|標|是|為|:|：)?\s*[「」\"]?(\d{4,5})[」\"]?',
                 r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*寫\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
                 r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*寫\s*[「」\"]?(\d{4,5})[」\"]?',
                 r'(?:價格|售價|促銷價|建議售價|價牌顯示|標籤寫|寫著)\s*(?:是|為|:|：)?\s*[「」\"]?(\d{1,2},\d{3})[」\"]?',
@@ -2108,7 +2152,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # 驗證價格一致性
             current_price = data_obj.get("price")
             if desc_price and not rescue_blocked_by_distant_view:
-                rescued_price = clean_monitor_price(desc_price)
+                rescued_price = clean_monitor_price(desc_price, context_text=thinking_text)
                 if rescued_price:
                     current_digits = "".join(c for c in str(current_price or "") if c.isdigit())
                     rescued_digits = "".join(c for c in str(rescued_price or "") if c.isdigit())
@@ -2122,7 +2166,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 else:
                     console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
 
-        cleaned_final_price = clean_monitor_price(data_obj.get("price"))
+        cleaned_final_price = clean_monitor_price(data_obj.get("price"), context_text=thinking_text)
         if data_obj.get("price") and not cleaned_final_price:
             console.print(f"[dim]⚠️ [價格攔截] 最終價格 {data_obj.get('price')} 2000 元以下或格式不合 -> 清除[/dim]")
             data_obj["price"] = None
