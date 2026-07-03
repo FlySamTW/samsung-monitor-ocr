@@ -82,3 +82,14 @@ python tools\rerun_questionable_records.py --input-csv remaining_candidates.csv 
 - `tools/rerun_questionable_records.py` now validates every candidate file against its real source folder before queueing. If the CSV says period `202510`, the resolved photo must also live under a path containing `202510`; otherwise it is skipped, not silently rerun under the wrong folder.
 - `BatchOrchestrator.force_rerun()` now refuses to queue a rerun when the current source folder does not contain the requested image. This prevents missing-file cases from being logged as corrupted photos.
 - The bad in-progress rerun controller was stopped after 202511 had exported. 202510 was interrupted before export and should be resumed only after regenerating or validating candidates with the patched script.
+
+## 2026-07-03 19:45 Full Auto Resume
+
+- Do not press the dashboard's old global "restart" action for normal production work. It purges OCR JSON history in the current source folder before rerunning. The boss-facing dashboard now exposes only the safe continue button (`續跑`) on the main toolbar.
+- `skills/batch_orchestrator.py` now imports `Path`; without this, new results that tried to attach `source_path` failed with `name 'Path' is not defined`, causing a 5-failure meltdown.
+- The production recursive runner was restarted with resume enabled, not `--restart` and not `--no-resume`.
+- Active log files for this run:
+  - `logs/full_auto_recursive_20260703_194356.out.log`
+  - `logs/full_auto_recursive_20260703_194356.err.log`
+- At restart, completed folders were being marked `skipped_existing`; folder `2025-商化照片\商化照片-202502` resumed from `534/1906` and began increasing normally.
+- If this runner stops, inspect `/api/status`, the two log files above, and `_ocr_audit/folder_summary.csv`. Resume with the normal recursive launcher so completed folders remain preserved.

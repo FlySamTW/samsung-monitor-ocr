@@ -209,3 +209,5 @@ npm.cmd --prefix dashboard run build
 - Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
 - `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.
 - Non-Codex users should use `SETUP_FIRST_TIME.bat`, `START_OCR.bat`, `START_FULL_AUTO_OCR.bat`, and `CHECK_STATUS.bat`. Do not tell ordinary users to type Python commands unless the BAT flow fails.
+- The dashboard main toolbar should expose safe continue/resume (`續跑`) for normal production work. Do not expose a global restart button to ordinary users, because `restart=true` purges OCR JSON history in the current source folder before rerunning.
+- If a production recursive run stalls with `name 'Path' is not defined`, ensure `skills/batch_orchestrator.py` imports `Path` from `pathlib`, restart the backend process, then resume with the recursive launcher and existing `_ocr_audit` state.

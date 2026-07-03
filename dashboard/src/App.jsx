@@ -472,11 +472,7 @@ const App = () => {
 
                 <button onClick={() => handleStart(false)} disabled={stats.is_running}
                     style={{ background: stats.is_running ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                    <Play size={12} /> 繼續執行
-                </button>
-                <button onClick={() => handleStart(true)} disabled={stats.is_running}
-                    style={{ background: stats.is_running ? '#333' : '#f59e0b', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: stats.is_running?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                    <Zap size={12} /> 重新啟動
+                    <Play size={12} /> 續跑
                 </button>
                <button onClick={handleStop}
                    style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
