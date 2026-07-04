@@ -232,6 +232,7 @@ npm.cmd --prefix dashboard run build
 - The lower-left panel must preserve the historical LLM record, including `[THINK]` summaries and final classification lines. Filter only raw `JSON Error`, initialization/debug messages, batch start/stop noise, and internal queue wording.
 - If the local VLM repeats a token/spec endlessly, backend must close that stream and retry instead of letting the UI loop forever.
 - Large Drive uploads use rclone remote `samsung_ocr_drive` through `tools\rclone_drive_upload.py` or `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`; keep year-only folders and use the `_drive_upload\rclone_drive_upload.lock` guard.
+- If an rclone child stays on one batch without updating `drive_upload_uploaded.csv`, restart the uploader with a smaller batch such as `--limit 100` and keep `--rclone-timeout-seconds` enabled.
 - For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.
 - Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
 - `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.

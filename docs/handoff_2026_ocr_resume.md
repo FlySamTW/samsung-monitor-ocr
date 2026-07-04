@@ -103,5 +103,6 @@ python tools\rerun_questionable_records.py --input-csv remaining_candidates.csv 
 - Google Drive upload can now use local rclone remote `samsung_ocr_drive`, rooted at the approved shared parent folder. Use year-only folders.
 - Batch file for non-Python users: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
 - Script entrypoint: `python tools\rclone_drive_upload.py --execute --repeat --limit 500 --transfers 4 --checkers 8`.
+- If a single rclone batch stalls, stop only the rclone/uploader process and resume with a smaller batch plus timeout, for example `--limit 100 --rclone-timeout-seconds 1200`.
 - The uploader has a lock file under `_drive_upload\rclone_drive_upload.lock`; do not run multiple uploaders. It only uploads rows that `tools\prepare_drive_upload_manifest.py` marks `ready`.
 - Current missing-result helper: `tools\build_missing_result_rerun_candidates.py`. It reads `_ocr_audit\folder_summary.csv` and creates a safe candidate CSV for `tools\rerun_questionable_records.py`.

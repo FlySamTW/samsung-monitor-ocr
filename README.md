@@ -259,6 +259,7 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - The lower-left log area is intentional and must keep the historical LLM record visible (`[THINK]` and final classification lines). Filter only internal noise such as initialization/debug/JSON errors.
 - Google Drive upload is handled by rclone remote `samsung_ocr_drive`; use year folders only (`2026`, `2025`, ...).
 - Non-Python upload entrypoint: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
+- rclone upload batches have a timeout guard; if one batch stalls, restart with `tools\rclone_drive_upload.py --execute --repeat --limit 100 --rclone-timeout-seconds 1200`.
 - Missing-result rerun candidate builder: `tools\build_missing_result_rerun_candidates.py`.
 # 一般使用者入口
 

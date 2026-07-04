@@ -113,7 +113,7 @@ def single_instance_lock(lock_path: Path):
                 pass
 
 
-def run_command(command: list[str], log_path: Path, execute: bool) -> int:
+def run_command(command: list[str], log_path: Path, execute: bool, timeout_seconds: int) -> int:
     printable = " ".join(f'"{part}"' if " " in part else part for part in command)
     print(printable, flush=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,8 +122,19 @@ def run_command(command: list[str], log_path: Path, execute: bool) -> int:
         if not execute:
             log.write("[dry-run]\n")
             return 0
-        completed = subprocess.run(command, text=True, stdout=log, stderr=subprocess.STDOUT)
-        return completed.returncode
+        try:
+            completed = subprocess.run(
+                command,
+                text=True,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds if timeout_seconds > 0 else None,
+            )
+            return completed.returncode
+        except subprocess.TimeoutExpired:
+            log.write(f"[timeout] command exceeded {timeout_seconds} seconds\n")
+            print(f"[upload] rclone timed out after {timeout_seconds} seconds", flush=True)
+            return 124
 
 
 def prepare_manifest(args, limit: int) -> Path:
@@ -184,7 +195,7 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         ]
         if args.dry_run:
             command.append("--dry-run")
-        rc = run_command(command, args.log_path, execute=args.execute)
+        rc = run_command(command, args.log_path, execute=args.execute, timeout_seconds=args.rclone_timeout_seconds)
         if rc != 0:
             raise SystemExit(rc)
 
@@ -225,6 +236,12 @@ def main() -> int:
     parser.add_argument("--sleep-seconds", type=int, default=10)
     parser.add_argument("--transfers", type=int, default=4)
     parser.add_argument("--checkers", type=int, default=8)
+    parser.add_argument(
+        "--rclone-timeout-seconds",
+        type=int,
+        default=1800,
+        help="Abort one rclone batch if it runs longer than this. 0 disables the timeout.",
+    )
     parser.add_argument("--execute", action="store_true", help="Actually upload. Without this, only print commands.")
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to rclone.")
     args = parser.parse_args()
