@@ -244,6 +244,7 @@ Google Drive upload handoff:
 - Prepare upload manifests with: `python tools/prepare_drive_upload_manifest.py --output-dir D:\00_商化\00_已OCR照片 --limit-ready 25`
 - The script writes `_drive_upload\drive_upload_ready.csv`, `_drive_upload\drive_upload_review_required.csv`, `_drive_upload\drive_upload_next_batch.csv`, `_drive_upload\staging_map.csv`, and `_drive_upload\drive_upload_summary.json`.
 - Only upload rows from `drive_upload_next_batch.csv` / `staging_map.csv`. Do not upload `review_required` rows; they need rerun or manual review first.
+- Upload batches are newest-period first (`2026` before `2025` before `2024`). Filenames containing `無型號` are review rows and must not be uploaded until corrected/rerun.
 - Record completed uploads in `_drive_upload\drive_upload_uploaded.csv`; the next manifest run skips those files so uploads can resume safely on another machine.
 
 # 2026-07-03 Portable Resume
@@ -258,6 +259,7 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - The backend may process the next photo early, but the UI must not show that parsed result before its self-talk finishes.
 - The lower-left log area is intentional and must keep the historical LLM record visible (`[THINK]` and final classification lines). Filter only internal noise such as initialization/debug/JSON errors.
 - Google Drive upload is handled by rclone remote `samsung_ocr_drive`; use year folders only (`2026`, `2025`, ...).
+- Odyssey Ark / Ark Mini LED 55-inch upright or curved desk displays are treated as `S55BG970NC`; do not borrow nearby S27/S32 small-monitor labels.
 - Non-Python upload entrypoint: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
 - rclone upload batches have a timeout guard; if one batch stalls, restart with `tools\rclone_drive_upload.py --execute --repeat --limit 100 --rclone-timeout-seconds 1200`.
 - Missing-result rerun candidate builder: `tools\build_missing_result_rerun_candidates.py`.

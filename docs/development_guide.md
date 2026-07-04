@@ -194,6 +194,7 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
   - Builds safe Google Drive upload batches from the flat OCR output folder.
   - Excludes internal `_` folders and questionable filenames, stages the next batch as ASCII `upload_0001.jpg` files, and uses `_drive_upload\drive_upload_uploaded.csv` as the resume/duplicate guard.
   - Keep Drive organization year-only (`2026`, `2025`, ...); filename carries month/store/search detail.
+  - Pending batches must be newest-period first and must keep `無型號` rows in review until a rerun or manual correction resolves the model.
 
 - `tools/rclone_drive_upload.py`
   - Uses rclone remote `samsung_ocr_drive` for large resumable uploads to the approved Google Drive parent folder.
@@ -226,6 +227,7 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
    - `model + 無價格` where thinking contains a price.
    - `(無型號) + price`.
    - current-year `？＄` filenames.
+   - Odyssey Ark / Ark Mini LED 55-inch upright or curved desk displays should resolve to `S55BG970NC`; never borrow nearby S27/S32 small-monitor labels.
 
 4. Model comparison is incomplete:
    - `qwen/qwen3-vl-8b` is currently running and works.

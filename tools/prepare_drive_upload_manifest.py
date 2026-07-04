@@ -26,6 +26,7 @@ PRICE_TOKEN_RE = re.compile(
 DISTANT_VIEW_TOKEN = "\u9060\u666f"
 REVIEW_NAME_TOKENS = [
     "\u505c\u7522",  # discontinued
+    "\u7121\u578b\u865f",  # no model
     "\u578b\u865f\u672a\u8fa8\u8b58",  # model not recognized
     "\u7121\u50f9\u683c",  # no price
     "\u4e0d\u5408\u683c",  # rejected
@@ -143,6 +144,14 @@ def write_csv(path: Path, rows: list[ManifestRow]) -> None:
             writer.writerow(asdict(row))
 
 
+def newest_first_key(row: ManifestRow) -> tuple[int, str]:
+    try:
+        period_rank = int(row.period)
+    except (TypeError, ValueError):
+        period_rank = -1
+    return (-period_rank, row.file_name.casefold())
+
+
 def stage_upload_batch(rows: list[ManifestRow], stage_dir: Path) -> Path:
     stage_dir.mkdir(parents=True, exist_ok=True)
     for old_file in stage_dir.glob("upload_*"):
@@ -205,8 +214,9 @@ def main() -> int:
             continue
         all_rows.append(classify_file(path, output_root, args.max_bytes))
 
-    ready_rows = [row for row in all_rows if row.status == "ready"]
-    review_rows = [row for row in all_rows if row.status != "ready"]
+    all_rows.sort(key=newest_first_key)
+    ready_rows = sorted((row for row in all_rows if row.status == "ready"), key=newest_first_key)
+    review_rows = sorted((row for row in all_rows if row.status != "ready"), key=newest_first_key)
     pending_rows = [
         row
         for row in ready_rows

@@ -191,7 +191,7 @@
    - 有型號 → 直接採用，忽略下方標籤的不一致型號
    - 有 FollowMe 字樣 → 但你在分支C，代表沒有實體支架，此標籤按一般型號處理
    - 只有 Odyssey / QLED / G5 / G6 / G8 / AI M7 / Smart Monitor 等行銷名稱，沒有 S 開頭英數型號 → 不可填入 model
-   - 看到 "Odyssey Ark" 只是系列/商品名，不是完整型號；若同一張標籤沒有清楚的 S 開頭完整型號，不可從旁邊其他小牌借 S27CG552EC 之類型號，model 必須填 null。
+   - 看到 "Odyssey Ark"、"Ark Mini LED"、55 吋大型直立/曲面桌上機時，主角型號固定視為 S55BG970NC；不可從旁邊其他小牌借 S27CG552EC 之類 27/32 吋型號。
    - model 禁止只填 "G5"、"G6"、"G8"、"Odyssey G8" 這種系列名；一般單機必須是 S 開頭完整型號，否則填 null
    - 唯一允許的跨標籤：L 標籤型號 + 下方標籤價格
 
@@ -200,15 +200,16 @@
 3. 無 L 型標籤時，優先選 S27/S32 開頭的型號
 
 ### C-2a. Odyssey Ark 直接出口
-如果主角是 Odyssey Ark、Ark、55 吋大型曲面螢幕，且同一張主角標籤沒有清楚的 S 開頭完整型號：
+如果主角是 Odyssey Ark、Ark Mini LED、55 吋大型曲面/直立桌上螢幕：
 - 不要讀旁邊 27/32 吋小螢幕的 S27/S32 型號
 - 不要反覆描述「旁邊小牌」
-- 不要補猜價格
-- 自然描述必須說「只看到 Odyssey Ark 系列名，沒有主角完整 S 型號」
+- model 必須填 S55BG970NC
+- 價格只讀主角 Ark 價格牌；若主角價格牌不清楚才填 null
+- 自然描述必須說「主角是 Odyssey Ark 55 吋，依固定規則歸為 S55BG970NC」
 - 禁止寫「主角標籤上寫 S27CG552EC」或「型號為 S27CG552EC」
 - 直接輸出這兩行：
-主角是 Odyssey Ark 系列，只看到系列名，沒有同一張主角標籤的完整 S 型號；旁邊小螢幕型號不可借用。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有規格牌", "model": null, "price": null}
+主角是 Odyssey Ark 55 吋大型桌上螢幕，依固定規則歸為 S55BG970NC；旁邊小螢幕型號不可借用。
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "S55BG970NC", "price": null}
 輸出後立刻停止。
 
 ### C-3. 型號讀取（逐字讀取法，腦中執行）

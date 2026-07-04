@@ -182,7 +182,8 @@ Use this section when taking over the Samsung OCR overnight job.
 
 - Upload destination is the user's shared Drive folder. Use year-only child folders (`2026`, `2025`, ...); do not create month folders.
 - Run `tools/prepare_drive_upload_manifest.py` against `D:\00_商化\00_已OCR照片` before each upload batch.
-- Upload only `ready` rows staged under `_drive_upload\staging`. Rows in `_drive_upload\drive_upload_review_required.csv` must be rerun or reviewed first.
+- Upload only `ready` rows staged under `_drive_upload\staging`. Rows in `_drive_upload\drive_upload_review_required.csv` must be rerun or reviewed first; filenames containing `無型號` are not safe for Drive.
+- Upload manifests are newest-period first, so the unattended uploader should send `2026` before `2025` before `2024`.
 - After each successful upload, append the exact Drive-returned file name and ID to `_drive_upload\drive_upload_uploaded.csv`, then rerun the manifest. This is the resume guard and prevents duplicate uploads.
 
 ### Known unresolved defects
@@ -191,6 +192,7 @@ Use this section when taking over the Samsung OCR overnight job.
 - Some completed 2026 filenames still contain `？＄`; these must be repaired or moved to manual review.
 - Some completed rows are `model + 無價格` although thinking text contains a valid price. Use thinking rescue or focused rerun.
 - Some obvious distant views are still classified as `單機/(無型號)/price`, e.g. `M-台南市-永康區-TK3C-中華-362.jpg`.
+- Odyssey Ark / Ark Mini LED 55-inch upright or curved desk displays should be `S55BG970NC`; keep the guard that blocks borrowing nearby S27/S32 labels.
 - Newer model comparison is not complete. qwen3-vl-8b is active; Gemma 4 12B QAT and Qwen3.5 9B VLM were downloading and not fully evaluated.
 
 ### First actions for takeover

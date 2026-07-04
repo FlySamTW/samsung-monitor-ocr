@@ -576,6 +576,17 @@ def should_clear_borrowed_odyssey_ark_model(model, context_text=""):
 def has_odyssey_ark_context(context_text=""):
     return "ODYSSEY ARK" in str(context_text or "").upper()
 
+
+def infer_odyssey_ark_model(context_text=""):
+    """Treat the 55-inch Odyssey Ark floor/desk display as the known Ark model."""
+    text = str(context_text or "").upper()
+    compact = re.sub(r"[^A-Z0-9]", "", text)
+    if "S55BG970" in compact or "LS55BG970" in compact:
+        return "S55BG970NC"
+    if "ODYSSEY ARK" in text and ("55" in text or "MINI LED" in text or "ARK" in text):
+        return "S55BG970NC"
+    return None
+
 # --- Logging Setup (必須在函數定義前) ---
 # [v19.8] Avoid cp950 crash when stdout is redirected to a file.
 if sys.stdout.isatty():
@@ -2080,6 +2091,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                             if best_match:
                                 data_obj["model"] = best_match[0]
                                 console.print(f"[green]✅ [尺寸交叉驗證] 修正為: {best_match[0]}[/green]")
+
+        ark_model = infer_odyssey_ark_model(thinking_text)
+        if ark_model and not data_obj.get("model"):
+            console.print(f"[green]✅ [Odyssey Ark 固定規則] 主角 Ark 55 吋 → {ark_model}[/green]")
+            data_obj["model"] = ark_model
 
         # 3. Strict Price Check (4-5 digits only)
         raw_price = data_obj.get("price")

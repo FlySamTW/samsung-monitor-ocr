@@ -299,6 +299,17 @@ def has_odyssey_ark_context(context_text=""):
     return "ODYSSEY ARK" in str(context_text or "").upper()
 
 
+def infer_odyssey_ark_model(context_text=""):
+    """Treat the 55-inch Odyssey Ark floor/desk display as the known Ark model."""
+    text = str(context_text or "").upper()
+    compact = re.sub(r"[^A-Z0-9]", "", text)
+    if "S55BG970" in compact or "LS55BG970" in compact:
+        return "S55BG970NC"
+    if "ODYSSEY ARK" in text and ("55" in text or "MINI LED" in text or "ARK" in text):
+        return "S55BG970NC"
+    return None
+
+
 def correct_common_model_price_conflict(model, price, context_text=""):
     model_text = str(model or "").upper()
     cleaned_price = clean_monitor_price(price)
@@ -347,6 +358,10 @@ def normalize_like_backend(parsed, raw_text):
         normalized["model"] = None
         normalized["price"] = None
         model_rescue_blocked = True
+
+    ark_model = infer_odyssey_ark_model(raw_text)
+    if ark_model and not normalized.get("model"):
+        normalized["model"] = ark_model
 
     if not normalized.get("model") and not rescue_blocked_by_distant_view:
         main_label_model = extract_main_label_model(raw_text)
