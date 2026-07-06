@@ -30,6 +30,8 @@ from photo_rename_planner import (  # noqa: E402
     CONFLICT_STATUS,
     MISSING_RESULT_STATUS,
     MISSING_SOURCE_STATUS,
+    NO_CHANGE_STATUS,
+    READY_STATUS,
     copy_plan_to_flat_output,
     make_plan,
     summarize,
@@ -325,6 +327,13 @@ def backup_previous_copied(audit_folder: Path, dry_run: bool) -> tuple[Path, int
     return backup_dir, count
 
 
+def split_plan_for_partial_copy(plan: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    safe_statuses = {READY_STATUS, NO_CHANGE_STATUS}
+    safe_rows = [row for row in plan if row.get("status") in safe_statuses]
+    blocked_rows = [row for row in plan if row.get("status") not in safe_statuses]
+    return safe_rows, blocked_rows
+
+
 def export_folder_outputs(args, folder: Path, audit_folder: Path, period: str) -> dict[str, object]:
     records = json_request(args.backend_url, "/api/success_records", timeout=120)
     if not isinstance(records, list):
@@ -339,15 +348,20 @@ def export_folder_outputs(args, folder: Path, audit_folder: Path, period: str) -
     results_map = records_to_map(records)
     plan = make_plan(folder, results_map, period, args.price_symbol)
     counts = summarize(plan)
-    unsafe = counts.get(MISSING_RESULT_STATUS, 0) + counts.get(MISSING_SOURCE_STATUS, 0) + counts.get(CONFLICT_STATUS, 0)
-    if unsafe:
-        raise RuntimeError(f"unsafe rename rows for {folder}: {counts}")
+    safe_plan, blocked_plan = split_plan_for_partial_copy(plan)
+    blocked_path = audit_folder / "blocked_after_rerun.csv"
 
     if not args.dry_run:
         write_dict_csv(success_path, records, SUCCESS_HEADERS)
         write_csv(audit_folder / "rename_plan.csv", plan)
         write_csv(audit_folder / "conflicts.csv", [item for item in plan if item["status"] == CONFLICT_STATUS])
-        copied = copy_plan_to_flat_output(plan, Path(args.output_dir))
+        write_csv(blocked_path, blocked_plan)
+        if blocked_plan:
+            print(
+                f"[warn] {folder.name} blocked_rows={len(blocked_plan)} written={blocked_path}; copying safe rows only.",
+                flush=True,
+            )
+        copied = copy_plan_to_flat_output(safe_plan, Path(args.output_dir)) if safe_plan else []
         write_csv(audit_folder / "copied.csv", copied)
     else:
         copied = []
@@ -358,6 +372,11 @@ def export_folder_outputs(args, folder: Path, audit_folder: Path, period: str) -
         "records": len(records),
         "ready": counts.get("ready", 0),
         "no_change": counts.get("no_change", 0),
+        "blocked": len(blocked_plan),
+        "missing_result": counts.get(MISSING_RESULT_STATUS, 0),
+        "missing_source": counts.get(MISSING_SOURCE_STATUS, 0),
+        "conflict": counts.get(CONFLICT_STATUS, 0),
+        "blocked_path": str(blocked_path) if blocked_plan else "",
         "copied": len(copied),
         "backed_up": backup_count,
         "backup_dir": str(backup_dir) if backup_count else "",

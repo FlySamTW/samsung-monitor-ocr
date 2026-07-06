@@ -263,6 +263,7 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - Non-Python upload entrypoint: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
 - rclone upload batches have a timeout guard; if one batch stalls, restart with `tools\rclone_drive_upload.py --execute --repeat --limit 100 --rclone-timeout-seconds 1200`.
 - Missing-result rerun candidate builder: `tools\build_missing_result_rerun_candidates.py`.
+- A corrupted image or unresolved `missing_result` must not stop a whole rerun/export batch. The scripts now write unsafe rows to `blocked_after_rerun.csv` / `blocked_after_recursive.csv` and continue copying safe rows.
 # 一般使用者入口
 
 不用 Codex、不用手打 Python 指令：

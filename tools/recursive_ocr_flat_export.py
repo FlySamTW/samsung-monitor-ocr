@@ -16,6 +16,8 @@ from typing import Dict, Iterable, List, Optional
 from photo_rename_planner import (
     CONFLICT_STATUS,
     IMAGE_EXTENSIONS,
+    NO_CHANGE_STATUS,
+    READY_STATUS,
     copy_plan_to_flat_output,
     make_plan,
     summarize,
@@ -244,6 +246,13 @@ def records_to_map(records: Iterable[dict]) -> Dict[str, Dict[str, str]]:
     return results
 
 
+def split_plan_for_partial_copy(plan: List[Dict[str, str]]) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    safe_statuses = {READY_STATUS, NO_CHANGE_STATUS}
+    safe_rows = [row for row in plan if row.get("status") in safe_statuses]
+    blocked_rows = [row for row in plan if row.get("status") not in safe_statuses]
+    return safe_rows, blocked_rows
+
+
 def price_digits(row: dict) -> str:
     value = row.get("human_price") or row.get("price") or ""
     return "".join(ch for ch in str(value) if ch.isdigit())
@@ -406,7 +415,12 @@ def process_folder(args, source_root: Path, output_dir: Path, audit_dir: Path, r
         try:
             if copy_error:
                 raise RuntimeError(copy_error)
-            copied = copy_plan_to_flat_output(plan, output_dir)
+            safe_plan, blocked_plan = split_plan_for_partial_copy(plan)
+            if blocked_plan:
+                blocked_path = folder_audit_dir / "blocked_after_recursive.csv"
+                write_csv(blocked_path, blocked_plan)
+                copy_error = f"{len(blocked_plan)} 筆需人工/補跑：{blocked_path}"
+            copied = copy_plan_to_flat_output(safe_plan, output_dir) if safe_plan else []
             write_csv(copied_path, copied)
             copied_count = len(copied)
         except Exception as exc:
