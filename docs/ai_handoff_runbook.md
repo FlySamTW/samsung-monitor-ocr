@@ -229,6 +229,22 @@ The live UI must keep photo preview, LLM self-talk, and parsed OCR result aligne
 
 If a user reports that photos switch faster than self-talk/results, inspect this contract first before changing prompt/model code.
 
+## Dashboard Sync Update - 2026-07-06
+
+Current dashboard versions:
+
+- `v19.16 (總進度)` added global OCR progress in the header.
+- `v19.18 (同步防呆)` fixed the long-run presentation queue so the main preview does not freeze on old photos when OCR is faster than the display animation.
+
+Operational rules:
+
+- Do not drive the main preview from `recent_results[0]`.
+- During a running batch, the right-side record list should come from already revealed frontend presentation items, not raw backend-speed history.
+- Presentation queue items may be discarded when they are stale and no longer present in the backend display queue. This affects only what the dashboard chooses to show; OCR audit/output data must remain intact.
+- Long self-talk should be trimmed for monitor display so a single result cannot hold the preview for too long.
+- If the preview appears stuck, check `/api/status` first. If `current_file` and `stats.processed` are changing, the backend is healthy and the issue is frontend presentation lag.
+- `/api/status.overall_progress` is the source for the top-bar total progress. It merges folder discovery, folder summary, missing-result rerun summaries, and the current active folder stats.
+
 # 2026-07-02 HANDOFF - Live OCR Continuation
 
 ## Live Processes

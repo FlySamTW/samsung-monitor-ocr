@@ -677,10 +677,12 @@ api_client: OpenAI = None
 model_name_global = ""
 IMAGE_LOOKUP_CACHE = {}
 OUTPUT_ROOT = Path(os.environ.get("OCR_OUTPUT_DIR", r"D:\00_商化\00_已OCR照片"))
+SOURCE_ROOT = Path(os.environ.get("OCR_SOURCE_ROOT", r"D:\00_商化\00_未整理商化照片"))
 DRIVE_MANIFEST_DIR = OUTPUT_ROOT / "_drive_upload"
 AUDIT_DIR = OUTPUT_ROOT / "_ocr_audit"
 MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
+OVERALL_PROGRESS_CACHE = {"mtime": None, "data": None}
 
 REVIEW_REASON_LABELS = {
     "current_year_missing_compare_symbol": "2026+ 缺少 ↑/↓/✓ 比價符號",
@@ -707,6 +709,213 @@ def _append_csv_row(path: Path, fieldnames: list[str], row: dict) -> None:
         if not exists:
             writer.writeheader()
         writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_csv_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return list(csv.DictReader(handle))
+    except Exception as exc:
+        log.debug("read csv failed %s: %s", path, exc)
+        return []
+
+
+def _folder_key(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(Path(text).resolve()).lower()
+    except Exception:
+        return text.lower()
+
+
+def _relative_to_source(folder: str) -> str:
+    if not folder:
+        return ""
+    try:
+        path = Path(folder).resolve()
+        return str(path.relative_to(SOURCE_ROOT.resolve()))
+    except Exception:
+        return folder
+
+
+def _latest_mtime(paths: list[Path]):
+    mtimes = []
+    for path in paths:
+        try:
+            if path.exists():
+                mtimes.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    return max(mtimes) if mtimes else None
+
+
+def _load_base_overall_progress() -> dict:
+    discovery_path = AUDIT_DIR / "folder_discovery.csv"
+    summary_path = AUDIT_DIR / "folder_summary.csv"
+    rerun_summary_paths = sorted(AUDIT_DIR.glob("missing_result_rerun_summary*.csv"))
+    cache_paths = [discovery_path, summary_path, *rerun_summary_paths]
+    latest_mtime = _latest_mtime(cache_paths)
+    cached = OVERALL_PROGRESS_CACHE.get("data")
+    if cached is not None and OVERALL_PROGRESS_CACHE.get("mtime") == latest_mtime:
+        return json.loads(json.dumps(cached))
+
+    folders: dict[str, dict] = {}
+
+    discovery_rows = _read_csv_rows(discovery_path)
+    summary_rows = _read_csv_rows(summary_path)
+
+    for row in discovery_rows:
+        folder = row.get("folder", "")
+        key = _folder_key(folder)
+        if not key:
+            continue
+        image_count = _safe_int(row.get("image_count"))
+        folders[key] = {
+            "folder": folder,
+            "relative_folder": _relative_to_source(folder),
+            "period": row.get("period", ""),
+            "image_count": image_count,
+            "processed": 0,
+            "ready": 0,
+            "status": "pending",
+        }
+
+    for row in summary_rows:
+        folder = row.get("folder", "")
+        key = _folder_key(folder)
+        if not key:
+            continue
+        image_count = _safe_int(row.get("image_count"))
+        entry = folders.setdefault(key, {
+            "folder": folder,
+            "relative_folder": _relative_to_source(folder),
+            "period": row.get("period", ""),
+            "image_count": image_count,
+            "processed": 0,
+            "ready": 0,
+            "status": "pending",
+        })
+        if image_count:
+            entry["image_count"] = max(_safe_int(entry.get("image_count")), image_count)
+        entry["period"] = entry.get("period") or row.get("period", "")
+        entry["status"] = row.get("status", entry.get("status", "pending"))
+        processed = max(
+            _safe_int(row.get("processed")),
+            _safe_int(row.get("copied_count")),
+            _safe_int(row.get("ready")),
+            _safe_int(row.get("success")),
+        )
+        if row.get("status") in {"copied", "skipped_existing"} and _safe_int(row.get("missing_result")) == 0:
+            processed = max(processed, entry["image_count"])
+        entry["processed"] = max(_safe_int(entry.get("processed")), processed)
+        entry["ready"] = max(_safe_int(entry.get("ready")), _safe_int(row.get("ready")), _safe_int(row.get("copied_count")))
+
+    for path in rerun_summary_paths:
+        for row in _read_csv_rows(path):
+            folder = row.get("folder", "")
+            key = _folder_key(folder)
+            if not key:
+                continue
+            entry = folders.setdefault(key, {
+                "folder": folder,
+                "relative_folder": _relative_to_source(folder),
+                "period": row.get("period", ""),
+                "image_count": _safe_int(row.get("records")),
+                "processed": 0,
+                "ready": 0,
+                "status": "rerun",
+            })
+            records = _safe_int(row.get("records"))
+            if records:
+                entry["image_count"] = max(_safe_int(entry.get("image_count")), records)
+            entry["period"] = entry.get("period") or row.get("period", "")
+            processed = max(
+                _safe_int(row.get("processed")),
+                _safe_int(row.get("copied")),
+                _safe_int(row.get("ready")),
+                _safe_int(row.get("records")),
+            )
+            entry["processed"] = max(_safe_int(entry.get("processed")), processed)
+            entry["ready"] = max(_safe_int(entry.get("ready")), _safe_int(row.get("ready")), _safe_int(row.get("copied")))
+            entry["status"] = "rerun_complete"
+
+    total_images = sum(_safe_int(item.get("image_count")) for item in folders.values())
+    total_folders = len(folders)
+    base = {
+        "source_root": str(SOURCE_ROOT),
+        "output_dir": str(OUTPUT_ROOT),
+        "audit_dir": str(AUDIT_DIR),
+        "total_folders": total_folders,
+        "total_images": total_images,
+        "folders": list(folders.values()),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    OVERALL_PROGRESS_CACHE["mtime"] = latest_mtime
+    OVERALL_PROGRESS_CACHE["data"] = base
+    return json.loads(json.dumps(base))
+
+
+def build_overall_progress(current_folder=None, current_stats=None) -> dict:
+    progress = _load_base_overall_progress()
+    folders = progress.pop("folders", [])
+    current_key = _folder_key(current_folder)
+    current_stats = current_stats or {}
+
+    for item in folders:
+        if current_key and _folder_key(item.get("folder")) == current_key:
+            current_total = _safe_int(current_stats.get("total"))
+            current_processed = _safe_int(current_stats.get("processed"))
+            if current_total:
+                item["image_count"] = max(_safe_int(item.get("image_count")), current_total)
+            item["processed"] = max(_safe_int(item.get("processed")), current_processed)
+            item["ready"] = max(_safe_int(item.get("ready")), _safe_int(current_stats.get("success")))
+            item["status"] = "active" if getattr(orchestrator, "is_running", False) else "active_idle"
+
+    total_images = sum(_safe_int(item.get("image_count")) for item in folders)
+    processed_images = sum(
+        min(_safe_int(item.get("processed")), _safe_int(item.get("image_count")) or _safe_int(item.get("processed")))
+        for item in folders
+    )
+    ready_images = sum(
+        min(_safe_int(item.get("ready")), _safe_int(item.get("image_count")) or _safe_int(item.get("ready")))
+        for item in folders
+    )
+    completed_folders = sum(
+        1 for item in folders
+        if _safe_int(item.get("image_count")) > 0 and _safe_int(item.get("processed")) >= _safe_int(item.get("image_count"))
+    )
+    next_pending = next(
+        (item for item in folders if _safe_int(item.get("processed")) < _safe_int(item.get("image_count"))),
+        None
+    )
+
+    current_folder_info = next((item for item in folders if current_key and _folder_key(item.get("folder")) == current_key), None)
+    return {
+        **progress,
+        "total_folders": len(folders),
+        "completed_folders": completed_folders,
+        "remaining_folders": max(len(folders) - completed_folders, 0),
+        "total_images": total_images,
+        "processed_images": processed_images,
+        "ready_images": ready_images,
+        "remaining_images": max(total_images - processed_images, 0),
+        "percent": round((processed_images / total_images) * 100, 2) if total_images else 0,
+        "current_folder": current_folder_info,
+        "next_pending_folder": next_pending,
+    }
 
 
 def _parse_review_filename(file_name: str) -> dict:
@@ -2756,7 +2965,7 @@ def list_dirs():
     """列出可用資料夾"""
     try:
         # [v19.8] List actual photo source folders instead of repo root
-        source_root = Path(r"D:\00_商化\00_未整理商化照片")
+        source_root = SOURCE_ROOT
         if source_root.exists():
             dirs = sorted([
                 str(p.relative_to(source_root))
@@ -2819,6 +3028,10 @@ def get_status():
             "last_token_usage": last_token_usage,
             "last_image_cost": last_image_cost,
             "stats": stats,
+            "overall_progress": build_overall_progress(
+                current_folder=getattr(orchestrator, 'image_dir', None),
+                current_stats=stats,
+            ),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "display_queue": getattr(orchestrator, 'display_queue', []), # [v19.8 UX] Completed results queued for UI
@@ -2827,8 +3040,8 @@ def get_status():
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
             "is_running": orchestrator.is_running,
             "image_dir": getattr(orchestrator, 'image_dir', None), # [v19.8] Current source folder for dashboard
-            "source_root": r"D:\00_商化\00_未整理商化照片",
-            "current_relative_dir": str(Path(getattr(orchestrator, 'image_dir', '')).resolve().relative_to(Path(r"D:\00_商化\00_未整理商化照片").resolve())) if getattr(orchestrator, 'image_dir', None) and str(Path(getattr(orchestrator, 'image_dir')).resolve()).startswith(str(Path(r"D:\00_商化\00_未整理商化照片").resolve())) else getattr(orchestrator, 'image_dir', None),
+            "source_root": str(SOURCE_ROOT),
+            "current_relative_dir": str(Path(getattr(orchestrator, 'image_dir', '')).resolve().relative_to(SOURCE_ROOT.resolve())) if getattr(orchestrator, 'image_dir', None) and str(Path(getattr(orchestrator, 'image_dir')).resolve()).startswith(str(SOURCE_ROOT.resolve())) else getattr(orchestrator, 'image_dir', None),
             "resources": {
                 "cpu": psutil.cpu_percent(interval=0.1),
                 "ram": psutil.virtual_memory().percent

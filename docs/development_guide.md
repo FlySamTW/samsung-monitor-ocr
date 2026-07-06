@@ -156,6 +156,27 @@ When changing the live dashboard, keep the preview, LLM self-talk, and OCR resul
 
 Never use `recent_results[0]` to drive the main preview during a running batch. It is normally the previous completed image, while `current_file` has already advanced to the next image. The frontend should change the preview only when `current_file` changes, and should blank live self-talk unless `stream_file === current_file`.
 
+# Dashboard Presentation Queue Contract (2026-07-06)
+
+The live monitor is supervisor-facing, so it must look alive without mixing metadata between photos.
+
+- `dashboard/src/App.jsx` owns a frontend presentation queue: `pendingQueue`, `activePresentation`, and `revealedResults`.
+- The right panel must only show `revealedResults` while OCR is running. `recent_results` is allowed only as an idle historical fallback.
+- Each completed item needs a stable queue key: `presentation_id`, then `completed_at + file_name`, then `source_path`, then `file_name`.
+- Long self-talk is trimmed for display. This is presentation-only and must not alter OCR audit data.
+- When the backend display queue is full and the frontend is behind, discard stale display-only queue items that no longer appear in the backend's latest queue. Otherwise the preview looks frozen on old photos.
+- A watchdog clears a stale `activePresentation` if the displayed text stops advancing for several seconds.
+- The main preview `<img>` must use `key={currentImage}` so image changes force a real remount.
+
+# Overall Progress Contract (2026-07-06)
+
+`/api/status` returns `overall_progress` so the dashboard can show total OCR progress across all discovered source folders.
+
+- Backend aggregation reads `_ocr_audit/folder_discovery.csv`, `_ocr_audit/folder_summary.csv`, missing-result rerun summaries, and live active-folder stats.
+- Frontend must display both global progress and current-folder progress.
+- Do not let the browser scan the source tree or output folder on every poll.
+- Google Drive upload progress is separate and comes from `_drive_upload/drive_upload_summary.json`.
+
 # 2026-07-02 Development Handoff
 
 ## Code Changes Already Made

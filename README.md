@@ -282,3 +282,13 @@ The repo intentionally includes only the small portable sample set at `samples/o
 4. 查目前狀態，雙擊 `CHECK_STATUS.bat`
 
 設定來源與輸出資料夾請改 `user_settings.cmd`。完整說明見 `docs/user_quick_start.md`。
+
+# 2026-07-06 Dashboard Progress And Sync Notes
+
+- Current dashboard build is `v19.18 (同步防呆)`.
+- The header shows global OCR progress from `/api/status.overall_progress`: total processed photos, total source photos, remaining photos, completed folders, and current folder progress.
+- Do not read the old current-folder counter as the whole project count. It is only the active folder.
+- The live monitor keeps preview photo, displayed self-talk, and right-side result scoped to the same queue key.
+- If OCR runs faster than the display animation, the dashboard may fast-forward stale display-only queue items and trim long self-talk so the main preview does not look frozen.
+- This fast-forward is visual only. It must never delete OCR records, copied output photos, or audit rows.
+- Google Drive upload progress is separate. Check `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json` for uploaded, ready-pending, and review-required counts.

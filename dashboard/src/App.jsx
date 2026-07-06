@@ -25,6 +25,11 @@ const formatDisplayPrice = (val) => {
   return val;
 };
 
+const formatCount = (val) => {
+  const num = Number(val || 0);
+  return Number.isFinite(num) ? num.toLocaleString() : '0';
+};
+
 // [v18.73] 超嚴格型號驗證（檢查標題）
 const getResultThumbSrc = (res) => {
   if (!res) return null;
@@ -78,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.14 (LLM Log Restored)";
+const UI_VERSION = "v19.18 (同步防呆)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -168,134 +173,254 @@ const App = () => {
     }
   };
 
-  // [v19.8 UX] Display queue lets backend run ahead while UI plays completed
-  // results at typewriter speed. -1 means "live" (show current_file + stream_buffer).
-  const [displayQueueIndex, setDisplayQueueIndex] = useState(-1);
+  // [v19.15 UX] Frontend-owned presentation queue. The backend may run ahead,
+  // but the viewer only sees: photo -> typed self-talk -> right-side result.
+  const MAX_PENDING_PRESENTATIONS = 400;
+  const MAX_REVEALED_RESULTS = 180;
+  const MAX_LIVE_BACKLOG = 14;
+  const MAX_DISPLAY_NARRATION_CHARS = 360;
+  const [pendingQueue, setPendingQueue] = useState([]);
+  const [activePresentation, setActivePresentation] = useState(null);
+  const [revealedResults, setRevealedResults] = useState([]);
   const [displayedBuffer, setDisplayedBuffer] = useState("");
   const isAdvancingRef = useRef(false);
-  const playedQueueKeysRef = useRef(new Set());
-  const [presentedQueueCutoff, setPresentedQueueCutoff] = useState(-1);
+  const acceptedPresentationKeysRef = useRef(new Set());
+  const revealedKeysRef = useRef(new Set());
+  const activePresentationRef = useRef(null);
+  const latestDisplayQueueKeysRef = useRef(new Set());
+  const displayWatchdogRef = useRef({ key: "", length: 0, updatedAt: Date.now() });
   const [displayTargetKey, setDisplayTargetKey] = useState("");
   const [typewriterReady, setTypewriterReady] = useState(false);
 
-  const getQueueKey = (item) => `${item?.completed_at || ''}|${item?.file_name || ''}`;
+  const getQueueKey = (item) => {
+    if (!item) return "";
+    const result = item.result || {};
+    const completedFile = item.file_name || result.file_name || "";
+    if (item.presentation_id || result.presentation_id) return item.presentation_id || result.presentation_id;
+    if (item.completed_at && completedFile) return `${item.completed_at}|${completedFile}`;
+    if (item.source_path || result.source_path) return item.source_path || result.source_path;
+    if (completedFile) return completedFile;
+    return "";
+  };
+
+  const normalizePresentationItem = (item) => {
+    if (!item) return null;
+    const result = item.result || {};
+    const key = getQueueKey(item);
+    if (!key) return null;
+    return {
+      ...item,
+      ...result,
+      file_name: item.file_name || result.file_name,
+      source_path: item.source_path || result.source_path,
+      thumb_b64: item.thumb_b64 || result.thumb_b64,
+      stream_buffer: item.stream_buffer || result.stream_buffer || result.thinking || "",
+      _queueKey: key,
+      _isCurrent: false
+    };
+  };
+
+  const trimDisplayNarration = (text) => {
+    const value = String(text || "").trim();
+    if (value.length <= MAX_DISPLAY_NARRATION_CHARS) return value;
+    return `${value.slice(0, MAX_DISPLAY_NARRATION_CHARS).trim()}...`;
+  };
+
   const getQueueDisplayText = (item) => {
     if (!item) return "";
-    if (item.stream_buffer && item.stream_buffer.trim()) return item.stream_buffer;
-    const result = item.result || {};
-    return `這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`;
+    if (item.stream_buffer && item.stream_buffer.trim()) return trimDisplayNarration(item.stream_buffer);
+    const result = item.result || item;
+    return trimDisplayNarration(`這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`);
   };
 
-  // When new completed results arrive and we are in live mode, start draining queue.
   useEffect(() => {
-    const queue = data.display_queue || [];
-    if (displayQueueIndex === -1 && queue.length > 0) {
-      const nextIndex = queue.findIndex((item) => !playedQueueKeysRef.current.has(getQueueKey(item)));
-      if (nextIndex !== -1) {
-        setDisplayQueueIndex(nextIndex);
+    activePresentationRef.current = activePresentation;
+  }, [activePresentation]);
+
+  // Copy completed backend items into a local queue before the backend list rolls.
+  useEffect(() => {
+    const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
+    latestDisplayQueueKeysRef.current = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
+    if (incomingQueue.length === 0) return;
+
+    const incoming = [];
+    const activeKey = activePresentationRef.current?._queueKey;
+    incomingQueue.forEach((raw) => {
+      const item = normalizePresentationItem(raw);
+      if (!item) return;
+      if (item._queueKey === activeKey) return;
+      if (acceptedPresentationKeysRef.current.has(item._queueKey)) return;
+      if (revealedKeysRef.current.has(item._queueKey)) return;
+      acceptedPresentationKeysRef.current.add(item._queueKey);
+      incoming.push(item);
+    });
+
+    if (incoming.length === 0) return;
+    const incomingKeys = latestDisplayQueueKeysRef.current;
+    setPendingQueue((prev) => {
+      const existing = new Set(prev.map((item) => item._queueKey));
+      const next = [...prev];
+      incoming.forEach((item) => {
+        if (!existing.has(item._queueKey)) {
+          next.push(item);
+          existing.add(item._queueKey);
+        }
+      });
+      if (incomingQueue.length >= 45 && next.length > MAX_LIVE_BACKLOG) {
+        return next
+          .filter((item) => incomingKeys.has(item._queueKey))
+          .slice(-MAX_LIVE_BACKLOG);
       }
-      setDisplayedBuffer("");
-    } else if (displayQueueIndex >= 0 && displayQueueIndex >= queue.length) {
-      // Queue overflow / caught up to live - switch back to live mode.
-      setDisplayQueueIndex(-1);
-      setDisplayedBuffer("");
-    }
-  }, [data.display_queue, displayQueueIndex]);
+      return next.length > MAX_PENDING_PRESENTATIONS
+        ? next.slice(next.length - MAX_PENDING_PRESENTATIONS)
+        : next;
+    });
+  }, [data.display_queue]);
 
-  // Determine the current typewriter target (queued result or live stream).
+  // If the backend has already rolled past the visible item, fast-forward the
+  // presentation layer instead of letting the boss-facing preview look frozen.
+  useEffect(() => {
+    const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
+    if (!activePresentation || incomingQueue.length < 45) return;
+    const incomingKeys = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
+    if (incomingKeys.has(activePresentation._queueKey)) return;
+
+    setActivePresentation(null);
+    setDisplayedBuffer("");
+    setDisplayTargetKey("");
+    setTypewriterReady(false);
+    setPendingQueue((prev) => prev
+      .filter((item) => incomingKeys.has(item._queueKey))
+      .slice(-MAX_LIVE_BACKLOG));
+  }, [data.display_queue, activePresentation?._queueKey]);
+
+  useEffect(() => {
+    displayWatchdogRef.current = {
+      key: displayTargetKey,
+      length: displayedBuffer.length,
+      updatedAt: Date.now()
+    };
+  }, [displayTargetKey, displayedBuffer.length]);
+
+  useEffect(() => {
+    const watchdog = setInterval(() => {
+      const active = activePresentationRef.current;
+      if (!active) return;
+      const stalledMs = Date.now() - displayWatchdogRef.current.updatedAt;
+      if (stalledMs < 8000) return;
+      const latestKeys = latestDisplayQueueKeysRef.current;
+      setActivePresentation(null);
+      setDisplayedBuffer("");
+      setDisplayTargetKey("");
+      setTypewriterReady(false);
+      setPendingQueue((prev) => {
+        const trimmed = latestKeys.size
+          ? prev.filter((item) => latestKeys.has(item._queueKey))
+          : prev;
+        return trimmed.slice(-MAX_LIVE_BACKLOG);
+      });
+    }, 2000);
+    return () => clearInterval(watchdog);
+  }, []);
+
+  // Start the next completed item only after the previous one has been revealed.
+  useEffect(() => {
+    if (activePresentation || pendingQueue.length === 0) return;
+    const next = pendingQueue[0];
+    setPendingQueue((prev) => prev.slice(1));
+    setActivePresentation(next);
+  }, [activePresentation, pendingQueue]);
+
   const getDisplayTarget = () => {
-    const queue = data.display_queue || [];
-    if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
-      const item = queue[displayQueueIndex];
-      return { target: getQueueDisplayText(item), isQueue: true, key: getQueueKey(item) };
+    if (activePresentation) {
+      return {
+        target: getQueueDisplayText(activePresentation),
+        isQueue: true,
+        key: activePresentation._queueKey
+      };
     }
-    return { target: data.stream_buffer || "", isQueue: false, key: `live|${data.stream_file || data.current_file || ""}` };
+    return {
+      target: data.stream_buffer || "",
+      isQueue: false,
+      key: `live|${data.stream_file || data.current_file || ""}`
+    };
   };
 
-  // [v19.12 UX] Stage the illusion deliberately:
-  // 1) show the photo immediately,
-  // 2) give the viewer a tiny visual lead-in,
-  // 3) then start the self-talk,
-  // 4) reveal the thumbnail/result only after the self-talk completes.
+  // Stage the illusion deliberately: photo first, then self-talk, then result.
   useEffect(() => {
-    const { key } = getDisplayTarget();
+    const { key, isQueue } = getDisplayTarget();
     if (!key || key === displayTargetKey) return;
     setDisplayTargetKey(key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
-    const leadIn = setTimeout(() => setTypewriterReady(true), 140);
+    const leadIn = setTimeout(() => setTypewriterReady(true), isQueue ? 160 : 60);
     return () => clearTimeout(leadIn);
-  }, [data.current_file, data.stream_file, data.display_queue, displayQueueIndex]);
+  }, [activePresentation?._queueKey, data.current_file, data.stream_file]);
 
-  // [v19.12 UX] Linear Typewriter Effect (Readable Speed)
   useEffect(() => {
-    const { target } = getDisplayTarget();
+    const { target, isQueue } = getDisplayTarget();
     if (!typewriterReady) return;
     if (!target) {
-        setDisplayedBuffer("");
-        return;
+      setDisplayedBuffer("");
+      return;
     }
 
-    // If target reset/shrank, reset display immediately
     if (target.length < displayedBuffer.length) {
-         setDisplayedBuffer(target);
-         return;
+      setDisplayedBuffer(target);
+      return;
     }
 
+    const backlog = pendingQueue.length;
+    const charStep = isQueue ? Math.min(24, Math.max(3, Math.ceil((backlog + 1) / 3))) : 4;
     const timer = setInterval(() => {
-        setDisplayedBuffer((prev) => {
-            const { target: t } = getDisplayTarget();
-            if (prev.length < t.length) {
-                return t.slice(0, prev.length + 1);
-            }
-            return prev;
-        });
-    }, 18); // v19.12: readable but still brisk for supervisor viewing.
+      setDisplayedBuffer((prev) => {
+        const { target: latestTarget } = getDisplayTarget();
+        if (prev.length < latestTarget.length) {
+          return latestTarget.slice(0, Math.min(prev.length + charStep, latestTarget.length));
+        }
+        return prev;
+      });
+    }, 18);
 
     return () => clearInterval(timer);
-  }, [data.display_queue, data.stream_buffer, displayQueueIndex, typewriterReady, displayTargetKey]);
+  }, [activePresentation, data.stream_buffer, pendingQueue.length, typewriterReady, displayTargetKey]);
 
-  // [v19.8 UX] Advance to next queued item when current one finishes typing.
+  // Only after self-talk has finished may the item enter the right-side record.
   useEffect(() => {
-    const queue = data.display_queue || [];
-    const { target, isQueue } = getDisplayTarget();
-    if (!isQueue || !target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
+    if (!activePresentation) return;
+    const target = getQueueDisplayText(activePresentation);
+    if (!target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
 
     isAdvancingRef.current = true;
     const timer = setTimeout(() => {
-      const currentItem = queue[displayQueueIndex];
-      if (currentItem) {
-        playedQueueKeysRef.current.add(getQueueKey(currentItem));
-        setPresentedQueueCutoff((prev) => Math.max(prev, displayQueueIndex));
+      const item = { ...activePresentation, _isCurrent: true };
+      if (!revealedKeysRef.current.has(item._queueKey)) {
+        revealedKeysRef.current.add(item._queueKey);
+        setRevealedResults((prev) => {
+          const cleaned = prev
+            .filter((res) => res._queueKey !== item._queueKey)
+            .map((res) => ({ ...res, _isCurrent: false }));
+          return [item, ...cleaned].slice(0, MAX_REVEALED_RESULTS);
+        });
       }
-
-      const nextIndex = queue.findIndex((item, idx) => (
-        idx > displayQueueIndex && !playedQueueKeysRef.current.has(getQueueKey(item))
-      ));
-
-      if (nextIndex !== -1) {
-        setDisplayQueueIndex(nextIndex);
-        setDisplayedBuffer("");
-      } else {
-        // Drained queue - return to live mode.
-        setDisplayQueueIndex(-1);
-        setDisplayedBuffer("");
-      }
+      setActivePresentation(null);
+      setDisplayedBuffer("");
       isAdvancingRef.current = false;
-    }, 120); // Must stay below the 500ms polling interval or reveal gets canceled.
+    }, 220);
 
-    return () => { clearTimeout(timer); isAdvancingRef.current = false; };
-  }, [displayedBuffer, displayQueueIndex, data.display_queue, data.stream_buffer]);
+    return () => {
+      clearTimeout(timer);
+      isAdvancingRef.current = false;
+    };
+  }, [activePresentation, displayedBuffer]);
 
-  // [v19.8 UX] Choose displayed image: queued completed result, or live current_file.
+  // Choose displayed image: queued completed result, or live current_file.
   useEffect(() => {
-    const queue = data.display_queue || [];
-    if (displayQueueIndex >= 0 && displayQueueIndex < queue.length) {
-      const item = queue[displayQueueIndex];
+    if (activePresentation) {
       setImageLoaded(false);
       setImageFailed(false);
-      setCurrentThumb(item.thumb_b64 || null);
-      setCurrentImage(getResultImageSrc(item));
+      setCurrentThumb(activePresentation.thumb_b64 || null);
+      setCurrentImage(getResultImageSrc(activePresentation));
     } else {
       const activeFile = data.current_file && data.current_file !== 'None' ? data.current_file : null;
       if (activeFile) {
@@ -309,7 +434,7 @@ const App = () => {
         setImageFailed(false);
       }
     }
-  }, [displayQueueIndex, data.display_queue, data.current_file, data.current_thumb]);
+  }, [activePresentation, data.current_file, data.current_thumb]);
 
 
 
@@ -516,52 +641,21 @@ const App = () => {
 
   const stats = data.stats || defaultState.stats;
   const isRunning = Boolean(data.is_running || stats.is_running);
-  const displayQueue = data.display_queue || [];
-  const displayedQueueItem = displayQueueIndex >= 0 && displayQueueIndex < displayQueue.length
-    ? displayQueue[displayQueueIndex]
-    : null;
-  const displayedQueueText = displayedQueueItem ? getQueueDisplayText(displayedQueueItem) : "";
-  const currentQueueTextDone = Boolean(displayedQueueText && displayedBuffer.length >= displayedQueueText.length);
-  const effectivePresentedQueueCutoff = Math.max(
-    presentedQueueCutoff,
-    displayQueueIndex > 0 ? displayQueueIndex - 1 : -1,
-    currentQueueTextDone ? displayQueueIndex : -1
-  );
-  const queueCutoff = Math.min(
-    displayQueue.length - 1,
-    effectivePresentedQueueCutoff
-  );
-  const activeQueueKey = displayQueueIndex >= 0
-    ? getQueueKey(displayQueue[displayQueueIndex])
-    : null;
-  const queuedPanelItems = queueCutoff >= 0
-    ? displayQueue
-        .slice(0, queueCutoff + 1)
-        .reverse()
-        .map((item) => {
-          const recent = (data.recent_results || []).find(r => r.file_name === item.file_name) || {};
-          const itemResult = item.result || {};
-          const itemKey = getQueueKey(item);
-          return {
-            ...recent,
-            ...itemResult,
-            file_name: item.file_name || recent.file_name,
-            source_path: item.source_path || recent.source_path,
-            thumb_b64: item.thumb_b64 || recent.thumb_b64,
-            stream_buffer: item.stream_buffer || recent.stream_buffer,
-            price_status: itemResult.price_status || recent.price_status,
-            price_symbol: itemResult.price_symbol || recent.price_symbol,
-            official_price: itemResult.official_price || recent.official_price,
-            price_diff_percent: itemResult.price_diff_percent || recent.price_diff_percent,
-            _queueKey: itemKey,
-            _isCurrent: itemKey === activeQueueKey,
-          };
-        })
-    : [];
-  const rightPanelItems = displayQueue.length > 0
-    ? queuedPanelItems
-    : (data.recent_results || []).map((res, i) => ({ ...res, _queueKey: null, _isCurrent: i === 0 }));
-  const displayedFileName = displayedQueueItem?.file_name || data.stream_file || data.current_file || "-";
+  const overallProgress = data.overall_progress || {};
+  const overallTotal = Number(overallProgress.total_images || 0);
+  const overallProcessed = Number(overallProgress.processed_images || 0);
+  const overallPercent = overallTotal ? Math.min(100, Math.max(0, (overallProcessed / overallTotal) * 100)) : 0;
+  const folderTotal = Number(overallProgress.total_folders || 0);
+  const folderDone = Number(overallProgress.completed_folders || 0);
+  const historicalPanelItems = (data.recent_results || []).map((res, i) => ({
+    ...res,
+    _queueKey: getQueueKey(res) || `recent|${i}|${res.file_name || ""}`,
+    _isCurrent: i === 0
+  }));
+  const rightPanelItems = (isRunning || revealedResults.length > 0)
+    ? revealedResults
+    : historicalPanelItems;
+  const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
@@ -588,10 +682,20 @@ const App = () => {
                <span style={{ fontSize: '0.75rem', color: '#ffffff', fontWeight: 'bold', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
                  {UI_VERSION}
                </span>
-               <div style={{ height: '3px', width: '200px', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${(stats.processed / (stats.total || 1)) * 100}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
-               </div>
-               <span style={{ fontSize: '0.7rem', color: '#888' }}>{stats.processed}/{stats.total || 0}</span>
+                <div style={{ width: '330px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
+                    <span style={{ fontWeight: '800', color: '#ffffff' }}>總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
+                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
+                  </div>
+                  <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
+                    <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
+                    <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
+                    <span>本資料夾 {formatCount(stats.processed)}/{formatCount(stats.total || 0)}</span>
+                  </div>
+                </div>
                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
                   <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>
@@ -676,7 +780,7 @@ const App = () => {
                                           <span style={{fontSize:'0.75rem'}}>照片載入中</span>
                                       </div>
                                   )}
-                                  {currentImage && !imageFailed && <img src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => { setImageLoaded(false); setImageFailed(true); }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
+                                  {currentImage && !imageFailed && <img key={currentImage} src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => { setImageLoaded(false); setImageFailed(true); }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
                                   {imageFailed && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
@@ -803,7 +907,7 @@ const App = () => {
                       <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
                           {/* [v19.10] Right panel follows the presentation queue, not the faster backend. */}
                           {rightPanelItems.map((res, i) => (
-                             <div key={`${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                             <div key={res._queueKey || `${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                  <div style={{ display: 'flex', gap: '6px' }}>
                                      <ResultThumbnail res={res} onClick={() => { setInspectImage(res); }} />
                                      <div style={{ flex: 1, minWidth: 0 }}>

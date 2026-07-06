@@ -103,7 +103,7 @@
 <body>
     <div class="container">
         <h1>❌ 失敗圖片清單 <span id="count" style="font-size: 0.6em; background: #ef5350; padding: 2px 8px; border-radius: 12px; vertical-align: middle;">0</span> <span id="version-stamp" style="font-size:12px; color:#aaa; margin-left:10px; font-weight:normal;">Build: v19.7 (Cache Fix)</span></h1>
-
+        
         <div class="stats">
             <span>以下列出所有從 <code>failed_files.json</code> 載入的失敗記錄：</span>
             <button class="btn" onclick="copyList()">📋 複製所有檔名</button>
@@ -175,7 +175,7 @@
 
             const listHtml = failedFiles.map(file => `
                 <li style="display:flex; gap:15px; align-items:center;">
-                    <img src="/api/image/${encodeURIComponent(file.filename)}"
+                    <img src="/api/image/${encodeURIComponent(file.filename)}" 
                          style="width:50px; height:50px; object-fit:cover; border-radius:4px; border:1px solid #444; cursor:zoom-in;"
                          onclick="openLightbox('${file.filename}', '${file.reason}')">
                     <div style="flex:1;">

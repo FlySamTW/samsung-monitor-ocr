@@ -24,6 +24,25 @@ The user-facing sequence must be:
 
 The backend may finish multiple photos ahead, but the right panel must never reveal a photo's model/price/status before its self-talk has finished. In `dashboard/src/App.jsx`, prefer the display queue and already-presented cutoff over `recent_results` whenever a queue exists. `recent_results` is backend-speed data and will confuse viewers if shown early.
 
+## Live Presentation Catch-Up Rule (2026-07-06)
+
+The dashboard must balance two user-facing truths: no mixed metadata, and no frozen-looking preview. A pure "wait for every queued self-talk to finish" approach fails during fast OCR because the frontend can lag dozens of photos behind the backend.
+
+- Keep the main preview, self-talk, and right-side thumbnail scoped to the same stable queue key.
+- Keep a bounded local presentation queue; when the backend display queue is full, discard stale display-only items that are no longer in the backend's latest queue.
+- Trim long self-talk for display so one photo cannot monopolize the boss-facing monitor.
+- Add a watchdog: if the presentation layer stops advancing for several seconds, clear the stale active presentation and resume from the newest safe queue slice.
+- Add `key={currentImage}` to the main preview image so React remounts it whenever the photo URL changes.
+- This catch-up behavior only affects dashboard presentation. It must never delete OCR records, copied output photos, or audit rows.
+
+## Overall Progress Rule (2026-07-06)
+
+The dashboard header must show global OCR progress, not only the current folder's `processed/total`. `/api/status` exposes `overall_progress`, computed from `_ocr_audit/folder_discovery.csv`, `_ocr_audit/folder_summary.csv`, missing-result rerun summaries, and the active folder's live stats.
+
+- Show total processed images, total source images, remaining images, completed folders, total folders, and the current folder progress.
+- Do not scan the source tree from the browser. The backend owns this aggregation.
+- The progress number is operational guidance, not upload readiness; Google Drive readiness still comes from `_drive_upload/drive_upload_summary.json`.
+
 **Purpose**: To document critical engineering failures and strict rules for future development, ensuring mistakes are never repeated.
 
 ## 🔄 最新改動日誌 (v18.99+)

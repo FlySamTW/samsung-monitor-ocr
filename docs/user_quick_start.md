@@ -46,3 +46,10 @@ set LOCAL_LLM_CONTEXT_LENGTH=16384
 - 想換照片資料夾：改 `user_settings.cmd` 的 `OCR_SOURCE_ROOT`。
 - 想換輸出資料夾：改 `user_settings.cmd` 的 `OCR_OUTPUT_DIR`。
 - 不要把正式照片資料夾放進 Git；專案只保留 `samples/ocr_demo_50` 作為範例。
+
+## 介面進度怎麼看
+
+- 上方 `總進度` 是所有已發現來源資料夾的總 OCR 進度，不只是目前資料夾。
+- `本資料夾` 是現在正在跑的單一資料夾進度。
+- 右側 `辨識紀錄` 只顯示已完成展示的結果；若 OCR 很快，介面會略過太舊的展示項來追上最新照片，但不會刪除 OCR 結果或輸出檔案。
+- 上傳 Google Drive 的進度不放在主介面；需要時查看 `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json`。

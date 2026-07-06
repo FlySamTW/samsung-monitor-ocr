@@ -417,7 +417,7 @@
                 // [v19.0] Sync Directory from LocalStorage (or default)
                 // [v19.6 Fix] Use correct key 'samsung_ocr_target_dir' to match App.jsx
                 const savedDir = localStorage.getItem('samsung_ocr_target_dir') || '商化照片-202512';
-
+                
                 // Call API to switch directory silently
                 try {
                     await fetch('/api/set_work_dir', {
@@ -435,7 +435,7 @@
                 document.getElementById('totalCount').textContent = allRecords.length;
                 filteredRecords = [...allRecords]; // Init filter
                 renderTable();
-
+                
                 // [v18.83] 用事件委派處理縮圖點擊
                 document.getElementById('tableBody').addEventListener('click', (e) => {
                     if (e.target.classList.contains('thumb') && e.target.dataset.filename) {
@@ -458,7 +458,7 @@
         function renderTable() {
             const tbody = document.getElementById('tableBody');
             tbody.innerHTML = '';
-
+            
             const start = (currentPage - 1) * ITEMS_PER_PAGE;
             const end = start + ITEMS_PER_PAGE;
             const pageData = filteredRecords.slice(start, end);
@@ -474,14 +474,14 @@
                 tr.innerHTML = `
                     <td>${imgHtml}</td>
                     <td style="font-family:monospace; color:#d1d5db; font-size:12px; overflow:hidden; text-overflow:ellipsis;" title="${item.file_name}">${item.file_name}</td>
-
+                    
                     <td>
                         <select id="view_${item.file_name}" style="background:#222; color:#fff; border:1px solid #444; width:100%; padding:4px;">
                             <option value="單機" ${item.view_type === '單機' ? 'selected' : ''}>單機</option>
                             <option value="遠景" ${item.view_type === '遠景' ? 'selected' : ''}>遠景</option>
                         </select>
                     </td>
-
+                    
                     <td>
                         <select id="screen_${item.file_name}" style="background:#222; color:#fff; border:1px solid #444; width:100%; padding:4px;">
                             <option value="">(無)</option>
@@ -490,7 +490,7 @@
                             <option value="不顯示" ${item.screen_status === '不顯示' ? 'selected' : ''}>不顯示</option>
                         </select>
                     </td>
-
+                    
                     <td>
                         <select id="quality_${item.file_name}" style="background:#222; color:#fff; border:1px solid #444; width:100%; padding:4px;">
                             <option value="">(無)</option>
@@ -498,14 +498,14 @@
                             <option value="沒有規格價格牌" ${item.quality_issue === '沒有規格價格牌' ? 'selected' : ''}>無吊牌</option>
                         </select>
                     </td>
-
+                    
                     <td><input type="text" id="model_${item.file_name}" value="${item.model === null ? 'null' : (item.model || '')}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     <td><input type="text" id="price_${item.file_name}" value="${item.price === null ? 'null' : (item.price || '')}" style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
                     <td style="text-align:center;">
                         ${getPriceStatusBadge(item)}
                     </td>
                     <td><input type="text" id="note_${item.file_name}" value="${item.note || ''}" placeholder="備註..." style="width:100%; background:#222; color:#fff; border:1px solid #444; padding:4px;"></td>
-
+                    
                     <td>
                         <div style="display:flex; gap:5px;">
                             <button class="btn" style="background:#10b981; padding:4px 8px; margin:0;" onclick="saveRow('${item.file_name}')" title="儲存">💾</button>
@@ -515,7 +515,7 @@
                 `;
                 tbody.appendChild(tr);
             });
-
+            
             const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE) || 1;
             document.getElementById('pageInfo').textContent = `Page ${currentPage} / ${totalPages}`;
             document.getElementById('filterCount').textContent = `(篩選: ${filteredRecords.length} 筆)`;
@@ -528,11 +528,11 @@
             const status = item.price_status || 'unknown';
             const officialPrice = item.official_price;
             const diffPercent = item.price_diff_percent;
-
+            
             let bgColor = '#dc2626';
             let fontWeight = '900';
             let title = '官網查無價格';
-
+            
             if (status === 'match') {
                 bgColor = '#22c55e';
                 title = `符合官方 $${officialPrice?.toLocaleString() || '?'} (${diffPercent > 0 ? '+' : ''}${diffPercent || 0}%)`;
@@ -546,7 +546,7 @@
                 bgColor = '#555';
                 title = '官網查無此型號 (已停產)';
             }
-
+            
             return `<span title="${title}" style="display:inline-block; padding:2px 8px; border-radius:4px; background:${bgColor}; color:#fff; font-weight:${fontWeight}; cursor:help;">${symbol}</span>`;
         }
 
@@ -557,7 +557,7 @@
             const model = document.getElementById(`model_${filename}`).value;
             const price = document.getElementById(`price_${filename}`).value;
             const note = document.getElementById(`note_${filename}`).value;
-
+            
             try {
                 const res = await fetch('/api/correct', {
                     method: 'POST',
@@ -572,17 +572,17 @@
                         price: price
                     })
                 });
-
+                
                 const json = await res.json();
                 if (json.status === 'success') {
                     const rec = allRecords.find(r => r.file_name === filename);
-                    if (rec) {
+                    if (rec) { 
                         rec.view_type = viewType;
                         rec.screen_status = screenStatus;
                         rec.quality_issue = qualityIssue;
                         rec.note = note;
-                        rec.model = model;
-                        rec.price = price;
+                        rec.model = model; 
+                        rec.price = price; 
                     }
                     const btn = document.querySelector(`button[onclick="saveRow('${filename}')"]`);
                     if(btn) {
@@ -605,17 +605,17 @@
         async function requestRerun(filename) {
             // [v18.99] User requested NO confirm dialog
             // if (!confirm(`確定要將 ${filename} 加入優先重跑佇列嗎？\n(將會覆寫目前的結果)`)) return;
-
+            
             try {
                 openMonitor();
-
+                
                 const res = await fetch('/api/rerun', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ filename: filename })
                 });
                 const json = await res.json();
-
+                
                 if (json.status === 'queued' || json.status === 'exists') {
                     const btn = document.querySelector(`button[onclick="requestRerun('${filename}')"]`);
                     if(btn) {
@@ -663,7 +663,7 @@
                 panel.style.height = '30px';
             }
         }
-
+        
         function toggleMonitorSize() {
              const panel = document.getElementById('liveMonitor');
             if (panel.style.height === '30px') {
@@ -680,10 +680,10 @@
             document.getElementById('monitorToggleBtn').style.display = 'none';
             isMonitorOpen = true;
             localStorage.setItem('monitorOpen', 'true');
-
+            
             // [v18.99] Reset State for new run
             monitorState = 'waiting_for_start';
-
+            
             if (!monitorInterval) {
                 pollStatus();
                 monitorInterval = setInterval(pollStatus, 1000); // Faster pulling (1s)
@@ -695,13 +695,13 @@
             try {
                 const res = await fetch('/api/status');
                 const data = await res.json();
-
+                
                 // [v18.99] Robust State Machine for Auto-Refresh
                 // 1. If we see it running, mark as running
                 if (data.is_running) {
                     monitorState = 'running';
                 }
-
+                
                 // 2. If we were waiting or running, and now it's NOT running...
                 //    BUT we must ensure we actually saw it run OR we have a "completed" log signal
                 const hasCompletionLog = data.lm_logs && data.lm_logs.some(l => {
@@ -759,7 +759,7 @@
                         else if (message.includes("WARNING") || message.includes("⚠️")) color = "#fca5a5";
                         else if (message.includes("✅") || message.includes("Success")) color = "#10b981";
                         else if (message.includes("▶️") || message.includes("Processing")) color = "#3b82f6";
-
+                        
                         return `<div style="margin-bottom:2px; font-family:monospace; font-size:12px;">
                                     ${timestamp ? `<span style="color:#666; margin-right:5px;">[${timestamp}]</span>` : ''}
                                     <span style="color:${color}">${message}</span>
@@ -767,7 +767,7 @@
                     }).join('');
                     logsDiv.scrollTop = logsDiv.scrollHeight;
                 }
-
+                
                 const statusEl = document.getElementById('monitorStatus');
                 statusEl.textContent = data.is_running ? "Running..." : "Idle";
                 statusEl.style.color = data.is_running ? "#10b981" : "#888";
@@ -785,7 +785,7 @@
                     allRecords = await r.json();
                     document.getElementById('totalCount').textContent = allRecords.length;
                     filterData(); // Re-render table
-
+                    
                     // Show small notification
                     const btn = document.getElementById('monitorToggleBtn');
                     const originalText = btn.textContent;
@@ -846,7 +846,7 @@
 
             currentEditingFile = filename;
             document.getElementById('overlayFilename').textContent = filename;
-
+            
             const vw = record.view_type || (record.category && record.category.includes('遠景') ? '遠景' : '單機');
             const ss = record.screen_status || (record.category && record.category.includes('黑屏') ? '黑屏' : (record.category && record.category.includes('藍屏') ? '藍屏' : ''));
             const qi = record.quality_issue || (record.category && record.category.includes('看不清楚') ? '照不清楚' : '');
@@ -859,10 +859,10 @@
 
             pan = { x: 0, y: 0 };
             imgContainer.style.transform = `translate(0px, 0px)`;
-
+            
             const imgEl = document.getElementById('lightboxImg');
             imgEl.src = `/api/image/${encodeURIComponent(filename)}`;
-
+            
             document.getElementById('lightbox').style.display = 'flex';
             window.addEventListener('mousemove', onDrag);
             window.addEventListener('mouseup', endDrag);
@@ -889,16 +889,16 @@
                         price: price
                     })
                 });
-
+                
                 const json = await res.json();
                 if (json.status === 'success') {
                     const rec = allRecords.find(r => r.file_name === currentEditingFile);
-                    if (rec) {
+                    if (rec) { 
                         rec.view_type = viewType;
                         rec.screen_status = screenStatus;
                         rec.quality_issue = qualityIssue;
-                        rec.model = model;
-                        rec.price = price;
+                        rec.model = model; 
+                        rec.price = price; 
                     }
                     renderTable();
                     closeLightbox();
@@ -909,7 +909,7 @@
                 alert('發送請求失敗: ' + e);
             }
         }
-
+        
         function triggerRerunFromLightbox() {
             if(currentEditingFile) {
                 requestRerun(currentEditingFile);
