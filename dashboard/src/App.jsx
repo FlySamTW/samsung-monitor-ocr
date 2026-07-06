@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.18 (同步防呆)";
+const UI_VERSION = "v19.21 (右側處理中同步)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -105,6 +105,8 @@ const App = () => {
   const [data, setData] = useState(defaultState);
   const [currentImage, setCurrentImage] = useState(null);
   const [currentThumb, setCurrentThumb] = useState(null);
+  const [visibleImage, setVisibleImage] = useState(null);
+  const [imagePreparing, setImagePreparing] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [error, setError] = useState(null);
@@ -346,6 +348,8 @@ const App = () => {
     };
   };
 
+  const imageReadyForDisplay = !currentImage || imageLoaded || imageFailed;
+
   // Stage the illusion deliberately: photo first, then self-talk, then result.
   useEffect(() => {
     const { key, isQueue } = getDisplayTarget();
@@ -353,9 +357,14 @@ const App = () => {
     setDisplayTargetKey(key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
-    const leadIn = setTimeout(() => setTypewriterReady(true), isQueue ? 160 : 60);
-    return () => clearTimeout(leadIn);
   }, [activePresentation?._queueKey, data.current_file, data.stream_file]);
+
+  useEffect(() => {
+    if (!displayTargetKey || !imageReadyForDisplay) return;
+    const { isQueue } = getDisplayTarget();
+    const leadIn = setTimeout(() => setTypewriterReady(true), isQueue ? 80 : 40);
+    return () => clearTimeout(leadIn);
+  }, [displayTargetKey, imageReadyForDisplay]);
 
   useEffect(() => {
     const { target, isQueue } = getDisplayTarget();
@@ -392,6 +401,7 @@ const App = () => {
     if (!target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
 
     isAdvancingRef.current = true;
+    let releaseTimer = null;
     const timer = setTimeout(() => {
       const item = { ...activePresentation, _isCurrent: true };
       if (!revealedKeysRef.current.has(item._queueKey)) {
@@ -403,14 +413,20 @@ const App = () => {
           return [item, ...cleaned].slice(0, MAX_REVEALED_RESULTS);
         });
       }
-      setActivePresentation(null);
-      setDisplayedBuffer("");
-      isAdvancingRef.current = false;
-    }, 220);
+      const revealHoldMs = pendingQueue.length > 10 ? 320 : 720;
+      releaseTimer = setTimeout(() => {
+        setActivePresentation(null);
+        setDisplayedBuffer("");
+        isAdvancingRef.current = false;
+      }, revealHoldMs);
+    }, 120);
 
     return () => {
       clearTimeout(timer);
-      isAdvancingRef.current = false;
+      if (releaseTimer) clearTimeout(releaseTimer);
+      if (activePresentationRef.current?._queueKey !== activePresentation._queueKey) {
+        isAdvancingRef.current = false;
+      }
     };
   }, [activePresentation, displayedBuffer]);
 
@@ -435,6 +451,44 @@ const App = () => {
       }
     }
   }, [activePresentation, data.current_file, data.current_thumb]);
+
+  // Do not blank or dim the boss-facing preview between photos. Keep the
+  // current photo visible until the next full-resolution image is ready.
+  useEffect(() => {
+    if (!currentImage) {
+      setVisibleImage(null);
+      setImageLoaded(false);
+      setImageFailed(false);
+      setImagePreparing(false);
+      return;
+    }
+
+    let cancelled = false;
+    setImageLoaded(false);
+    setImageFailed(false);
+    setImagePreparing(true);
+
+    const img = new window.Image();
+    img.onload = () => {
+      if (cancelled) return;
+      setVisibleImage(currentImage);
+      setImageLoaded(true);
+      setImageFailed(false);
+      setImagePreparing(false);
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      setVisibleImage(null);
+      setImageLoaded(false);
+      setImageFailed(true);
+      setImagePreparing(false);
+    };
+    img.src = currentImage;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentImage]);
 
 
 
@@ -652,8 +706,17 @@ const App = () => {
     _queueKey: getQueueKey(res) || `recent|${i}|${res.file_name || ""}`,
     _isCurrent: i === 0
   }));
+  const showPendingResult = activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
+  const activePendingResult = showPendingResult
+    ? {
+        ...activePresentation,
+        _queueKey: `${activePresentation._queueKey}|pending`,
+        _isCurrent: true,
+        _pendingReveal: true
+      }
+    : null;
   const rightPanelItems = (isRunning || revealedResults.length > 0)
-    ? revealedResults
+    ? (activePendingResult ? [activePendingResult, ...revealedResults] : revealedResults)
     : historicalPanelItems;
   const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
@@ -772,16 +835,16 @@ const App = () => {
                           </span>
                       </div>
                       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
-                          {(currentImage || currentThumb) ? (
+                          {(visibleImage || currentImage || currentThumb) ? (
                               <>
-                                  {!imageLoaded && !imageFailed && (
+                                  {!visibleImage && imagePreparing && !imageFailed && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
                                           <span style={{fontSize:'0.75rem'}}>照片載入中</span>
                                       </div>
                                   )}
-                                  {currentImage && !imageFailed && <img key={currentImage} src={currentImage} onLoad={() => setImageLoaded(true)} onError={() => { setImageLoaded(false); setImageFailed(true); }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20 }} alt="P" />}
-                                  {imageFailed && (
+                                  {visibleImage && !imageFailed && <img key={visibleImage} src={visibleImage} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
+                                  {imageFailed && !visibleImage && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
                                           <span style={{fontSize:'0.75rem'}}>照片切換中</span>
@@ -909,10 +972,20 @@ const App = () => {
                           {rightPanelItems.map((res, i) => (
                              <div key={res._queueKey || `${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                  <div style={{ display: 'flex', gap: '6px' }}>
-                                     <ResultThumbnail res={res} onClick={() => { setInspectImage(res); }} />
+                                     <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                      <div style={{ flex: 1, minWidth: 0 }}>
                                          <div style={{ color: '#fff', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.file_name}</div>
-                                         {res.view_type !== '遠景' && (
+                                         {res._pendingReveal && (
+                                            <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                                <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
+                                                    處理中
+                                                </span>
+                                                <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>
+                                                    等待自言自語完成
+                                                </span>
+                                            </div>
+                                         )}
+                                         {!res._pendingReveal && res.view_type !== '遠景' && (
                                             <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', alignItems: 'center', marginTop: '2px', width: '100%', columnGap: '8px' }}>
                                                 <div style={{ fontSize: '0.7rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {res.model || (res.category?.startsWith('不合格') ? res.category.replace('不合格-', '') : '(無型號)')}
@@ -937,7 +1010,7 @@ const App = () => {
                                             </div>
                                          )}
                                           <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                             <button
+                                             {!res._pendingReveal && <button
                                                  title="重新辨識"
                                                  onClick={(e) => {
                                                      e.stopPropagation();
@@ -976,12 +1049,12 @@ const App = () => {
                                                  }}
                                              >
                                                  {rerunQueue[res.file_name] ? '已排隊' : '重跑'}
-                                             </button>
-                                            {res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
-                                            {res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
-                                            {res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
+                                             </button>}
+                                            {!res._pendingReveal && res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
+                                            {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
+                                            {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
                                              {/* [v18.67] 價格驗證符號 - 包含 ? 未知，但排除 not_compared */}
-                                             {res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
+                                             {!res._pendingReveal && res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                 <span
                                                     title={
                                                         res.price_status === 'unknown' ? '官網/PChome 查無價格；需人工確認或重跑' :

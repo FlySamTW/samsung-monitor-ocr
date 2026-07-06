@@ -17,6 +17,12 @@ from rich.console import Console
 from rich.logging import RichHandler
 from openai import OpenAI
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # === 鐵律：確保模組重載 ===
 # 強制清除快取，確保每次執行都使用最新程式碼
 def force_reload_skills():

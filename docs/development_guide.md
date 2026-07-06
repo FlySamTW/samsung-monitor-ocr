@@ -234,8 +234,10 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 
 ## Dashboard Presentation Rule
 
-- Current production dashboard is `v19.14 (LLM Log Restored)`.
+- Current production dashboard is `v19.21 (右側處理中同步)`.
 - Boss-facing order must remain: photo first, LLM self-talk second, parsed thumbnail/result last.
+- While the current photo's self-talk is still typing, the top row of `辨識紀錄` must show the same photo as a `處理中 / 等待自言自語完成` placeholder. Do not leave the previous completed result at the top, because users read that as a metadata mismatch.
+- Parsed model/price/status badges for the current photo may appear only after that same photo's self-talk has finished.
 - The lower-left panel must always stay presentable and must preserve the historical LLM record (`[THINK]` summaries and final classification lines). Never replace it with blank space or result summaries only; filter only raw `JSON Error`, initialization/debug wording, and internal playback wording.
 
 ## Remaining Work

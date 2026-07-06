@@ -235,11 +235,13 @@ Current dashboard versions:
 
 - `v19.16 (總進度)` added global OCR progress in the header.
 - `v19.18 (同步防呆)` fixed the long-run presentation queue so the main preview does not freeze on old photos when OCR is faster than the display animation.
+- `v19.21 (右側處理中同步)` adds a same-photo `處理中 / 等待自言自語完成` placeholder at the top of `辨識紀錄` while the left photo's self-talk is typing.
 
 Operational rules:
 
 - Do not drive the main preview from `recent_results[0]`.
 - During a running batch, the right-side record list should come from already revealed frontend presentation items, not raw backend-speed history.
+- While a new photo is typing self-talk, do not leave the previous completed result as the top right row. Show the same current photo as `處理中`; replace it with parsed metadata only after self-talk finishes.
 - Presentation queue items may be discarded when they are stale and no longer present in the backend display queue. This affects only what the dashboard chooses to show; OCR audit/output data must remain intact.
 - Long self-talk should be trimmed for monitor display so a single result cannot hold the preview for too long.
 - If the preview appears stuck, check `/api/status` first. If `current_file` and `stats.processed` are changing, the backend is healthy and the issue is frontend presentation lag.
@@ -286,7 +288,7 @@ Operational rules:
 5. UI:
    - The blue icon button was changed to text `重跑`.
    - Historical/not-compared rows must not show a red `?` price badge.
-   - `辨識紀錄` is delayed on purpose: a photo's thumbnail/result must appear only after that photo's LLM self-talk has finished typing. Backend may run ahead, but the user-facing presentation must stay sequential.
+   - `辨識紀錄` is delayed on purpose: while the photo's LLM self-talk is typing, show that same photo as `處理中 / 等待自言自語完成`; only after typing finishes may model/price/status appear.
    - If user still sees old UI, refresh browser and confirm `dashboard/dist/assets/index-*.js` is the latest build.
 
 6. Google Drive upload:

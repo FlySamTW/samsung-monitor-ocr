@@ -9,6 +9,12 @@
 )
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+}
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $LogDir = Join-Path $RepoRoot "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
