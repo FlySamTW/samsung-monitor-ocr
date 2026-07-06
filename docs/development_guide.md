@@ -196,6 +196,12 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
   - Keep Drive organization year-only (`2026`, `2025`, ...); filename carries month/store/search detail.
   - Pending batches must be newest-period first and must keep `無型號` rows in review until a rerun or manual correction resolves the model.
 
+- `samsung_ocr_batch_processor.py` review APIs
+  - `/api/review_queue?year=2026&limit=300` reads `_drive_upload\drive_upload_review_required.csv` and returns blocked upload rows for the dashboard `待人工校正` drawer.
+  - `/api/review_correction` appends human decisions to `_ocr_audit\manual_corrections.csv`; when `learn_rule=true`, it also appends `_ocr_audit\manual_learning_rules.csv`.
+  - These APIs are deliberately append-only. A separate repair/export step must consume the CSVs and rebuild safe filenames before Drive upload.
+  - The ARK quick action records `S55BG970NC` for Odyssey Ark / Ark Mini LED / 55-inch upright or curved desk displays, while preserving the rule that nearby S27/S32 labels cannot be borrowed.
+
 - `tools/rclone_drive_upload.py`
   - Uses rclone remote `samsung_ocr_drive` for large resumable uploads to the approved Google Drive parent folder.
   - Calls `tools/prepare_drive_upload_manifest.py`, uploads only `ready` rows, groups by year folder, and records uploaded filenames in `_drive_upload\drive_upload_uploaded.csv`.

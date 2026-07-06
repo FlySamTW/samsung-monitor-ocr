@@ -128,6 +128,13 @@ const App = () => {
   const [autoScroll, setAutoScroll] = useState(true);
   // [v19.8] Track files queued for rerun so UI gives immediate feedback.
   const [rerunQueue, setRerunQueue] = useState({});
+  const [showReviewPanel, setShowReviewPanel] = useState(false);
+  const [reviewYear, setReviewYear] = useState('2026');
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewQueue, setReviewQueue] = useState({ items: [], total: 0, returned: 0, summary: {} });
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewDrafts, setReviewDrafts] = useState({});
+  const [reviewMsg, setReviewMsg] = useState('');
 
   // Refs for auto-scroll
   const logsContainerRef = useRef(null);
@@ -440,6 +447,73 @@ const App = () => {
       }
   };
 
+  const fetchReviewQueue = async (year = reviewYear, reason = reviewReason) => {
+      setReviewLoading(true);
+      setReviewMsg('');
+      try {
+          const params = new URLSearchParams({ year, limit: '300' });
+          if (reason) params.set('reason', reason);
+          const res = await fetch(`/api/review_queue?${params.toString()}`);
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || '待審清單讀取失敗');
+          setReviewQueue(json);
+      } catch (e) {
+          setReviewMsg(`讀取失敗：${e.message || e}`);
+      } finally {
+          setReviewLoading(false);
+      }
+  };
+
+  const openReviewPanel = () => {
+      setShowReviewPanel(true);
+      fetchReviewQueue();
+  };
+
+  const getReviewDraft = (item) => reviewDrafts[item.file_name] || {};
+
+  const updateReviewDraft = (item, patch) => {
+      setReviewDrafts(prev => ({
+          ...prev,
+          [item.file_name]: {
+              ...(prev[item.file_name] || {}),
+              ...patch
+          }
+      }));
+  };
+
+  const saveReviewCorrection = async (item, action = 'manual_correction') => {
+      const draft = getReviewDraft(item);
+      const payload = {
+          file_name: item.file_name,
+          source_path: item.source_path,
+          period: item.period,
+          year: item.year,
+          reasons: item.reasons,
+          view_type: draft.view_type ?? item.view_type ?? '',
+          model: draft.model ?? item.model ?? '',
+          price: draft.price ?? item.price ?? '',
+          price_symbol: draft.price_symbol ?? '',
+          note: draft.note ?? '',
+          learn_rule: Boolean(draft.learn_rule),
+          rule_hint: draft.rule_hint ?? '',
+          match_text: draft.match_text ?? item.file_name,
+          action
+      };
+      try {
+          const res = await fetch('/api/review_correction', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || '儲存失敗');
+          setReviewMsg(action === 'needs_rerun' ? '已標記重跑需求' : '人工校正已記錄');
+          setTimeout(() => setReviewMsg(''), 2500);
+      } catch (e) {
+          setReviewMsg(`儲存失敗：${e.message || e}`);
+      }
+  };
+
   const stats = data.stats || defaultState.stats;
   const isRunning = Boolean(data.is_running || stats.is_running);
   const displayQueue = data.display_queue || [];
@@ -488,6 +562,8 @@ const App = () => {
     ? queuedPanelItems
     : (data.recent_results || []).map((res, i) => ({ ...res, _queueKey: null, _isCurrent: i === 0 }));
   const displayedFileName = displayedQueueItem?.file_name || data.stream_file || data.current_file || "-";
+  const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
+  const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
 
   return (
@@ -571,6 +647,10 @@ const App = () => {
                <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
                    style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                    <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
+               </button>
+               <button onClick={openReviewPanel}
+                   style={{ background: '#f59e0b', color: '#111', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                   <AlertCircle size={12} /> 待人工校正
                </button>
                {controlMsg && <span style={{fontSize:'0.7rem', marginLeft:'5px'}}>{controlMsg}</span>}
            </div>
@@ -828,6 +908,197 @@ const App = () => {
               </div>
            </div>
       </div>
+         {showReviewPanel && (
+             <div style={{
+                 position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)',
+                 zIndex: 9900, display: 'flex', justifyContent: 'flex-end'
+             }}>
+                 <div style={{
+                     width: 'min(980px, 94vw)', height: '100%', background: '#0f0f0f',
+                     borderLeft: '1px solid #333', boxShadow: '-20px 0 60px rgba(0,0,0,0.45)',
+                     display: 'flex', flexDirection: 'column'
+                 }}>
+                     <div style={{ padding: '14px 16px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                         <AlertCircle size={18} color="#f59e0b" />
+                         <div style={{ flex: 1 }}>
+                             <div style={{ color: '#fff', fontWeight: 'bold', fontSize: '1rem' }}>待人工校正</div>
+                             <div style={{ color: '#888', fontSize: '0.72rem' }}>
+                                 上傳前被擋住的照片；先校正或標記重跑，避免錯檔先進雲端。
+                             </div>
+                         </div>
+                         <select
+                             value={reviewYear}
+                             onChange={(e) => {
+                                 const next = e.target.value;
+                                 setReviewYear(next);
+                                 fetchReviewQueue(next, reviewReason);
+                             }}
+                             style={{ background: '#111', color: '#e5e7eb', border: '1px solid #444', borderRadius: '4px', padding: '5px 8px' }}
+                         >
+                             {['2026', '2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016', '2015', ''].map(y => (
+                                 <option key={y || 'all'} value={y}>{y || '全部年份'}</option>
+                             ))}
+                         </select>
+                         <select
+                             value={reviewReason}
+                             onChange={(e) => {
+                                 const next = e.target.value;
+                                 setReviewReason(next);
+                                 fetchReviewQueue(reviewYear, next);
+                             }}
+                             style={{ background: '#111', color: '#e5e7eb', border: '1px solid #444', borderRadius: '4px', padding: '5px 8px', maxWidth: '220px' }}
+                         >
+                             <option value="">全部原因</option>
+                             {Object.entries(reviewReasonCounts).slice(0, 24).map(([reason, count]) => (
+                                 <option key={reason} value={reason}>{reason} ({count})</option>
+                             ))}
+                         </select>
+                         <button
+                             onClick={() => fetchReviewQueue(reviewYear, reviewReason)}
+                             style={{ background: '#1f2937', color: '#fff', border: '1px solid #4b5563', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer' }}
+                         >
+                             刷新
+                         </button>
+                         <button
+                             onClick={() => setShowReviewPanel(false)}
+                             style={{ background: '#ef4444', color: '#fff', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
+                         >
+                             <XCircle size={18} />
+                         </button>
+                     </div>
+
+                     <div style={{ padding: '10px 16px', display: 'flex', gap: '8px', flexWrap: 'wrap', borderBottom: '1px solid #222', background: '#121212' }}>
+                         <span style={{ color: '#ddd', fontSize: '0.75rem' }}>顯示 {reviewQueue.returned || 0}/{reviewQueue.total || 0} 筆</span>
+                         {Object.entries(reviewYearCounts).slice(0, 8).map(([year, count]) => (
+                             <span key={year} style={{ color: year === reviewYear ? '#111' : '#aaa', background: year === reviewYear ? '#f59e0b' : '#1f2937', padding: '2px 6px', borderRadius: '3px', fontSize: '0.68rem' }}>
+                                 {year}: {count}
+                             </span>
+                         ))}
+                         {reviewMsg && <span style={{ color: reviewMsg.includes('失敗') ? '#ef4444' : '#22c55e', fontSize: '0.75rem', marginLeft: 'auto' }}>{reviewMsg}</span>}
+                     </div>
+
+                     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+                         {reviewLoading ? (
+                             <div style={{ color: '#888', textAlign: 'center', marginTop: '80px' }}>待審清單載入中...</div>
+                         ) : reviewQueue.items?.length ? (
+                             reviewQueue.items.map((item) => {
+                                 const draft = getReviewDraft(item);
+                                 const draftView = draft.view_type ?? item.view_type ?? '單機';
+                                 const draftModel = draft.model ?? item.model ?? '';
+                                 const draftPrice = draft.price ?? item.price ?? '';
+                                 return (
+                                     <div key={item.file_name} style={{ background: '#171717', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '10px', marginBottom: '10px' }}>
+                                         <div style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: '10px' }}>
+                                             <ResultThumbnail res={item} onClick={() => setInspectImage(item)} />
+                                             <div style={{ minWidth: 0 }}>
+                                                 <div style={{ color: '#fff', fontSize: '0.86rem', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.file_name}>
+                                                     {item.file_name}
+                                                 </div>
+                                                 <div style={{ color: '#f59e0b', fontSize: '0.72rem', marginTop: '3px' }}>
+                                                     {item.reason_labels || item.reasons}
+                                                 </div>
+                                                 <div style={{ color: '#888', fontSize: '0.68rem', marginTop: '2px' }}>
+                                                     {item.suggested_action}
+                                                 </div>
+                                             </div>
+                                         </div>
+
+                                         <div style={{ display: 'grid', gridTemplateColumns: '88px 1fr 116px 96px', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
+                                             <select
+                                                 value={draftView}
+                                                 onChange={(e) => updateReviewDraft(item, { view_type: e.target.value })}
+                                                 style={{ background: '#0b0b0b', color: '#e5e7eb', border: '1px solid #444', borderRadius: '4px', padding: '6px' }}
+                                             >
+                                                 <option value="單機">單機</option>
+                                                 <option value="遠景">遠景</option>
+                                             </select>
+                                             <input
+                                                 value={draftModel}
+                                                 onChange={(e) => updateReviewDraft(item, { model: e.target.value })}
+                                                 placeholder="型號，例如 S55BG970NC"
+                                                 style={{ background: '#0b0b0b', color: '#fff', border: '1px solid #444', borderRadius: '4px', padding: '7px' }}
+                                             />
+                                             <input
+                                                 value={draftPrice}
+                                                 onChange={(e) => updateReviewDraft(item, { price: e.target.value })}
+                                                 placeholder="價格"
+                                                 style={{ background: '#0b0b0b', color: '#f59e0b', border: '1px solid #444', borderRadius: '4px', padding: '7px' }}
+                                             />
+                                             <select
+                                                 value={draft.price_symbol ?? ''}
+                                                 onChange={(e) => updateReviewDraft(item, { price_symbol: e.target.value })}
+                                                 title="2026+ 檔名需 ↑/↓/✓"
+                                                 style={{ background: '#0b0b0b', color: '#e5e7eb', border: '1px solid #444', borderRadius: '4px', padding: '6px' }}
+                                             >
+                                                 <option value="">符號</option>
+                                                 <option value="↑">↑ 高於官網</option>
+                                                 <option value="↓">↓ 低於官網</option>
+                                                 <option value="✓">✓ 持平</option>
+                                                 <option value="？">？ 待查</option>
+                                             </select>
+                                         </div>
+
+                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 92px 74px 88px 88px', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
+                                             <input
+                                                 value={draft.note ?? ''}
+                                                 onChange={(e) => updateReviewDraft(item, { note: e.target.value })}
+                                                 placeholder="備註或辨識依據"
+                                                 style={{ background: '#0b0b0b', color: '#d1d5db', border: '1px solid #444', borderRadius: '4px', padding: '7px' }}
+                                             />
+                                             <label style={{ color: '#aaa', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                 <input
+                                                     type="checkbox"
+                                                     checked={Boolean(draft.learn_rule)}
+                                                     onChange={(e) => updateReviewDraft(item, { learn_rule: e.target.checked })}
+                                                 />
+                                                 學規則
+                                             </label>
+                                             <button
+                                                 onClick={() => updateReviewDraft(item, {
+                                                     view_type: '單機',
+                                                     model: 'S55BG970NC',
+                                                     learn_rule: true,
+                                                     rule_hint: 'Odyssey Ark / Ark Mini LED / 55吋大型直立或曲面桌上機 -> S55BG970NC',
+                                                     note: draft.note || 'Odyssey Ark 55吋大型直立或曲面桌上機'
+                                                 })}
+                                                 style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '7px 8px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                                             >
+                                                 ARK
+                                             </button>
+                                             <button
+                                                 onClick={() => updateReviewDraft(item, { view_type: '遠景', model: '', price: '', price_symbol: '' })}
+                                                 style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '7px 8px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                                             >
+                                                 遠景
+                                             </button>
+                                             <button
+                                                 onClick={() => saveReviewCorrection(item)}
+                                                 style={{ background: '#22c55e', color: '#fff', border: 'none', padding: '7px 8px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                                             >
+                                                 記錄
+                                             </button>
+                                         </div>
+                                         <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
+                                             <button
+                                                 onClick={() => saveReviewCorrection(item, 'needs_rerun')}
+                                                 style={{ background: '#374151', color: '#e5e7eb', border: '1px solid #4b5563', padding: '5px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.72rem' }}
+                                             >
+                                                 標記重跑需求
+                                             </button>
+                                         </div>
+                                     </div>
+                                 );
+                             })
+                         ) : (
+                             <div style={{ color: '#666', textAlign: 'center', marginTop: '80px' }}>
+                                 目前沒有待校正資料
+                             </div>
+                         )}
+                     </div>
+                 </div>
+             </div>
+         )}
+
          {showConfirmModal && (
              <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
                  <div style={{ background: '#111', border: '2px solid #00f5ff', borderRadius: '12px', width: '400px', padding: '24px', boxShadow: '0 0 30px rgba(0, 245, 255, 0.2)', textAlign: 'center' }}>

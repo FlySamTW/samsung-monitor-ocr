@@ -186,6 +186,15 @@ Use this section when taking over the Samsung OCR overnight job.
 - Upload manifests are newest-period first, so the unattended uploader should send `2026` before `2025` before `2024`.
 - After each successful upload, append the exact Drive-returned file name and ID to `_drive_upload\drive_upload_uploaded.csv`, then rerun the manifest. This is the resume guard and prevents duplicate uploads.
 
+### Manual review panel rule
+
+- The dashboard `待人工校正` drawer reads `_drive_upload\drive_upload_review_required.csv` and is the user-facing inbox for blocked Drive rows.
+- Do not place this queue inside the normal boss-facing monitor. It should stay behind the toolbar button so the live OCR view remains clean.
+- `記錄` writes `_ocr_audit\manual_corrections.csv`; `學規則` writes `_ocr_audit\manual_learning_rules.csv`; `標記重跑需求` records that another safe candidate CSV must be generated before rerun.
+- Treat `manual_corrections.csv` as authoritative human feedback for later repair/export scripts. Do not upload a row that is still only in review unless a follow-up script has rebuilt a safe filename and the manifest marks it `ready`.
+- Use `tools/apply_manual_review_corrections.py` to turn recorded manual corrections into a dry-run rename plan. Add `--apply` only after reviewing `_ocr_audit\manual_correction_rename_plan_*.csv`, then rerun the Drive manifest.
+- The quick ARK action means Odyssey Ark / Ark Mini LED / 55-inch upright or curved desk displays => `S55BG970NC`; still do not borrow nearby S27/S32 monitor labels.
+
 ### Known unresolved defects
 
 - Current-year repaired export dry-run still blocks: 202605 has 79 rows with store price but unknown Samsung/PChome reference.

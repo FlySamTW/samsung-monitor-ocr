@@ -46,6 +46,19 @@
 - `rerun_reason`: 自動列出疑難原因。
 - `rerun_recommended_model`: 目前預設建議用 `qwen/qwen3-vl-8b` 重跑。
 
+## Dashboard 待人工校正面板
+
+主監看畫面右上工具列的 `待人工校正` 會開啟獨立面板，資料來源是 `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_review_required.csv`。這個面板用來處理「OCR 已輸出，但不能安全上傳到 Google Drive」的照片，尤其是 2026+ 缺少 `↑/↓/✓`、無價格、無型號、或仍有 `？` 的檔名。
+
+操作結果：
+
+- `記錄`: 寫入 `_ocr_audit\manual_corrections.csv`，保留人工確認的視角、型號、價格、符號與備註。
+- `學規則`: 同時寫入 `_ocr_audit\manual_learning_rules.csv`，供後續 prompt、後處理守衛或 repair 腳本套用。
+- `ARK`: 快速填入 `S55BG970NC`，適用 Odyssey Ark / Ark Mini LED / 55 吋大型直立或曲面桌上機，但仍不可借旁邊 S27/S32 小螢幕標籤。
+- `標記重跑需求`: 只記錄需要安全產生 rerun candidate，不會直接猜來源資料夾重跑。
+
+注意：這個面板不是大量改檔工具。校正 CSV 產生後，仍需由 repair/export 腳本讀取校正資料、重建正確檔名，再重新產生 Drive manifest；只有 manifest 標為 `ready` 的照片才能上傳。
+
 ## 產生審核表與重跑名單
 
 ```powershell

@@ -278,6 +278,10 @@ If a user reports that photos switch faster than self-talk/results, inspect this
    - Existing child folders: `2026` (`1JejKATTb7COE7qTP9mIC5F9IQbHWK2L4`) and `2025` (`1UluPo7m5HCq_iVpdkioOVq292E6LAbC-`).
    - Use `tools/prepare_drive_upload_manifest.py --output-dir D:\00_商化\00_已OCR照片 --limit-ready 25` before each batch.
    - Upload only `_drive_upload\staging_map.csv` rows, then append exact Drive-returned IDs to `_drive_upload\drive_upload_uploaded.csv` and rerun the manifest. Do not upload `drive_upload_review_required.csv` rows.
+   - If a year appears under-uploaded, check `_drive_upload\drive_upload_review_required.csv` first. For example, 2026 may have complete OCR/export but still be blocked because current-year rows lack `↑/↓/✓`, price, or model.
+   - Dashboard API `/api/review_queue?year=2026` reads the blocked upload rows. The toolbar button `待人工校正` opens the review drawer; it records corrections in `_ocr_audit\manual_corrections.csv` and optional reusable rules in `_ocr_audit\manual_learning_rules.csv`.
+   - The review drawer does not bulk-rename by itself. After human review, a repair/export script must consume the correction CSV and regenerate safe output before Drive upload.
+   - Use `tools\apply_manual_review_corrections.py --output-dir D:\00_商化\00_已OCR照片` to produce a dry-run rename plan from `manual_corrections.csv`; add `--apply` only after checking the plan, then rerun `tools\prepare_drive_upload_manifest.py`.
 
 ## Recent Changes (2026-07-03)
 

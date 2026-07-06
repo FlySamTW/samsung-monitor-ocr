@@ -2,6 +2,7 @@ import os
 import sys
 import importlib
 import argparse
+import csv
 from pathlib import Path
 import time
 import json
@@ -675,6 +676,153 @@ orchestrator: BatchOrchestrator = None
 api_client: OpenAI = None
 model_name_global = ""
 IMAGE_LOOKUP_CACHE = {}
+OUTPUT_ROOT = Path(os.environ.get("OCR_OUTPUT_DIR", r"D:\00_商化\00_已OCR照片"))
+DRIVE_MANIFEST_DIR = OUTPUT_ROOT / "_drive_upload"
+AUDIT_DIR = OUTPUT_ROOT / "_ocr_audit"
+MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
+MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
+
+REVIEW_REASON_LABELS = {
+    "current_year_missing_compare_symbol": "2026+ 缺少 ↑/↓/✓ 比價符號",
+    "current_year_missing_price": "2026+ 缺少店內價格",
+    "unknown_marker": "檔名仍有？待確認",
+    "name_contains_無型號": "檔名為無型號",
+    "name_contains_型號未辨識": "型號未辨識",
+    "name_contains_無價格": "無價格",
+    "name_contains_不合格": "不合格照片",
+    "name_contains_照片不清楚": "照片不清楚",
+    "name_contains_照不清楚": "照不清楚",
+    "name_contains_沒有規格": "沒有規格牌",
+    "name_contains_沒有價格": "沒有價格牌",
+    "name_contains_黑屏": "黑屏",
+    "oversize": "檔案過大",
+}
+
+
+def _append_csv_row(path: Path, fieldnames: list[str], row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists() and path.stat().st_size > 0
+    with path.open("a", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        if not exists:
+            writer.writeheader()
+        writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+
+def _parse_review_filename(file_name: str) -> dict:
+    stem = Path(file_name).stem
+    parts = stem.split("-")
+    period = ""
+    view_type = ""
+    model = ""
+    price = ""
+    serial = parts[-1] if parts else ""
+
+    for part in parts:
+        if re.fullmatch(r"20\d{4}", part):
+            period = part
+            break
+
+    for idx, part in enumerate(parts):
+        if part in {"單機", "遠景"}:
+            view_type = part
+            if part == "單機":
+                if idx + 1 < len(parts):
+                    candidate_model = parts[idx + 1]
+                    if candidate_model not in {"無型號", "型號未辨識"}:
+                        model = candidate_model
+                if idx + 2 < len(parts):
+                    price = parts[idx + 2]
+            break
+
+    if not price:
+        match = re.search(r"([↑↓✓？?]?[\uff04$]\d+|無價格)", stem)
+        if match:
+            price = match.group(1)
+
+    return {
+        "period": period,
+        "year": period[:4] if period else "",
+        "view_type": view_type,
+        "model": model,
+        "price": price,
+        "serial": serial,
+    }
+
+
+def _review_reason_labels(reasons: str) -> str:
+    labels = []
+    for reason in str(reasons or "").split(";"):
+        reason = reason.strip()
+        if not reason:
+            continue
+        labels.append(REVIEW_REASON_LABELS.get(reason, reason))
+    return "；".join(labels)
+
+
+def _suggest_review_action(row: dict) -> str:
+    reasons = str(row.get("reasons") or "")
+    parsed = _parse_review_filename(row.get("file_name") or "")
+    file_name = row.get("file_name") or ""
+    if "型號未辨識" in file_name or "無型號" in file_name:
+        return "補型號、改遠景，或按重跑"
+    if "無價格" in file_name or "current_year_missing_price" in reasons:
+        return "補店內價格，或按重跑"
+    if "current_year_missing_compare_symbol" in reasons:
+        return "補 ↑/↓/✓，或查價後重建檔名"
+    if parsed.get("model"):
+        return "確認價格與比價符號"
+    return "人工確認"
+
+
+def _load_review_rows(year: str = "2026", reason: str = "", limit: int = 300) -> tuple[list[dict], dict]:
+    review_path = DRIVE_MANIFEST_DIR / "drive_upload_review_required.csv"
+    if not review_path.exists():
+        return [], {"error": f"找不到待審清單: {review_path}"}
+
+    items: list[dict] = []
+    reason_counts: dict[str, int] = {}
+    year_counts: dict[str, int] = {}
+    with review_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            row_year = (row.get("year") or "")[:4]
+            row_reasons = row.get("reasons") or ""
+            year_counts[row_year or "_unknown"] = year_counts.get(row_year or "_unknown", 0) + 1
+            for one_reason in row_reasons.split(";"):
+                one_reason = one_reason.strip()
+                if one_reason:
+                    reason_counts[one_reason] = reason_counts.get(one_reason, 0) + 1
+
+            if year and row_year != year:
+                continue
+            if reason and reason not in row_reasons:
+                continue
+
+            parsed = _parse_review_filename(row.get("file_name") or "")
+            enriched = {
+                **row,
+                **{k: parsed.get(k, "") for k in ("view_type", "model", "price", "serial")},
+                "reason_labels": _review_reason_labels(row_reasons),
+                "suggested_action": _suggest_review_action(row),
+            }
+            items.append(enriched)
+
+    items.sort(
+        key=lambda item: (
+            -int(item.get("period") or 0) if str(item.get("period") or "").isdigit() else 0,
+            item.get("file_name", "").casefold(),
+        )
+    )
+    filtered_count = len(items)
+    if limit > 0:
+        items = items[:limit]
+    return items, {
+        "review_path": str(review_path),
+        "filtered_count": filtered_count,
+        "year_counts": year_counts,
+        "reason_counts": dict(sorted(reason_counts.items(), key=lambda pair: pair[1], reverse=True)),
+    }
 
 # [v17.09] Structured Output Schema (B-Mode)
 SAMSUNG_AUDIT_SCHEMA = {
@@ -2807,6 +2955,95 @@ def get_success_records():
     results = orchestrator.get_all_records()
     print(f"[API] 🟢 Returned {len(results)} records.")
     return jsonify(results)
+
+
+@flask_app.route('/api/review_queue')
+def get_review_queue():
+    """Return photos blocked by the Drive upload gate for manual review."""
+    try:
+        year = request.args.get("year", "2026").strip()
+        reason = request.args.get("reason", "").strip()
+        try:
+            limit = int(request.args.get("limit", "300"))
+        except ValueError:
+            limit = 300
+        limit = max(0, min(limit, 1000))
+        items, summary = _load_review_rows(year=year, reason=reason, limit=limit)
+        return jsonify({
+            "items": items,
+            "returned": len(items),
+            "total": summary.get("filtered_count", len(items)),
+            "summary": summary,
+        })
+    except Exception as e:
+        log.error(f"Review queue API error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@flask_app.route('/api/review_correction', methods=['POST'])
+def save_review_correction():
+    """Persist a manual review correction and optional reusable learning rule."""
+    try:
+        data = request.json or {}
+        file_name = (data.get("file_name") or "").strip()
+        source_path = (data.get("source_path") or "").strip()
+        if not file_name:
+            return jsonify({"error": "缺少檔名"}), 400
+
+        parsed = _parse_review_filename(file_name)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        row = {
+            "timestamp": timestamp,
+            "file_name": file_name,
+            "source_path": source_path,
+            "period": data.get("period") or parsed.get("period", ""),
+            "year": data.get("year") or parsed.get("year", ""),
+            "review_reasons": data.get("reasons", ""),
+            "corrected_view_type": data.get("view_type", ""),
+            "corrected_model": data.get("model", ""),
+            "corrected_price": data.get("price", ""),
+            "corrected_price_symbol": data.get("price_symbol", ""),
+            "note": data.get("note", ""),
+            "action": data.get("action", "manual_correction"),
+            "learn_rule": "1" if data.get("learn_rule") else "",
+            "rule_hint": data.get("rule_hint", ""),
+        }
+        correction_fields = [
+            "timestamp", "file_name", "source_path", "period", "year", "review_reasons",
+            "corrected_view_type", "corrected_model", "corrected_price", "corrected_price_symbol",
+            "note", "action", "learn_rule", "rule_hint",
+        ]
+        _append_csv_row(MANUAL_CORRECTIONS_PATH, correction_fields, row)
+
+        if data.get("learn_rule"):
+            rule_fields = [
+                "timestamp", "rule_hint", "match_text", "view_type", "model", "price",
+                "note", "example_file", "source_path",
+            ]
+            _append_csv_row(MANUAL_RULES_PATH, rule_fields, {
+                "timestamp": timestamp,
+                "rule_hint": data.get("rule_hint", ""),
+                "match_text": data.get("match_text", "") or file_name,
+                "view_type": data.get("view_type", ""),
+                "model": data.get("model", ""),
+                "price": data.get("price", ""),
+                "note": data.get("note", ""),
+                "example_file": file_name,
+                "source_path": source_path,
+            })
+
+        if orchestrator:
+            orchestrator.log_system(f"📝 待審人工校正已記錄: {file_name}")
+
+        return jsonify({
+            "status": "success",
+            "message": "人工校正已記錄",
+            "manual_corrections": str(MANUAL_CORRECTIONS_PATH),
+            "manual_rules": str(MANUAL_RULES_PATH),
+        })
+    except Exception as e:
+        log.error(f"Review correction API error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @flask_app.route('/')
 def serve_dashboard():

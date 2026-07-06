@@ -247,6 +247,13 @@ Google Drive upload handoff:
 - Upload batches are newest-period first (`2026` before `2025` before `2024`). Filenames containing `無型號` are review rows and must not be uploaded until corrected/rerun.
 - Record completed uploads in `_drive_upload\drive_upload_uploaded.csv`; the next manifest run skips those files so uploads can resume safely on another machine.
 
+Manual review panel:
+- The dashboard has a separate `待人工校正` drawer for rows blocked by `_drive_upload\drive_upload_review_required.csv`; keep it out of the main boss-facing monitor unless someone opens it intentionally.
+- The panel is a review inbox, not a bulk rename engine. `記錄` appends corrections to `_ocr_audit\manual_corrections.csv`; `學規則` also appends to `_ocr_audit\manual_learning_rules.csv`; `標記重跑需求` records that a safe rerun candidate should be generated.
+- Quick ARK fill sets `view_type=單機`, `model=S55BG970NC`, and a reusable rule hint for Odyssey Ark / Ark Mini LED / 55-inch upright or curved desk displays.
+- Apply recorded manual corrections with `python tools/apply_manual_review_corrections.py --output-dir D:\00_商化\00_已OCR照片` first; it is dry-run by default and writes `_ocr_audit\manual_correction_rename_plan_*.csv`. Add `--apply` only after checking the plan.
+- 2026 OCR/export can be complete while Drive upload remains partial. In that case, inspect `drive_upload_review_required.csv` and the dashboard review drawer instead of rerunning all 2026 folders.
+
 # 2026-07-03 Portable Resume
 
 For another PC or another AI agent, start from `docs/handoff_2026_ocr_resume.md`.
