@@ -271,6 +271,7 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - rclone upload batches have a timeout guard; if one batch stalls, restart with `tools\rclone_drive_upload.py --execute --repeat --limit 100 --rclone-timeout-seconds 1200`.
 - Missing-result rerun candidate builder: `tools\build_missing_result_rerun_candidates.py`.
 - A corrupted image or unresolved `missing_result` must not stop a whole rerun/export batch. The scripts now write unsafe rows to `blocked_after_rerun.csv` / `blocked_after_recursive.csv` and continue copying safe rows.
+- After a long `missing_result` rerun is already active, use `tools\continue_after_missing_rerun.ps1` as the unattended bridge: it waits for the rerun to finish, safely restarts the backend to load current code, runs recursive flat export in resume mode, audits the output, then resumes rclone Drive upload for ready rows.
 # 一般使用者入口
 
 不用 Codex、不用手打 Python 指令：

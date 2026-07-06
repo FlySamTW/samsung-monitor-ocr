@@ -189,9 +189,10 @@ _ocr_audit\audit_report.csv
 4. `missing_result > 0`：代表有照片沒有 OCR 成功結果，不能把該資料夾算完成。
 5. `conflict > 0`：代表改名後會撞檔名，不能覆蓋，需先看該資料夾的 `conflicts.csv`。
 6. WebP/HEIC：照規格略過，只要列在 `skipped_unsupported.csv`，不要算入完成照片數。
-7. 輸出資料夾在來源資料夾內：更換為來源資料夾旁邊的新資料夾，例如 `<來源>_OCR整理`。
-8. 輸出資料夾是來源資料夾上層：更換為來源資料夾旁邊的新資料夾，避免把無關照片與審計檔算進輸出。
-9. 輸出資料夾第一層已有 jpg/jpeg/png 但沒有 `_ocr_audit\folder_summary.csv`：改用新的輸出資料夾，或先移開既有照片。
+7. 若 `tools\rerun_questionable_records.py` 正在補 `missing_result`，不要中途重啟後端或手動開 recursive。啟動一次 `tools\continue_after_missing_rerun.ps1`，讓它等補跑完成後再安全接遞迴、驗收與上傳。
+8. 輸出資料夾在來源資料夾內：更換為來源資料夾旁邊的新資料夾，例如 `<來源>_OCR整理`。
+9. 輸出資料夾是來源資料夾上層：更換為來源資料夾旁邊的新資料夾，避免把無關照片與審計檔算進輸出。
+10. 輸出資料夾第一層已有 jpg/jpeg/png 但沒有 `_ocr_audit\folder_summary.csv`：改用新的輸出資料夾，或先移開既有照片。
 10. 來源資料夾沒有 `.jpg/.jpeg/.png`：確認是否選錯資料夾；只有 HEIC/WebP 依目前規格不會處理，也不能宣稱完成。
 11. 想重新跑已完成資料夾：使用新輸出資料夾，或清楚知道後果後才加 `--no-resume`。
 

@@ -246,6 +246,7 @@ npm.cmd --prefix dashboard run build
 - If an rclone child stays on one batch without updating `drive_upload_uploaded.csv`, restart the uploader with a smaller batch such as `--limit 100` and keep `--rclone-timeout-seconds` enabled.
 - For risky outputs, `tools/rerun_questionable_records.py --input-csv ... --execute` can resume from a filtered candidate list.
 - Before queueing any risky rerun, verify the candidate image exists inside the row's real source folder. Do not rerun a filename under a guessed month folder; skip it and regenerate candidates instead.
+- If a `missing_result` rerun is already active, do not stop the backend. Start `tools\continue_after_missing_rerun.ps1` once; it waits for the rerun to finish, restarts the backend only when idle, runs recursive flat export in resume mode, audits, then resumes rclone upload.
 - A corrupted image or unresolved `missing_result` should be isolated to `blocked_after_rerun.csv` / `blocked_after_recursive.csv`; do not let one bad source image stop the whole folder's safe output.
 - `/api/image` should serve original source photos and must not fall back to enlarged thumbnails for boss-facing preview.
 - Non-Codex users should use `SETUP_FIRST_TIME.bat`, `START_OCR.bat`, `START_FULL_AUTO_OCR.bat`, and `CHECK_STATUS.bat`. Do not tell ordinary users to type Python commands unless the BAT flow fails.
