@@ -95,15 +95,16 @@ The dashboard header must show global OCR progress, not only the current folder'
 4. 完成後用正式 `results.csv` 產改名計畫，再複製到同一層新輸出資料夾；不原地裸改照片。
 5. 正式接力工具是 `tools/recursive_ocr_flat_export.py`，可由 `run_recursive_ocr_flat_export.bat` 啟動。
 6. 另一台電腦上的 AI 接手執行時，先讀 `docs/ai_handoff_runbook.md`。
-7. 輸出資料夾不可等於來源根資料夾、不可放在來源根資料夾底下、也不可是來源根資料夾的上層，避免重跑時掃到自己輸出的照片或混入無關檔案。
-8. `run_recursive_ocr_flat_export.bat` 啟動前要先用 `tools\validate_recursive_ocr_inputs.py` 預檢來源、輸出路徑、是否至少有一張 `.jpg/.jpeg/.png`，以及輸出第一層是否已有照片但缺少 `_ocr_audit\folder_summary.csv`；預檢失敗時不可啟動 LLM 或 OCR 後端。
-9. `run_ocr.bat` 與 `run_recursive_ocr_flat_export.bat` 啟動前都要先用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
-10. AI、排程或非互動環境執行批次檔時要設定 `OCR_NO_PAUSE=1`，避免成功或錯誤結尾卡在 `pause`。
-11. `run_recursive_ocr_flat_export.bat` 接力結束後預設清理本次 OCR 後端；若需要保留後端觀察狀態，可設定 `OCR_KEEP_SERVER=1`。
-12. 接力器預設用 `_ocr_audit\folder_summary.csv` + `copied.csv` 續跑；已完整複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾標為 `skipped_existing`，避免中斷重跑時產生 `_2` 重複檔。
-13. `run_recursive_ocr_flat_export.bat` 會在接力器跑完後自動用 `tools\recursive_ocr_audit_report.py --output-dir <輸出資料夾>` 驗收；手動拆跑 Python 接力器時也必須補跑驗收，通過才可回報全量完成。驗收摘要在 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量；失敗時看 `_ocr_audit\audit_report.csv`。
-14. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
-15. `tools\photo_rename_planner.py` 必須用 `period` 決定價格欄是否可帶比價符號；歷史年度即使 `results.csv` 殘留 `price_symbol`，輸出檔名也只能保留店內價格。修改後至少執行 `tools\test_photo_rename_planner.py`。
+7. Long recursive OCR runs must keep refreshing source discovery. New folders added under the source root should be picked up automatically; if an already-handled folder changes during the same run, it should be re-queued instead of waiting for a manual restart.
+8. 輸出資料夾不可等於來源根資料夾、不可放在來源根資料夾底下、也不可是來源根資料夾的上層，避免重跑時掃到自己輸出的照片或混入無關檔案。
+9. `run_recursive_ocr_flat_export.bat` 啟動前要先用 `tools\validate_recursive_ocr_inputs.py` 預檢來源、輸出路徑、是否至少有一張 `.jpg/.jpeg/.png`，以及輸出第一層是否已有照片但缺少 `_ocr_audit\folder_summary.csv`；預檢失敗時不可啟動 LLM 或 OCR 後端。
+10. `run_ocr.bat` 與 `run_recursive_ocr_flat_export.bat` 啟動前都要先用 `tools\stop_ocr_server.py` 清理既有 `samsung_ocr_batch_processor.py` 後端，避免連到舊程式。
+11. AI、排程或非互動環境執行批次檔時要設定 `OCR_NO_PAUSE=1`，避免成功或錯誤結尾卡在 `pause`。
+12. `run_recursive_ocr_flat_export.bat` 接力結束後預設清理本次 OCR 後端；若需要保留後端觀察狀態，可設定 `OCR_KEEP_SERVER=1`。
+13. 接力器預設用 `_ocr_audit\folder_summary.csv` + `copied.csv` 續跑；已完整複製、來源照片數與最新修改時間未變、且目標檔案仍存在的資料夾標為 `skipped_existing`，避免中斷重跑時產生 `_2` 重複檔。
+14. `run_recursive_ocr_flat_export.bat` 會在接力器跑完後自動用 `tools\recursive_ocr_audit_report.py --output-dir <輸出資料夾>` 驗收；手動拆跑 Python 接力器時也必須補跑驗收，通過才可回報全量完成。驗收摘要在 `_ocr_audit\audit_summary.json`，內含驗收時間、審計檔路徑與主要數量；失敗時看 `_ocr_audit\audit_report.csv`。
+15. 若使用者只說 `GIT`，也要同步本專案專屬 SKILL；本檔就是本專案優先更新的 SKILL。
+16. `tools\photo_rename_planner.py` 必須用 `period` 決定價格欄是否可帶比價符號；歷史年度即使 `results.csv` 殘留 `price_symbol`，輸出檔名也只能保留店內價格。修改後至少執行 `tools\test_photo_rename_planner.py`。
 
 ### [2026-03-05] 日誌與結果列表去重修復
 

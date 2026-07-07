@@ -280,6 +280,10 @@ The dashboard is boss-facing and must remain visually stable during long runs.
   - Calls `tools/prepare_drive_upload_manifest.py`, uploads only `ready` rows, groups by year folder, and records uploaded filenames in `_drive_upload\drive_upload_uploaded.csv`.
   - Has a lock file at `_drive_upload\rclone_drive_upload.lock`; do not start a second uploader while it exists.
 
+- `tools/recursive_ocr_flat_export.py`
+  - Refreshes source-folder discovery before each folder handoff so newly added folders are picked up during the same long run.
+  - If a folder already handled in the current run later changes image count or newest modified time, it is re-queued instead of waiting for a manual restart.
+
 - `tools/build_missing_result_rerun_candidates.py`
   - Reads `_ocr_audit\folder_summary.csv` and emits a safe CSV for `tools\rerun_questionable_records.py`.
   - Use it for folders blocked by `missing_result` instead of restarting everything.

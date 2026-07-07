@@ -648,7 +648,14 @@ def main() -> int:
         for order_index, folder_row in enumerate(folders, start=1):
             folder_key = str(folder_row["folder"])
             if folder_key in handled_this_run:
-                continue
+                previous_summary = summary_by_folder.get(folder_key)
+                if previous_summary and resume_row_matches_current(previous_summary, folder_row):
+                    continue
+                handled_this_run.remove(folder_key)
+                print(
+                    f"[recursive] rediscovered changed folder; re-queueing {folder_row['folder']}",
+                    flush=True,
+                )
             resume_row = resume_index.get(folder_key) if resume_enabled else None
             if resume_row and resume_row_matches_current(resume_row, folder_row):
                 summary = summary_from_resume(resume_row, folder_row)
