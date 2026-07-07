@@ -218,6 +218,7 @@ The dashboard is boss-facing and must remain visually stable during long runs.
 
 - In resume mode, load existing `_ocr_audit/folder_summary.csv` before writing new rows.
 - Merge previous summary rows with currently discovered folders; never rewrite the file with only the current run's first few rows.
+- During a production run, refresh source-folder discovery between folders. The source root is live: new or moved folders must be picked up without a full restart, and the newest period/folder must remain first.
 - If a bad restart already shrank `folder_summary.csv`, rebuild it with:
 
 ```powershell

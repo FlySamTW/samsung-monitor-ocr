@@ -523,30 +523,34 @@ def main() -> int:
     audit_dir = output_dir / "_ocr_audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
 
-    folders, unsupported = discover_folders(source_root)
-    if args.limit_folders and args.limit_folders > 0:
-        folders = folders[: args.limit_folders]
+    def refresh_discovery() -> tuple[List[dict], List[dict]]:
+        refreshed_folders, refreshed_unsupported = discover_folders(source_root)
+        if args.limit_folders and args.limit_folders > 0:
+            refreshed_folders = refreshed_folders[: args.limit_folders]
 
-    write_dict_csv(
-        audit_dir / "skipped_unsupported.csv",
-        unsupported,
-        ["folder", "path", "extension", "reason"],
-    )
-    discovery_rows = [
-        {
-            "order": index,
-            "folder": str(item["folder"]),
-            "period": item["period"],
-            "image_count": item["image_count"],
-            "latest_mtime": iso_from_mtime(item["latest_mtime"]),
-        }
-        for index, item in enumerate(folders, start=1)
-    ]
-    write_dict_csv(
-        audit_dir / "folder_discovery.csv",
-        discovery_rows,
-        ["order", "folder", "period", "image_count", "latest_mtime"],
-    )
+        write_dict_csv(
+            audit_dir / "skipped_unsupported.csv",
+            refreshed_unsupported,
+            ["folder", "path", "extension", "reason"],
+        )
+        discovery_rows = [
+            {
+                "order": index,
+                "folder": str(item["folder"]),
+                "period": item["period"],
+                "image_count": item["image_count"],
+                "latest_mtime": iso_from_mtime(item["latest_mtime"]),
+            }
+            for index, item in enumerate(refreshed_folders, start=1)
+        ]
+        write_dict_csv(
+            audit_dir / "folder_discovery.csv",
+            discovery_rows,
+            ["order", "folder", "period", "image_count", "latest_mtime"],
+        )
+        return refreshed_folders, refreshed_unsupported
+
+    folders, unsupported = refresh_discovery()
 
     state_path = audit_dir / "_recursive_ocr_state.json"
     summary_path = audit_dir / "folder_summary.csv"
@@ -594,20 +598,7 @@ def main() -> int:
 
     resume_enabled = not args.no_resume and not args.restart and not args.no_copy
     resume_index = build_resume_index(summary_path) if resume_enabled else {}
-    pending_folders = [
-        row for row in folders
-        if not (
-            str(row["folder"]) in resume_index
-            and resume_row_matches_current(resume_index[str(row["folder"])], row)
-        )
-    ]
-
-    if args.ensure_llm and pending_folders:
-        ensure_local_llm(args)
-
-    if pending_folders:
-        wait_for_backend(args.backend_url, timeout_seconds=90)
-        configure_llm(args)
+    backend_configured = False
 
     existing_summaries: List[Dict[str, object]] = []
     if resume_enabled and summary_path.exists():
@@ -633,7 +624,77 @@ def main() -> int:
         )
         write_dict_csv(summary_path, ordered, summary_headers)
 
-    for index, folder_row in enumerate(folders, start=1):
+    def refresh_runtime_discovery() -> None:
+        nonlocal folders, unsupported, discovered_folder_keys, resume_index
+        previous_keys = discovered_folder_keys
+        folders, unsupported = refresh_discovery()
+        discovered_folder_keys = [str(row["folder"]) for row in folders]
+        state["folders_total"] = len(folders)
+        state["unsupported_total"] = len(unsupported)
+        state["updated_at"] = datetime.now().isoformat()
+        if resume_enabled:
+            resume_index = build_resume_index(summary_path)
+        if discovered_folder_keys != previous_keys:
+            print(
+                f"[recursive] source discovery refreshed folders={len(folders)} unsupported={len(unsupported)}",
+                flush=True,
+            )
+
+    handled_this_run = set()
+    processed_counter = 0
+    while True:
+        refresh_runtime_discovery()
+        next_item = None
+        for order_index, folder_row in enumerate(folders, start=1):
+            folder_key = str(folder_row["folder"])
+            if folder_key in handled_this_run:
+                continue
+            resume_row = resume_index.get(folder_key) if resume_enabled else None
+            if resume_row and resume_row_matches_current(resume_row, folder_row):
+                summary = summary_from_resume(resume_row, folder_row)
+                summary_by_folder[folder_key] = summary
+                handled_this_run.add(folder_key)
+                state["completed"].append(summary)
+                state["updated_at"] = datetime.now().isoformat()
+                write_merged_summaries()
+                write_state(state_path, state)
+                continue
+            next_item = (order_index, folder_key, folder_row)
+            break
+
+        if next_item is None:
+            break
+
+        index, folder_key, folder_row = next_item
+        processed_counter += 1
+        print(f"[recursive] ({index}/{len(folders)}) processing {folder_row['folder']}", flush=True)
+        try:
+            if not backend_configured:
+                if args.ensure_llm:
+                    ensure_local_llm(args)
+                wait_for_backend(args.backend_url, timeout_seconds=90)
+                configure_llm(args)
+                backend_configured = True
+            summary = process_folder(args, source_root, output_dir, audit_dir, folder_row, index)
+        except Exception as exc:
+            summary = {
+                "folder": folder_key,
+                "period": folder_row["period"],
+                "image_count": folder_row["image_count"],
+                "source_latest_mtime": iso_from_mtime(folder_row["latest_mtime"]),
+                "status": "error",
+                "copy_error": str(exc),
+            }
+        summary_by_folder[folder_key] = summary
+        handled_this_run.add(folder_key)
+        write_merged_summaries()
+        state["completed"].append(summary)
+        state["updated_at"] = datetime.now().isoformat()
+        state["processed_in_this_run"] = processed_counter
+        write_state(state_path, state)
+        print(f"[recursive] completed status={summary.get('status')} folder={folder_row['folder']}", flush=True)
+
+    if False:  # Legacy static traversal disabled; dynamic loop above owns traversal.
         print(f"[接力] ({index}/{len(folders)}) 開始：{folder_row['folder']}", flush=True)
         resume_row = resume_index.get(str(folder_row["folder"]))
         if resume_row and not resume_row_matches_current(resume_row, folder_row):

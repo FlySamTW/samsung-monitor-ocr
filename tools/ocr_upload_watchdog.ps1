@@ -156,7 +156,9 @@ function Start-RecursiveIfNeeded {
             "--api-key", "lm-studio",
             "--model", $Model,
             "--poll-seconds", "20",
-            "--timeout-minutes", "360"
+            "--timeout-minutes", "360",
+            "--watch",
+            "--watch-sleep-seconds", "300"
         ) | Out-Null
 }
 
