@@ -197,8 +197,11 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
             command.append("--dry-run")
         rc = run_command(command, args.log_path, execute=args.execute, timeout_seconds=args.rclone_timeout_seconds)
         if rc == 124 and args.continue_on_timeout:
+            if args.execute and not args.dry_run and uploaded_rows:
+                append_uploaded(args.uploaded_log, uploaded_rows)
+                prepare_manifest(args, args.limit)
             print("[upload] timeout treated as retryable; next cycle will resume with --ignore-existing", flush=True)
-            return len(year_rows)
+            return len(uploaded_rows) or len(year_rows)
         if rc != 0:
             raise SystemExit(rc)
 
@@ -233,7 +236,7 @@ def main() -> int:
     parser.add_argument("--uploaded-log", default="")
     parser.add_argument("--rclone", default="")
     parser.add_argument("--remote", default=DEFAULT_REMOTE)
-    parser.add_argument("--limit", type=int, default=500)
+    parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--repeat", action="store_true", help="Keep uploading batches until no ready rows remain.")
     parser.add_argument("--max-cycles", type=int, default=0, help="0 means no max when --repeat is used.")
     parser.add_argument("--sleep-seconds", type=int, default=10)

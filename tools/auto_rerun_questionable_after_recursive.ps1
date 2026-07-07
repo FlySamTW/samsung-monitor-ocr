@@ -135,7 +135,7 @@ function Start-Uploader-IfNeeded {
                 "--output-dir", $OutputDir,
                 "--execute",
                 "--repeat",
-                "--limit", "500",
+                "--limit", "100",
                 "--transfers", "4",
                 "--checkers", "8",
                 "--rclone-timeout-seconds", "1200"
