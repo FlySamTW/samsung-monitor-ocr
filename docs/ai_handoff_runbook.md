@@ -394,4 +394,5 @@ This machine now has a Windows scheduled task named `SamsungOCR_PipelineWatchdog
 - Interval: every 4 hours
 - Behavior: preserve audit/output state, rebuild a shrunk `folder_summary.csv`, start the backend only if missing, start recursive OCR only if no runner is active and work remains, ensure exactly one questionable-rerun watcher, and start rclone upload only if ready rows remain and no uploader/rclone is active.
 - When the watchdog starts recursive OCR, it must include `--watch --watch-sleep-seconds 300` so new folders added after a cycle are picked up later.
+- It also records OCR progress heartbeats. If `processed/ready/current file` do not change for the configured stall window, it restarts only the OCR backend and recursive runner, then resumes from `_ocr_audit`; it must not clear output or stop Drive upload.
 - It must never use `--no-resume`, clear `_ocr_audit`, delete output photos, or upload `review_required` rows.

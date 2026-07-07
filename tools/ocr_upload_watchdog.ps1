@@ -5,7 +5,8 @@ param(
     [string]$BackendUrl = "http://127.0.0.1:5000",
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
-    [int]$RcloneTimeoutSeconds = 1200
+    [int]$RcloneTimeoutSeconds = 1200,
+    [int]$OcrStallMinutes = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +88,76 @@ function Start-BackendIfNeeded {
         }
     }
     Write-RunLog "backend did not become ready; see $outLog $errLog"
+}
+
+function Write-JsonFile($Path, $Value) {
+    $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Restart-OcrIfStalled {
+    $status = Get-BackendStatus
+    if (-not $status -or -not [bool]$status.is_running) {
+        return
+    }
+
+    $auditDir = Join-Path $OutputDir "_ocr_audit"
+    New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
+    $statePath = Join-Path $auditDir "watchdog_ocr_progress_state.json"
+    $overall = $status.overall_progress
+    $processed = if ($overall -and $null -ne $overall.processed_images) { [int]$overall.processed_images } else { -1 }
+    $ready = if ($overall -and $null -ne $overall.ready_images) { [int]$overall.ready_images } else { -1 }
+    $key = "{0}|{1}|{2}|{3}" -f $processed, $ready, $status.current_relative_dir, $status.current_file
+    $now = Get-Date
+
+    $previous = $null
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            $previous = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        } catch {
+            $previous = $null
+        }
+    }
+
+    if (-not $previous -or $previous.key -ne $key) {
+        Write-JsonFile $statePath ([pscustomobject]@{
+            key = $key
+            first_seen = $now.ToString("s")
+            last_seen = $now.ToString("s")
+            processed = $processed
+            ready = $ready
+            folder = $status.current_relative_dir
+            file = $status.current_file
+        })
+        Write-RunLog "ocr progress heartbeat updated processed=$processed ready=$ready"
+        return
+    }
+
+    $firstSeen = [datetime]$previous.first_seen
+    $staleMinutes = ($now - $firstSeen).TotalMinutes
+    Write-JsonFile $statePath ([pscustomobject]@{
+        key = $key
+        first_seen = $previous.first_seen
+        last_seen = $now.ToString("s")
+        processed = $processed
+        ready = $ready
+        folder = $status.current_relative_dir
+        file = $status.current_file
+        stale_minutes = [math]::Round($staleMinutes, 1)
+    })
+
+    if ($staleMinutes -lt $OcrStallMinutes) {
+        Write-RunLog "ocr progress unchanged stale_minutes=$([math]::Round($staleMinutes,1)) threshold=$OcrStallMinutes"
+        return
+    }
+
+    Write-RunLog "ocr appears stalled stale_minutes=$([math]::Round($staleMinutes,1)); restarting backend and recursive runner"
+    $targets = @(Get-MatchingProcess "recursive_ocr_flat_export.py|samsung_ocr_batch_processor.py")
+    foreach ($proc in $targets) {
+        Write-RunLog "stopping stalled OCR process pid=$($proc.ProcessId)"
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
 }
 
 function Get-CsvRowCount([string]$Path) {
@@ -288,6 +359,7 @@ try {
     Set-Content -LiteralPath $LockPath -Encoding UTF8 -Value ("pid={0}`nstarted={1}" -f $PID, (Get-Date -Format "s"))
     Write-RunLog "watchdog start"
     Repair-FolderSummaryIfShrunk
+    Restart-OcrIfStalled
     Start-BackendIfNeeded
     Start-RecursiveIfNeeded
     Start-AutoRerunWatcherIfNeeded
