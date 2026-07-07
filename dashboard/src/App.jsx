@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.21 (右側處理中同步)";
+const UI_VERSION = "v19.22 (自言自語保留)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -185,6 +185,7 @@ const App = () => {
   const [activePresentation, setActivePresentation] = useState(null);
   const [revealedResults, setRevealedResults] = useState([]);
   const [displayedBuffer, setDisplayedBuffer] = useState("");
+  const [heldNarration, setHeldNarration] = useState({ text: "", key: "", fileName: "" });
   const isAdvancingRef = useRef(false);
   const acceptedPresentationKeysRef = useRef(new Set());
   const revealedKeysRef = useRef(new Set());
@@ -238,6 +239,15 @@ const App = () => {
   useEffect(() => {
     activePresentationRef.current = activePresentation;
   }, [activePresentation]);
+
+  useEffect(() => {
+    if (!displayedBuffer) return;
+    setHeldNarration({
+      text: displayedBuffer,
+      key: displayTargetKey,
+      fileName: activePresentation?.file_name || data.stream_file || data.current_file || ""
+    });
+  }, [displayedBuffer, displayTargetKey, activePresentation?.file_name, data.stream_file, data.current_file]);
 
   // Copy completed backend items into a local queue before the backend list rolls.
   useEffect(() => {
@@ -715,10 +725,25 @@ const App = () => {
         _pendingReveal: true
       }
     : null;
+  const livePendingFile = !activePendingResult && !activePresentation && isRunning && data.current_file && data.current_file !== 'None'
+    ? data.current_file
+    : "";
+  const livePendingResult = livePendingFile
+    ? {
+        file_name: livePendingFile,
+        thumb_b64: data.current_thumb || null,
+        _queueKey: `live-pending|${livePendingFile}`,
+        _isCurrent: true,
+        _pendingReveal: true
+      }
+    : null;
+  const pendingPanelResult = activePendingResult || livePendingResult;
   const rightPanelItems = (isRunning || revealedResults.length > 0)
-    ? (activePendingResult ? [activePendingResult, ...revealedResults] : revealedResults)
+    ? (pendingPanelResult ? [pendingPanelResult, ...revealedResults] : revealedResults)
     : historicalPanelItems;
   const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
+  const visibleNarration = displayedBuffer || heldNarration.text;
+  const isHeldNarration = Boolean(!displayedBuffer && heldNarration.text);
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
@@ -865,13 +890,28 @@ const App = () => {
                   <div className="log-wall" style={{ flex: 1, padding: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0a0a0f', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem', position: 'relative' }}>
                       {/* 1. Top Pane: Active Stream Only */}
                        <div ref={streamBufferRef} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
-                            {displayedBuffer ? (
-                               <div style={{ wordBreak: 'break-all', whiteSpace: 'pre-wrap', color: '#ffffff', fontSize: '1.05rem', fontFamily: 'JetBrains Mono', lineHeight: '1.6', fontWeight: 'bold' }}>
-                                   {displayedBuffer}
-                                   <span className="typing-dots"></span>
+                            {visibleNarration ? (
+                               <div style={{
+                                   wordBreak: 'break-all',
+                                   whiteSpace: 'pre-wrap',
+                                   color: isHeldNarration ? '#d1d5db' : '#ffffff',
+                                   opacity: isHeldNarration ? 0.82 : 1,
+                                   fontSize: '1.05rem',
+                                   fontFamily: 'JetBrains Mono',
+                                   lineHeight: '1.6',
+                                   fontWeight: 'bold',
+                                   transition: 'color 0.18s ease, opacity 0.18s ease'
+                               }}>
+                                   {isHeldNarration && (
+                                      <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>
+                                          上一張摘要保留中 · 下一張判讀中
+                                      </div>
+                                   )}
+                                   {visibleNarration}
+                                   {!isHeldNarration && <span className="typing-dots"></span>}
                                </div>
                             ) : (
-                                <div style={{ color: '#444', fontSize: '0.8rem', fontStyle: 'italic' }}>...</div>
+                                <div style={{ color: '#444', fontSize: '0.8rem', fontStyle: 'italic' }}>等待辨識訊號...</div>
                             )}
                        </div>
 

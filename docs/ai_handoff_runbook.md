@@ -236,12 +236,14 @@ Current dashboard versions:
 - `v19.16 (總進度)` added global OCR progress in the header.
 - `v19.18 (同步防呆)` fixed the long-run presentation queue so the main preview does not freeze on old photos when OCR is faster than the display animation.
 - `v19.21 (右側處理中同步)` adds a same-photo `處理中 / 等待自言自語完成` placeholder at the top of `辨識紀錄` while the left photo's self-talk is typing.
+- `v19.22 (自言自語保留)` keeps the previous completed narration visible until the next narration starts, and keeps the right panel's top placeholder on the same currently visible photo, so the LLM pane does not blank out or look one photo behind during normal running.
 
 Operational rules:
 
 - Do not drive the main preview from `recent_results[0]`.
 - During a running batch, the right-side record list should come from already revealed frontend presentation items, not raw backend-speed history.
-- While a new photo is typing self-talk, do not leave the previous completed result as the top right row. Show the same current photo as `處理中`; replace it with parsed metadata only after self-talk finishes.
+- Once a new photo is visible, do not leave the previous completed result as the top right row. Show the same current photo as `處理中`; replace it with parsed metadata only after self-talk finishes.
+- Do not clear the LLM/self-talk pane while waiting for the next displayed narration. A blank pane looks broken to viewers; keep the previous narration in a softened previous-summary state until the next text actually starts.
 - Presentation queue items may be discarded when they are stale and no longer present in the backend display queue. This affects only what the dashboard chooses to show; OCR audit/output data must remain intact.
 - Long self-talk should be trimmed for monitor display so a single result cannot hold the preview for too long.
 - If the preview appears stuck, check `/api/status` first. If `current_file` and `stats.processed` are changing, the backend is healthy and the issue is frontend presentation lag.
@@ -289,6 +291,7 @@ Operational rules:
    - The blue icon button was changed to text `重跑`.
    - Historical/not-compared rows must not show a red `?` price badge.
    - `辨識紀錄` is delayed on purpose: while the photo's LLM self-talk is typing, show that same photo as `處理中 / 等待自言自語完成`; only after typing finishes may model/price/status appear.
+   - The LLM pane must not disappear between photos. Keep the previous completed narration visible until the next narration starts.
    - If user still sees old UI, refresh browser and confirm `dashboard/dist/assets/index-*.js` is the latest build.
 
 6. Google Drive upload:

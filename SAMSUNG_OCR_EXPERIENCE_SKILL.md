@@ -20,10 +20,13 @@ The user-facing sequence must be:
 
 1. Show the photo in the main preview.
 2. Play that photo's LLM self-talk/typewriter text to completion.
-3. While the self-talk is typing, show that same photo at the top of `辨識紀錄` as `處理中 / 等待自言自語完成`.
-4. Only after self-talk completes, replace the placeholder with that photo's parsed thumbnail/model/price/status.
+3. As soon as a new photo is visible in the main preview, show that same photo at the top of `辨識紀錄` as `處理中 / 等待自言自語完成`, even if the next self-talk text has not started yet.
+4. When that self-talk has finished but the next photo's self-talk has not started, keep the completed narration visible as a held previous-summary state. Never let the LLM/self-talk pane go blank or collapse to a black empty area during normal running.
+5. Only after self-talk completes, replace the placeholder with that photo's parsed thumbnail/model/price/status.
 
 The backend may finish multiple photos ahead, but the right panel must never reveal a photo's model/price/status before its self-talk has finished. It also must not leave the previous completed result at the top while a new photo is typing, because that looks like mismatched metadata. In `dashboard/src/App.jsx`, prefer the display queue and already-presented cutoff over `recent_results` whenever a queue exists. `recent_results` is backend-speed data and will confuse viewers if shown early.
+
+Interface presentation is a first-class requirement. If the LLM pane blanks out between photos, the monitor looks broken even when OCR data is correct. Preserve visual continuity: previous narration may stay softly visible until the next narration begins, with a clear previous-summary label.
 
 ## Live Presentation Catch-Up Rule (2026-07-06)
 
@@ -257,8 +260,8 @@ npm.cmd --prefix dashboard run build
 
 ## 2026-07-04 UI And Runner Rules
 
-- Current dashboard build: `v19.21 (右側處理中同步)`.
-- Boss-facing sequence must look like: photo appears, LLM self-talk types, the same photo appears as `處理中` in `辨識紀錄`, then the parsed result appears after self-talk finishes.
+- Current dashboard build: `v19.22 (自言自語保留)`.
+- Boss-facing sequence must look like: photo appears, LLM self-talk types, the same photo appears as `處理中` in `辨識紀錄`, the completed narration stays visible until the next narration begins, then the parsed result appears after self-talk finishes.
 - Backend may process ahead, but the visible filename, preview, self-talk, and lower-left `辨識中` panel must all refer to the same displayed photo.
 - The lower-left panel must preserve the historical LLM record, including `[THINK]` summaries and final classification lines. Filter only raw `JSON Error`, initialization/debug messages, batch start/stop noise, and internal queue wording.
 - If the local VLM repeats a token/spec endlessly, backend must close that stream and retry instead of letting the UI loop forever.
