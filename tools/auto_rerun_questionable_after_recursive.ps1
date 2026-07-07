@@ -201,6 +201,7 @@ try {
         } else {
             Write-RunLog ("waiting; recursive={0}; backend unavailable" -f $recursive.Count)
         }
+        Start-Uploader-IfNeeded
         Start-Sleep -Seconds $PollSeconds
     }
 

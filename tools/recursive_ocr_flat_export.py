@@ -609,7 +609,30 @@ def main() -> int:
         wait_for_backend(args.backend_url, timeout_seconds=90)
         configure_llm(args)
 
-    summaries: List[Dict[str, object]] = []
+    existing_summaries: List[Dict[str, object]] = []
+    if resume_enabled and summary_path.exists():
+        existing_summaries = [dict(row) for row in read_dict_csv(summary_path)]
+    summary_by_folder: Dict[str, Dict[str, object]] = {
+        str(row.get("folder") or ""): row
+        for row in existing_summaries
+        if row.get("folder")
+    }
+    discovered_folder_keys = [str(row["folder"]) for row in folders]
+
+    def write_merged_summaries() -> None:
+        ordered = [
+            summary_by_folder[key]
+            for key in discovered_folder_keys
+            if key in summary_by_folder
+        ]
+        discovered = set(discovered_folder_keys)
+        ordered.extend(
+            row
+            for key, row in summary_by_folder.items()
+            if key and key not in discovered
+        )
+        write_dict_csv(summary_path, ordered, summary_headers)
+
     for index, folder_row in enumerate(folders, start=1):
         print(f"[接力] ({index}/{len(folders)}) 開始：{folder_row['folder']}", flush=True)
         resume_row = resume_index.get(str(folder_row["folder"]))
@@ -629,8 +652,8 @@ def main() -> int:
                     "status": "error",
                     "copy_error": str(exc),
                 }
-        summaries.append(summary)
-        write_dict_csv(summary_path, summaries, summary_headers)
+        summary_by_folder[str(folder_row["folder"])] = summary
+        write_merged_summaries()
         state["completed"].append(summary)
         state["updated_at"] = datetime.now().isoformat()
         write_state(state_path, state)

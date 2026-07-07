@@ -364,9 +364,22 @@ Important dashboard rule: do not enlarge `thumb_b64` in the main preview. It mad
 
 Current UI contract: the monitor must look smooth to supervisors. The photo, LLM self-talk area, and right-side result panel are a staged presentation, not raw backend state.
 
-- Frontend version `v19.23 (舞台節拍)` separates the visible LLM text (`narrationDisplay`) from the internal typing cursor (`displayedBuffer`).
+- Frontend version `v19.27 (穩定監看)` separates the visible LLM text (`narrationDisplay`) from the internal typing cursor (`displayedBuffer`), keeps the preview alive between photos, and fixes responsive layout.
 - When advancing, catching up, or waiting for the next LLM stream, do not blank the LLM pane. Keep the previous narration visible with a calm handoff label until new typing begins.
+- The lower LLM history pane must show readable history, not raw operational noise. Filter `圖片損壞`, `無法識別圖片格式`, `JSON Error`, stop/interruption text, and internal queue maintenance lines. If `lm_logs` has only noise, show `display_queue` summaries.
 - Right-side records may show the current photo as "processing", but model/price/status are revealed only after self-talk finishes.
 - When model/price/status are revealed, the LLM label must switch to a completed/revealed state in the same beat.
 - If the backend runs ahead, drop stale display-only queue items and keep moving; never solve lag by showing an empty black LLM block.
+- Do not black-screen or fade the photo between images. Keep the previous full-resolution image until the next full-resolution `/api/image/<source_path>` load succeeds.
+- Right rail action text is `再辨識`; keep the rail wide on desktop and stack it below the preview on narrow windows.
 - Verification must include actual browser observation, not only `npm run build`.
+
+## 2026-07-07 recursive progress resume fix
+
+If `folder_summary.csv` shrinks after restarting recursive OCR, do not restart from scratch. Rebuild the summary from audit folders and continue:
+
+```powershell
+.\.venv\Scripts\python.exe tools\rebuild_recursive_folder_summary.py --output-dir "D:\00_商化\00_已OCR照片"
+```
+
+Then restart `tools\recursive_ocr_flat_export.py` in normal resume mode. Keep rclone upload running unless the uploader itself is failing.

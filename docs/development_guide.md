@@ -173,6 +173,20 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 - Do not let later `displayedBuffer` updates downgrade a revealed queue key back to a typing/live-judging label.
 - Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make self-talk flash too quickly during high-throughput batches.
 
+# Dashboard Sync No-Regression Contract (2026-07-07)
+
+This project has repeatedly regressed the live monitor. Treat the following as a hard engineering contract, not a suggestion.
+
+- The main photo, visible LLM self-talk, and right-side thumbnail/result must always come from the same stable queue key.
+- Keep the staged time-gap illusion: while the user watches photo A and its self-talk, the backend may already process photo B. Photo B must not appear in the right-side result list until B's own self-talk has visibly completed.
+- Do not remove the frontend-owned queue (`pendingQueue`, `activePresentation`, `revealedResults`) when optimizing speed. Raw backend `recent_results` is too fast and will desynchronize the screen.
+- Never drive the main preview from `recent_results[0]` during a running batch.
+- The right panel may show a pending placeholder for the active item, but it must not reveal model/price/status early.
+- Do not blank, dim, or replace the main photo between items. Keep the previous full-resolution photo visible until the next full-resolution photo has loaded.
+- When a batch is stopped, between folders, or idle, do not display stale backend `current_file`, `current_relative_dir`, `stream_buffer`, or old live narration as if it were active. Idle state may show history, but it must not pretend a stale photo is currently being judged.
+- If you change dashboard timing, run a browser check after a rebuild: confirm the visible sequence is photo -> LLM self-talk -> right-side result, and confirm stopping a batch clears live current photo/file instead of showing a stale old folder.
+- If any change breaks this contract, revert or fix the UI before touching OCR logic or upload scripts. A visually mismatched monitor is a production bug.
+
 # Overall Progress Contract (2026-07-06)
 
 `/api/status` returns `overall_progress` so the dashboard can show total OCR progress across all discovered source folders.
@@ -181,6 +195,36 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 - Frontend must display both global progress and current-folder progress.
 - Do not let the browser scan the source tree or output folder on every poll.
 - Google Drive upload progress is separate and comes from `_drive_upload/drive_upload_summary.json`.
+
+# Dashboard v19.27 Monitor Layout Contract (2026-07-07)
+
+The dashboard is boss-facing and must remain visually stable during long runs.
+
+- Current dashboard build is `v19.27 (穩定監看)`.
+- Never black out, dim, or collapse the main preview between photos. Keep the previous full-resolution photo visible until the next full-resolution `/api/image/<source_path>` image has loaded.
+- When a batch stops or changes folders, clear active live labels/narration state, but do not forcibly set the visible photo to blank. The idle filename may say `上一張畫面保留`.
+- The LLM lower history pane must always contain readable history. Filter backend noise such as `圖片損壞`, `無法識別圖片格式`, `JSON Error`, stop/interruption messages, and internal queue wording. If `lm_logs` only contains noise, fall back to recent `display_queue` summaries.
+- The right-side `辨識紀錄` column is intentionally wider on desktop (`result-sidebar`) so filenames are readable. On narrow windows, the layout must stack vertically instead of squeezing the left preview/LLM pane into a few pixels.
+- Right-side action text is `再辨識`, not `重跑`.
+- If a UI rebuild changes these surfaces, refresh the browser and verify in the real app:
+  - `status-current-folder` shows the current folder.
+  - `llm-history-log` is not blank and has no damage/noise spam.
+  - `result-rail` is visible and uses `再辨識`.
+  - The preview image stays present while the next image loads.
+
+# Recursive Progress Resume Contract (2026-07-07)
+
+`tools/recursive_ocr_flat_export.py` must preserve previously completed folder summaries when restarted.
+
+- In resume mode, load existing `_ocr_audit/folder_summary.csv` before writing new rows.
+- Merge previous summary rows with currently discovered folders; never rewrite the file with only the current run's first few rows.
+- If a bad restart already shrank `folder_summary.csv`, rebuild it with:
+
+```powershell
+.\.venv\Scripts\python.exe tools\rebuild_recursive_folder_summary.py --output-dir "D:\00_商化\00_已OCR照片"
+```
+
+- After rebuilding, restart recursive OCR in normal resume mode. Do not use `--no-resume`, do not delete audit folders, and do not stop the rclone uploader unless it is the failing process.
 
 # 2026-07-02 Development Handoff
 

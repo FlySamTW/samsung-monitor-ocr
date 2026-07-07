@@ -321,6 +321,47 @@ def image_count(folder: Path) -> int:
     )
 
 
+def resolve_source_folder(folder: Path, success_path: Path) -> Path:
+    """Recover from stale audit paths when source photos were moved up a level."""
+    if folder.exists():
+        return folder
+    if not success_path.exists():
+        return folder
+
+    names = [
+        row.get("file_name") or row.get("filename") or ""
+        for row in read_dict_csv(success_path)
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return folder
+
+    candidates: list[Path] = []
+    for parent in folder.parents:
+        if parent.exists():
+            candidates.append(parent)
+        if len(candidates) >= 4:
+            break
+
+    for candidate in candidates:
+        hits = sum(1 for name in names[:50] if (candidate / name).exists())
+        if hits:
+            return candidate
+
+    for parent in candidates[:2]:
+        try:
+            for child in parent.iterdir():
+                if not child.is_dir():
+                    continue
+                hits = sum(1 for name in names[:50] if (child / name).exists())
+                if hits:
+                    return child
+        except OSError:
+            continue
+
+    return folder
+
+
 def audit_rows_for_period(audit_dir: Path, period_prefix: str) -> List[Dict[str, str]]:
     rows = read_dict_csv(audit_dir / "folder_summary.csv")
     selected = {
@@ -362,6 +403,7 @@ def repair_folder(row: Dict[str, str], audit_dir: Path, output_dir: Path, price_
     if not token_dir:
         token_dir = next(audit_dir.glob(f"*_{period}_*"), Path())
     success_path = token_dir / "success_records.csv"
+    folder = resolve_source_folder(folder, success_path)
     if not folder.exists():
         raise FileNotFoundError(f"source folder missing: {folder}")
     if not success_path.exists():

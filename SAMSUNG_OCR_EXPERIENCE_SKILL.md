@@ -52,6 +52,18 @@ The dashboard must balance two user-facing truths: no mixed metadata, and no fro
 - Add `key={currentImage}` to the main preview image so React remounts it whenever the photo URL changes.
 - This catch-up behavior only affects dashboard presentation. It must never delete OCR records, copied output photos, or audit rows.
 
+## Live Sync No-Regression Rule (2026-07-07)
+
+This is a non-negotiable rule for every future AI or developer touching the dashboard.
+
+- The photo, visible LLM self-talk, and right-side thumbnail/model/price must share the same stable item key.
+- Preserve the visual trick: the user may be watching the previous completed item while the backend is already processing the next item, but the right-side result must only reveal after that item's self-talk has finished.
+- Do not replace `pendingQueue`, `activePresentation`, and `revealedResults` with raw `recent_results` during OCR. That is the known path back to desync.
+- `recent_results` is only an idle/history fallback. It must not drive the live main preview.
+- Stopping a batch or switching folders must clear stale live presentation state. The backend may retain old `current_file` for audit, but the UI must not show that stale file as an active photo/LLM pair.
+- Keep the current photo visible until the next full-resolution image is ready; never blank or dim between photos during a normal run.
+- Any UI timing change must be verified in the browser after rebuild with the sequence: photo visible -> LLM text types -> right-side result reveals. If these three do not match, the change is not done.
+
 ## Overall Progress Rule (2026-07-06)
 
 The dashboard header must show global OCR progress, not only the current folder's `processed/total`. `/api/status` exposes `overall_progress`, computed from `_ocr_audit/folder_discovery.csv`, `_ocr_audit/folder_summary.csv`, missing-result rerun summaries, and the active folder's live stats.
@@ -273,10 +285,15 @@ npm.cmd --prefix dashboard run build
 
 ## 2026-07-04 UI And Runner Rules
 
-- Current dashboard build: `v19.22 (自言自語保留)`.
+- Current dashboard build: `v19.27 (穩定監看)`.
 - Boss-facing sequence must look like: photo appears, LLM self-talk types, the same photo appears as `處理中` in `辨識紀錄`, the completed narration stays visible until the next narration begins, then the parsed result appears after self-talk finishes.
 - Backend may process ahead, but the visible filename, preview, self-talk, and lower-left `辨識中` panel must all refer to the same displayed photo.
 - The lower-left panel must preserve the historical LLM record, including `[THINK]` summaries and final classification lines. Filter only raw `JSON Error`, initialization/debug messages, batch start/stop noise, and internal queue wording.
+- Do not let `圖片損壞`, `無法識別圖片格式`, stop/interruption messages, or queue maintenance logs fill the lower-left panel. If live logs are only noise, show readable recent `display_queue` summaries instead.
+- Never black out, dim, or collapse the main preview between photos. Keep the previous full-resolution photo visible until the next full-resolution image has loaded.
+- On a stop/idle transition, clear active live labels and narration state, but do not forcibly blank the visible photo. Showing `上一張畫面保留` is acceptable.
+- The right-side column must be wide enough for filenames on desktop and must stack below the preview on narrow windows. Do not squeeze the left photo/LLM area into a narrow vertical strip.
+- The right-side rerun action text is `再辨識`, not `重跑`.
 - If the local VLM repeats a token/spec endlessly, backend must close that stream and retry instead of letting the UI loop forever.
 - Large Drive uploads use rclone remote `samsung_ocr_drive` through `tools\rclone_drive_upload.py` or `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`; keep year-only folders and use the `_drive_upload\rclone_drive_upload.lock` guard.
 - If an rclone child stays on one batch without updating `drive_upload_uploaded.csv`, restart the uploader with a smaller batch such as `--limit 100` and keep `--rclone-timeout-seconds` enabled.
@@ -288,3 +305,4 @@ npm.cmd --prefix dashboard run build
 - Non-Codex users should use `SETUP_FIRST_TIME.bat`, `START_OCR.bat`, `START_FULL_AUTO_OCR.bat`, and `CHECK_STATUS.bat`. Do not tell ordinary users to type Python commands unless the BAT flow fails.
 - The dashboard main toolbar should expose safe continue/resume (`續跑`) for normal production work. Do not expose a global restart button to ordinary users, because `restart=true` purges OCR JSON history in the current source folder before rerunning.
 - If a production recursive run stalls with `name 'Path' is not defined`, ensure `skills/batch_orchestrator.py` imports `Path` from `pathlib`, restart the backend process, then resume with the recursive launcher and existing `_ocr_audit` state.
+- If `_ocr_audit\folder_summary.csv` suddenly contains only a few rows after a restart, rebuild it with `tools\rebuild_recursive_folder_summary.py --output-dir D:\00_商化\00_已OCR照片`, then restart `tools\recursive_ocr_flat_export.py` in normal resume mode. Never use `--no-resume` to recover this.

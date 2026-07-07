@@ -83,8 +83,32 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.25 (可讀節拍)";
+const UI_VERSION = "v19.27 (穩定監看)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
+
+const isReadableLmLogLine = (line) => {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  const noise = [
+    'JSON Error',
+    '初始化 Local LLM',
+    '正在分析圖片',
+    '已略過',
+    '現在硬碟上的成功數應已減少',
+    '個紀錄檔中移除',
+    '[Priority]',
+    '優先插隊',
+    '圖片損壞',
+    '永久跳過',
+    '無法識別圖片格式',
+    '文件損壞',
+    '載入圖片',
+    '收到停止指令',
+    '批次處理已被用戶中斷',
+    '━━━━━━━━'
+  ];
+  return !noise.some((part) => text.includes(part));
+};
 
 const App = () => {
   console.log("App: Component Initialize");
@@ -142,6 +166,8 @@ const App = () => {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewDrafts, setReviewDrafts] = useState({});
   const [reviewMsg, setReviewMsg] = useState('');
+  const stats = data.stats || defaultState.stats;
+  const isRunning = Boolean(data.is_running || stats.is_running);
 
   // Refs for auto-scroll
   const logsContainerRef = useRef(null);
@@ -292,6 +318,10 @@ const App = () => {
 
   // Copy completed backend items into a local queue before the backend list rolls.
   useEffect(() => {
+    if (!isRunning) {
+      latestDisplayQueueKeysRef.current = new Set();
+      return;
+    }
     const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
     latestDisplayQueueKeysRef.current = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
     if (incomingQueue.length === 0) return;
@@ -328,11 +358,12 @@ const App = () => {
         ? next.slice(next.length - MAX_PENDING_PRESENTATIONS)
         : next;
     });
-  }, [data.display_queue]);
+  }, [data.display_queue, isRunning]);
 
   // If the backend has already rolled past the visible item, fast-forward the
   // presentation layer instead of letting the boss-facing preview look frozen.
   useEffect(() => {
+    if (!isRunning) return;
     const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
     if (!activePresentation || incomingQueue.length < 45) return;
     const incomingKeys = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
@@ -346,7 +377,7 @@ const App = () => {
     setPendingQueue((prev) => prev
       .filter((item) => incomingKeys.has(item._queueKey))
       .slice(-MAX_LIVE_BACKLOG));
-  }, [data.display_queue, activePresentation?._queueKey]);
+  }, [data.display_queue, activePresentation?._queueKey, isRunning]);
 
   useEffect(() => {
     displayWatchdogRef.current = {
@@ -386,6 +417,28 @@ const App = () => {
     setActivePresentation(next);
   }, [activePresentation, pendingQueue]);
 
+  // Never show stale live state after a batch stops. The backend intentionally
+  // keeps the last current_file/current folder for audit visibility, but the
+  // boss-facing presentation must not mix that stale photo with old narration
+  // or right-side results.
+  useEffect(() => {
+    if (isRunning) return;
+    setPendingQueue([]);
+    setActivePresentation(null);
+    setDisplayedBuffer("");
+    setDisplayTargetKey("");
+    setTypewriterReady(false);
+    setImagePreparing(false);
+    setImageFailed(false);
+    setNarrationDisplay({
+      text: "",
+      key: "",
+      phase: "idle",
+      fileName: "",
+      nextFileName: ""
+    });
+  }, [isRunning]);
+
   const getDisplayTarget = () => {
     if (activePresentation) {
       return {
@@ -395,9 +448,9 @@ const App = () => {
       };
     }
     return {
-      target: data.stream_buffer || "",
+      target: isRunning ? (data.stream_buffer || "") : "",
       isQueue: false,
-      key: `live|${data.stream_file || data.current_file || ""}`
+      key: isRunning ? `live|${data.stream_file || data.current_file || ""}` : ""
     };
   };
 
@@ -495,25 +548,23 @@ const App = () => {
       setCurrentThumb(activePresentation.thumb_b64 || null);
       setCurrentImage(getResultImageSrc(activePresentation));
     } else {
-      const activeFile = data.current_file && data.current_file !== 'None' ? data.current_file : null;
+      const activeFile = isRunning && data.current_file && data.current_file !== 'None' ? data.current_file : null;
       if (activeFile) {
         setImageLoaded(false);
         setImageFailed(false);
         setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
         setCurrentThumb(data.current_thumb || null);
       } else {
-        setCurrentImage(null);
         setCurrentThumb(null);
         setImageFailed(false);
       }
     }
-  }, [activePresentation, data.current_file, data.current_thumb]);
+  }, [activePresentation, data.current_file, data.current_thumb, isRunning]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
   useEffect(() => {
     if (!currentImage) {
-      setVisibleImage(null);
       setImageLoaded(false);
       setImageFailed(false);
       setImagePreparing(false);
@@ -535,7 +586,6 @@ const App = () => {
     };
     img.onerror = () => {
       if (cancelled) return;
-      setVisibleImage(null);
       setImageLoaded(false);
       setImageFailed(true);
       setImagePreparing(false);
@@ -750,8 +800,6 @@ const App = () => {
       }
   };
 
-  const stats = data.stats || defaultState.stats;
-  const isRunning = Boolean(data.is_running || stats.is_running);
   const overallProgress = data.overall_progress || {};
   const overallTotal = Number(overallProgress.total_images || 0);
   const overallProcessed = Number(overallProgress.processed_images || 0);
@@ -763,6 +811,15 @@ const App = () => {
     _queueKey: getQueueKey(res) || `recent|${i}|${res.file_name || ""}`,
     _isCurrent: i === 0
   }));
+  const displayQueueHistoryItems = (Array.isArray(data.display_queue) ? data.display_queue : [])
+    .slice(-80)
+    .map((raw) => {
+      const item = normalizePresentationItem(raw);
+      return item;
+    })
+    .filter(Boolean)
+    .reverse()
+    .map((item, i) => ({ ...item, _isCurrent: i === 0 }));
   const showPendingResult = activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
   const activePendingResult = showPendingResult
     ? {
@@ -787,8 +844,11 @@ const App = () => {
   const pendingPanelResult = activePendingResult || livePendingResult;
   const rightPanelItems = (isRunning || revealedResults.length > 0)
     ? (pendingPanelResult ? [pendingPanelResult, ...revealedResults] : revealedResults)
-    : historicalPanelItems;
-  const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
+    : (historicalPanelItems.length > 0 ? historicalPanelItems : displayQueueHistoryItems);
+  const displayedFileName = activePresentation?.file_name || (isRunning ? (data.stream_file || data.current_file || "-") : (visibleImage ? "上一張畫面保留" : "-"));
+  const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
+  const currentFolderLabel = isRunning ? (data.current_relative_dir || data.image_dir || "-") : "-";
+  const currentFileLabel = isRunning && data.current_file && data.current_file !== "None" ? data.current_file : "-";
   const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 LLM 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
@@ -801,6 +861,17 @@ const App = () => {
       : narrationPhase === "warming"
         ? "照片已切換 · 等待 LLM 開始輸出"
         : "上一張摘要保留中 · 下一張判讀中";
+  const cleanLmLogLines = (data.lm_logs || []).filter(isReadableLmLogLine);
+  const queueHistoryLines = (Array.isArray(data.display_queue) ? data.display_queue : [])
+    .slice(-36)
+    .map((raw) => normalizePresentationItem(raw))
+    .filter(Boolean)
+    .flatMap((item) => {
+      const summary = getQueueDisplayText(item);
+      const verdict = `判斷是${item.view_type || item.category || '照片'}：${item.model || '(無型號)'} / ${formatDisplayPrice(item.price)}`;
+      return summary ? [`▶️ ${item.file_name}`, verdict, `[THINK] ${summary}`] : [`▶️ ${item.file_name}`, verdict];
+    });
+  const visibleLogLines = cleanLmLogLines.length >= 3 ? cleanLmLogLines : queueHistoryLines;
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
@@ -816,7 +887,7 @@ const App = () => {
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       {/* 1. Header */}
-      <header style={{ height: '50px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', borderBottom: '1px solid #333', background: '#111' }}>
+      <header className="app-header" style={{ height: '50px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', borderBottom: '1px solid #333', background: '#111' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Activity color="#00f5ff" size={24} />
               <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff', background: 'none', WebkitBackgroundClip: 'initial', WebkitTextFillColor: 'initial' }}>
@@ -855,57 +926,79 @@ const App = () => {
       )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
-            <div style={{ padding: '8px 16px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-               <span style={{fontSize:'0.75rem', color:'#aaa'}}>📁 來源根目錄:</span>
-                {isRunning && data.image_dir ? (
-                 <>
-                   <span style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.source_root || 'D:\\00_商化\\00_未整理商化照片'}>
-                     {data.source_root || 'D:\\00_商化\\00_未整理商化照片'}
-                   </span>
-                   <span style={{fontSize:'0.75rem', color:'#aaa'}}>目前資料夾:</span>
-                   <span style={{ color: '#fbbf24', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.image_dir}>
-                     {data.current_relative_dir || data.image_dir}
-                   </span>
-                 </>
-               ) : (
-               <select
-                   value={targetDir}
-                   onChange={(e)=>setTargetDir(e.target.value)}
-                   style={{
-                       background: '#111', border: '1px solid #444', color: '#00f5ff',
-                       padding: '3px 6px', fontSize: '0.75rem', borderRadius: '3px', width: '180px'
-                   }}
-               >
-                   {availableDirs.map(d => <option key={d} value={d}>{d}</option>)}
-                   {targetDir && !availableDirs.includes(targetDir) && <option value={targetDir}>{targetDir}</option>}
-               </select>
-               )}
+            <div style={{ padding: '10px 14px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}>
+              <div className="status-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 0.9fr) minmax(280px, 1fr) minmax(320px, 1.25fr) auto', gap: '14px', alignItems: 'center', minWidth: 0 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.62rem', color: '#8a8a8a', marginBottom: '2px' }}>來源根目錄</div>
+                  <div style={{ color: '#00f5ff', fontSize: '0.75rem', fontFamily: 'JetBrains Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sourceRootLabel}>
+                    {sourceRootLabel}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.62rem', color: '#8a8a8a', marginBottom: '2px' }}>目前資料匣</div>
+                  <div data-testid="status-current-folder" style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: 800, fontFamily: 'JetBrains Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.image_dir || currentFolderLabel}>
+                    {currentFolderLabel}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.62rem', color: '#8a8a8a', marginBottom: '2px' }}>目前檔案</div>
+                  <div style={{ color: '#e5e7eb', fontSize: '0.74rem', fontFamily: 'JetBrains Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={currentFileLabel}>
+                    {currentFileLabel}
+                  </div>
+                </div>
+                <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: '8px', minWidth: '118px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#f97316', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }} />
+                  <span style={{ color: isRunning ? '#d1fae5' : '#fed7aa', fontSize: '0.75rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                    {isRunning ? '正在執行' : '待機中'}
+                  </span>
+                </div>
+              </div>
 
-                <button onClick={() => handleStart(false)} disabled={isRunning}
-                    style={{ background: isRunning ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: isRunning?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                    <Play size={12} /> 續跑
-                </button>
-               <button onClick={handleStop}
-                   style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                   <Square size={12} /> 停止
-               </button>
-               <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')}
-                   style={{ background: '#6366f1', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                   <AlertCircle size={12} /> 失敗記錄 ({stats.failed})
-               </button>
-               <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
-                   style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                   <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
-               </button>
-               <button onClick={openReviewPanel}
-                   style={{ background: '#f59e0b', color: '#111', border:'1px solid #333', padding:'4px 10px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                   <AlertCircle size={12} /> 待人工校正
-               </button>
-               {controlMsg && <span style={{fontSize:'0.7rem', marginLeft:'5px'}}>{controlMsg}</span>}
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                {!isRunning && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '260px', maxWidth: '520px', flex: '1 1 320px' }}>
+                    <span style={{ fontSize: '0.68rem', color: '#9ca3af', fontWeight: 800, whiteSpace: 'nowrap' }}>起始資料匣</span>
+                    <select
+                      value={targetDir}
+                      onChange={(e)=>setTargetDir(e.target.value)}
+                      style={{
+                        background: '#111', border: '1px solid #444', color: '#00f5ff',
+                        padding: '4px 6px', fontSize: '0.75rem', borderRadius: '3px', width: '100%', minWidth: 0
+                      }}
+                    >
+                      {availableDirs.map(d => <option key={d} value={d}>{d}</option>)}
+                      {targetDir && !availableDirs.includes(targetDir) && <option value={targetDir}>{targetDir}</option>}
+                    </select>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginLeft: 'auto' }}>
+                  <button onClick={() => handleStart(false)} disabled={isRunning}
+                      style={{ background: isRunning ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: isRunning?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                      <Play size={12} /> 續跑
+                  </button>
+                 <button onClick={handleStop}
+                     style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                     <Square size={12} /> 停止
+                 </button>
+                 <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')}
+                     style={{ background: '#6366f1', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                     <AlertCircle size={12} /> 失敗記錄 ({stats.failed})
+                 </button>
+                 <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
+                     style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                     <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
+                 </button>
+                 <button onClick={openReviewPanel}
+                     style={{ background: '#f59e0b', color: '#111', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                     <AlertCircle size={12} /> 待人工校正
+                 </button>
+                 {controlMsg && <span style={{fontSize:'0.7rem', marginLeft:'5px'}}>{controlMsg}</span>}
+               </div>
+              </div>
            </div>
 
-           <div style={{ flex: 1, display: 'flex', gap: '8px', overflow: 'hidden' }}>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
+            <div className="monitor-workspace" style={{ flex: 1, display: 'flex', gap: '10px', overflow: 'hidden' }}>
+              <div className="main-monitor-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ flex: '0 0 50%', position: 'relative', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
                       <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
                           <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}>
@@ -925,7 +1018,7 @@ const App = () => {
                                           <span style={{fontSize:'0.75rem'}}>照片載入中</span>
                                       </div>
                                   )}
-                                  {visibleImage && !imageFailed && <img key={visibleImage} src={visibleImage} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
+                                  {visibleImage && <img key={visibleImage} src={visibleImage} data-testid="main-preview-image" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
                                   {imageFailed && !visibleImage && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
@@ -992,12 +1085,11 @@ const App = () => {
                        </div>
 
                       {/* 2. Bottom Pane: System Logs / History */}
-                      <div style={{ flex: 1, overflowY: 'auto' }}>
-                          {data.lm_logs?.length > 0 ? (
-                               [...data.lm_logs]
-                                .filter(line => !line.includes('JSON Error') && !line.includes('初始化 Local LLM') && !line.includes('正在分析圖片') && !line.includes('已略過') && !line.includes('現在硬碟上的成功數應已減少') && !line.includes('個紀錄檔中移除'))
-                               .reverse()
-                               .map((line, i) => {
+                      <div style={{ flex: 1, overflowY: 'auto' }} data-testid="llm-history-log">
+                          {visibleLogLines.length > 0 ? (
+                               [...visibleLogLines]
+                                .reverse()
+                                .map((line, i) => {
                                   const isThink = line.includes('[THINK]');
                                   let content = line;
                                   let icon = null;
@@ -1044,15 +1136,15 @@ const App = () => {
                                   );
                               })
                           ) : (
-                               <div style={{textAlign:'center', marginTop:'10%', color:'#222', fontSize:'0.7rem'}}>無歷史紀錄</div>
+                               <div style={{textAlign:'center', marginTop:'10%', color:'#4b5563', fontSize:'0.76rem'}}>等待下一段辨識紀錄</div>
                           )}
                           <div ref={logsEndRef} />
                       </div>
                   </div>
               </div>
 
-              <div style={{ width: '280px', display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
-                  <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'4px' }}>
+              <div className="result-sidebar" style={{ width: 'clamp(460px, 34vw, 640px)', minWidth: '420px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
+                  <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
                         {l:'成功', v:stats.success, c:'#22c55e'}, {l:'失敗', v:stats.failed, c:'#ef4444'},
                         {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'}, {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
@@ -1080,17 +1172,20 @@ const App = () => {
                         </div>
                       )}
 
-                      <div style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.8rem', fontWeight: 'bold', display:'flex', alignItems:'center', gap:'4px', color: '#888' }}>
+                      <div style={{ padding: '8px 10px', borderBottom: '1px solid #333', fontSize: '0.82rem', fontWeight: 'bold', display:'flex', alignItems:'center', justifyContent: 'space-between', gap:'8px', color: '#a1a1aa' }}>
+                          <span style={{display:'flex', alignItems:'center', gap:'4px'}}>
                           <Zap size={12} color="#f59e0b"/> 辨識紀錄
+                          </span>
+                          <span style={{fontSize:'0.68rem', color:'#64748b', fontWeight:700}}>最新結果在上方</span>
                       </div>
-                      <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }} data-testid="result-rail">
                           {/* [v19.10] Right panel follows the presentation queue, not the faster backend. */}
                           {rightPanelItems.map((res, i) => (
-                             <div key={res._queueKey || `${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '4px', padding: '6px', marginBottom:'6px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
-                                 <div style={{ display: 'flex', gap: '6px' }}>
-                                     <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
-                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                         <div style={{ color: '#fff', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.file_name}</div>
+                             <div data-testid="result-card" key={res._queueKey || `${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                                  <div style={{ display: 'flex', gap: '8px' }}>
+                                      <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.25, minHeight: '2.9em', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', wordBreak: 'break-all' }}>{res.file_name}</div>
                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
@@ -1102,11 +1197,11 @@ const App = () => {
                                             </div>
                                          )}
                                          {!res._pendingReveal && res.view_type !== '遠景' && (
-                                            <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', alignItems: 'center', marginTop: '2px', width: '100%', columnGap: '8px' }}>
-                                                <div style={{ fontSize: '0.7rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) auto', alignItems: 'center', marginTop: '3px', width: '100%', columnGap: '10px' }}>
+                                                <div style={{ fontSize: '0.76rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {res.model || (res.category?.startsWith('不合格') ? res.category.replace('不合格-', '') : '(無型號)')}
                                                 </div>
-                                                <div style={{ fontSize: '0.7rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                <div style={{ fontSize: '0.76rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
                                                     {formatDisplayPrice(res.price)}
                                                     {res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                         <span
@@ -1127,7 +1222,7 @@ const App = () => {
                                          )}
                                           <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
                                              {!res._pendingReveal && <button
-                                                 title="重新辨識"
+                                                  title="再辨識"
                                                  onClick={(e) => {
                                                      e.stopPropagation();
                                                      setRerunQueue(prev => ({...prev, [res.file_name]: true}));
@@ -1159,13 +1254,13 @@ const App = () => {
                                                      background: rerunQueue[res.file_name] ? '#374151' : '#1f2937',
                                                      border: '1px solid #4b5563',
                                                      borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer',
-                                                     padding: '0 4px',
-                                                     color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
-                                                     fontSize: '0.6rem', display: 'flex', alignItems: 'center'
-                                                 }}
-                                             >
-                                                 {rerunQueue[res.file_name] ? '已排隊' : '重跑'}
-                                             </button>}
+                                                      padding: '1px 6px',
+                                                      color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
+                                                      fontSize: '0.66rem', display: 'flex', alignItems: 'center'
+                                                  }}
+                                              >
+                                                  {rerunQueue[res.file_name] ? '已排隊' : '再辨識'}
+                                              </button>}
                                             {!res._pendingReveal && res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
                                             {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
                                             {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
@@ -1556,6 +1651,59 @@ const App = () => {
            color: #ffffff;
            margin-left: 2px;
          }
+        .monitor-workspace,
+        .main-monitor-panel,
+        .result-sidebar,
+        .log-wall {
+          min-width: 0;
+          min-height: 0;
+        }
+        @media (min-width: 1600px) {
+          .result-sidebar {
+            width: clamp(500px, 34vw, 680px) !important;
+            min-width: 480px !important;
+          }
+        }
+        @media (max-width: 1200px) {
+          .app-header {
+            height: auto !important;
+            min-height: 50px;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 12px !important;
+          }
+          .monitor-workspace {
+            flex-direction: column !important;
+            overflow-y: auto !important;
+          }
+          .main-monitor-panel {
+            flex: 0 0 auto !important;
+            height: clamp(640px, calc(100vh - 170px), 760px) !important;
+            min-height: 640px !important;
+          }
+          .result-sidebar {
+            width: 100% !important;
+            min-width: 0 !important;
+            min-height: 500px !important;
+            flex: 0 0 auto !important;
+          }
+          .status-grid {
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+          }
+        }
+        @media (max-width: 720px) {
+          .app-header > div:last-child {
+            width: 100%;
+            justify-content: space-between;
+            gap: 10px !important;
+          }
+          .app-header > div:last-child > div:nth-child(2) {
+            width: min(100%, 330px) !important;
+          }
+          .status-grid {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
        `}</style>
      </div>
    );

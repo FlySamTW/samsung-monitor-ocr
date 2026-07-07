@@ -196,6 +196,9 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         if args.dry_run:
             command.append("--dry-run")
         rc = run_command(command, args.log_path, execute=args.execute, timeout_seconds=args.rclone_timeout_seconds)
+        if rc == 124 and args.continue_on_timeout:
+            print("[upload] timeout treated as retryable; next cycle will resume with --ignore-existing", flush=True)
+            return len(year_rows)
         if rc != 0:
             raise SystemExit(rc)
 
@@ -244,6 +247,13 @@ def main() -> int:
     )
     parser.add_argument("--execute", action="store_true", help="Actually upload. Without this, only print commands.")
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to rclone.")
+    parser.add_argument(
+        "--stop-on-timeout",
+        dest="continue_on_timeout",
+        action="store_false",
+        help="Exit when one rclone batch times out. Default keeps retrying so unattended uploads do not stall.",
+    )
+    parser.set_defaults(continue_on_timeout=True)
     args = parser.parse_args()
 
     args.output_dir = Path(args.output_dir).resolve()
