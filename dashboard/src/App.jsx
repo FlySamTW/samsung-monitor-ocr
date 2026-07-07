@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.23 (舞台節拍)";
+const UI_VERSION = "v19.24 (揭露節拍)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -277,10 +277,11 @@ const App = () => {
 
   useEffect(() => {
     if (!displayedBuffer) return;
+    const phase = revealedKeysRef.current.has(displayTargetKey) ? "revealed" : "typing";
     setNarrationDisplay({
       text: displayedBuffer,
       key: displayTargetKey,
-      phase: "typing",
+      phase,
       fileName: activePresentation?.file_name || data.stream_file || data.current_file || ""
     });
   }, [displayedBuffer, displayTargetKey, activePresentation?.file_name, data.stream_file, data.current_file]);
@@ -457,6 +458,7 @@ const App = () => {
       const item = { ...activePresentation, _isCurrent: true };
       if (!revealedKeysRef.current.has(item._queueKey)) {
         revealedKeysRef.current.add(item._queueKey);
+        setNarrationDisplay((prev) => prev.text ? { ...prev, phase: "revealed" } : prev);
         setRevealedResults((prev) => {
           const cleaned = prev
             .filter((res) => res._queueKey !== item._queueKey)
@@ -466,7 +468,6 @@ const App = () => {
       }
       const revealHoldMs = pendingQueue.length > 20 ? 520 : 1100;
       releaseTimer = setTimeout(() => {
-        setNarrationDisplay((prev) => prev.text ? { ...prev, phase: "revealed" } : prev);
         setActivePresentation(null);
         setDisplayedBuffer("");
         isAdvancingRef.current = false;
@@ -785,12 +786,14 @@ const App = () => {
     : historicalPanelItems;
   const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
   const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 LLM 輸出..." : "");
-  const narrationPhase = displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
+  const narrationPhase = narrationDisplay.phase === "revealed"
+    ? "revealed"
+    : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
   const isHeldNarration = narrationPhase !== "typing";
   const narrationStatusLabel = narrationPhase === "typing"
     ? "LLM 即時判讀中"
     : narrationPhase === "revealed"
-      ? "本張摘要完成 · 下一張判讀準備中"
+      ? "本張摘要完成 · 右側結果已揭露"
       : narrationPhase === "warming"
         ? "照片已切換 · 等待 LLM 開始輸出"
         : "上一張摘要保留中 · 下一張判讀中";

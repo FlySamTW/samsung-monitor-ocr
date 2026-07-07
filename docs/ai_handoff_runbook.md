@@ -367,5 +367,6 @@ Current UI contract: the monitor must look smooth to supervisors. The photo, LLM
 - Frontend version `v19.23 (舞台節拍)` separates the visible LLM text (`narrationDisplay`) from the internal typing cursor (`displayedBuffer`).
 - When advancing, catching up, or waiting for the next LLM stream, do not blank the LLM pane. Keep the previous narration visible with a calm handoff label until new typing begins.
 - Right-side records may show the current photo as "processing", but model/price/status are revealed only after self-talk finishes.
+- When model/price/status are revealed, the LLM label must switch to a completed/revealed state in the same beat.
 - If the backend runs ahead, drop stale display-only queue items and keep moving; never solve lag by showing an empty black LLM block.
 - Verification must include actual browser observation, not only `npm run build`.

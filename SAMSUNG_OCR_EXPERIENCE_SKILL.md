@@ -35,6 +35,8 @@ The dashboard is judged by viewers before they understand the backend. Treat the
 - The visible LLM pane must be independent from the internal typing cursor. Clearing `displayedBuffer` for the next item must never create a black or empty self-talk area.
 - During the gap between photos, keep the previous narration visible with a calm status label such as "previous summary held / next photo judging".
 - The sequence is a visual contract: new photo appears, the LLM pane immediately has either held narration or live typing, then the right-side result is revealed.
+- At the exact moment the right-side model/price/status is revealed, the LLM pane label must switch from "live judging" to a completed/revealed state. Never show "LLM is still judging" while the formal result is already visible.
+- Once a stable queue key has been revealed, later buffer updates for that same key must not downgrade the visible phase back to "typing/live judging".
 - If the backend runs ahead, catch up by trimming or dropping stale display-only queue items, not by blanking the LLM area.
 - A UI that looks paused, black, or mismatched is a product failure even when OCR files are correct. Fix presentation defects with the same urgency as OCR correctness defects.
 
