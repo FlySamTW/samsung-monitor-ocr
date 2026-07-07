@@ -16,6 +16,9 @@
 - `START_OCR.bat`: 啟動 OCR dashboard，開啟 `http://127.0.0.1:5000/`。
 - `START_FULL_AUTO_OCR.bat`: 從來源資料夾往下遞迴處理，輸出到平面 OCR 照片資料夾。
 - `CHECK_STATUS.bat`: 查看後端、目前資料夾、目前檔案、成功/失敗數。
+- `INSTALL_WATCHDOG_TASK.bat`: 安裝每 4 小時自動檢查/續跑 OCR 與上傳的 Windows 工作排程。
+
+`INSTALL_WATCHDOG_TASK.bat` 會建立 `SamsungOCR_PipelineWatchdog`。它只會補起已停止的 OCR 接力器、可疑照片重跑等待器、Google Drive 上傳器，並保留已完成資料；它不會清空歷史，也不會用 restart/no-resume。
 
 ## 修改來源與輸出路徑
 

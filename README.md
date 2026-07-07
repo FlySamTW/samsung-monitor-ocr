@@ -41,6 +41,7 @@
 | tools/photo_rename_planner.py | 依 OCR 結果產生照片改名計畫，預設不改照片 |
 | tools/recursive_ocr_flat_export.py | 遞迴接力 OCR，完成後複製改名照片到單一資料夾 |
 | tools/recursive_ocr_audit_report.py | 驗收遞迴接力輸出是否完整 |
+| INSTALL_WATCHDOG_TASK.bat | 安裝每 4 小時自動續跑 OCR / 上傳的 Windows 排程 |
 | docs/ai_handoff_runbook.md | 另一台電腦上的 AI 接手執行手冊 |
 
 ## 🏷️ 歷年照片改名規格
@@ -280,6 +281,7 @@ The repo intentionally includes only the small portable sample set at `samples/o
 2. 平常開 dashboard 雙擊 `START_OCR.bat`
 3. 要整批遞迴 OCR 並輸出平面照片，雙擊 `START_FULL_AUTO_OCR.bat`
 4. 查目前狀態，雙擊 `CHECK_STATUS.bat`
+5. 要讓電腦每 4 小時自動檢查並安全續跑 OCR/上傳，雙擊 `INSTALL_WATCHDOG_TASK.bat`
 
 設定來源與輸出資料夾請改 `user_settings.cmd`。完整說明見 `docs/user_quick_start.md`。
 
@@ -292,3 +294,4 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - If OCR runs faster than the display animation, the dashboard may fast-forward stale display-only queue items and trim long self-talk so the main preview does not look frozen.
 - This fast-forward is visual only. It must never delete OCR records, copied output photos, or audit rows.
 - Google Drive upload progress is separate. Check `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json` for uploaded, ready-pending, and review-required counts.
+- Unattended production machines should install `SamsungOCR_PipelineWatchdog` with `INSTALL_WATCHDOG_TASK.bat`. It runs every 4 hours, preserves existing audit/output state, restarts only missing OCR/upload helpers, and never uses `--no-resume`.

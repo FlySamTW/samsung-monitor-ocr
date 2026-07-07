@@ -383,3 +383,13 @@ If `folder_summary.csv` shrinks after restarting recursive OCR, do not restart f
 ```
 
 Then restart `tools\recursive_ocr_flat_export.py` in normal resume mode. Keep rclone upload running unless the uploader itself is failing.
+
+## 2026-07-07 unattended watchdog
+
+This machine now has a Windows scheduled task named `SamsungOCR_PipelineWatchdog`.
+
+- Installer: `INSTALL_WATCHDOG_TASK.bat`
+- Script: `tools\ocr_upload_watchdog.ps1`
+- Interval: every 4 hours
+- Behavior: preserve audit/output state, rebuild a shrunk `folder_summary.csv`, start the backend only if missing, start recursive OCR only if no runner is active and work remains, ensure exactly one questionable-rerun watcher, and start rclone upload only if ready rows remain and no uploader/rclone is active.
+- It must never use `--no-resume`, clear `_ocr_audit`, delete output photos, or upload `review_required` rows.
