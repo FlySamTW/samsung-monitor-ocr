@@ -148,43 +148,44 @@ $env:OCR_NO_PAUSE = "1"
 守門失敗時，不要直接改全域 Prompt；先確認是否是模型版本、圖片裁切、後處理或特定案例標準答案問題。
 # Dashboard Live Sync Contract (2026-07-01)
 
-When changing the live dashboard, keep the preview, LLM self-talk, and OCR result scoped by filename:
+When changing the live dashboard, keep the preview, AI narration, and OCR result scoped by filename:
 
 - `current_file` is the active photo and owns the main preview.
 - `stream_file` is the active photo that owns `stream_buffer`.
 - `latest_result_file` is only the newest completed result for history/side panels.
 
-Never use `recent_results[0]` to drive the main preview during a running batch. It is normally the previous completed image, while `current_file` has already advanced to the next image. The frontend should change the preview only when `current_file` changes, and should blank live self-talk unless `stream_file === current_file`.
+Never use `recent_results[0]` to drive the main preview during a running batch. It is normally the previous completed image, while `current_file` has already advanced to the next image. The frontend should change the preview only when `current_file` changes, and should blank live AI narration unless `stream_file === current_file`.
 
 # Dashboard Presentation Queue Contract (2026-07-06)
 
 The live monitor is supervisor-facing, so it must look alive without mixing metadata between photos.
 
 - `dashboard/src/App.jsx` owns a frontend presentation queue: `pendingQueue`, `activePresentation`, and `revealedResults`.
-- `narrationDisplay` is the user-visible stage text and must not be cleared just because the internal typing buffer is reset. This prevents the LLM pane from becoming a black empty block while the backend judges the next photo.
-- The right panel must only show `revealedResults` while OCR is running. `recent_results` is allowed only as an idle historical fallback.
+- `narrationDisplay` is the user-visible stage text and must not be cleared just because the internal typing buffer is reset. This prevents the AI narration pane from becoming a black empty block while the backend judges the next photo.
+- The right panel should show `revealedResults` first while OCR is running, and may backfill older self-contained `display_queue` items below the active placeholder so long-running sessions do not lose the thumbnail stack. `recent_results` is allowed only as an idle historical fallback.
 - Each completed item needs a stable queue key: `presentation_id`, then `completed_at + file_name`, then `source_path`, then `file_name`.
-- Long self-talk is trimmed for display. This is presentation-only and must not alter OCR audit data.
+- Long AI narration is trimmed for display. This is presentation-only and must not alter OCR audit data.
 - When the backend display queue is full and the frontend is behind, discard stale display-only queue items that no longer appear in the backend's latest queue. Otherwise the preview looks frozen on old photos.
 - A watchdog clears a stale `activePresentation` if the displayed text stops advancing for several seconds.
 - The main preview `<img>` must use `key={currentImage}` so image changes force a real remount.
-- UI polish is a correctness gate. The expected stage rhythm is photo visible -> held or live LLM narration visible -> typewriter completes -> right-side result reveal. Never trade this rhythm for a raw "latest result" jump.
-- When right-side model/price/status appears, the LLM label must already say the summary is complete/revealed. A "still judging" label beside a revealed result is considered out of sync.
+- UI polish is a correctness gate. The expected stage rhythm is photo visible -> held or live AI narration visible -> typewriter completes -> right-side result reveal. Never trade this rhythm for a raw "latest result" jump.
+- When right-side model/price/status appears, the AI label must already say the summary is complete/revealed. A "still judging" label beside a revealed result is considered out of sync.
 - Do not let later `displayedBuffer` updates downgrade a revealed queue key back to a typing/live-judging label.
-- Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make self-talk flash too quickly during high-throughput batches.
+- Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make AI narration flash too quickly during high-throughput batches.
+- User-facing UI copy must say `AI`, never `LLM`, and must never expose the old four-character internal shorthand (`自言` + `自語`). Use labels such as `AI 即時判讀中`, `照片已切換 · 等待 AI 開始輸出`, and `本張摘要完成 · 右側結果已揭露`.
 
 # Dashboard Sync No-Regression Contract (2026-07-07)
 
 This project has repeatedly regressed the live monitor. Treat the following as a hard engineering contract, not a suggestion.
 
-- The main photo, visible LLM self-talk, and right-side thumbnail/result must always come from the same stable queue key.
-- Keep the staged time-gap illusion: while the user watches photo A and its self-talk, the backend may already process photo B. Photo B must not appear in the right-side result list until B's own self-talk has visibly completed.
+- The main photo, visible AI narration, and right-side thumbnail/result must always come from the same stable queue key.
+- Keep the staged time-gap illusion: while the user watches photo A and its AI narration, the backend may already process photo B. Photo B must not appear as the active top result until B's own AI narration has visibly completed.
 - Do not remove the frontend-owned queue (`pendingQueue`, `activePresentation`, `revealedResults`) when optimizing speed. Raw backend `recent_results` is too fast and will desynchronize the screen.
 - Never drive the main preview from `recent_results[0]` during a running batch.
 - The right panel may show a pending placeholder for the active item, but it must not reveal model/price/status early.
 - Do not blank, dim, or replace the main photo between items. Keep the previous full-resolution photo visible until the next full-resolution photo has loaded.
 - When a batch is stopped, between folders, or idle, do not display stale backend `current_file`, `current_relative_dir`, `stream_buffer`, or old live narration as if it were active. Idle state may show history, but it must not pretend a stale photo is currently being judged.
-- If you change dashboard timing, run a browser check after a rebuild: confirm the visible sequence is photo -> LLM self-talk -> right-side result, and confirm stopping a batch clears live current photo/file instead of showing a stale old folder.
+- If you change dashboard timing, run a browser check after a rebuild: confirm the visible sequence is photo -> AI narration -> right-side result, and confirm stopping a batch clears live current photo/file instead of showing a stale old folder.
 - If any change breaks this contract, revert or fix the UI before touching OCR logic or upload scripts. A visually mismatched monitor is a production bug.
 
 # Overall Progress Contract (2026-07-06)
@@ -192,19 +193,20 @@ This project has repeatedly regressed the live monitor. Treat the following as a
 `/api/status` returns `overall_progress` so the dashboard can show total OCR progress across all discovered source folders.
 
 - Backend aggregation reads `_ocr_audit/folder_discovery.csv`, `_ocr_audit/folder_summary.csv`, missing-result rerun summaries, and live active-folder stats.
+- `overall_progress.next_pending_folder` must exclude `blocked`, `skipped_blocked`, and `error` rows. Expose blocked work separately as `next_blocked_folder` so the dashboard does not imply a blocked historical folder is the next runnable folder.
 - Frontend must display both global progress and current-folder progress.
 - Do not let the browser scan the source tree or output folder on every poll.
 - Google Drive upload progress is separate and comes from `_drive_upload/drive_upload_summary.json`.
 
-# Dashboard v19.27 Monitor Layout Contract (2026-07-07)
+# Dashboard v19.29 Monitor Layout Contract (2026-07-07)
 
 The dashboard is boss-facing and must remain visually stable during long runs.
 
-- Current dashboard build is `v19.27 (穩定監看)`.
+- Current dashboard build is `v19.29 (AI判讀視覺微調)`.
 - Never black out, dim, or collapse the main preview between photos. Keep the previous full-resolution photo visible until the next full-resolution `/api/image/<source_path>` image has loaded.
 - When a batch stops or changes folders, clear active live labels/narration state, but do not forcibly set the visible photo to blank. The idle filename may say `上一張畫面保留`.
-- The LLM lower history pane must always contain readable history. Filter backend noise such as `圖片損壞`, `無法識別圖片格式`, `JSON Error`, stop/interruption messages, and internal queue wording. If `lm_logs` only contains noise, fall back to recent `display_queue` summaries.
-- The right-side `辨識紀錄` column is intentionally wider on desktop (`result-sidebar`) so filenames are readable. On narrow windows, the layout must stack vertically instead of squeezing the left preview/LLM pane into a few pixels.
+- The AI lower history pane must always contain readable history. Filter backend noise such as `圖片損壞`, `無法識別圖片格式`, `JSON Error`, stop/interruption messages, and internal queue wording. If `lm_logs` only contains noise, fall back to recent `display_queue` summaries.
+- The right-side `辨識紀錄` column must remain on the right side of the desktop monitor layout, but it must not dominate the main photo. Keep it bounded around 360-430 px on normal desktop widths, with two/three-line filenames and hover titles instead of making the whole rail excessively wide. This project is operated from a GPU workstation, not a phone UI; do not add responsive rules that push the result sidebar below the preview.
 - Right-side action text is `再辨識`, not `重跑`.
 - If a UI rebuild changes these surfaces, refresh the browser and verify in the real app:
   - `status-current-folder` shows the current folder.
@@ -250,7 +252,7 @@ The dashboard is boss-facing and must remain visually stable during long runs.
   - Rerun button text changed from icon to `重跑`.
   - Price compare badge should render only when `price_symbol` exists.
   - Unknown price tooltip says Samsung/PChome lookup needs confirmation.
-  - `辨識紀錄` must be delayed until the photo's LLM self-talk has finished typing. Do not show parsed thumbnail results for the current queue item while its self-talk is still playing.
+  - `辨識紀錄` must be delayed until the photo's AI narration has finished typing. Do not show parsed thumbnail results for the current queue item while its AI narration is still playing.
 
 - `tools/repair_current_year_price_compare_outputs.py`
   - Repairs existing current-year outputs using audit records without rerunning OCR.
@@ -284,12 +286,12 @@ The dashboard is boss-facing and must remain visually stable during long runs.
 
 ## Dashboard Presentation Rule
 
-- Current production dashboard is `v19.22 (自言自語保留)`.
-- Boss-facing order must remain: photo first, LLM self-talk second, parsed thumbnail/result last.
-- As soon as a photo is visible in the main preview, the top row of `辨識紀錄` must show that same photo as a `處理中 / 等待自言自語完成` placeholder until parsed metadata is allowed to appear. Do not leave the previous completed result at the top, because users read that as a metadata mismatch.
-- Parsed model/price/status badges for the current photo may appear only after that same photo's self-talk has finished.
-- The LLM/self-talk pane must never go blank during normal running. If the next photo is loading or the next narration has not started, keep the previous completed narration visible as a softened previous-summary state until new text begins.
-- The lower-left panel must always stay presentable and must preserve the historical LLM record (`[THINK]` summaries and final classification lines). Never replace it with blank space or result summaries only; filter only raw `JSON Error`, initialization/debug wording, and internal playback wording.
+- Current production dashboard is `v19.29 (AI判讀視覺微調)`.
+- Boss-facing order must remain: photo first, AI narration second, parsed thumbnail/result last.
+- As soon as a photo is visible in the main preview, the top row of `辨識紀錄` must show that same photo as a `處理中 / AI 即時判讀中` placeholder until parsed metadata is allowed to appear. Do not leave the previous completed result at the top, because users read that as a metadata mismatch.
+- Parsed model/price/status badges for the current photo may appear only after that same photo's AI narration has finished.
+- The AI narration pane must never go blank during normal running. If the next photo is loading or the next narration has not started, keep the previous completed narration visible as a softened previous-summary state until new text begins.
+- The lower-left panel must always stay presentable and must preserve the historical AI judgment record (`[THINK]` summaries and final classification lines). Never replace it with blank space or result summaries only; filter only raw `JSON Error`, initialization/debug wording, and internal playback wording.
 
 ## Remaining Work
 

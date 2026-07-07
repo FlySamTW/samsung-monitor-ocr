@@ -903,8 +903,21 @@ def build_overall_progress(current_folder=None, current_stats=None) -> dict:
         1 for item in folders
         if _safe_int(item.get("image_count")) > 0 and _safe_int(item.get("processed")) >= _safe_int(item.get("image_count"))
     )
+    blocked_statuses = {"blocked", "skipped_blocked", "error"}
     next_pending = next(
-        (item for item in folders if _safe_int(item.get("processed")) < _safe_int(item.get("image_count"))),
+        (
+            item for item in folders
+            if item.get("status") not in blocked_statuses
+            and _safe_int(item.get("processed")) < _safe_int(item.get("image_count"))
+        ),
+        None
+    )
+    next_blocked = next(
+        (
+            item for item in folders
+            if item.get("status") in blocked_statuses
+            and _safe_int(item.get("processed")) < _safe_int(item.get("image_count"))
+        ),
         None
     )
 
@@ -921,6 +934,7 @@ def build_overall_progress(current_folder=None, current_stats=None) -> dict:
         "percent": round((processed_images / total_images) * 100, 2) if total_images else 0,
         "current_folder": current_folder_info,
         "next_pending_folder": next_pending,
+        "next_blocked_folder": next_blocked,
     }
 
 

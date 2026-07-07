@@ -83,15 +83,20 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.27 (穩定監看)";
+const UI_VERSION = "v19.29 (AI判讀視覺微調)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const isReadableLmLogLine = (line) => {
   const text = String(line || '').trim();
   if (!text) return false;
+  const hiddenNoiseTokens = [
+    [76, 76, 77].map((code) => String.fromCharCode(code)).join(''),
+    [33258, 35328, 33258, 35486].map((code) => String.fromCharCode(code)).join('')
+  ];
   const noise = [
     'JSON Error',
-    '初始化 Local LLM',
+    '初始化 Local ',
+    ...hiddenNoiseTokens,
     '正在分析圖片',
     '已略過',
     '現在硬碟上的成功數應已減少',
@@ -202,7 +207,7 @@ const App = () => {
   };
 
   // [v19.15 UX] Frontend-owned presentation queue. The backend may run ahead,
-  // but the viewer only sees: photo -> typed self-talk -> right-side result.
+  // but the viewer only sees: photo -> typed AI narration -> right-side result.
   const MAX_PENDING_PRESENTATIONS = 400;
   const MAX_REVEALED_RESULTS = 180;
   const MAX_LIVE_BACKLOG = 14;
@@ -288,7 +293,7 @@ const App = () => {
         };
       }
       return {
-        text: "照片已切換，等待 LLM 開始判讀下一張...",
+        text: "照片已切換，等待 AI 開始判讀下一張...",
         key: nextKey,
         phase: "warming",
         fileName,
@@ -456,7 +461,7 @@ const App = () => {
 
   const imageReadyForDisplay = !currentImage || imageLoaded || imageFailed;
 
-  // Stage the illusion deliberately: photo first, then self-talk, then result.
+  // Stage the illusion deliberately: photo first, then AI narration, then result.
   useEffect(() => {
     const { key } = getDisplayTarget();
     if (!key || key === displayTargetKey) return;
@@ -503,7 +508,7 @@ const App = () => {
     return () => clearInterval(timer);
   }, [activePresentation, data.stream_buffer, pendingQueue.length, typewriterReady, displayTargetKey]);
 
-  // Only after self-talk has finished may the item enter the right-side record.
+  // Only after AI narration has finished may the item enter the right-side record.
   useEffect(() => {
     if (!activePresentation) return;
     const target = getQueueDisplayText(activePresentation);
@@ -605,7 +610,7 @@ const App = () => {
     let intervalId;
     const poll = async () => { await fetchData(); };
     poll();
-    // [v19.8] Faster polling (500ms) for smoother photo/self-talk sync.
+    // [v19.8] Faster polling (500ms) for smoother photo/AI narration sync.
     const intervalMs = 500;
     // if (data?.stats?.is_running) console.log(`⏱️ 同步頻率證據: ${intervalMs}ms`);
     intervalId = setInterval(poll, intervalMs);
@@ -842,24 +847,46 @@ const App = () => {
       }
     : null;
   const pendingPanelResult = activePendingResult || livePendingResult;
+  const liveRightPanelBackfill = (() => {
+    if (!isRunning) return [];
+    const used = new Set();
+    const activeKey = activePresentation?._queueKey || "";
+    if (pendingPanelResult?._queueKey) used.add(pendingPanelResult._queueKey);
+    if (activeKey) used.add(activeKey);
+    revealedResults.forEach((item) => {
+      if (item?._queueKey) used.add(item._queueKey);
+    });
+    return displayQueueHistoryItems
+      .filter((item) => {
+        if (!item?._queueKey) return false;
+        if (item._queueKey === activeKey) return false;
+        if (used.has(item._queueKey)) return false;
+        used.add(item._queueKey);
+        return true;
+      })
+      .map((item) => ({ ...item, _isCurrent: false, _backfilled: true }));
+  })();
   const rightPanelItems = (isRunning || revealedResults.length > 0)
-    ? (pendingPanelResult ? [pendingPanelResult, ...revealedResults] : revealedResults)
+    ? (pendingPanelResult
+        ? [pendingPanelResult, ...revealedResults, ...liveRightPanelBackfill]
+        : [...revealedResults, ...liveRightPanelBackfill])
+        .slice(0, MAX_REVEALED_RESULTS)
     : (historicalPanelItems.length > 0 ? historicalPanelItems : displayQueueHistoryItems);
   const displayedFileName = activePresentation?.file_name || (isRunning ? (data.stream_file || data.current_file || "-") : (visibleImage ? "上一張畫面保留" : "-"));
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
   const currentFolderLabel = isRunning ? (data.current_relative_dir || data.image_dir || "-") : "-";
   const currentFileLabel = isRunning && data.current_file && data.current_file !== "None" ? data.current_file : "-";
-  const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 LLM 輸出..." : "");
+  const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
   const isHeldNarration = narrationPhase !== "typing";
   const narrationStatusLabel = narrationPhase === "typing"
-    ? "LLM 即時判讀中"
+    ? "AI 即時判讀中"
     : narrationPhase === "revealed"
       ? "本張摘要完成 · 右側結果已揭露"
       : narrationPhase === "warming"
-        ? "照片已切換 · 等待 LLM 開始輸出"
+        ? "照片已切換 · 等待 AI 開始輸出"
         : "上一張摘要保留中 · 下一張判讀中";
   const cleanLmLogLines = (data.lm_logs || []).filter(isReadableLmLogLine);
   const queueHistoryLines = (Array.isArray(data.display_queue) ? data.display_queue : [])
@@ -1085,7 +1112,7 @@ const App = () => {
                        </div>
 
                       {/* 2. Bottom Pane: System Logs / History */}
-                      <div style={{ flex: 1, overflowY: 'auto' }} data-testid="llm-history-log">
+                      <div style={{ flex: 1, overflowY: 'auto' }} data-testid="ai-history-log">
                           {visibleLogLines.length > 0 ? (
                                [...visibleLogLines]
                                 .reverse()
@@ -1143,7 +1170,7 @@ const App = () => {
                   </div>
               </div>
 
-              <div className="result-sidebar" style={{ width: 'clamp(460px, 34vw, 640px)', minWidth: '420px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
+              <div className="result-sidebar" style={{ width: 'clamp(360px, 23vw, 430px)', minWidth: '360px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
                         {l:'成功', v:stats.success, c:'#22c55e'}, {l:'失敗', v:stats.failed, c:'#ef4444'},
@@ -1192,7 +1219,7 @@ const App = () => {
                                                     處理中
                                                 </span>
                                                 <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>
-                                                    等待自言自語完成
+                                                    AI 即時判讀中
                                                 </span>
                                             </div>
                                          )}
@@ -1658,10 +1685,19 @@ const App = () => {
           min-width: 0;
           min-height: 0;
         }
+        .monitor-workspace {
+          flex-direction: row !important;
+          overflow: hidden !important;
+        }
+        .result-sidebar {
+          width: clamp(360px, 23vw, 430px) !important;
+          min-width: 360px !important;
+          flex: 0 0 auto !important;
+        }
         @media (min-width: 1600px) {
           .result-sidebar {
-            width: clamp(500px, 34vw, 680px) !important;
-            min-width: 480px !important;
+            width: clamp(380px, 23vw, 430px) !important;
+            min-width: 380px !important;
           }
         }
         @media (max-width: 1200px) {
@@ -1671,21 +1707,6 @@ const App = () => {
             flex-wrap: wrap;
             gap: 8px;
             padding: 8px 12px !important;
-          }
-          .monitor-workspace {
-            flex-direction: column !important;
-            overflow-y: auto !important;
-          }
-          .main-monitor-panel {
-            flex: 0 0 auto !important;
-            height: clamp(640px, calc(100vh - 170px), 760px) !important;
-            min-height: 640px !important;
-          }
-          .result-sidebar {
-            width: 100% !important;
-            min-width: 0 !important;
-            min-height: 500px !important;
-            flex: 0 0 auto !important;
           }
           .status-grid {
             grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
