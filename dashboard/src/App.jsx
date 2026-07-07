@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.24 (揭露節拍)";
+const UI_VERSION = "v19.25 (可讀節拍)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -181,6 +181,10 @@ const App = () => {
   const MAX_REVEALED_RESULTS = 180;
   const MAX_LIVE_BACKLOG = 14;
   const MAX_DISPLAY_NARRATION_CHARS = 360;
+  const LIVE_TYPEWRITER_INTERVAL_MS = 32;
+  const QUEUE_TYPEWRITER_INTERVAL_MS = 30;
+  const FAST_REVEAL_HOLD_MS = 920;
+  const NORMAL_REVEAL_HOLD_MS = 1450;
   const [pendingQueue, setPendingQueue] = useState([]);
   const [activePresentation, setActivePresentation] = useState(null);
   const [revealedResults, setRevealedResults] = useState([]);
@@ -431,7 +435,7 @@ const App = () => {
 
     const backlog = pendingQueue.length;
     const charStep = isQueue
-      ? Math.min(14, Math.max(3, Math.ceil((backlog + 1) / 5)))
+      ? Math.min(12, Math.max(3, Math.ceil((backlog + 1) / 7)))
       : 3;
     const timer = setInterval(() => {
       setDisplayedBuffer((prev) => {
@@ -441,7 +445,7 @@ const App = () => {
         }
         return prev;
       });
-    }, isQueue ? 24 : 28);
+    }, isQueue ? QUEUE_TYPEWRITER_INTERVAL_MS : LIVE_TYPEWRITER_INTERVAL_MS);
 
     return () => clearInterval(timer);
   }, [activePresentation, data.stream_buffer, pendingQueue.length, typewriterReady, displayTargetKey]);
@@ -466,7 +470,7 @@ const App = () => {
           return [item, ...cleaned].slice(0, MAX_REVEALED_RESULTS);
         });
       }
-      const revealHoldMs = pendingQueue.length > 20 ? 520 : 1100;
+      const revealHoldMs = pendingQueue.length > 20 ? FAST_REVEAL_HOLD_MS : NORMAL_REVEAL_HOLD_MS;
       releaseTimer = setTimeout(() => {
         setActivePresentation(null);
         setDisplayedBuffer("");

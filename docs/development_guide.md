@@ -171,6 +171,7 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 - UI polish is a correctness gate. The expected stage rhythm is photo visible -> held or live LLM narration visible -> typewriter completes -> right-side result reveal. Never trade this rhythm for a raw "latest result" jump.
 - When right-side model/price/status appears, the LLM label must already say the summary is complete/revealed. A "still judging" label beside a revealed result is considered out of sync.
 - Do not let later `displayedBuffer` updates downgrade a revealed queue key back to a typing/live-judging label.
+- Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make self-talk flash too quickly during high-throughput batches.
 
 # Overall Progress Contract (2026-07-06)
 
