@@ -55,3 +55,6 @@ set LOCAL_LLM_CONTEXT_LENGTH=16384
 - 左側自言自語區若顯示 `上一張摘要保留中 · 下一張判讀中`，代表系統正在準備下一段自言自語；這是為了避免監看畫面中途變黑或空白。
 - 若 OCR 很快，介面會略過太舊的展示項來追上最新照片，但不會刪除 OCR 結果或輸出檔案。
 - 上傳 Google Drive 的進度不放在主介面；需要時查看 `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json`。
+## Dashboard viewing rule
+
+During a live run, the main screen is intentionally staged for viewers: photo first, LLM self-talk always visible, then the right-side result is revealed. If the system is already judging the next photo, the LLM area may hold the previous summary with a status label instead of going blank.

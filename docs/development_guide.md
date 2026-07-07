@@ -161,12 +161,14 @@ Never use `recent_results[0]` to drive the main preview during a running batch. 
 The live monitor is supervisor-facing, so it must look alive without mixing metadata between photos.
 
 - `dashboard/src/App.jsx` owns a frontend presentation queue: `pendingQueue`, `activePresentation`, and `revealedResults`.
+- `narrationDisplay` is the user-visible stage text and must not be cleared just because the internal typing buffer is reset. This prevents the LLM pane from becoming a black empty block while the backend judges the next photo.
 - The right panel must only show `revealedResults` while OCR is running. `recent_results` is allowed only as an idle historical fallback.
 - Each completed item needs a stable queue key: `presentation_id`, then `completed_at + file_name`, then `source_path`, then `file_name`.
 - Long self-talk is trimmed for display. This is presentation-only and must not alter OCR audit data.
 - When the backend display queue is full and the frontend is behind, discard stale display-only queue items that no longer appear in the backend's latest queue. Otherwise the preview looks frozen on old photos.
 - A watchdog clears a stale `activePresentation` if the displayed text stops advancing for several seconds.
 - The main preview `<img>` must use `key={currentImage}` so image changes force a real remount.
+- UI polish is a correctness gate. The expected stage rhythm is photo visible -> held or live LLM narration visible -> typewriter completes -> right-side result reveal. Never trade this rhythm for a raw "latest result" jump.
 
 # Overall Progress Contract (2026-07-06)
 

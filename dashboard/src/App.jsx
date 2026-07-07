@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.22 (自言自語保留)";
+const UI_VERSION = "v19.23 (舞台節拍)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const App = () => {
@@ -185,11 +185,18 @@ const App = () => {
   const [activePresentation, setActivePresentation] = useState(null);
   const [revealedResults, setRevealedResults] = useState([]);
   const [displayedBuffer, setDisplayedBuffer] = useState("");
-  const [heldNarration, setHeldNarration] = useState({ text: "", key: "", fileName: "" });
+  const [narrationDisplay, setNarrationDisplay] = useState({
+    text: "",
+    key: "",
+    phase: "idle",
+    fileName: "",
+    nextFileName: ""
+  });
   const isAdvancingRef = useRef(false);
   const acceptedPresentationKeysRef = useRef(new Set());
   const revealedKeysRef = useRef(new Set());
   const activePresentationRef = useRef(null);
+  const narrationDisplayRef = useRef(narrationDisplay);
   const latestDisplayQueueKeysRef = useRef(new Set());
   const displayWatchdogRef = useRef({ key: "", length: 0, updatedAt: Date.now() });
   const [displayTargetKey, setDisplayTargetKey] = useState("");
@@ -236,15 +243,44 @@ const App = () => {
     return trimDisplayNarration(`這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`);
   };
 
+  const getNarrationFileName = () => (
+    activePresentation?.file_name || data.stream_file || data.current_file || ""
+  );
+
+  const prepareNarrationHandoff = (nextKey = "", nextFileName = "") => {
+    setNarrationDisplay((prev) => {
+      const fileName = nextFileName || getNarrationFileName();
+      if (prev.text) {
+        return {
+          ...prev,
+          phase: "handoff",
+          nextFileName: fileName
+        };
+      }
+      return {
+        text: "照片已切換，等待 LLM 開始判讀下一張...",
+        key: nextKey,
+        phase: "warming",
+        fileName,
+        nextFileName: fileName
+      };
+    });
+  };
+
   useEffect(() => {
     activePresentationRef.current = activePresentation;
   }, [activePresentation]);
 
   useEffect(() => {
+    narrationDisplayRef.current = narrationDisplay;
+  }, [narrationDisplay]);
+
+  useEffect(() => {
     if (!displayedBuffer) return;
-    setHeldNarration({
+    setNarrationDisplay({
       text: displayedBuffer,
       key: displayTargetKey,
+      phase: "typing",
       fileName: activePresentation?.file_name || data.stream_file || data.current_file || ""
     });
   }, [displayedBuffer, displayTargetKey, activePresentation?.file_name, data.stream_file, data.current_file]);
@@ -297,6 +333,7 @@ const App = () => {
     const incomingKeys = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
     if (incomingKeys.has(activePresentation._queueKey)) return;
 
+    prepareNarrationHandoff("", data.current_file || "");
     setActivePresentation(null);
     setDisplayedBuffer("");
     setDisplayTargetKey("");
@@ -321,6 +358,7 @@ const App = () => {
       const stalledMs = Date.now() - displayWatchdogRef.current.updatedAt;
       if (stalledMs < 8000) return;
       const latestKeys = latestDisplayQueueKeysRef.current;
+      prepareNarrationHandoff("", data.current_file || "");
       setActivePresentation(null);
       setDisplayedBuffer("");
       setDisplayTargetKey("");
@@ -362,8 +400,9 @@ const App = () => {
 
   // Stage the illusion deliberately: photo first, then self-talk, then result.
   useEffect(() => {
-    const { key, isQueue } = getDisplayTarget();
+    const { key } = getDisplayTarget();
     if (!key || key === displayTargetKey) return;
+    prepareNarrationHandoff(key, getNarrationFileName());
     setDisplayTargetKey(key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
@@ -380,7 +419,7 @@ const App = () => {
     const { target, isQueue } = getDisplayTarget();
     if (!typewriterReady) return;
     if (!target) {
-      setDisplayedBuffer("");
+      prepareNarrationHandoff(displayTargetKey, getNarrationFileName());
       return;
     }
 
@@ -390,7 +429,9 @@ const App = () => {
     }
 
     const backlog = pendingQueue.length;
-    const charStep = isQueue ? Math.min(24, Math.max(3, Math.ceil((backlog + 1) / 3))) : 4;
+    const charStep = isQueue
+      ? Math.min(14, Math.max(3, Math.ceil((backlog + 1) / 5)))
+      : 3;
     const timer = setInterval(() => {
       setDisplayedBuffer((prev) => {
         const { target: latestTarget } = getDisplayTarget();
@@ -399,7 +440,7 @@ const App = () => {
         }
         return prev;
       });
-    }, 18);
+    }, isQueue ? 24 : 28);
 
     return () => clearInterval(timer);
   }, [activePresentation, data.stream_buffer, pendingQueue.length, typewriterReady, displayTargetKey]);
@@ -423,8 +464,9 @@ const App = () => {
           return [item, ...cleaned].slice(0, MAX_REVEALED_RESULTS);
         });
       }
-      const revealHoldMs = pendingQueue.length > 10 ? 320 : 720;
+      const revealHoldMs = pendingQueue.length > 20 ? 520 : 1100;
       releaseTimer = setTimeout(() => {
+        setNarrationDisplay((prev) => prev.text ? { ...prev, phase: "revealed" } : prev);
         setActivePresentation(null);
         setDisplayedBuffer("");
         isAdvancingRef.current = false;
@@ -742,8 +784,16 @@ const App = () => {
     ? (pendingPanelResult ? [pendingPanelResult, ...revealedResults] : revealedResults)
     : historicalPanelItems;
   const displayedFileName = activePresentation?.file_name || data.stream_file || data.current_file || "-";
-  const visibleNarration = displayedBuffer || heldNarration.text;
-  const isHeldNarration = Boolean(!displayedBuffer && heldNarration.text);
+  const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 LLM 輸出..." : "");
+  const narrationPhase = displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
+  const isHeldNarration = narrationPhase !== "typing";
+  const narrationStatusLabel = narrationPhase === "typing"
+    ? "LLM 即時判讀中"
+    : narrationPhase === "revealed"
+      ? "本張摘要完成 · 下一張判讀準備中"
+      : narrationPhase === "warming"
+        ? "照片已切換 · 等待 LLM 開始輸出"
+        : "上一張摘要保留中 · 下一張判讀中";
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
@@ -902,7 +952,26 @@ const App = () => {
                                    fontWeight: 'bold',
                                    transition: 'color 0.18s ease, opacity 0.18s ease'
                                }}>
-                                   {isHeldNarration && (
+                                   <div style={{
+                                      color: isHeldNarration ? '#94a3b8' : '#22d3ee',
+                                      fontSize: '0.68rem',
+                                      fontWeight: '800',
+                                      marginBottom: '4px',
+                                      letterSpacing: 0,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px'
+                                   }}>
+                                      <span style={{
+                                        width: '6px',
+                                        height: '6px',
+                                        borderRadius: '50%',
+                                        background: isHeldNarration ? '#64748b' : '#22d3ee',
+                                        boxShadow: isHeldNarration ? 'none' : '0 0 8px #22d3ee'
+                                      }} />
+                                      {narrationStatusLabel}
+                                   </div>
+                                   {false && isHeldNarration && (
                                       <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>
                                           上一張摘要保留中 · 下一張判讀中
                                       </div>

@@ -28,6 +28,16 @@ The backend may finish multiple photos ahead, but the right panel must never rev
 
 Interface presentation is a first-class requirement. If the LLM pane blanks out between photos, the monitor looks broken even when OCR data is correct. Preserve visual continuity: previous narration may stay softly visible until the next narration begins, with a clear previous-summary label.
 
+## Dashboard Stage Clock Rule (2026-07-07)
+
+The dashboard is judged by viewers before they understand the backend. Treat the live monitor like a staged presentation, not a raw log tail.
+
+- The visible LLM pane must be independent from the internal typing cursor. Clearing `displayedBuffer` for the next item must never create a black or empty self-talk area.
+- During the gap between photos, keep the previous narration visible with a calm status label such as "previous summary held / next photo judging".
+- The sequence is a visual contract: new photo appears, the LLM pane immediately has either held narration or live typing, then the right-side result is revealed.
+- If the backend runs ahead, catch up by trimming or dropping stale display-only queue items, not by blanking the LLM area.
+- A UI that looks paused, black, or mismatched is a product failure even when OCR files are correct. Fix presentation defects with the same urgency as OCR correctness defects.
+
 ## Live Presentation Catch-Up Rule (2026-07-06)
 
 The dashboard must balance two user-facing truths: no mixed metadata, and no frozen-looking preview. A pure "wait for every queued self-talk to finish" approach fails during fast OCR because the frontend can lag dozens of photos behind the backend.
