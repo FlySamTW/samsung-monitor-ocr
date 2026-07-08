@@ -441,6 +441,7 @@ Important implementation notes:
 - 2026-07-09 verification: the corrected flat output for that sample is `M-202604-台中市-南屯區-TK3C-台中嶺東-單機-FollowMe_M7_32吋-無價格-697.jpg`. It is no longer `遠景`, but remains blocked from Drive upload because current-year FollowMe price is still missing.
 - 2026-07-09 follow-up: it is not enough for the filename to be rescued. If the saved narration still says `不是 FollowMe` or `整體符合「遠景」條件`, treat the row as `critical_followme_result_conflict`, rerun/repair it, and do not upload it.
 - 2026-07-09 additional rule: FollowMe does not always show the classic white circular base. If a `Samsung FollowMe` / `FollowMe` label is attached to a visible standing/vertical display, treat it as FollowMe review evidence even when the model says the white base is absent. Only reject it as a poster/ad when the FollowMe text is not tied to a visible standing display/product.
+- 2026-07-09 v19.34: if the narration both sees a `Samsung FollowMe`/`FollowMe` label on a visible standing/vertical display and says the classic white stand/base is missing, the label/display evidence wins. Do not let the old negative stand/base guard clear the FollowMe model or leave the row as `遠景`.
 
 ## 2026-07-08 Distant-View Quality Audit
 

@@ -51,7 +51,7 @@ from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
-VERSION = "v19.33 (FollowMe distant review guard)"
+VERSION = "v19.34 (FollowMe display-sign rescue)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -245,7 +245,7 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
     raw_model_text = str(raw_model or "").upper()
     context_upper = str(context_text or "").upper()
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
-    if has_negative_followme_context(text) and not has_positive_followme_physical_clue(context_text):
+    if has_negative_followme_context(text) and not has_positive_followme_physical_clue(context_text) and not has_followme_display_fixture_clue(context_text):
         return None
     if "FOLLOWME" not in text and "FOLLOW ME" not in text:
         return None
@@ -301,11 +301,13 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     raw_text = str(context_text or "")
     text = raw_text.upper()
     positive_physical_clue = has_positive_followme_physical_clue(raw_text)
+    display_fixture_clue = has_followme_display_fixture_clue(raw_text)
+    positive_followme_evidence = positive_physical_clue or display_fixture_clue
     if should_block_followme_due_to_other_brand(text, context_text):
         return None
-    if has_negative_followme_context(text) and not positive_physical_clue:
+    if has_negative_followme_context(text) and not positive_followme_evidence:
         return None
-    if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", raw_text) and not positive_physical_clue:
+    if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", raw_text) and not positive_followme_evidence:
         return None
 
     has_followme_word = "FOLLOWME" in text or "FOLLOW ME" in text
@@ -315,7 +317,7 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
         "落地底座", "直桿", "長直桿", "移動式立架",
     ])
     has_tray = any(token in raw_text for token in ["托盤", "展示立牌", "底部價牌", "價牌", "價格"])
-    if not has_followme_word and not positive_physical_clue and not (has_stand and has_tray):
+    if not has_followme_word and not positive_followme_evidence and not (has_stand and has_tray):
         return None
 
     digits = "".join(c for c in str(price or "") if c.isdigit())
@@ -340,7 +342,7 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
         return 'FollowMe M7 32"'
     if price_int:
         return None
-    if has_followme_word or positive_physical_clue:
+    if has_followme_word or positive_followme_evidence:
         return normalize_followme_model(None, price, context_text)
     return None
 
@@ -2673,7 +2675,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
             negative_followme_context = has_negative_followme_context(" ".join(str(part or "") for part in [raw_model, thinking_text]))
-            positive_followme_physical_context = has_positive_followme_physical_clue(thinking_text)
+            positive_followme_physical_context = (
+                has_positive_followme_physical_clue(thinking_text)
+                or has_followme_display_fixture_clue(thinking_text)
+            )
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
 
             # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
@@ -2863,7 +2868,12 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # 驗證型號一致性
             current_model = data_obj.get("model")
             rescue_blocked_by_distant_view = should_block_rescue_from_distant_view(data_obj.get("view_type"), thinking_text)
-            if is_followme_standard_name(current_model) and has_negative_followme_context(thinking_text) and not has_positive_followme_physical_clue(thinking_text):
+            if (
+                is_followme_standard_name(current_model)
+                and has_negative_followme_context(thinking_text)
+                and not has_positive_followme_physical_clue(thinking_text)
+                and not has_followme_display_fixture_clue(thinking_text)
+            ):
                 console.print(f"[yellow]⚠️ [FollowMe 排除] 獨白明確說沒有 FollowMe 支架/底座，清除標準化 FollowMe 型號[/yellow]")
                 data_obj["model"] = None
                 current_model = None
@@ -2941,7 +2951,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         if should_clear_non_samsung_price(data_obj.get("model"), thinking_text):
             console.print("[dim]⚠️ [非三星攔截] 主體被描述為非三星且無三星型號，清除價格[/dim]")
             data_obj["price"] = None
-            if any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"]) and not has_positive_followme_physical_clue(thinking_text):
+            if (
+                any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"])
+                and not has_positive_followme_physical_clue(thinking_text)
+                and not has_followme_display_fixture_clue(thinking_text)
+            ):
                 data_obj["view_type"] = "遠景"
 
         inferred_followme = None if should_block_borrowed_model_rescue(thinking_text) else infer_followme_from_physical_clues(data_obj.get("price"), thinking_text)
@@ -2966,7 +2980,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             ]
             dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰"]
             has_dv_clue = thinking_text and any(kw in thinking_text for kw in dv_keywords)
-            has_single_clue = thinking_text and (any(excl in thinking_text for excl in dv_exclusions) or has_positive_followme_physical_clue(thinking_text))
+            has_single_clue = thinking_text and (
+                any(excl in thinking_text for excl in dv_exclusions)
+                or has_positive_followme_physical_clue(thinking_text)
+                or has_followme_display_fixture_clue(thinking_text)
+            )
 
             # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
             if not has_model and not has_price and has_dv_clue and not has_single_clue:

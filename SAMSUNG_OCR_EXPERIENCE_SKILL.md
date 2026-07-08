@@ -348,6 +348,7 @@ npm.cmd --prefix dashboard run build
 - Do not let nearby LG/appliance/cashier/phone-counter content suppress a visible Samsung FollowMe unit. If the evidence contains Samsung FollowMe plus a standing display, white stand/base/tray, or similar FollowMe structure, treat it as a FollowMe/single-unit candidate even when other brands are also visible.
 - Do still block true LG/StanbyME/MyView cases when Samsung FollowMe is negated or only mentioned as absent.
 - FollowMe rescue must not require the classic white circular base. If `Samsung FollowMe` / `FollowMe` is on a visible standing or vertical display/product label, keep it as FollowMe review evidence even when the model says the white base is absent. Reject only pure posters/ads that are not tied to a visible standing display/product.
+- v19.34 correction: when the same narration says a visible standing/vertical display has a `Samsung FollowMe` / `FollowMe` label, that positive display-sign evidence overrides negative wording about missing classic white stand/base. Do not clear the FollowMe model, classify it as `遠景`, or show contradictory narration solely because `白色圓形底座` is not visible.
 - User-confirmed sample `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` must resolve to a `單機-FollowMe...` output, not `遠景`. If price is not readable it must stay blocked from current-year upload as `無價格`.
 - If post-processing rescues a row to FollowMe, the user-facing `thinking`/display narration must also be corrected. Do not show a card or filename as FollowMe while the AI narration says `不是 FollowMe` or `整體符合「遠景」條件`.
 
