@@ -206,6 +206,67 @@ def followme_distant_risk(records: list[dict[str, object]], candidate_names: set
     return risky
 
 
+def _price_int(value: object) -> int | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
+def infer_followme_model_from_evidence(evidence: str, price: object = None) -> str:
+    upper = evidence.upper().replace("FOLLOW ME", "FOLLOWME")
+    price_int = _price_int(price)
+    if "FOLLOWME PRO" in upper or "S43FM" in upper or "PRO" in upper or "43" in upper:
+        return 'FollowMe Pro M7 43"'
+    if price_int and price_int >= 15000:
+        return 'FollowMe Pro M7 43"'
+    if "M5" in upper or "S32FM50" in upper or "FM501" in upper or "FHD" in upper:
+        return 'FollowMe M5 32"'
+    if price_int and 9900 <= price_int <= 11000:
+        return 'FollowMe M5 32"'
+    return 'FollowMe M7 32"'
+
+
+def rescue_followme_distant_records(records: list[dict[str, object]], candidate_names: set[str]) -> list[str]:
+    """Turn obvious foreground FollowMe false-distant outputs into single-unit candidates.
+
+    The result is still subject to normal filename/upload guards. If the price is
+    missing, current-year output remains review-required instead of being
+    uploaded as complete.
+    """
+    rescued: list[str] = []
+    for record in records:
+        name = str(record.get("file_name") or record.get("filename") or "")
+        if name not in candidate_names:
+            continue
+        view_text = " ".join(text_value(record.get(key)) for key in ("view_type", "category", "human_category"))
+        model = record.get("human_model") or record.get("model")
+        if DISTANT_VIEW_TEXT not in view_text or not missing_model(model):
+            continue
+        evidence = " ".join(
+            text_value(record.get(key))
+            for key in (
+                "thinking",
+                "stream_buffer",
+                "raw",
+                "notes",
+                "model",
+                "human_model",
+            )
+        )
+        if not has_positive_followme_indicator(evidence):
+            continue
+        record["view_type"] = SINGLE_VIEW_TEXT
+        record["category"] = SINGLE_VIEW_TEXT
+        if missing_model(record.get("model")):
+            record["model"] = infer_followme_model_from_evidence(evidence, record.get("price") or record.get("human_price"))
+        rescued.append(name)
+    return rescued
+
+
 def abort_reason_for_rerun(
     args,
     rerun_records: list[dict[str, object]],
@@ -423,15 +484,24 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     audit_folder = Path(audit_folder_text)
     staging_root = Path(args.staging_root)
     staging_dir = staging_dir_for(staging_root, stamp, source_folder, period)
-    staged_count = stage_images(rows, staging_dir)
     summary: dict[str, object] = {
         "folder": str(source_folder),
         "period": period,
         "audit_folder": str(audit_folder),
         "staging_dir": str(staging_dir),
         "queued": len(rows),
-        "staged": staged_count,
     }
+    try:
+        staged_count = stage_images(rows, staging_dir)
+    except OSError as exc:
+        if not args.keep_staging:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        summary["staged"] = ""
+        summary["aborted"] = 1
+        summary["abort_reason"] = f"staging_copy_failed: {exc}"
+        print(f"[abort] {source_folder.name} reason=staging_copy_failed error={exc}", flush=True)
+        return summary
+    summary["staged"] = staged_count
     print(f"[folder] {index}/{total} {source_folder} candidates={len(rows)} staged={staged_count}", flush=True)
     if not staged_count:
         return summary
@@ -455,6 +525,10 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
 
     candidate_names = {Path(str(row.get("source_path") or "")).name for row in rows}
     logs = get_logs_since(args.backend_url, log_start)
+    rescued_followme = rescue_followme_distant_records(rerun_records, candidate_names)
+    if rescued_followme:
+        summary["rescued_followme_distant"] = len(rescued_followme)
+        summary["rescued_followme_sample"] = ";".join(rescued_followme[:5])
     abort_reason, guard_details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
     if abort_reason:
         summary.update(guard_details)
@@ -462,6 +536,8 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
         summary["aborted"] = 1
         summary["abort_reason"] = abort_reason
         print(f"[abort] {source_folder.name} reason={abort_reason} details={guard_details}", flush=True)
+        if not args.keep_staging:
+            shutil.rmtree(staging_dir, ignore_errors=True)
         return summary
 
     original_rows = read_success_rows(audit_folder / "success_records.csv")

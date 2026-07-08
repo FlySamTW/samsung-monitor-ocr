@@ -337,3 +337,8 @@ npm.cmd --prefix dashboard run build
 - FollowMe false-distant guard is mandatory. A foreground white floor circular base, vertical pole/stand, upright white frame, tray, or FollowMe Pro 4K / FollowMe 4K product card means the image must stay a FollowMe/single-unit candidate even if the background contains many TV/QLED/OLED displays. Do not merge staged rerun output that converts those candidates to `遠景 / 無型號`.
 - FollowMe model names must be standardized on the write path too. `skills/batch_orchestrator.py` normalizes `FOLLOWME...` variants before frontend state, CSV, and Label-Studio JSON export. This prevents a rerun from judging FollowMe correctly but saving an inconsistent model string for rename/export.
 - If taking over on 2026-07-08 or later, first check whether `tools\rerun_staged_candidates.py` is still running for the 2026 priority rerun on backend `http://127.0.0.1:5001`. Logs are `logs\priority_2026_all_qwen3_aux5001_20260708_210327.*.log`; summary is `_ocr_audit\priority_2026_all_qwen3_aux5001_summary_20260708_210327.csv`. Do not start older-folder recursive OCR until this current-year rerun finishes or safely aborts.
+
+## 2026-07-08 FollowMe Staged Rerun Patch
+
+- Staged rerun may rescue obvious foreground FollowMe false-distant outputs to `單機` plus a conservative FollowMe model before merge. Missing price still remains blocked by current-year upload guards, so this prevents false `遠景` upload without treating incomplete rows as finished.
+- `_ocr_staging` folders must be removed on abort or staging-copy failure to avoid filling `D:`.

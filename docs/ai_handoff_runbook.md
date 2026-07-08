@@ -429,3 +429,8 @@ Important implementation notes:
 - Smoke test result before starting priority rerun: `M-台中市-太平區-TK3C-太平-1256.jpg` stayed `遠景/null/null`; `M-台中市-南　區-TK3C-台中旗艦-1453.jpg` became `單機/FollowMe M7 32"/null`, so it is no longer a false distant view but remains blocked from Drive until price/model confidence is resolved.
 - Active 2026 priority rerun was started with `tools\rerun_staged_candidates.py --backend-url http://127.0.0.1:5001 --input-csv D:\00_商化\00_已OCR照片\_ocr_audit\current_year_scan_after_minicpm_20260708.csv --execute`. Logs: `logs\priority_2026_all_qwen3_aux5001_20260708_210327.out.log` and `.err.log`. Summary: `D:\00_商化\00_已OCR照片\_ocr_audit\priority_2026_all_qwen3_aux5001_summary_20260708_210327.csv`.
 - Let the 2026 priority rerun finish or abort by guard. Do not launch older-year recursive OCR while this rerun is active.
+
+## 2026-07-08 FollowMe Staged Rerun Patch
+
+- `tools\rerun_staged_candidates.py` now performs conservative FollowMe rescue before the abort check: obvious foreground FollowMe false-distant results become `單機` with an inferred FollowMe family model, while missing prices remain blocked by current-year upload guards.
+- The tool also removes `_ocr_staging` folders on abort or staging-copy failure. If `D:` fills again, check stale `_ocr_staging` first.
