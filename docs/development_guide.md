@@ -371,14 +371,17 @@ npm.cmd --prefix dashboard run build
 - Backend helper `should_block_followme_due_to_other_brand()` now blocks LG/StanbyME false positives only when there is no positive Samsung FollowMe sign/standing-display clue. A case with `Samsung Follow Me` plus a standing display/white stand/base/tray is rescued as FollowMe even if LG text appears elsewhere in the scene.
 - Regression check: text equivalent to `LG CordZero ... Samsung Follow Me ... 展示用的立式螢幕` should infer `FollowMe M7 32"`; text equivalent to `LG StanbyME ... 沒有 Samsung FollowMe` should infer `None`.
 - User-confirmed sample `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` must resolve to a `單機-FollowMe...` output, not `遠景`. If price is not readable it must stay blocked from current-year upload as `無價格`.
+- If post-processing rescues a row to FollowMe, the displayed/saved narration must be corrected too. A result card or filename must never say FollowMe while the narration still says `不是 FollowMe`, `沒有 FollowMe`, or `整體符合「遠景」條件`.
 
 ## 2026-07-08 Distant-View Quality Audit
 
 When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium --sample-csv "D:\00_商化\00_已OCR照片\_ocr_audit\distant_followme_risk_2026_latest_sample.csv"` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json` plus a deterministic sample CSV for visual spot checks.
 
-The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, side-label/model clues, or single-unit wording such as `主角是`, `一台`, `單台`, or `判斷是單機`. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.
+The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, side-label/model clues, or single-unit wording such as `主角是`, `一台`, `單台`, or `判斷是單機`. It also catches `critical_followme_result_conflict`: final output is FollowMe but the narration contradicts it. Baseline on 2026-07-09 after exposing this class: 303 current-year risk rows, including 275 FollowMe result/narration conflicts. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.
 
 The sample CSV is not a rerun list. It includes high-risk rows and a deterministic sample of apparently true distant rows so another AI can estimate whether distant precision is improving after reruns. If a user-confirmed FollowMe or single foreground monitor appears in this sample, expand the risk rules before allowing 2026 uploads.
+
+`tools\prepare_drive_upload_manifest.py` reads `_ocr_audit\distant_followme_risk_*_latest.csv`; listed files are marked `current_year_followme_or_distant_risk_needs_rerun` and must stay out of Drive until rerun/repair clears them.
 
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 

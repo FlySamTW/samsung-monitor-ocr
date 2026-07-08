@@ -230,6 +230,19 @@ def infer_followme_model_from_evidence(evidence: str, price: object = None) -> s
     return 'FollowMe M7 32"'
 
 
+def build_rescued_followme_thinking(record: dict[str, object], evidence: str) -> str:
+    model = str(record.get("model") or "").strip() or infer_followme_model_from_evidence(
+        evidence,
+        record.get("price") or record.get("human_price"),
+    )
+    price = str(record.get("price") or record.get("human_price") or "").strip() or NO_PRICE_TEXT
+    return (
+        f"最終校正：這張判定為{SINGLE_VIEW_TEXT}，型號 {model}，價格 {price}。"
+        "畫面中有 Samsung FollowMe 立式展示/產品標示，因此不能因旁邊賣場環境、"
+        "其他品牌或背景多台螢幕而判為遠景。"
+    )
+
+
 def rescue_followme_distant_records(records: list[dict[str, object]], candidate_names: set[str]) -> list[str]:
     """Turn obvious foreground FollowMe false-distant outputs into single-unit candidates.
 
@@ -263,6 +276,8 @@ def rescue_followme_distant_records(records: list[dict[str, object]], candidate_
         record["category"] = SINGLE_VIEW_TEXT
         if missing_model(record.get("model")):
             record["model"] = infer_followme_model_from_evidence(evidence, record.get("price") or record.get("human_price"))
+        record["thinking"] = build_rescued_followme_thinking(record, evidence)
+        record["stream_buffer"] = record["thinking"]
         rescued.append(name)
     return rescued
 

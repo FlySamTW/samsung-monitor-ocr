@@ -546,6 +546,41 @@ def normalize_followme_price(model, price=None, context_text=""):
     return None
 
 
+def build_final_display_thinking(result, original_thinking=""):
+    """Return the user-facing final narration after backend corrections."""
+    model = str((result or {}).get("model") or "").strip()
+    view_type = str((result or {}).get("view_type") or (result or {}).get("category") or "").strip()
+    price = str((result or {}).get("price") or "").strip()
+    thinking = str(original_thinking or "").strip()
+    upper_model = model.upper()
+    upper_thinking = thinking.upper()
+
+    final_price = price if price and price.lower() not in {"null", "none"} else "無價格"
+    final_model = model if model and model.lower() not in {"null", "none"} else "無型號"
+
+    followme_final = upper_model.startswith("FOLLOWME")
+    has_conflicting_followme_text = (
+        followme_final
+        and (
+            has_negative_followme_context(thinking)
+            or "整體符合「遠景」條件" in thinking
+            or "不是 FOLLOWME" in upper_thinking
+            or "非 FOLLOWME" in upper_thinking
+        )
+    )
+    if has_conflicting_followme_text:
+        return (
+            f"最終校正：這張判定為單機，型號 {final_model}，價格 {final_price}。"
+            "畫面中有 Samsung FollowMe 立式展示/產品標示，因此不能因旁邊賣場環境、"
+            "其他品牌或背景多台螢幕而判為遠景。"
+        )
+
+    if not thinking or thinking == "...":
+        return f"這張已完成辨識：{view_type or '單機'}，{final_model}，{final_price}。"
+
+    return thinking
+
+
 _CLEARANCE_PRICE_KEYWORDS = (
     "手寫",
     "促銷價",
@@ -3191,7 +3226,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
     final_think = thinking_text if 'thinking_text' in locals() else ""
-    result_json['thinking'] = final_think
+    result_json['thinking'] = build_final_display_thinking(result_json, final_think)
 
     return result_json
 

@@ -1149,10 +1149,12 @@ class BatchOrchestrator:
 
                 # [v19.8 UX] Queue completed result for delayed display.
                 # Backend keeps processing; UI drains this queue at typewriter speed.
-                display_text = str(self.stream_buffer or "")
                 thinking_text = str(norm_result.get("thinking") or "")
-                if thinking_text and len(display_text) < min(len(thinking_text), 80):
-                    display_text = thinking_text[:800]
+                # Prefer the final corrected narration over the live raw stream.
+                # Some images are rescued after model output, e.g. false distant
+                # FollowMe cases; replaying the raw stream makes the dashboard
+                # contradict the saved filename and audit result.
+                display_text = thinking_text[:800] if thinking_text else str(self.stream_buffer or "")
                 if not display_text.strip():
                     display_text = (
                         f"這張已完成辨識：{norm_result.get('view_type') or '單機'}，"

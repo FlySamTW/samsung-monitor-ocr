@@ -77,11 +77,25 @@ def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[str]]:
     return uploaded_names, uploaded_paths
 
 
-def classify_file(path: Path, output_root: Path, max_bytes: int) -> ManifestRow:
+def load_current_year_risk_names(output_root: Path) -> set[str]:
+    """Load current-year FollowMe/distant quality risks that must not upload."""
+    audit_root = output_root / "_ocr_audit"
+    risk_names: set[str] = set()
+    for path in audit_root.glob("distant_followme_risk_*_latest.csv"):
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                target_name = (row.get("target_name") or "").strip()
+                if target_name:
+                    risk_names.add(target_name)
+    return risk_names
+
+
+def classify_file(path: Path, output_root: Path, max_bytes: int, risk_names: set[str] | None = None) -> ManifestRow:
     file_name = path.name
     period = infer_period(file_name)
     year = period[:4] if period else ""
     reasons: list[str] = []
+    risk_names = risk_names or set()
 
     if not period:
         reasons.append("missing_period")
@@ -103,6 +117,9 @@ def classify_file(path: Path, output_root: Path, max_bytes: int) -> ManifestRow:
 
     if "\uff1f" in file_name or "?" in file_name:
         reasons.append("unknown_marker")
+
+    if file_name in risk_names:
+        reasons.append("current_year_followme_or_distant_risk_needs_rerun")
 
     price_match = PRICE_TOKEN_RE.search(file_name)
     if period:
@@ -203,6 +220,7 @@ def main() -> int:
     default_uploaded_log = manifest_dir / "drive_upload_uploaded.csv"
     uploaded_log = Path(args.uploaded_log).resolve() if args.uploaded_log else default_uploaded_log
     uploaded_names, uploaded_paths = load_uploaded(uploaded_log)
+    risk_names = load_current_year_risk_names(output_root)
 
     all_rows: list[ManifestRow] = []
     for path in sorted(output_root.rglob("*")):
@@ -216,7 +234,7 @@ def main() -> int:
             continue
         if path.suffix.lower() not in IMAGE_EXTS:
             continue
-        all_rows.append(classify_file(path, output_root, args.max_bytes))
+        all_rows.append(classify_file(path, output_root, args.max_bytes, risk_names))
 
     all_rows.sort(key=newest_first_key)
     ready_rows = sorted((row for row in all_rows if row.status == "ready"), key=newest_first_key)

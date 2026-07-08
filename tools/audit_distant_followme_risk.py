@@ -158,6 +158,31 @@ def classify_risk(evidence: str) -> tuple[str, list[str]]:
     return "", []
 
 
+def classify_final_followme_conflict(record: dict[str, str], plan_row: dict[str, str], evidence: str) -> tuple[str, list[str]]:
+    """Catch rows rescued to FollowMe whose narration still says distant/not FollowMe."""
+    final_text = " ".join(
+        str(value or "")
+        for value in (
+            record.get("model", ""),
+            record.get("human_model", ""),
+            plan_row.get("target_name", ""),
+        )
+    ).lower()
+    if "followme" not in final_text and "follow me" not in final_text:
+        return "", []
+
+    thinking = str(record.get("thinking", "") or "")
+    thinking_upper = thinking.upper().replace(" ", "")
+    hits: list[str] = []
+    if "整體符合「遠景」條件" in thinking or "遠景" in thinking:
+        hits.append("final_followme_but_distant_narration")
+    if any(token in thinking_upper for token in ("不是FOLLOWME", "非FOLLOWME", "沒有FOLLOWME", "無FOLLOWME")):
+        hits.append("final_followme_but_negative_narration")
+    if hits:
+        return "critical_followme_result_conflict", hits
+    return "", []
+
+
 def stable_sample_key(*parts: str) -> str:
     text = "|".join(part or "" for part in parts)
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
@@ -237,9 +262,6 @@ def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[
         for record in success_records:
             file_name = record.get("file_name", "")
             plan_row = plan_rows.get(file_name, {})
-            if not is_distant(record, plan_row):
-                continue
-            counters["distant_total"] += 1
             evidence = " ".join(
                 str(value or "")
                 for value in (
@@ -250,6 +272,20 @@ def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[
                     record.get("human_notes", ""),
                 )
             )
+            final_conflict, final_hits = classify_final_followme_conflict(record, plan_row, evidence)
+            if final_conflict:
+                counters["final_followme_result_total"] += 1
+                counters[final_conflict] += 1
+                row = build_output_row(period, folder, record, plan_row, final_conflict, final_hits, uploaded_names)
+                if row["uploaded"] == "yes":
+                    counters[f"{final_conflict}_uploaded"] += 1
+                rows.append(row)
+                sample_rows.append(row)
+                continue
+
+            if not is_distant(record, plan_row):
+                continue
+            counters["distant_total"] += 1
             risk_level, hits = classify_risk(evidence)
             if not risk_level:
                 counters["distant_no_followme_risk"] += 1
@@ -282,7 +318,10 @@ def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[
         "include_medium": include_medium,
         "risk_rows": len(rows),
         "sample_rows": len(sample_rows),
-        "risk_rate": round(len(rows) / counters["distant_total"], 4) if counters["distant_total"] else 0,
+        "risk_rate": round(
+            len(rows) / (counters["distant_total"] + counters["final_followme_result_total"]),
+            4,
+        ) if (counters["distant_total"] + counters["final_followme_result_total"]) else 0,
         "counts": dict(sorted(counters.items())),
     }
     return rows, sample_rows, summary
