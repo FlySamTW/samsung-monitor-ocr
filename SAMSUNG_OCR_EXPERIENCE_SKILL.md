@@ -353,3 +353,9 @@ npm.cmd --prefix dashboard run build
 When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
 
 The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.
+
+## 2026-07-08 FollowMe Risk Rerun Waiter
+
+- `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.
+- It does not interrupt an active staged rerun and does not touch the visible dashboard on port 5000.
+- Current live waiter was started on 2026-07-08 around 23:38 with output logs `logs\followme_risk_waiter_*.log` and main script log `logs\followme_risk_after_current_*.log`.

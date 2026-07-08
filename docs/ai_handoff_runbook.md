@@ -446,3 +446,9 @@ Important implementation notes:
 - The audit flags records saved as `遠景` while thinking/filename evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues.
 - Current baseline at creation: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already listed as uploaded. These must be treated as high-priority rerun/reupload targets, not complete deliverables.
 - `tools\ocr_upload_watchdog.ps1` now refreshes the fixed latest risk CSV/JSON during its 4-hour check. If risk rows remain after a staged current-year rerun, do not resume older-year recursive OCR yet.
+
+## 2026-07-08 FollowMe Risk Rerun Waiter
+
+- `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.
+- It does not interrupt an active staged rerun and does not touch the visible dashboard on port 5000.
+- Current live waiter was started on 2026-07-08 around 23:38 with output logs `logs\followme_risk_waiter_*.log` and main script log `logs\followme_risk_after_current_*.log`.
