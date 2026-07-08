@@ -127,17 +127,19 @@ function Refresh-RiskAudit {
     $auditDir = Join-Path $OutputDir "_ocr_audit"
     $riskCsv = Join-Path $auditDir "distant_followme_risk_2026_latest.csv"
     $riskJson = Join-Path $auditDir "distant_followme_risk_2026_latest.json"
+    $sampleCsv = Join-Path $auditDir "distant_followme_risk_2026_latest_sample.csv"
     & $Python "tools\audit_distant_followme_risk.py" `
         --output-dir $OutputDir `
         --year 2026 `
         --include-medium `
         --output-csv $riskCsv `
-        --summary-json $riskJson *>> $LogPath
+        --summary-json $riskJson `
+        --sample-csv $sampleCsv *>> $LogPath
     if ($LASTEXITCODE -ne 0) {
         throw "risk audit failed with exit=$LASTEXITCODE"
     }
     $summary = Get-Content -LiteralPath $riskJson -Raw | ConvertFrom-Json
-    Write-RunLog "risk audit rows=$($summary.risk_rows) csv=$riskCsv"
+    Write-RunLog "risk audit rows=$($summary.risk_rows) distant_total=$($summary.counts.distant_total) risk_rate=$($summary.risk_rate) sample=$sampleCsv csv=$riskCsv"
     return [pscustomobject]@{ Csv = $riskCsv; Json = $riskJson; Rows = [int]$summary.risk_rows }
 }
 

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Audit false-distant-view risk for Samsung FollowMe records.
+"""Audit false-distant-view risk for current-year distant records.
 
 This is a read-only guard. It scans audit success records and reports photos
 classified as distant view while the evidence still contains Samsung FollowMe
-or FollowMe physical clues. Those rows should be staged for rerun before upload.
+or strong single-unit clues. Those rows should be staged for rerun before upload.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +48,29 @@ PHYSICAL_TERMS = (
     "\u6258\u76e4",
     "\u79fb\u52d5\u5f0f",
 )
+
+SINGLE_UNIT_TERMS = (
+    "\u5224\u65b7\u662f\u55ae\u6a5f",
+    "\u9019\u5f35\u5df2\u5b8c\u6210\u8fa8\u8b58\uff1a\u55ae\u6a5f",
+    "\u55ae\u4e00\u4e3b\u89d2",
+    "\u4e3b\u89d2\u662f",
+    "\u4e3b\u9ad4\u662f",
+    "\u4e3b\u87a2\u5e55",
+    "\u4e00\u53f0",
+    "\u55ae\u53f0",
+    "\u55ae\u6a5f",
+)
+
+SIDE_LABEL_TERMS = (
+    "\u5074\u6a19",
+    "\u5074\u908a\u6a19\u7c64",
+    "\u5074\u908a\u898f\u683c",
+    "\u5074\u908a\u578b\u865f",
+    "\u87a2\u5e55\u5074\u6a19",
+)
+
+MODEL_CODE_RE = re.compile(r"\b(?:S|C|F|U|G|LS|LC|LU)[A-Z0-9]{5,}\b", re.IGNORECASE)
+PRICE_RE = re.compile(r"(?:NT\$?|[$\uff04])?\s?\d{1,3}(?:,\d{3})+")
 
 NEGATION_TERMS = (
     "\u6c92\u6709",
@@ -114,15 +139,28 @@ def hit_terms(text: str, terms: tuple[str, ...]) -> list[str]:
 def classify_risk(evidence: str) -> tuple[str, list[str]]:
     followme_hits = hit_terms(evidence, FOLLOWME_TERMS)
     physical_hits = hit_terms(evidence, PHYSICAL_TERMS)
+    single_hits = hit_terms(evidence, SINGLE_UNIT_TERMS)
+    side_label_hits = hit_terms(evidence, SIDE_LABEL_TERMS)
     has_samsung = "samsung" in evidence.lower() or "\u4e09\u661f" in evidence
+    has_model_code = bool(MODEL_CODE_RE.search(evidence))
+    has_price = bool(PRICE_RE.search(evidence))
 
     if followme_hits:
         return "critical_followme_text", followme_hits + physical_hits
     if has_samsung and physical_hits:
         return "high_samsung_physical_clue", physical_hits
+    if side_label_hits and (has_model_code or has_samsung):
+        return "high_side_label_model_clue", side_label_hits
+    if single_hits and (has_model_code or has_price or side_label_hits):
+        return "high_single_unit_conflict", single_hits + side_label_hits
     if physical_hits:
         return "medium_physical_clue", physical_hits
     return "", []
+
+
+def stable_sample_key(*parts: str) -> str:
+    text = "|".join(part or "" for part in parts)
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
 def is_distant(record: dict[str, str], plan_row: dict[str, str] | None) -> bool:
@@ -141,11 +179,45 @@ def load_uploaded_names(manifest_dir: Path) -> set[str]:
     return {row.get("file_name", "") for row in uploaded if row.get("file_name")}
 
 
-def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[dict[str, str]], dict[str, object]]:
+def build_output_row(
+    period: str,
+    folder: Path,
+    record: dict[str, str],
+    plan_row: dict[str, str],
+    risk_level: str,
+    hits: list[str],
+    uploaded_names: set[str],
+) -> dict[str, str]:
+    target_name = plan_row.get("target_name", "")
+    source_path = plan_row.get("original_path", "")
+    uploaded = "yes" if target_name in uploaded_names else "no"
+    return {
+        "period": period,
+        "audit_folder": str(folder),
+        "source_folder": str(Path(source_path).parent) if source_path else "",
+        "source_path": source_path,
+        "file_name": record.get("file_name", ""),
+        "target_name": target_name,
+        "original_path": source_path,
+        "target_path": plan_row.get("target_path", ""),
+        "view_type": record.get("view_type", ""),
+        "category": record.get("category", ""),
+        "model": record.get("model", ""),
+        "price": record.get("price", ""),
+        "reason": risk_level,
+        "risk_level": risk_level,
+        "hit_terms": ";".join(hits),
+        "uploaded": uploaded,
+        "thinking_excerpt": (record.get("thinking", "") or "")[:500],
+    }
+
+
+def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[dict[str, str]], list[dict[str, str]], dict[str, object]]:
     audit_root = output_dir / "_ocr_audit"
     manifest_dir = output_dir / "_drive_upload"
     uploaded_names = load_uploaded_names(manifest_dir)
     rows: list[dict[str, str]] = []
+    sample_rows: list[dict[str, str]] = []
     counters: Counter[str] = Counter()
 
     for folder in sorted(audit_root.glob("*")):
@@ -181,33 +253,27 @@ def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[
             risk_level, hits = classify_risk(evidence)
             if not risk_level:
                 counters["distant_no_followme_risk"] += 1
+                sample_rows.append(
+                    build_output_row(
+                        period,
+                        folder,
+                        record,
+                        plan_row,
+                        "distant_no_followme_risk",
+                        [],
+                        uploaded_names,
+                    )
+                )
                 continue
             if risk_level == "medium_physical_clue" and not include_medium:
                 counters["distant_medium_ignored"] += 1
                 continue
-            target_name = plan_row.get("target_name", "")
-            uploaded = "yes" if target_name in uploaded_names else "no"
+            row = build_output_row(period, folder, record, plan_row, risk_level, hits, uploaded_names)
             counters[risk_level] += 1
-            if uploaded == "yes":
+            if row["uploaded"] == "yes":
                 counters[f"{risk_level}_uploaded"] += 1
-            rows.append(
-                {
-                    "period": period,
-                    "audit_folder": str(folder),
-                    "file_name": file_name,
-                    "target_name": target_name,
-                    "original_path": plan_row.get("original_path", ""),
-                    "target_path": plan_row.get("target_path", ""),
-                    "view_type": record.get("view_type", ""),
-                    "category": record.get("category", ""),
-                    "model": record.get("model", ""),
-                    "price": record.get("price", ""),
-                    "risk_level": risk_level,
-                    "hit_terms": ";".join(hits),
-                    "uploaded": uploaded,
-                    "thinking_excerpt": (record.get("thinking", "") or "")[:500],
-                }
-            )
+            rows.append(row)
+            sample_rows.append(row)
 
     summary = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -215,9 +281,55 @@ def scan_audit(output_dir: Path, year: int, include_medium: bool) -> tuple[list[
         "year": year,
         "include_medium": include_medium,
         "risk_rows": len(rows),
+        "sample_rows": len(sample_rows),
+        "risk_rate": round(len(rows) / counters["distant_total"], 4) if counters["distant_total"] else 0,
         "counts": dict(sorted(counters.items())),
     }
-    return rows, summary
+    return rows, sample_rows, summary
+
+
+def write_sample_csv(path: Path, rows: list[dict[str, str]], sample_size: int) -> None:
+    if sample_size <= 0:
+        return
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        grouped.setdefault(row.get("risk_level", "") or "unknown", []).append(row)
+    sample_rows: list[dict[str, str]] = []
+    for bucket, bucket_rows in sorted(grouped.items()):
+        ordered = sorted(
+            bucket_rows,
+            key=lambda row: stable_sample_key(
+                row.get("file_name", ""),
+                row.get("target_name", ""),
+                row.get("risk_level", ""),
+            ),
+        )
+        for row in ordered[:sample_size]:
+            sampled = dict(row)
+            sampled["sample_bucket"] = bucket
+            sample_rows.append(sampled)
+    if not sample_rows:
+        return
+    headers = [
+        "sample_bucket",
+        "period",
+        "audit_folder",
+        "source_folder",
+        "source_path",
+        "file_name",
+        "target_name",
+        "target_path",
+        "view_type",
+        "category",
+        "model",
+        "price",
+        "reason",
+        "risk_level",
+        "hit_terms",
+        "uploaded",
+        "thinking_excerpt",
+    ]
+    write_csv(path, sample_rows, headers)
 
 
 def main() -> int:
@@ -227,6 +339,8 @@ def main() -> int:
     parser.add_argument("--include-medium", action="store_true", help="Include physical-clue-only rows.")
     parser.add_argument("--output-csv", default="")
     parser.add_argument("--summary-json", default="")
+    parser.add_argument("--sample-csv", default="")
+    parser.add_argument("--sample-size", type=int, default=20, help="Deterministic sample rows per risk bucket.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).resolve()
@@ -234,11 +348,14 @@ def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_csv = Path(args.output_csv) if args.output_csv else audit_root / f"distant_followme_risk_{args.year}_{stamp}.csv"
     summary_json = Path(args.summary_json) if args.summary_json else audit_root / f"distant_followme_risk_{args.year}_{stamp}.json"
+    sample_csv = Path(args.sample_csv) if args.sample_csv else audit_root / f"distant_followme_risk_{args.year}_{stamp}_sample.csv"
 
-    rows, summary = scan_audit(output_dir, args.year, args.include_medium)
+    rows, sample_rows, summary = scan_audit(output_dir, args.year, args.include_medium)
     headers = [
         "period",
         "audit_folder",
+        "source_folder",
+        "source_path",
         "file_name",
         "target_name",
         "original_path",
@@ -247,14 +364,17 @@ def main() -> int:
         "category",
         "model",
         "price",
+        "reason",
         "risk_level",
         "hit_terms",
         "uploaded",
         "thinking_excerpt",
     ]
     write_csv(output_csv, rows, headers)
+    write_sample_csv(sample_csv, sample_rows, args.sample_size)
     summary["output_csv"] = str(output_csv)
     summary["summary_json"] = str(summary_json)
+    summary["sample_csv"] = str(sample_csv)
     summary_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

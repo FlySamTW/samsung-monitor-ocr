@@ -411,12 +411,14 @@ function Run-DistantFollowMeAudit {
     New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
     $riskCsv = Join-Path $auditDir ("distant_followme_risk_{0}_latest.csv" -f $year)
     $riskJson = Join-Path $auditDir ("distant_followme_risk_{0}_latest.json" -f $year)
+    $sampleCsv = Join-Path $auditDir ("distant_followme_risk_{0}_latest_sample.csv" -f $year)
     & $Python "tools\audit_distant_followme_risk.py" `
         --output-dir $OutputDir `
         --year $year `
         --include-medium `
         --output-csv $riskCsv `
-        --summary-json $riskJson *>> $LogPath
+        --summary-json $riskJson `
+        --sample-csv $sampleCsv *>> $LogPath
     Write-RunLog "distant FollowMe risk audit exit=$LASTEXITCODE"
     if (Test-Path -LiteralPath $riskJson) {
         try {
@@ -427,8 +429,8 @@ function Run-DistantFollowMeAudit {
                     $uploadedRisk += [int]$property.Value
                 }
             }
-            Write-RunLog ("distant FollowMe risk rows={0} uploaded_risk={1} csv={2}" -f `
-                $risk.risk_rows, $uploadedRisk, $risk.output_csv)
+            Write-RunLog ("distant quality risk rows={0} distant_total={1} risk_rate={2} uploaded_risk={3} csv={4} sample={5}" -f `
+                $risk.risk_rows, $risk.counts.distant_total, $risk.risk_rate, $uploadedRisk, $risk.output_csv, $risk.sample_csv)
         } catch {
             Write-RunLog "distant FollowMe risk summary unreadable"
         }

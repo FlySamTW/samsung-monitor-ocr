@@ -438,14 +438,16 @@ Important implementation notes:
 ## 2026-07-08 FollowMe With Nearby Non-Samsung Products
 
 - User-confirmed bad sample: `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` was described as LG CordZero foreground plus `Samsung Follow Me` standing display and incorrectly treated as distant view. The backend now allows Samsung FollowMe rescue even when LG text appears nearby, as long as Samsung FollowMe/standing-display evidence exists.
+- 2026-07-09 verification: the corrected flat output for that sample is `M-202604-台中市-南屯區-TK3C-台中嶺東-單機-FollowMe_M7_32吋-無價格-697.jpg`. It is no longer `遠景`, but remains blocked from Drive upload because current-year FollowMe price is still missing.
 
-## 2026-07-08 Distant FollowMe Accuracy Audit
+## 2026-07-08 Distant-View Quality Audit
 
 - Do not report only that rerun processes are alive. For 2026, distant-view accuracy must be audited after each staged rerun.
-- Run `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` and check `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
-- The audit flags records saved as `遠景` while thinking/filename evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues.
+- Run `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium --sample-csv "D:\00_商化\00_已OCR照片\_ocr_audit\distant_followme_risk_2026_latest_sample.csv"` and check `_ocr_audit\distant_followme_risk_2026_latest.csv/json` plus the sample CSV.
+- The audit flags records saved as `遠景` while thinking/filename evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, side-label/model clues, or single-unit wording such as `主角是`, `一台`, `單台`, or `判斷是單機`.
 - Current baseline at creation: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already listed as uploaded. These must be treated as high-priority rerun/reupload targets, not complete deliverables.
-- `tools\ocr_upload_watchdog.ps1` now refreshes the fixed latest risk CSV/JSON during its 4-hour check. If risk rows remain after a staged current-year rerun, do not resume older-year recursive OCR yet.
+- `tools\ocr_upload_watchdog.ps1` now refreshes the fixed latest risk CSV/JSON/sample during its 4-hour check. If risk rows remain after a staged current-year rerun, do not resume older-year recursive OCR yet.
+- The sample CSV is not a rerun list. It includes high-risk rows and a deterministic sample of apparently true distant rows so another AI can estimate whether distant precision is improving after reruns.
 
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 

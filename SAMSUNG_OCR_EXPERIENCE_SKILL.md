@@ -347,12 +347,15 @@ npm.cmd --prefix dashboard run build
 
 - Do not let nearby LG/appliance/cashier/phone-counter content suppress a visible Samsung FollowMe unit. If the evidence contains Samsung FollowMe plus a standing display, white stand/base/tray, or similar FollowMe structure, treat it as a FollowMe/single-unit candidate even when other brands are also visible.
 - Do still block true LG/StanbyME/MyView cases when Samsung FollowMe is negated or only mentioned as absent.
+- User-confirmed sample `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` must resolve to a `單機-FollowMe...` output, not `遠景`. If price is not readable it must stay blocked from current-year upload as `無價格`.
 
-## 2026-07-08 Distant FollowMe Accuracy Audit
+## 2026-07-08 Distant-View Quality Audit
 
-When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
+When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium --sample-csv "D:\00_商化\00_已OCR照片\_ocr_audit\distant_followme_risk_2026_latest_sample.csv"` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json` plus a deterministic sample CSV for visual spot checks.
 
-The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.
+The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, side-label/model clues, or single-unit wording such as `主角是`, `一台`, `單台`, or `判斷是單機`. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.
+
+The sample CSV is not a rerun list. It includes high-risk rows and a deterministic sample of apparently true distant rows so another AI can estimate whether distant precision is improving after reruns. If a user-confirmed FollowMe or single foreground monitor appears in this sample, expand the risk rules before allowing 2026 uploads.
 
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 
