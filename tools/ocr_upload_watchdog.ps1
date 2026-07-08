@@ -405,6 +405,36 @@ function Log-Progress {
     }
 }
 
+function Run-DistantFollowMeAudit {
+    $year = (Get-Date).Year
+    $auditDir = Join-Path $OutputDir "_ocr_audit"
+    New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
+    $riskCsv = Join-Path $auditDir ("distant_followme_risk_{0}_latest.csv" -f $year)
+    $riskJson = Join-Path $auditDir ("distant_followme_risk_{0}_latest.json" -f $year)
+    & $Python "tools\audit_distant_followme_risk.py" `
+        --output-dir $OutputDir `
+        --year $year `
+        --include-medium `
+        --output-csv $riskCsv `
+        --summary-json $riskJson *>> $LogPath
+    Write-RunLog "distant FollowMe risk audit exit=$LASTEXITCODE"
+    if (Test-Path -LiteralPath $riskJson) {
+        try {
+            $risk = Get-Content -LiteralPath $riskJson -Raw | ConvertFrom-Json
+            $uploadedRisk = 0
+            foreach ($property in $risk.counts.PSObject.Properties) {
+                if ($property.Name -like "*_uploaded") {
+                    $uploadedRisk += [int]$property.Value
+                }
+            }
+            Write-RunLog ("distant FollowMe risk rows={0} uploaded_risk={1} csv={2}" -f `
+                $risk.risk_rows, $uploadedRisk, $risk.output_csv)
+        } catch {
+            Write-RunLog "distant FollowMe risk summary unreadable"
+        }
+    }
+}
+
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LockPath) | Out-Null
 if (Test-Path -LiteralPath $LockPath) {
     $ageMinutes = ((Get-Date) - (Get-Item -LiteralPath $LockPath).LastWriteTime).TotalMinutes
@@ -424,6 +454,7 @@ try {
     Start-RecursiveIfNeeded
     Start-AutoRerunWatcherIfNeeded
     Start-UploaderIfNeeded
+    Run-DistantFollowMeAudit
     Log-Progress
     Write-RunLog "watchdog done"
 } finally {

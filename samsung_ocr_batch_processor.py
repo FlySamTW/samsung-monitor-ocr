@@ -249,7 +249,7 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
         return None
     if "FOLLOWME" not in text and "FOLLOW ME" not in text:
         return None
-    if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+    if should_block_followme_due_to_other_brand(text, context_text):
         return None
 
     price_int = None
@@ -301,7 +301,7 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     raw_text = str(context_text or "")
     text = raw_text.upper()
     positive_physical_clue = has_positive_followme_physical_clue(raw_text)
-    if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+    if should_block_followme_due_to_other_brand(text, context_text):
         return None
     if has_negative_followme_context(text) and not positive_physical_clue:
         return None
@@ -473,6 +473,38 @@ def has_positive_followme_physical_clue(text):
                 return True
             start = index + len(token_lower)
     return False
+
+
+def should_block_followme_due_to_other_brand(text, context_text=""):
+    """Block LG/other-brand false positives without losing a visible Samsung FollowMe unit."""
+    raw_text = str(context_text or "")
+    combined = str(text or "")
+    upper = combined.upper()
+    if not any(token in upper for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+        return False
+
+    has_followme_word = "FOLLOWME" in upper or "FOLLOW ME" in upper
+    has_samsung = "SAMSUNG" in upper or "三星" in raw_text
+    if not has_followme_word or not has_samsung:
+        return True
+
+    # A Samsung FollowMe sign plus a standing/display clue is enough to keep the
+    # Samsung monitor candidate even when a nearby LG product is also visible.
+    standing_display_terms = (
+        "立式螢幕",
+        "展示螢幕",
+        "顯示螢幕",
+        "直立螢幕",
+        "獨立螢幕",
+        "白色立柱",
+        "白色支架",
+        "垂直支架",
+        "圓形底座",
+        "白色底座",
+        "托盤",
+        "移動式",
+    )
+    return not (has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in standing_display_terms))
 
 
 def is_followme_standard_name(model):

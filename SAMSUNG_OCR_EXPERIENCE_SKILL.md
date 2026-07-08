@@ -342,3 +342,14 @@ npm.cmd --prefix dashboard run build
 
 - Staged rerun may rescue obvious foreground FollowMe false-distant outputs to `單機` plus a conservative FollowMe model before merge. Missing price still remains blocked by current-year upload guards, so this prevents false `遠景` upload without treating incomplete rows as finished.
 - `_ocr_staging` folders must be removed on abort or staging-copy failure to avoid filling `D:`.
+
+## 2026-07-08 FollowMe With Nearby Non-Samsung Products
+
+- Do not let nearby LG/appliance/cashier/phone-counter content suppress a visible Samsung FollowMe unit. If the evidence contains Samsung FollowMe plus a standing display, white stand/base/tray, or similar FollowMe structure, treat it as a FollowMe/single-unit candidate even when other brands are also visible.
+- Do still block true LG/StanbyME/MyView cases when Samsung FollowMe is negated or only mentioned as absent.
+
+## 2026-07-08 Distant FollowMe Accuracy Audit
+
+When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
+
+The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.

@@ -364,3 +364,15 @@ npm.cmd --prefix dashboard run build
 - `tools\rerun_staged_candidates.py` now rescues obvious foreground FollowMe false-distant rerun outputs before applying the abort guard: if a candidate has FollowMe/stand/base/tray evidence but the model returns `遠景 / 無型號`, it is converted back to `單機` with a conservative FollowMe family model.
 - This does not force upload: if the price is still missing, current-year rename/upload guards keep the row review-required.
 - The tool now removes `_ocr_staging` folders when a group aborts or staging copy fails. If `D:` becomes full again, check stale `_ocr_staging` before rerunning OCR.
+
+## 2026-07-08 FollowMe With Nearby Non-Samsung Products
+
+- A visible Samsung FollowMe unit must not be classified as distant view just because a nearby LG vacuum, appliance display, cashier area, or other non-monitor product is large in the frame.
+- Backend helper `should_block_followme_due_to_other_brand()` now blocks LG/StanbyME false positives only when there is no positive Samsung FollowMe sign/standing-display clue. A case with `Samsung Follow Me` plus a standing display/white stand/base/tray is rescued as FollowMe even if LG text appears elsewhere in the scene.
+- Regression check: text equivalent to `LG CordZero ... Samsung Follow Me ... 展示用的立式螢幕` should infer `FollowMe M7 32"`; text equivalent to `LG StanbyME ... 沒有 Samsung FollowMe` should infer `None`.
+
+## 2026-07-08 Distant FollowMe Accuracy Audit
+
+When current-year distant-view records are rerun, accuracy must be audited, not only process health. Use `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` to produce `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
+
+The audit catches records saved as `遠景` even though evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues. Baseline on 2026-07-08: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already uploaded. Treat those as priority rerun/reupload targets and keep older-year OCR gated until the current-year risk count is cleared or manually justified.

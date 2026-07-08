@@ -434,3 +434,15 @@ Important implementation notes:
 
 - `tools\rerun_staged_candidates.py` now performs conservative FollowMe rescue before the abort check: obvious foreground FollowMe false-distant results become `單機` with an inferred FollowMe family model, while missing prices remain blocked by current-year upload guards.
 - The tool also removes `_ocr_staging` folders on abort or staging-copy failure. If `D:` fills again, check stale `_ocr_staging` first.
+
+## 2026-07-08 FollowMe With Nearby Non-Samsung Products
+
+- User-confirmed bad sample: `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` was described as LG CordZero foreground plus `Samsung Follow Me` standing display and incorrectly treated as distant view. The backend now allows Samsung FollowMe rescue even when LG text appears nearby, as long as Samsung FollowMe/standing-display evidence exists.
+
+## 2026-07-08 Distant FollowMe Accuracy Audit
+
+- Do not report only that rerun processes are alive. For 2026, distant-view accuracy must be audited after each staged rerun.
+- Run `tools\audit_distant_followme_risk.py --output-dir "D:\00_商化\00_已OCR照片" --year 2026 --include-medium` and check `_ocr_audit\distant_followme_risk_2026_latest.csv/json`.
+- The audit flags records saved as `遠景` while thinking/filename evidence still contains FollowMe, Samsung Follow, S32FM/S43FM, white stand/base, vertical pole, tray, or similar FollowMe physical clues.
+- Current baseline at creation: 1181 current-year distant records, 66 FollowMe-risk rows, 65 already listed as uploaded. These must be treated as high-priority rerun/reupload targets, not complete deliverables.
+- `tools\ocr_upload_watchdog.ps1` now refreshes the fixed latest risk CSV/JSON during its 4-hour check. If risk rows remain after a staged current-year rerun, do not resume older-year recursive OCR yet.
