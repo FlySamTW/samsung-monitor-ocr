@@ -174,6 +174,7 @@ The dashboard header must show global OCR progress, not only the current folder'
 
 - **Distant View (遠景)**: >3 monitors, no readable labels.
 - **Single Unit (單機)**: Readable label OR single dominant monitor OR FollowMe stand.
+- **Other Brand Single Unit**: If rerun/recognition confirms the main monitor is not Samsung, set `model` to `它牌(BRAND)` such as `它牌(ACER)`, `它牌(ASUS)`, or `它牌(LG)`. Do not store the non-Samsung product model; do not leave it as `無型號`.
 
 ### 2. FollowMe Identification
 
@@ -227,6 +228,15 @@ Use this section when taking over the Samsung OCR overnight job.
    - `S24F332EAC / 2390` is a real monitor price.
    - Do not use the old 3000 cutoff. Current cutoff is `<2000`, with context checks for plans/accessories.
    - Handwritten clearance exception: if the same physical card clearly says `促銷價`, `展示出清`, `出清`, `展示機`, `福利品`, `清倉`, or `特賣`, a handwritten 4-digit price such as `1999` is valid. Without that context, low plan/monthly/accessory prices remain invalid.
+
+6. Non-Samsung main monitors are not `無型號`.
+   - Use `它牌(BRAND)` for the model field.
+   - Keep only the brand, not the non-Samsung model code.
+
+7. Current-year distant views are not safe to upload.
+   - For 2026 and future periods, `遠景` must enter rerun/review before Drive upload.
+   - Reason: many false distant views are actually single monitors, FollowMe, or non-Samsung single units with dense labels.
+   - Historical distant views may remain ready unless other review reasons apply.
 
 ### Google Drive upload rule
 
@@ -311,3 +321,19 @@ npm.cmd --prefix dashboard run build
 - Unattended production PCs should install the scheduled task via `INSTALL_WATCHDOG_TASK.bat`. It creates `SamsungOCR_PipelineWatchdog`, which runs `tools\ocr_upload_watchdog.ps1` every 4 hours to resume missing OCR/upload helpers without clearing history.
 - Recursive traversal must treat the source root as live. Refresh discovery between folders and run watchdog-started recursive OCR with `--watch`; do not rely on a one-time folder list captured at startup.
 - The watchdog must check real progress, not just process existence. If OCR `processed/ready/current file` remains unchanged beyond the stall window, restart only the OCR backend and recursive runner and resume from audit state; keep rclone upload alive.
+
+## 2026-07-08 current-year priority gate
+
+- Current/future years are not complete just because first-pass OCR copied files. If Drive review still has current-year rows, older folders must wait.
+- `tools/recursive_ocr_flat_export.py` exits at a safe folder boundary with `paused_reason=current_year_review_gate` before starting older folders when current-year review rows exist.
+- `tools/auto_rerun_questionable_after_recursive.ps1` runs current-year questionable reruns first, without `--include-older`, then runs all-year questionable passes.
+- For 2026, distant-view rows are risky because many are false positives. Treat `遠景`, no model, no price, unknown compare symbol, bad/unclear photo, and price-compare failures as blocked until rerun/repair/manual correction clears the Drive manifest.
+- When a slow fallback vision model is needed, do not run it over the entire source folder for a small risky subset. Use `tools\rerun_staged_candidates.py`: it stages only filtered source photos, processes that staging folder, merges records back into the original audit folder, and rebuilds flat outputs.
+- For the 2026 distant-view false-positive recovery, regenerate source candidates from audit with `tools\rerun_questionable_records.py`, then staged-rerun only rows whose `reason` contains `遠景`. Never use the Drive review CSV paths directly as rerun source paths; those point at flat output photos.
+- The watchdog must recognize `rerun_staged_candidates.py` as active OCR work. During staged rerun it can keep Drive upload alive, but it must not start recursive OCR, auto questionable rerun, or OCR stall recovery.
+- Prefer an auxiliary backend on port 5001 for staged reruns while the visible dashboard remains on port 5000. Launch it with `SAMSUNG_OCR_NO_BROWSER=1` and `--port 5001`, then point staged rerun tools at `http://127.0.0.1:5001`. This prevents the formal monitor from showing temporary `_ocr_staging` folders.
+- Staged rerun results must be discarded, not merged, if logs show context-length errors (`n_keep >= n_ctx`, `context length`, or `number of tokens to keep`) or if a large batch collapses into suspicious `單機 / 無型號 / 無價格` rows. qwen3.5 9B failed this way on 2026-07-08 at 8K context and is not a safe replacement until retested at 16K+ context.
+- Model fallback status: keep `qwen/qwen3-vl-8b` as the main production model. qwen3.5 9B VLM and Gemma 4 12B QAT may be used only as guarded last-pass candidates after loading with sufficient context and passing a staged sample. MiniCPM-V-4.6 was not usable through the current LM Studio OpenAI-compatible image request path. When comparing logs, remember that `tools/qwen_vl_regression.py` previously mis-normalized `FollowMe Pro M7 43"` as `FollowMe M7 32"`; logs made before that fix may underrate alternative models.
+- FollowMe false-distant guard is mandatory. A foreground white floor circular base, vertical pole/stand, upright white frame, tray, or FollowMe Pro 4K / FollowMe 4K product card means the image must stay a FollowMe/single-unit candidate even if the background contains many TV/QLED/OLED displays. Do not merge staged rerun output that converts those candidates to `遠景 / 無型號`.
+- FollowMe model names must be standardized on the write path too. `skills/batch_orchestrator.py` normalizes `FOLLOWME...` variants before frontend state, CSV, and Label-Studio JSON export. This prevents a rerun from judging FollowMe correctly but saving an inconsistent model string for rename/export.
+- If taking over on 2026-07-08 or later, first check whether `tools\rerun_staged_candidates.py` is still running for the 2026 priority rerun on backend `http://127.0.0.1:5001`. Logs are `logs\priority_2026_all_qwen3_aux5001_20260708_210327.*.log`; summary is `_ocr_audit\priority_2026_all_qwen3_aux5001_summary_20260708_210327.csv`. Do not start older-folder recursive OCR until this current-year rerun finishes or safely aborts.

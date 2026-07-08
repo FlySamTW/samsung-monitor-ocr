@@ -24,6 +24,7 @@ PRICE_TOKEN_RE = re.compile(
     r"-(?P<symbol>[\u2191\u2193\u2713\u2714\?\uff1f]?)[\uff04$](?P<price>\d+)-"
 )
 DISTANT_VIEW_TOKEN = "\u9060\u666f"
+OTHER_BRAND_TOKEN = "\u5b83\u724c("  # 它牌(
 REVIEW_NAME_TOKENS = [
     "\u505c\u7522",  # discontinued
     "\u7121\u578b\u865f",  # no model
@@ -95,6 +96,7 @@ def classify_file(path: Path, output_root: Path, max_bytes: int) -> ManifestRow:
         reasons.append("oversize")
 
     is_distant_view = f"-{DISTANT_VIEW_TOKEN}-" in file_name
+    is_other_brand = OTHER_BRAND_TOKEN in file_name
     for token in REVIEW_NAME_TOKENS:
         if token in file_name:
             reasons.append(f"name_contains_{token}")
@@ -106,10 +108,12 @@ def classify_file(path: Path, output_root: Path, max_bytes: int) -> ManifestRow:
     if period:
         period_year = int(year)
         symbol = price_match.group("symbol") if price_match else ""
-        if period_year >= 2026 and not is_distant_view:
-            if not price_match:
+        if period_year >= 2026:
+            if is_distant_view:
+                reasons.append("current_year_distant_view_needs_rerun")
+            elif not price_match:
                 reasons.append("current_year_missing_price")
-            elif symbol not in COMPARE_SYMBOLS:
+            elif (not is_other_brand) and symbol not in COMPARE_SYMBOLS:
                 reasons.append("current_year_missing_compare_symbol")
         if period_year < 2026 and price_match and symbol in (COMPARE_SYMBOLS | UNKNOWN_SYMBOLS):
             reasons.append("historical_has_compare_symbol")

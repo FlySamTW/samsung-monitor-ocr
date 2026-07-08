@@ -219,9 +219,16 @@ def collect_candidates(audit_dir: Path, source_root: Path, include_older: bool) 
     for success_csv in sorted(audit_dir.glob("*/success_records.csv")):
         audit_folder = success_csv.parent
         source_folder = audit_folder_source_folder(audit_folder, source_root)
-        period = infer_period_from_text(audit_folder.name)
-        if not include_older and period and int(period[:4]) < current_year:
-            continue
+        period = (
+            infer_period_from_text(audit_folder.name)
+            or infer_period_from_text(str(source_folder or ""))
+            or infer_period_from_text(str(success_csv))
+        )
+        if not include_older:
+            if not period:
+                continue
+            if int(period[:4]) < current_year:
+                continue
         for record in read_dict_csv(success_csv):
             reasons = reason_for(record)
             file_name = record.get("file_name") or record.get("filename") or ""

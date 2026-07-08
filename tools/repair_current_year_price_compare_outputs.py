@@ -144,6 +144,12 @@ def enrich_record(row: Dict[str, str]) -> Dict[str, str]:
                     enriched["price"] = price
     model = selected_value(enriched, "human_model", "model").upper()
     price = digits_or_none(selected_value(enriched, "human_price", "price"))
+    if is_other_brand_model(model):
+        enriched["price_status"] = "not_compared"
+        enriched["price_symbol"] = ""
+        enriched["official_price"] = ""
+        enriched["price_diff_percent"] = ""
+        return enriched
     if model and price:
         lookup_model = normalize_model_for_price_lookup(model)
         result = validate_ocr_price(lookup_model, price)
@@ -195,6 +201,11 @@ def normalize_model_for_price_lookup(model: str) -> str:
         return model
     upper = model.upper().strip()
     return MODEL_OCR_NORMALIZATION.get(upper, model)
+
+
+def is_other_brand_model(model: str) -> bool:
+    text = str(model or "").strip()
+    return text.startswith("它牌(") or text.startswith("它牌（")
 
 
 def should_reclassify_to_distant_view(record: Dict[str, str]) -> bool:

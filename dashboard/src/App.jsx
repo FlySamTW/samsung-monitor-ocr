@@ -83,7 +83,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.29 (AI判讀視覺微調)";
+const UI_VERSION = "v19.33 (原圖1:1可拖曳)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const isReadableLmLogLine = (line) => {
@@ -152,7 +152,10 @@ const App = () => {
   const [inspectImage, setInspectImage] = useState(null);
   const [modalPosition, setModalPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [modalZoomMode, setModalZoomMode] = useState('actual');
+  const [modalImageError, setModalImageError] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
+  const modalViewportRef = useRef(null);
   const [correctionData, setCorrectionData] = useState({
       view_type: '單機',
       screen_status: '',
@@ -227,6 +230,44 @@ const App = () => {
     fileName: "",
     nextFileName: ""
   });
+
+  useEffect(() => {
+    if (!inspectImage) return;
+    setModalPosition({ x: 0, y: 0 });
+    setIsDragging(false);
+    setModalZoomMode('actual');
+    setModalImageError(false);
+  }, [inspectImage?._queueKey, inspectImage?.source_path, inspectImage?.file_name]);
+
+  useEffect(() => {
+    if (!inspectImage) return;
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      setInspectImage(null);
+      setModalPosition({ x: 0, y: 0 });
+      setIsDragging(false);
+      setModalZoomMode('actual');
+      setModalImageError(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [inspectImage]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const stopDragging = () => setIsDragging(false);
+    window.addEventListener('mouseup', stopDragging);
+    return () => window.removeEventListener('mouseup', stopDragging);
+  }, [isDragging]);
+
+  const centerModalImage = () => {
+    const viewport = modalViewportRef.current;
+    if (!viewport) return;
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2);
+    });
+  };
   const isAdvancingRef = useRef(false);
   const acceptedPresentationKeysRef = useRef(new Set());
   const revealedKeysRef = useRef(new Set());
@@ -874,8 +915,10 @@ const App = () => {
     : (historicalPanelItems.length > 0 ? historicalPanelItems : displayQueueHistoryItems);
   const displayedFileName = activePresentation?.file_name || (isRunning ? (data.stream_file || data.current_file || "-") : (visibleImage ? "上一張畫面保留" : "-"));
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
-  const currentFolderLabel = isRunning ? (data.current_relative_dir || data.image_dir || "-") : "-";
-  const currentFileLabel = isRunning && data.current_file && data.current_file !== "None" ? data.current_file : "-";
+  const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
+  const currentFileLabel = data.current_file && data.current_file !== "None"
+    ? data.current_file
+    : (data.latest_result_file || "-");
   const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
@@ -1212,7 +1255,7 @@ const App = () => {
                                   <div style={{ display: 'flex', gap: '8px' }}>
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
-                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.25, minHeight: '2.9em', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', wordBreak: 'break-all' }}>{res.file_name}</div>
+                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
@@ -1224,11 +1267,11 @@ const App = () => {
                                             </div>
                                          )}
                                          {!res._pendingReveal && res.view_type !== '遠景' && (
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 1fr) auto', alignItems: 'center', marginTop: '3px', width: '100%', columnGap: '10px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(118px, 136px) minmax(76px, 92px)', alignItems: 'center', marginTop: 0, width: 'fit-content', maxWidth: '100%', columnGap: '8px' }}>
                                                 <div style={{ fontSize: '0.76rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {res.model || (res.category?.startsWith('不合格') ? res.category.replace('不合格-', '') : '(無型號)')}
                                                 </div>
-                                                <div style={{ fontSize: '0.76rem', color: '#f59e0b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
+                                                <div style={{ fontSize: '0.76rem', color: '#f59e0b', fontWeight: '900', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-start', minWidth: 0 }}>
                                                     {formatDisplayPrice(res.price)}
                                                     {res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                         <span
@@ -1281,16 +1324,17 @@ const App = () => {
                                                      background: rerunQueue[res.file_name] ? '#374151' : '#1f2937',
                                                      border: '1px solid #4b5563',
                                                      borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer',
-                                                      padding: '1px 6px',
+                                                      height: '22px',
+                                                      padding: '0 7px',
                                                       color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
-                                                      fontSize: '0.66rem', display: 'flex', alignItems: 'center'
+                                                      fontSize: '0.66rem', lineHeight: '20px', display: 'inline-flex', alignItems: 'center'
                                                   }}
                                               >
                                                   {rerunQueue[res.file_name] ? '已排隊' : '再辨識'}
                                               </button>}
-                                            {!res._pendingReveal && res.view_type && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff' }}>{res.view_type}</span>}
-                                            {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#ec4899', color: '#fff' }}>{res.screen_status}</span>}
-                                            {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: '#f97316', color: '#fff' }}>{res.quality_issue.replace('不合格-', '')}</span>}
+                                            {!res._pendingReveal && res.view_type && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.view_type}</span>}
+                                            {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#ec4899', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.screen_status}</span>}
+                                            {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#f97316', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.quality_issue.replace('不合格-', '')}</span>}
                                              {/* [v18.67] 價格驗證符號 - 包含 ? 未知，但排除 not_compared */}
                                              {!res._pendingReveal && res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                 <span
@@ -1300,14 +1344,18 @@ const App = () => {
                                                     }
                                                     style={{
                                                         fontSize: '0.7rem',
-                                                        padding: '1px 4px',
+                                                        height: '22px',
+                                                        padding: '0 7px',
                                                         borderRadius: '3px',
                                                         background: res.price_status === 'match' ? '#22c55e' :
                                                                    res.price_status === 'high' ? '#ef4444' :
                                                                    res.price_status === 'low' ? '#3b82f6' : '#dc2626',
                                                         color: '#fff',
                                                         fontWeight: '900',
-                                                        cursor: 'help'
+                                                        cursor: 'help',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        lineHeight: '20px'
                                                     }}
                                                 >
                                                     {res.price_symbol === '-' ? '？' : (res.price_symbol || '？')}
@@ -1534,20 +1582,12 @@ const App = () => {
                     position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
                     background: 'rgba(0,0,0,0.95)', zIndex: 10000,
                     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                    cursor: isDragging ? 'grabbing' : 'default'
+                    cursor: 'default'
                 }}
-                onMouseMove={(e) => {
-                    if (!isDragging) return;
-                    setModalPosition({
-                        x: e.clientX - dragStartRef.current.x,
-                        y: e.clientY - dragStartRef.current.y
-                    });
-                }}
-                onMouseUp={() => setIsDragging(false)}
-             >
+              >
                   {/* Close Button */}
                   <button
-                         onClick={() => { setInspectImage(null); setModalPosition({x:0,y:0}); }}
+                         onClick={() => { setInspectImage(null); setModalPosition({x:0,y:0}); setIsDragging(false); setModalZoomMode('actual'); setModalImageError(false); }}
                          style={{
                              position: 'fixed', top: '20px', right: '40px',
                              background: '#ef4444', color: '#fff', border: '2px solid #fff',
@@ -1560,32 +1600,113 @@ const App = () => {
                          <XCircle size={24} />
                   </button>
 
+                  <div style={{
+                      position: 'fixed', top: '20px', left: '28px', zIndex: 10005,
+                      display: 'flex', gap: '8px', alignItems: 'center',
+                      background: 'rgba(17,17,17,0.88)', border: '1px solid #333',
+                      borderRadius: '6px', padding: '6px'
+                  }}>
+                      <button
+                          onClick={() => { setModalZoomMode('actual'); setModalPosition({x:0,y:0}); setIsDragging(false); setTimeout(centerModalImage, 0); }}
+                          style={{
+                              height: '28px', padding: '0 10px', borderRadius: '4px',
+                              border: modalZoomMode === 'actual' ? '1px solid #00f5ff' : '1px solid #444',
+                              background: modalZoomMode === 'actual' ? '#0f2933' : '#1f2937',
+                              color: '#fff', fontWeight: 800, cursor: 'pointer'
+                          }}
+                      >
+                          100%
+                      </button>
+                      <button
+                          onClick={() => { setModalZoomMode('fit'); setModalPosition({x:0,y:0}); setIsDragging(false); }}
+                          style={{
+                              height: '28px', padding: '0 10px', borderRadius: '4px',
+                              border: modalZoomMode === 'fit' ? '1px solid #00f5ff' : '1px solid #444',
+                              background: modalZoomMode === 'fit' ? '#0f2933' : '#1f2937',
+                              color: '#fff', fontWeight: 800, cursor: 'pointer'
+                          }}
+                      >
+                          適合視窗
+                      </button>
+                      <span style={{ color: '#94a3b8', fontSize: '0.72rem', fontWeight: 700 }}>
+                          100% 可拖曳檢視
+                      </span>
+                  </div>
+
                   {/* Image Container */}
                       <div
+                         ref={modalViewportRef}
                          style={{
-                             position: 'absolute',
-                             transform: `translate(${modalPosition.x}px, ${modalPosition.y}px)`,
-                             transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-                             cursor: isDragging ? 'grabbing' : 'grab'
+                             width: '100vw',
+                             height: 'calc(100vh - 86px)',
+                             display: modalZoomMode === 'actual' ? 'block' : 'flex',
+                             alignItems: modalZoomMode === 'fit' ? 'center' : 'stretch',
+                             justifyContent: modalZoomMode === 'fit' ? 'center' : 'flex-start',
+                             overflow: modalZoomMode === 'actual' ? 'auto' : 'hidden',
+                             cursor: modalZoomMode === 'actual' ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                             userSelect: 'none',
+                             padding: '52px 24px 12px',
+                             boxSizing: 'border-box',
+                             overscrollBehavior: 'contain'
                          }}
                          onMouseDown={(e) => {
-                            setIsDragging(true);
-                            dragStartRef.current = { x: e.clientX - modalPosition.x, y: e.clientY - modalPosition.y };
+                             if (modalZoomMode !== 'actual' || e.button !== 0 || !modalViewportRef.current) return;
+                             e.preventDefault();
+                             setIsDragging(true);
+                             dragStartRef.current = {
+                                 x: e.clientX,
+                                 y: e.clientY,
+                                 scrollLeft: modalViewportRef.current.scrollLeft,
+                                 scrollTop: modalViewportRef.current.scrollTop
+                             };
                          }}
+                         onMouseMove={(e) => {
+                             if (!isDragging || modalZoomMode !== 'actual' || !modalViewportRef.current) return;
+                             e.preventDefault();
+                             const start = dragStartRef.current;
+                             modalViewportRef.current.scrollLeft = start.scrollLeft - (e.clientX - start.x);
+                             modalViewportRef.current.scrollTop = start.scrollTop - (e.clientY - start.y);
+                         }}
+                         onMouseUp={() => setIsDragging(false)}
+                         onMouseLeave={() => setIsDragging(false)}
+                         onDragStart={(e) => e.preventDefault()}
                       >
                           <img
                               src={getResultImageSrc(inspectImage)}
                               style={{
-                                  display: 'block',
+                                  display: modalImageError ? 'none' : 'block',
+                                  maxWidth: modalZoomMode === 'fit' ? 'calc(100vw - 48px)' : 'none',
+                                  maxHeight: modalZoomMode === 'fit' ? 'calc(100vh - 132px)' : 'none',
+                                  width: modalZoomMode === 'actual' ? 'auto' : 'auto',
+                                  height: modalZoomMode === 'actual' ? 'auto' : 'auto',
+                                  objectFit: 'contain',
                                   border: '4px solid #444',
                                   borderRadius: '4px',
                                   boxShadow: '0 0 100px rgba(0,0,0,0.8)',
                                   userSelect: 'none',
-                                  pointerEvents: 'auto'
+                                  pointerEvents: 'none',
+                                  WebkitUserDrag: 'none',
+                                  transform: 'none',
+                                  transition: 'none'
                               }}
-                              alt="Inspection"
+                              alt="放大照片"
+                              className="inspection-modal-image"
                               draggable={false}
+                              onLoad={centerModalImage}
+                              onError={() => setModalImageError(true)}
                           />
+                          {modalImageError && (
+                              <div style={{
+                                  height: '100%',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: '#f87171',
+                                  fontWeight: 800
+                              }}>
+                                  原圖載入失敗
+                              </div>
+                          )}
                       </div>
 
                    {/* Metadata Footer [v18.30 Fix: Stays at Bottom] */}
@@ -1693,6 +1814,14 @@ const App = () => {
           width: clamp(360px, 23vw, 430px) !important;
           min-width: 360px !important;
           flex: 0 0 auto !important;
+        }
+        .inspection-modal-image {
+          max-width: none !important;
+          max-height: none !important;
+        }
+        .inspection-modal-image[style*="calc"] {
+          max-width: calc(100vw - 48px) !important;
+          max-height: calc(100vh - 132px) !important;
         }
         @media (min-width: 1600px) {
           .result-sidebar {

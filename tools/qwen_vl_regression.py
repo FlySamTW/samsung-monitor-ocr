@@ -90,6 +90,13 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
     price_name = match_followme_by_price(price_int, products)
     code_name = match_followme_by_code(text, products)
 
+    if (
+        "FOLLOWME PRO" in text
+        or "S43FM" in text
+        or "PRO" in raw_model_text
+        or (price_int and price_int >= 15000 and ("FOLLOWME" in text or "FOLLOW ME" in text))
+    ):
+        return 'FollowMe Pro M7 43"'
     if code_name:
         return code_name
     if "M5" in raw_model_text or "S32FM50" in raw_model_text:

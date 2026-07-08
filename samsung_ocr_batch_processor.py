@@ -245,7 +245,7 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
     raw_model_text = str(raw_model or "").upper()
     context_upper = str(context_text or "").upper()
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
-    if has_negative_followme_context(text):
+    if has_negative_followme_context(text) and not has_positive_followme_physical_clue(context_text):
         return None
     if "FOLLOWME" not in text and "FOLLOW ME" not in text:
         return None
@@ -260,6 +260,14 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
                 price_int = int(digits)
             except ValueError:
                 price_int = None
+
+    if (
+        "FOLLOWME PRO" in text
+        or "S43FM" in text
+        or "PRO" in raw_model_text
+        or (price_int and price_int >= 15000 and ("FOLLOWME" in text or "FOLLOW ME" in text))
+    ):
+        return 'FollowMe Pro M7 43"'
 
     products = get_followme_products()
     price_name = match_followme_by_price(price_int, products)
@@ -290,26 +298,40 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
 
 def infer_followme_from_physical_clues(price=None, context_text=""):
     """Infer FollowMe when the model describes the physical stand/tray but outputs 遠景."""
-    text = str(context_text or "").upper()
+    raw_text = str(context_text or "")
+    text = raw_text.upper()
+    positive_physical_clue = has_positive_followme_physical_clue(raw_text)
     if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
         return None
-    if has_negative_followme_context(text):
+    if has_negative_followme_context(text) and not positive_physical_clue:
         return None
-    if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", str(context_text or "")):
+    if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", raw_text) and not positive_physical_clue:
         return None
 
-    raw_text = str(context_text or "")
     has_followme_word = "FOLLOWME" in text or "FOLLOW ME" in text
-    has_stand = any(token in raw_text for token in ["白色支架", "垂直支架", "白色垂直", "圓形底座", "白色底座"])
+    has_stand = any(token in raw_text for token in [
+        "白色支架", "垂直支架", "白色垂直", "直立支架", "白色立式",
+        "圓形底座", "圓盤底座", "白色圓形底座", "白色底座", "白色圓盤",
+        "落地底座", "直桿", "長直桿", "移動式立架",
+    ])
     has_tray = any(token in raw_text for token in ["托盤", "展示立牌", "底部價牌", "價牌", "價格"])
-    if not has_followme_word and not (has_stand and has_tray):
+    if not has_followme_word and not positive_physical_clue and not (has_stand and has_tray):
         return None
 
     digits = "".join(c for c in str(price or "") if c.isdigit())
     price_int = int(digits) if digits else None
+    code_name = match_followme_by_code(text, get_followme_products())
+    if code_name:
+        return code_name
     price_name = match_followme_by_price(price_int, get_followme_products())
     if price_name:
         return price_name
+    if "PRO" in text or "43" in text or "S43FM" in text:
+        return 'FollowMe Pro M7 43"'
+    if "M5" in text or "S32FM50" in text:
+        return 'FollowMe M5 32"'
+    if "M7" in text or "S32FM70" in text or "S32DM70" in text or "4K" in text:
+        return 'FollowMe M7 32"'
     if price_int and price_int >= 15000:
         return 'FollowMe Pro M7 43"'
     if price_int and 9900 <= price_int <= 11000:
@@ -318,7 +340,7 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
         return 'FollowMe M7 32"'
     if price_int:
         return None
-    if has_followme_word:
+    if has_followme_word or positive_physical_clue:
         return normalize_followme_model(None, price, context_text)
     return None
 
@@ -364,7 +386,9 @@ def has_negative_followme_context(text):
     normalized = str(text or "").upper().replace(" ", "")
     if re.search(r"(非|不是|不屬於|不符合|均非)FOLLOWME", normalized):
         return True
-    if re.search(r"(沒有|無|不是|非)FOLLOWME.*(支架|底座|特徵|結構)", normalized):
+    if re.search(r"(沒有|無|不是|非|看不到|未看到)(?:任何)?FOLLOWME.*(支架|底座|特徵|結構)", normalized):
+        return True
+    if re.search(r"(沒有|無|不是|非|看不到|未看到)FOLLOWME.*(支架|底座|特徵|結構)", normalized):
         return True
     return any(token in normalized for token in [
         "非FOLLOWME",
@@ -377,9 +401,78 @@ def has_negative_followme_context(text):
         "無FOLLOWME特徵",
         "沒有FOLLOWME支架",
         "無FOLLOWME支架",
+        "看不到FOLLOWME支架",
+        "未看到FOLLOWME支架",
         "沒有FOLLOWME底座",
         "無FOLLOWME底座",
+        "看不到FOLLOWME底座",
+        "未看到FOLLOWME底座",
     ])
+
+
+FOLLOWME_PHYSICAL_CLUE_TEXTS = (
+    "followme",
+    "follow me",
+    "white vertical stand",
+    "vertical stand",
+    "white circular base",
+    "circular base",
+    "mobile smart",
+    "mobile stand",
+    "白色垂直支架",
+    "垂直支架",
+    "白色直立支架",
+    "直立支架",
+    "白色立式",
+    "白色外框",
+    "白色圓形底座",
+    "圓形底座",
+    "圓盤底座",
+    "白色圓盤",
+    "白色底座",
+    "落地底座",
+    "直桿",
+    "長直桿",
+    "移動式智慧聯網",
+    "移動式立架",
+    "托盤",
+    "FollowMe Pro 4K",
+    "FollowMe 4K",
+    "S32FM",
+    "S43FM",
+)
+
+
+FOLLOWME_PHYSICAL_NEGATIONS = (
+    "沒有",
+    "沒看到",
+    "未看到",
+    "看不到",
+    "不是",
+    "並非",
+    "非",
+    "無",
+    "no ",
+    "not ",
+    "without",
+)
+
+
+def has_positive_followme_physical_clue(text):
+    """Return True when strong FollowMe physical/product clues are not negated nearby."""
+    lower_text = str(text or "").lower()
+    for token in FOLLOWME_PHYSICAL_CLUE_TEXTS:
+        token_lower = token.lower()
+        start = 0
+        while True:
+            index = lower_text.find(token_lower, start)
+            if index < 0:
+                break
+            before = lower_text[max(0, index - 28):index]
+            if not any(negation in before for negation in FOLLOWME_PHYSICAL_NEGATIONS):
+                return True
+            start = index + len(token_lower)
+    return False
 
 
 def is_followme_standard_name(model):
@@ -388,7 +481,7 @@ def is_followme_standard_name(model):
 
 def has_strong_single_unit_evidence(text):
     raw_text = str(text or "")
-    return any(term in raw_text for term in [
+    return has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in [
         "同一台主角",
         "只有一台",
         "單一主角",
@@ -470,9 +563,82 @@ def clean_monitor_price(price, min_price=2000, context_text=""):
     return digits
 
 
+OTHER_BRAND_ALIASES = (
+    ("ACER", ("ACER", "宏碁", "PREDATOR", "NITRO")),
+    ("ASUS", ("ASUS", "華碩", "ROG", "TUF")),
+    ("LG", ("LG", "STANBYME", "閨蜜機", "MYVIEW")),
+    ("BENQ", ("BENQ", "明基", "MOBIUZ")),
+    ("MSI", ("MSI", "微星", "OPTIX")),
+    ("VIEWSONIC", ("VIEWSONIC", "優派")),
+    ("AOC", ("AOC",)),
+    ("DELL", ("DELL", "ALIENWARE")),
+    ("PHILIPS", ("PHILIPS", "飛利浦")),
+    ("HP", ("HP", "OMEN")),
+    ("LENOVO", ("LENOVO", "聯想")),
+    ("GIGABYTE", ("GIGABYTE", "技嘉", "AORUS")),
+)
+
+
+def normalize_other_brand_model(brand):
+    raw_brand = str(brand or "").strip()
+    raw_upper = raw_brand.upper()
+    for canonical, aliases in OTHER_BRAND_ALIASES:
+        if any(alias.upper() in raw_upper for alias in aliases):
+            return f"它牌({canonical})"
+    brand_text = re.sub(r"[^A-Z0-9+_. -]", "", raw_upper).strip()
+    if not brand_text:
+        return None
+    return f"它牌({brand_text})"
+
+
+def is_other_brand_model(model):
+    return bool(re.fullmatch(r"它牌[（(][A-Z0-9+_. -]+[）)]", str(model or "").strip().upper()))
+
+
+def is_samsung_model_like(model):
+    text = str(model or "").strip().upper().replace("-", "")
+    if not text or is_other_brand_model(text):
+        return False
+    if "FOLLOWME" in text or "FOLLOW ME" in text:
+        return True
+    return bool(re.match(r"^(S|C|U|LC|LS|LU|LF|LH)[A-Z0-9]{6,}$", text))
+
+
+def infer_other_brand_model(context_text="", raw_model=None):
+    """Return normalized '它牌(BRAND)' when the main monitor is clearly not Samsung."""
+    raw_text = " ".join(str(part or "") for part in [raw_model, context_text])
+    if not raw_text.strip():
+        return None
+
+    existing = re.search(r"它牌[（(]\s*([^）)]+)\s*[）)]", raw_text, re.IGNORECASE)
+    if existing:
+        normalized_existing = normalize_other_brand_model(existing.group(1))
+        if normalized_existing:
+            return normalized_existing
+
+    upper_text = raw_text.upper()
+    raw_upper = str(raw_model or "").upper()
+    subject_terms = r"(主角|主體|這台|此台|這個商品|商品|螢幕|顯示器|MONITOR|品牌|LOGO)"
+    product_terms = r"(螢幕|顯示器|MONITOR|品牌|LOGO|型號)"
+
+    for brand, aliases in OTHER_BRAND_ALIASES:
+        alias_re = "|".join(re.escape(alias.upper()) for alias in aliases)
+        if raw_upper and re.search(alias_re, raw_upper, re.IGNORECASE):
+            return normalize_other_brand_model(brand)
+        if re.search(rf"{subject_terms}.{{0,30}}(?:{alias_re})", upper_text, re.IGNORECASE):
+            return normalize_other_brand_model(brand)
+        if re.search(rf"(?:{alias_re}).{{0,24}}{product_terms}", upper_text, re.IGNORECASE):
+            return normalize_other_brand_model(brand)
+        if re.search(rf"(不是|非|不屬於).{{0,10}}(SAMSUNG|三星).{{0,24}}(?:{alias_re})", upper_text, re.IGNORECASE):
+            return normalize_other_brand_model(brand)
+    return None
+
+
 def should_clear_non_samsung_price(model, context_text=""):
     """Do not keep a visible price when the model itself says the subject is not Samsung."""
     if model:
+        return False
+    if infer_other_brand_model(context_text, model):
         return False
     text = str(context_text or "").upper()
     if re.search(r"(不是|非)\s*(LG|ASUS|ROG|BENQ|ACER)", text, re.IGNORECASE):
@@ -1844,10 +2010,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "你是三星商化照片 OCR 助理。每張照片都是全新任務，只看目前圖片。\n"
             "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
             "分類規則：\n"
-            "1. 遠景：完全看不到清楚型號或價格，且畫面主要是多台螢幕陳列。遠景不填 model/price。\n"
-            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；不要因為底座不完整入鏡而否定。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
+            "1. 遠景：畫面主要是多台/整排/展示牆，沒有單一主角可對應型號與店內價，即使看到多張價牌也仍是遠景；只有主角自己的價牌清楚可讀才可跳到單機。遠景不填 model/price。\n"
+            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
             "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
-            "價格規則：只讀實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"
+            "4. 它牌單機：若主角明確是非三星螢幕，只在 model 填「它牌(品牌)」，例如 它牌(ACER)、它牌(ASUS)、它牌(LG)，不要填它牌的實際型號。\n"
+            "價格規則：只讀主角自己的實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；它牌主角若有清楚店內價也可保留，但不做 Samsung 官網比價；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"
             "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
             "JSON 格式固定為："
             "{\"view_type\":\"遠景或單機\",\"category\":\"遠景或單機或FollowMe\","
@@ -2342,6 +2509,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
         import difflib # Ensure import available (inline is safe)
         raw_model = data_obj.get("model")
+        raw_other_brand_model = infer_other_brand_model(thinking_text, raw_model)
+        if raw_other_brand_model and data_obj.get("view_type") != "遠景":
+            console.print(f"[dim]🔎 [Other Brand] '{raw_model}' -> '{raw_other_brand_model}'[/dim]")
+            data_obj["model"] = raw_other_brand_model
+            raw_model = None
 
         # [v18.81] 移除 FollowMe 自動偵測邏輯
         # 原因：AI 幻覺說「圓形底座」時會誤觸發，導致錯誤的型號自動填入
@@ -2373,17 +2545,20 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
             negative_followme_context = has_negative_followme_context(" ".join(str(part or "") for part in [raw_model, thinking_text]))
+            positive_followme_physical_context = has_positive_followme_physical_clue(thinking_text)
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
 
             # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
             # 1. clean_model 明確包含 "FOLLOWME"
             # 2. 或者 clean_model 為空/無效，且 raw_model/thinking_text 有 FollowMe 關鍵字
-            if "FOLLOWME" in clean_model and not negative_followme_context and not borrowed_model_context:
+            if "FOLLOWME" in clean_model and (not negative_followme_context or positive_followme_physical_context) and not borrowed_model_context:
                 is_followme_candidate = True
-            elif not has_valid_s_model and not negative_followme_context and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
+            elif not has_valid_s_model and (not negative_followme_context or positive_followme_physical_context) and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
                 if raw_model and any(h in raw_model.upper() for h in followme_hints):
                     is_followme_candidate = True
                 elif thinking_text and any(h in thinking_text.upper() for h in followme_hints):
+                    is_followme_candidate = True
+                elif positive_followme_physical_context:
                     is_followme_candidate = True
 
             if is_followme_candidate:
@@ -2560,10 +2735,15 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # 驗證型號一致性
             current_model = data_obj.get("model")
             rescue_blocked_by_distant_view = should_block_rescue_from_distant_view(data_obj.get("view_type"), thinking_text)
-            if is_followme_standard_name(current_model) and has_negative_followme_context(thinking_text):
+            if is_followme_standard_name(current_model) and has_negative_followme_context(thinking_text) and not has_positive_followme_physical_clue(thinking_text):
                 console.print(f"[yellow]⚠️ [FollowMe 排除] 獨白明確說沒有 FollowMe 支架/底座，清除標準化 FollowMe 型號[/yellow]")
                 data_obj["model"] = None
                 current_model = None
+            elif is_followme_standard_name(current_model):
+                normalized_followme = normalize_followme_model(current_model, data_obj.get("price"), thinking_text)
+                if normalized_followme and normalized_followme != current_model:
+                    data_obj["model"] = normalized_followme
+                    current_model = normalized_followme
             main_label_model = extract_main_label_model(thinking_text)
             if not current_model and main_label_model and not rescue_blocked_by_distant_view:
                 console.print(f"[green]✅ [主角標籤救援] 從描述補回型號: {main_label_model}[/green]")
@@ -2626,10 +2806,14 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             console.print(f"[yellow]⚠️ [型號價格校正] {data_obj.get('model')} + {data_obj.get('price')} 不合理，改為 {corrected_model}[/yellow]")
             data_obj["model"] = corrected_model
 
+        other_brand_model = infer_other_brand_model(thinking_text, data_obj.get("model"))
+        if other_brand_model and data_obj.get("view_type") != "遠景" and not is_samsung_model_like(data_obj.get("model")):
+            data_obj["model"] = other_brand_model
+
         if should_clear_non_samsung_price(data_obj.get("model"), thinking_text):
             console.print("[dim]⚠️ [非三星攔截] 主體被描述為非三星且無三星型號，清除價格[/dim]")
             data_obj["price"] = None
-            if any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"]):
+            if any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"]) and not has_positive_followme_physical_clue(thinking_text):
                 data_obj["view_type"] = "遠景"
 
         inferred_followme = None if should_block_borrowed_model_rescue(thinking_text) else infer_followme_from_physical_clues(data_obj.get("price"), thinking_text)
@@ -2654,7 +2838,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             ]
             dv_exclusions = ["同一台", "只有一台", "清晰可讀", "主角", "價牌清晰", "標籤清晰", "型號清晰"]
             has_dv_clue = thinking_text and any(kw in thinking_text for kw in dv_keywords)
-            has_single_clue = thinking_text and any(excl in thinking_text for excl in dv_exclusions)
+            has_single_clue = thinking_text and (any(excl in thinking_text for excl in dv_exclusions) or has_positive_followme_physical_clue(thinking_text))
 
             # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
             if not has_model and not has_price and has_dv_clue and not has_single_clue:
@@ -2890,6 +3074,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             model_for_price = result_json.get("model")
             price_for_validate = result_json.get("price")
             compare_official = should_compare_official_price(fname)
+            if is_other_brand_model(model_for_price):
+                compare_official = False
 
             # [v18.69] 自動發現新型號
             if compare_official and model_for_price:
@@ -3673,6 +3859,8 @@ def main():
     parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL", "qwen/qwen3-vl-8b"), help="Model Name")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of files")
     parser.add_argument("--timeout", type=int, default=180, help="API request timeout in seconds")
+    parser.add_argument("--host", default=os.environ.get("SAMSUNG_OCR_HOST", "0.0.0.0"), help="Dashboard bind host")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("SAMSUNG_OCR_PORT", "5000")), help="Dashboard/API port")
     parser.add_argument("--bottom_label_strip", action="store_true", help="Add an automatic lower full-width price-label strip crop for difficult retail shelves")
     parser.add_argument("--bottom_center_zoom", action="store_true", help="Add an automatic enlarged lower-center price-label crop for reruns")
     parser.add_argument("--no_followme_auto_update", action="store_true", help="Skip the startup refresh for the daily FollowMe reference")
@@ -3833,7 +4021,7 @@ def main():
     from threading import Timer
     def open_browser():
         try:
-            webbrowser.open("http://localhost:5000")
+            webbrowser.open(f"http://localhost:{args.port}")
             console.print("[green]🚀 Browser launch command sent.[/green]")
         except Exception as e:
             console.print(f"[red]⚠️ Browser launch failed: {e}[/red]")
@@ -3841,7 +4029,7 @@ def main():
     if os.environ.get("SAMSUNG_OCR_NO_BROWSER") != "1":
         Timer(1.5, open_browser).start()
 
-    flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
+    flask_app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
     # === 鐵律：最終版本確認 ===

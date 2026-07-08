@@ -36,11 +36,13 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 4. `FollowMe` 是型號，不是檔名分類；類別仍用 `單機` 或 `遠景`。
 5. `FollowMe` 必須細分：`FollowMe_M5_32吋`、`FollowMe_M7_32吋`、`FollowMe_Pro_M7_43吋`。
 6. 型號讀不到寫 `型號未辨識`；價格讀不到寫 `無價格`。
+   - 例外：若重新辨識後確認主角是非三星螢幕，型號欄寫 `它牌(品牌)`，例如 `它牌(ACER)`、`它牌(ASUS)`、`它牌(LG)`；不需要也不應填它牌實際型號。
 7. 價格預設用全形 `＄`，必要時可改半形 `$`。
 8. 當年度有官網比價時，價格前要保留 `↑/↓/✓/？`；歷史年度不比價時不加符號。
 9. Windows 檔名不可用字元需清理，雙引號改成 `吋`，空白改成 `_`，半形 `?` 要轉成全形 `？`。
 10. 批量整理輸出可全部放同一層新資料夾；年月已在檔名中，若同名則加尾碼，不可覆蓋。
 11. `HEIC`、`WebP` 目前可不處理；接力或審計工具應列出略過數，不可把略過檔案算進完成率。
+12. 當年度（2026 與未來）`遠景` 不可直接視為 Drive ready；因目前遠景誤判風險高，必須先進重辨識/人工校正桶，確認不是單機、FollowMe 或它牌單機後才能上傳。
 
 ## 歷年接力規則
 
@@ -315,10 +317,12 @@ The dashboard is boss-facing and must remain visually stable during long runs.
    - current-year `？＄` filenames.
    - Odyssey Ark / Ark Mini LED 55-inch upright or curved desk displays should resolve to `S55BG970NC`; never borrow nearby S27/S32 small-monitor labels.
 
-4. Model comparison is incomplete:
-   - `qwen/qwen3-vl-8b` is currently running and works.
-   - User reported Gemma 4 12B QAT and Qwen3.5 9B VLM downloads were still in progress.
-   - Do not claim those newer models were tested until real local runs are completed.
+4. Model comparison status:
+   - `qwen/qwen3-vl-8b` is still the only model approved for the main OCR line.
+   - `qwen3.5-9b-vlm` and `gemma-4-12b-it-qat` have local smoke-test evidence, but they are not safe replacements yet: 8K context failed, 16K can run, and throughput is much slower than Qwen3-VL 8B.
+   - `MiniCPM-V-4.6` was attempted through LM Studio, but the current local server reported that the loaded model did not support image inputs in the OpenAI-compatible chat request format.
+   - `tools/qwen_vl_regression.py` now checks FollowMe Pro / 43-inch clues before generic M7 clues. Older eval logs may undercount qwen3.5/Gemma because the eval helper previously normalized `FollowMe Pro M7 43"` back to `FollowMe M7 32"`.
+   - Do not switch the production model unless the candidate passes the same guarded 2026 staged sample with no context errors and no suspicious collapse into `單機 / 無型號 / 無價格`.
 
 ## Verification Required Before Handoff Completion
 
@@ -338,3 +342,19 @@ npm.cmd --prefix dashboard run build
 - Dashboard no-blur rule: never enlarge `thumb_b64` in the main preview. Show a loading/placeholder state until a full image URL loads.
 - Backend result records should include `source_path` so cross-folder dashboard queue entries can load the full source image.
 - `tools/rerun_questionable_records.py` supports `--input-csv` for safe resume from a filtered candidate list.
+
+## Current-Year Priority Gate
+
+- The production order is current/future year first, then older years.
+- `tools/prepare_drive_upload_manifest.py` keeps current-year questionable rows out of Drive, including current-year distant-view rows until they have been safely rerun or corrected.
+- `tools/recursive_ocr_flat_export.py` must not continue into older folders while `_drive_upload\drive_upload_review_required.csv` still contains current/future-year review rows. It now exits cleanly with `paused_reason=current_year_review_gate` before starting an older folder. Do not remove this gate unless the user explicitly accepts older-year-first processing.
+- `tools/auto_rerun_questionable_after_recursive.ps1` must run current-year questionable photos first (`--include-older` off), then run all-year questionable passes. This is the fix for the 2026 distant-view false-positive issue where first-pass completion was mistaken for final completion.
+- Do not upload current-year rows that are still in `review_required`. For 2026, distant view, no model, no price, unknown compare symbol, bad/unclear photo, and current-year price-compare failures must be resolved by rerun/repair/manual correction before Drive upload.
+- Slow fallback VLMs must not be launched against full 2026 source folders just to repair a subset. Use `tools\rerun_staged_candidates.py` with a filtered candidate CSV so only risky rows are copied to a temporary staging folder, processed, merged back into the original audit `success_records.csv`, and re-exported to the flat output.
+- For the 2026 false-distant problem, regenerate candidates from audit state with `tools\rerun_questionable_records.py` first, then run staged rerun with `--reason-contains 遠景`. This preserves original source-folder mapping and avoids accidentally rerunning already renamed flat-output photos as if they were source photos.
+- `tools\ocr_upload_watchdog.ps1` must treat `rerun_staged_candidates.py` as an active OCR job. While staged rerun is active, the watchdog may keep upload alive but must not start recursive OCR, auto questionable rerun, or OCR stall recovery.
+- Staged reruns should use an auxiliary backend on port 5001 when the production dashboard on port 5000 is visible. Start `samsung_ocr_batch_processor.py --port 5001` with `SAMSUNG_OCR_NO_BROWSER=1`, then pass `--backend-url http://127.0.0.1:5001` to `tools\rerun_staged_candidates.py`. This keeps the supervisor-facing dashboard from showing `_ocr_staging` folders.
+- Never merge staged rerun output if the backend logs contain model context errors such as `n_keep >= n_ctx`, `context length`, or `number of tokens to keep`. The 2026-07-08 qwen3.5 9B attempt failed at 8K context and produced false `單機 / 無型號 / 無價格` rows; it was rolled back. qwen3.5 may only be retried after loading with 16K+ context and passing the same guarded candidate sample.
+- FollowMe false-distant guard: if the foreground subject has a white floor circular base, vertical pole/stand, upright white frame, tray, or a FollowMe Pro 4K / FollowMe 4K product card, do not let background QLED/OLED/TV display walls force `遠景`. The backend helper `has_positive_followme_physical_clue()` and staged rerun guard `followme_distant_risk()` protect this case. If a staged rerun turns such a candidate into `遠景 / 無型號`, abort and do not merge.
+- FollowMe result names must be standardized before saving frontend/CSV/Label-Studio JSON state. `skills/batch_orchestrator.py` now normalizes variants such as `FOLLOWME PRO M7 43"` to `FollowMe Pro M7 43"` after model matching and before `recent_results`, `session_results`, CSV, and JSON export. Do not remove this write-path guard; otherwise rerun may classify correctly but save an inconsistent model name.
+- 2026-07-08 active priority rerun: `tools\rerun_staged_candidates.py` was started against auxiliary backend `http://127.0.0.1:5001` with `current_year_scan_after_minicpm_20260708.csv`, output logs `logs\priority_2026_all_qwen3_aux5001_20260708_210327.*.log`, and summary `D:\00_商化\00_已OCR照片\_ocr_audit\priority_2026_all_qwen3_aux5001_summary_20260708_210327.csv`. Let this finish or abort by its own guards before resuming older recursive OCR.

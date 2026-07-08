@@ -258,6 +258,11 @@ def price_digits(row: dict) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
 
+def is_other_brand_record(row: dict) -> bool:
+    model = str(row.get("human_model") or row.get("model") or "").strip()
+    return model.startswith("它牌(") or model.startswith("它牌（")
+
+
 def is_current_or_future_period(period: str) -> bool:
     match = re.search(r"(20\d{2})", str(period or ""))
     if not match:
@@ -271,8 +276,35 @@ def current_year_unknown_price_records(period: str, records: List[dict]) -> List
     return [
         record
         for record in records
-        if price_digits(record) and str(record.get("price_status") or "") == "unknown"
+        if price_digits(record)
+        and str(record.get("price_status") or "") == "unknown"
+        and not is_other_brand_record(record)
     ]
+
+
+def period_year(period: str) -> int:
+    match = re.search(r"(20\d{2})", str(period or ""))
+    return int(match.group(1)) if match else 0
+
+
+def is_older_than_current_year(period: str) -> bool:
+    year = period_year(period)
+    return bool(year and year < datetime.now().year)
+
+
+def current_year_review_gate_count(output_dir: Path) -> tuple[int, Path]:
+    """Return current/future-year rows blocked by the Drive upload review gate."""
+    review_path = output_dir / "_drive_upload" / "drive_upload_review_required.csv"
+    if not review_path.exists():
+        return 0, review_path
+    current_year = datetime.now().year
+    count = 0
+    for row in read_dict_csv(review_path):
+        year = int_value(row.get("year"), 0)
+        reasons = str(row.get("reasons") or "").strip()
+        if year >= current_year and reasons:
+            count += 1
+    return count, review_path
 
 
 def write_results_snapshot(path: Path, records: List[dict]) -> None:
@@ -506,6 +538,11 @@ def main() -> int:
     parser.add_argument("--no-copy", action="store_true", help="只產生改名計畫，不複製照片")
     parser.add_argument("--no-resume", action="store_true", help="不使用既有 _ocr_audit 續跑狀態，重新處理所有資料匣")
     parser.add_argument("--ensure-llm", action="store_true", help="開始前先用 LM Studio CLI 確認本機模型已載入")
+    parser.add_argument(
+        "--ignore-current-year-review-gate",
+        action="store_true",
+        help="Allow older folders even when current/future-year Drive review rows still need rerun.",
+    )
     parser.add_argument("--watch", action="store_true", help="keep traversing source-root; new or changed folders are picked up in later cycles")
     parser.add_argument("--watch-sleep-seconds", type=int, default=300, help="seconds to sleep between watch traversal cycles")
     parser.add_argument("--watch-cycles", type=int, default=0, help="maximum watch cycles; 0 means unlimited")
@@ -666,6 +703,22 @@ def main() -> int:
                 write_merged_summaries()
                 write_state(state_path, state)
                 continue
+            if not args.ignore_current_year_review_gate and is_older_than_current_year(str(folder_row.get("period") or "")):
+                gate_count, gate_path = current_year_review_gate_count(output_dir)
+                if gate_count > 0:
+                    state["paused_reason"] = "current_year_review_gate"
+                    state["current_year_review_required"] = gate_count
+                    state["current_year_review_path"] = str(gate_path)
+                    state["paused_before_folder"] = str(folder_row["folder"])
+                    state["updated_at"] = datetime.now().isoformat()
+                    write_state(state_path, state)
+                    print(
+                        "[recursive] paused before older folder; "
+                        f"current_year_review_required={gate_count} path={gate_path}",
+                        flush=True,
+                    )
+                    next_item = None
+                    break
             next_item = (order_index, folder_key, folder_row)
             break
 

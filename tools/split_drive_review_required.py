@@ -50,6 +50,8 @@ def classify(row: dict[str, str]) -> str:
 
     if any(token in text for token in BAD_PHOTO_TOKENS):
         return "bad_or_unclear_photo"
+    if "current_year_distant_view_needs_rerun" in reasons:
+        return "current_year_distant_view_needs_rerun"
     if "current_year_missing_compare_symbol" in reasons:
         return "needs_reference_price_compare"
     if any(token in text for token in MISSING_LABEL_TOKENS):

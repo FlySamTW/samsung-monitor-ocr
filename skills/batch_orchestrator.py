@@ -85,6 +85,31 @@ class BatchOrchestrator:
         # [v16.12] Force Rerun Queue
         self.priority_queue = [] 
 
+    @staticmethod
+    def _standardize_followme_model(model: object) -> object:
+        """Keep FollowMe names consistent before saving JSON/CSV/UI state."""
+        if model is None:
+            return model
+        text = str(model).strip()
+        if not text or text.lower() == "null":
+            return model
+
+        compact = text.upper().replace("FOLLOW ME", "FOLLOWME")
+        if not compact.startswith("FOLLOWME"):
+            return model
+
+        if "PRO" in compact or "43" in compact or "S43FM" in compact:
+            return 'FollowMe Pro M7 43"'
+        if "M5" in compact or "S32FM50" in compact or "FM501" in compact:
+            return 'FollowMe M5 32"'
+        return 'FollowMe M7 32"'
+
+    def _standardize_followme_result(self, result: dict) -> dict:
+        standard_model = self._standardize_followme_model(result.get("model"))
+        if standard_model != result.get("model"):
+            result["model"] = standard_model
+        return result
+
     def force_rerun(self, filename: str):
         """
         [v16.12] Manually trigger re-processing of a specific file.
@@ -1034,6 +1059,7 @@ class BatchOrchestrator:
                              self.log_system(f"⚠️ 型號未在標準表中匹配，保留原始值: '{raw_model}'")
                              # Keep original raw_model, don't clear!
                              norm_result['model'] = raw_model                             
+                norm_result = self._standardize_followme_result(norm_result)
                 # Add Metadata
 
                 # Add Metadata

@@ -6,7 +6,9 @@ param(
     [int]$PollSeconds = 300,
     [int]$PrimaryPasses = 3,
     [string]$PrimaryModel = "qwen/qwen3-vl-8b",
-    [string[]]$FinalModels = @("qwen3.5-9b-vlm", "qwen/qwen2.5-vl-7b", "gemma-4-12b-it-qat")
+    [string[]]$FinalModels = @("qwen3.5-9b-vlm", "qwen/qwen2.5-vl-7b", "gemma-4-12b-it-qat"),
+    [bool]$CurrentYearFirst = $true,
+    [bool]$RunAllYearsAfterCurrentYear = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,24 +151,57 @@ function Start-Uploader-IfNeeded {
     }
 }
 
+function Start-Recursive-IfNeeded {
+    $recursive = Get-MatchingProcess "recursive_ocr_flat_export.py"
+    if ($recursive.Count -gt 0) {
+        Write-RunLog "recursive runner already active; not starting another"
+        return
+    }
+    $recursiveOut = Join-Path $LogDir ("recursive_resume_after_questionable_{0}.out.log" -f $Stamp)
+    $recursiveErr = Join-Path $LogDir ("recursive_resume_after_questionable_{0}.err.log" -f $Stamp)
+    Write-RunLog "starting recursive OCR resume"
+    Start-Process -FilePath $Python `
+        -ArgumentList @(
+            "tools\recursive_ocr_flat_export.py",
+            "--source-root", $SourceRoot,
+            "--output-dir", $OutputDir,
+            "--backend-url", $BackendUrl,
+            "--api-base", "http://127.0.0.1:1234/v1",
+            "--api-key", "lm-studio",
+            "--model", $PrimaryModel,
+            "--poll-seconds", "20",
+            "--timeout-minutes", "360"
+        ) `
+        -WorkingDirectory $RepoRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $recursiveOut `
+        -RedirectStandardError $recursiveErr | Out-Null
+}
+
 function Invoke-QuestionablePass {
     param(
         [string]$Label,
-        [string]$Model
+        [string]$Model,
+        [bool]$IncludeOlder = $false
     )
     Ensure-BackendModel -Model $Model
     $safeLabel = $Label -replace "[^A-Za-z0-9_-]", "_"
     $candidateCsv = Join-Path $OutputDir ("_ocr_audit\questionable_rerun_candidates_{0}_{1}.csv" -f $safeLabel, $Stamp)
     $summaryCsv = Join-Path $OutputDir ("_ocr_audit\questionable_rerun_summary_{0}_{1}.csv" -f $safeLabel, $Stamp)
-    Write-RunLog "starting questionable rerun label=$Label model=$Model"
-    & $Python "tools\rerun_questionable_records.py" `
-        --source-root $SourceRoot `
-        --output-dir $OutputDir `
-        --backend-url $BackendUrl `
-        --include-older `
-        --execute `
-        --output-csv $candidateCsv `
-        --run-summary-csv $summaryCsv *>> $LogPath
+    Write-RunLog "starting questionable rerun label=$Label model=$Model includeOlder=$IncludeOlder"
+    $rerunArgs = @(
+        "tools\rerun_questionable_records.py",
+        "--source-root", $SourceRoot,
+        "--output-dir", $OutputDir,
+        "--backend-url", $BackendUrl,
+        "--execute",
+        "--output-csv", $candidateCsv,
+        "--run-summary-csv", $summaryCsv
+    )
+    if ($IncludeOlder) {
+        $rerunArgs += "--include-older"
+    }
+    & $Python @rerunArgs *>> $LogPath
     $rerunExit = $LASTEXITCODE
     Write-RunLog "questionable rerun label=$Label exit=$rerunExit"
     if ($rerunExit -ne 0) {
@@ -205,19 +240,34 @@ try {
         Start-Sleep -Seconds $PollSeconds
     }
 
-    for ($pass = 1; $pass -le $PrimaryPasses; $pass++) {
-        Invoke-QuestionablePass -Label ("qwen_pass_{0}" -f $pass) -Model $PrimaryModel
+    if ($CurrentYearFirst) {
+        Write-RunLog "current-year priority rerun starts"
+        for ($pass = 1; $pass -le $PrimaryPasses; $pass++) {
+            Invoke-QuestionablePass -Label ("current_year_qwen_pass_{0}" -f $pass) -Model $PrimaryModel -IncludeOlder $false
+        }
+        Write-RunLog "current-year priority rerun finished"
+    }
+
+    if ($RunAllYearsAfterCurrentYear) {
+        Write-RunLog "all-year questionable rerun starts"
+        for ($pass = 1; $pass -le $PrimaryPasses; $pass++) {
+            Invoke-QuestionablePass -Label ("all_year_qwen_pass_{0}" -f $pass) -Model $PrimaryModel -IncludeOlder $true
+        }
+        Write-RunLog "all-year questionable rerun finished"
     }
 
     $availableModels = Get-AvailableModelIds
     foreach ($model in $FinalModels) {
         if ($availableModels -contains $model) {
-            Invoke-QuestionablePass -Label ("final_{0}" -f $model) -Model $model
+            Invoke-QuestionablePass -Label ("final_{0}" -f $model) -Model $model -IncludeOlder $true
         } else {
             Write-RunLog "final model unavailable; skipped model=$model"
         }
     }
 
+    Refresh-UploadAndReviewSplit
+    Start-Uploader-IfNeeded
+    Start-Recursive-IfNeeded
     Write-RunLog "watcher finished"
 } finally {
     Pop-Location

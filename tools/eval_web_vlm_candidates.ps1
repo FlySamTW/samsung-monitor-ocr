@@ -34,8 +34,12 @@ function Summarize-Json([string]$Path) {
 
 function Invoke-HfDownload([string]$RepoId, [string[]]$Files, [string]$TargetDir) {
   New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
-  & $Python tools\download_hf_files.py --repo-id $RepoId --target-dir $TargetDir --files $Files
-  return $LASTEXITCODE
+  $downloadOutput = & $Python tools\download_hf_files.py --repo-id $RepoId --target-dir $TargetDir --files $Files 2>&1
+  $downloadExit = $LASTEXITCODE
+  foreach ($line in $downloadOutput) {
+    Write-Error -Message "$line" -ErrorAction Continue
+  }
+  return $downloadExit
 }
 
 function Test-Candidate($Candidate) {

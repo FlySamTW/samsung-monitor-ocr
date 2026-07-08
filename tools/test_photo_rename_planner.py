@@ -93,9 +93,36 @@ def test_distant_view_filename_omits_model_and_price():
     )
 
 
+def test_other_brand_model_is_kept_in_filename():
+    with tempfile.TemporaryDirectory() as tmp:
+        image_dir = Path(tmp)
+        image_path = image_dir / "M-台中市-西區-TK3C-公益-88.jpg"
+        image_path.write_bytes(b"fake")
+        plan = make_plan(
+            image_dir,
+            {
+                image_path.name: {
+                    "category": "單機",
+                    "view_type": "單機",
+                    "model": "它牌(ACER)",
+                    "price": "6990",
+                }
+            },
+            "202605",
+            "＄",
+            current_year=2026,
+        )
+    assert_equal(
+        plan[0]["target_name"],
+        "M-202605-台中市-西區-TK3C-公益-單機-它牌(ACER)-＄6990-88.jpg",
+        "它牌 filename",
+    )
+
+
 if __name__ == "__main__":
     test_price_symbol_by_period()
     test_make_plan_uses_period_for_price_symbol()
     test_discontinued_legacy_symbol_becomes_unknown()
     test_distant_view_filename_omits_model_and_price()
+    test_other_brand_model_is_kept_in_filename()
     print("photo_rename_planner historical price-symbol tests passed")

@@ -47,6 +47,36 @@ function Get-MatchingProcess([string]$Pattern) {
     })
 }
 
+function Get-StagedRerunProcesses {
+    @(Get-MatchingProcess "rerun_staged_candidates.py")
+}
+
+function Get-CurrentYearReviewCount {
+    $reviewCsv = Join-Path $OutputDir "_drive_upload\drive_upload_review_required.csv"
+    if (-not (Test-Path -LiteralPath $reviewCsv)) { return 0 }
+    $currentYear = [int](Get-Date).Year
+    try {
+        $rows = @(Import-Csv -LiteralPath $reviewCsv)
+    } catch {
+        return 0
+    }
+    $count = 0
+    foreach ($row in $rows) {
+        $yearText = [string]$row.year
+        $periodText = [string]$row.period
+        $rowYear = 0
+        if ($yearText -match "^\d{4}$") {
+            $rowYear = [int]$yearText
+        } elseif ($periodText -match "^(20\d{2})") {
+            $rowYear = [int]$Matches[1]
+        }
+        if ($rowYear -ge $currentYear) {
+            $count++
+        }
+    }
+    return $count
+}
+
 function Get-BackendStatus {
     try {
         return Invoke-RestMethod -Uri "$BackendUrl/api/status" -TimeoutSec 12
@@ -95,6 +125,12 @@ function Write-JsonFile($Path, $Value) {
 }
 
 function Restart-OcrIfStalled {
+    $staged = Get-StagedRerunProcesses
+    if ($staged.Count -gt 0) {
+        Write-RunLog "staged rerun active process_count=$($staged.Count); not applying OCR stall restart"
+        return
+    }
+
     $status = Get-BackendStatus
     if (-not $status -or -not [bool]$status.is_running) {
         return
@@ -187,6 +223,18 @@ function Repair-FolderSummaryIfShrunk {
 }
 
 function Start-RecursiveIfNeeded {
+    $staged = Get-StagedRerunProcesses
+    if ($staged.Count -gt 0) {
+        Write-RunLog "staged rerun active process_count=$($staged.Count); not starting recursive"
+        return
+    }
+
+    $currentYearReview = Get-CurrentYearReviewCount
+    if ($currentYearReview -gt 0) {
+        Write-RunLog "current-year review gate active rows=$currentYearReview; not starting recursive"
+        return
+    }
+
     $recursive = Get-MatchingProcess "recursive_ocr_flat_export.py"
     if ($recursive.Count -gt 0) {
         Write-RunLog "recursive runner ok process_count=$($recursive.Count)"
@@ -234,6 +282,18 @@ function Start-RecursiveIfNeeded {
 }
 
 function Start-AutoRerunWatcherIfNeeded {
+    $staged = Get-StagedRerunProcesses
+    if ($staged.Count -gt 0) {
+        Write-RunLog "staged rerun active process_count=$($staged.Count); not starting questionable watcher"
+        return
+    }
+
+    $currentYearReview = Get-CurrentYearReviewCount
+    if ($currentYearReview -gt 0) {
+        Write-RunLog "current-year review gate active rows=$currentYearReview; not starting questionable watcher"
+        return
+    }
+
     $watcher = @(Get-MatchingProcess "auto_rerun_questionable_after_recursive\.ps1" | Sort-Object CreationDate)
     if ($watcher.Count -gt 1) {
         $extras = @($watcher | Select-Object -Skip 1)
