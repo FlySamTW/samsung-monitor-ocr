@@ -51,7 +51,7 @@ from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
-VERSION = "v18.99 (FollowMe-Logic-Fix-OCG-v2.3)"
+VERSION = "v19.33 (FollowMe distant review guard)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -443,6 +443,36 @@ FOLLOWME_PHYSICAL_CLUE_TEXTS = (
 )
 
 
+FOLLOWME_DISPLAY_FIXTURE_TERMS = (
+    "立式螢幕",
+    "展示螢幕",
+    "顯示螢幕",
+    "直立螢幕",
+    "獨立螢幕",
+    "展示用",
+    "立式展示",
+    "直立展示",
+    "落地展示",
+    "移動式",
+    "支架",
+    "底座",
+    "托盤",
+)
+
+
+FOLLOWME_DISPLAY_LABEL_TERMS = (
+    "標籤",
+    "標牌",
+    "牌面",
+    "產品標示",
+    "上方",
+    "側標",
+    "旁邊",
+    "寫著",
+    "顯示",
+)
+
+
 FOLLOWME_PHYSICAL_NEGATIONS = (
     "沒有",
     "沒看到",
@@ -475,6 +505,30 @@ def has_positive_followme_physical_clue(text):
     return False
 
 
+def has_followme_display_fixture_clue(text):
+    """Return True for Samsung FollowMe signage attached to a visible standing display."""
+    raw_text = str(text or "")
+    upper = raw_text.upper().replace(" ", "")
+    has_followme = "FOLLOWME" in upper or "FOLLOWME" in upper.replace("FOLLOW ME", "FOLLOWME")
+    if not has_followme:
+        return False
+    has_samsung = "SAMSUNG" in upper or "三星" in raw_text
+    has_fixture = any(term in raw_text for term in FOLLOWME_DISPLAY_FIXTURE_TERMS)
+    has_label_context = any(term in raw_text for term in FOLLOWME_DISPLAY_LABEL_TERMS)
+    has_negative_product_context = any(
+        term in raw_text
+        for term in (
+            "只是海報",
+            "單純海報",
+            "廣告海報",
+            "不是商品",
+            "不是主角",
+            "旁邊廣告",
+        )
+    )
+    return has_samsung and (has_fixture or has_label_context) and not has_negative_product_context
+
+
 def should_block_followme_due_to_other_brand(text, context_text=""):
     """Block LG/other-brand false positives without losing a visible Samsung FollowMe unit."""
     raw_text = str(context_text or "")
@@ -504,7 +558,11 @@ def should_block_followme_due_to_other_brand(text, context_text=""):
         "托盤",
         "移動式",
     )
-    return not (has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in standing_display_terms))
+    return not (
+        has_followme_display_fixture_clue(raw_text)
+        or has_positive_followme_physical_clue(raw_text)
+        or any(term in raw_text for term in standing_display_terms)
+    )
 
 
 def is_followme_standard_name(model):
@@ -513,7 +571,7 @@ def is_followme_standard_name(model):
 
 def has_strong_single_unit_evidence(text):
     raw_text = str(text or "")
-    return has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in [
+    return has_followme_display_fixture_clue(raw_text) or has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in [
         "同一台主角",
         "只有一台",
         "單一主角",
@@ -716,6 +774,9 @@ def should_clear_non_samsung_price(model, context_text=""):
 
 
 def should_block_borrowed_model_rescue(context_text=""):
+    raw_text = str(context_text or "")
+    if has_followme_display_fixture_clue(raw_text):
+        return False
     text = str(context_text or "").upper().replace(" ", "")
     return any(token in text for token in [
         "不可借用",
@@ -2078,7 +2139,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
             "分類規則：\n"
             "1. 遠景：畫面主要是多台/整排/展示牆，沒有單一主角可對應型號與店內價，即使看到多張價牌也仍是遠景；只有主角自己的價牌清楚可讀才可跳到單機。遠景不填 model/price。\n"
-            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
+            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、Samsung FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；FollowMe 標牌若貼在直立展示螢幕/立式展示上，即使不是白色圓形底座也不能判遠景；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
             "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
             "4. 它牌單機：若主角明確是非三星螢幕，只在 model 填「它牌(品牌)」，例如 它牌(ACER)、它牌(ASUS)、它牌(LG)，不要填它牌的實際型號。\n"
             "價格規則：只讀主角自己的實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；它牌主角若有清楚店內價也可保留，但不做 Samsung 官網比價；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"

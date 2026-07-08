@@ -49,6 +49,30 @@ PHYSICAL_TERMS = (
     "\u79fb\u52d5\u5f0f",
 )
 
+FOLLOWME_DISPLAY_FIXTURE_TERMS = (
+    "\u7acb\u5f0f\u87a2\u5e55",
+    "\u5c55\u793a\u87a2\u5e55",
+    "\u986f\u793a\u87a2\u5e55",
+    "\u76f4\u7acb\u87a2\u5e55",
+    "\u7368\u7acb\u87a2\u5e55",
+    "\u5c55\u793a\u7528",
+    "\u7acb\u5f0f\u5c55\u793a",
+    "\u76f4\u7acb\u5c55\u793a",
+    "\u79fb\u52d5\u5f0f",
+)
+
+FOLLOWME_DISPLAY_LABEL_TERMS = (
+    "\u6a19\u7c64",
+    "\u6a19\u724c",
+    "\u724c\u9762",
+    "\u7522\u54c1\u6a19\u793a",
+    "\u4e0a\u65b9",
+    "\u5074\u6a19",
+    "\u65c1\u908a",
+    "\u5beb\u8457",
+    "\u986f\u793a",
+)
+
 SINGLE_UNIT_TERMS = (
     "\u5224\u65b7\u662f\u55ae\u6a5f",
     "\u9019\u5f35\u5df2\u5b8c\u6210\u8fa8\u8b58\uff1a\u55ae\u6a5f",
@@ -139,12 +163,16 @@ def hit_terms(text: str, terms: tuple[str, ...]) -> list[str]:
 def classify_risk(evidence: str) -> tuple[str, list[str]]:
     followme_hits = hit_terms(evidence, FOLLOWME_TERMS)
     physical_hits = hit_terms(evidence, PHYSICAL_TERMS)
+    display_fixture_hits = hit_terms(evidence, FOLLOWME_DISPLAY_FIXTURE_TERMS)
+    display_label_hits = hit_terms(evidence, FOLLOWME_DISPLAY_LABEL_TERMS)
     single_hits = hit_terms(evidence, SINGLE_UNIT_TERMS)
     side_label_hits = hit_terms(evidence, SIDE_LABEL_TERMS)
     has_samsung = "samsung" in evidence.lower() or "\u4e09\u661f" in evidence
     has_model_code = bool(MODEL_CODE_RE.search(evidence))
     has_price = bool(PRICE_RE.search(evidence))
 
+    if followme_hits and has_samsung and (display_fixture_hits or display_label_hits):
+        return "critical_followme_display_fixture", followme_hits + display_fixture_hits + display_label_hits
     if followme_hits:
         return "critical_followme_text", followme_hits + physical_hits
     if has_samsung and physical_hits:
@@ -173,8 +201,21 @@ def classify_final_followme_conflict(record: dict[str, str], plan_row: dict[str,
 
     thinking = str(record.get("thinking", "") or "")
     thinking_upper = thinking.upper().replace(" ", "")
+    corrected_distant_negation = any(
+        token in thinking
+        for token in (
+            "\u4e0d\u80fd\u56e0",
+            "\u4e0d\u53ef\u56e0",
+            "\u4e0d\u80fd\u5224\u70ba\u9060\u666f",
+            "\u4e0d\u53ef\u5224\u9060\u666f",
+            "\u4e0d\u662f\u9060\u666f",
+            "\u4e0d\u5c6c\u65bc\u9060\u666f",
+            "\u4e0d\u7b26\u5408\u9060\u666f",
+            "\u6700\u7d42\u6821\u6b63",
+        )
+    )
     hits: list[str] = []
-    if "整體符合「遠景」條件" in thinking or "遠景" in thinking:
+    if "整體符合「遠景」條件" in thinking or ("遠景" in thinking and not corrected_distant_negation):
         hits.append("final_followme_but_distant_narration")
     if any(token in thinking_upper for token in ("不是FOLLOWME", "非FOLLOWME", "沒有FOLLOWME", "無FOLLOWME")):
         hits.append("final_followme_but_negative_narration")

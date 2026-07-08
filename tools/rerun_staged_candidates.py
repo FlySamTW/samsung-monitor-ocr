@@ -76,6 +76,31 @@ FOLLOWME_RISK_TEXTS = (
     "\u79fb\u52d5\u5f0f",
     "\u6258\u76e4",
 )
+FOLLOWME_DISPLAY_FIXTURE_TERMS = (
+    "\u7acb\u5f0f\u87a2\u5e55",
+    "\u5c55\u793a\u87a2\u5e55",
+    "\u986f\u793a\u87a2\u5e55",
+    "\u76f4\u7acb\u87a2\u5e55",
+    "\u7368\u7acb\u87a2\u5e55",
+    "\u5c55\u793a\u7528",
+    "\u7acb\u5f0f\u5c55\u793a",
+    "\u76f4\u7acb\u5c55\u793a",
+    "\u79fb\u52d5\u5f0f",
+    "\u652f\u67b6",
+    "\u5e95\u5ea7",
+    "\u6258\u76e4",
+)
+FOLLOWME_DISPLAY_LABEL_TERMS = (
+    "\u6a19\u7c64",
+    "\u6a19\u724c",
+    "\u724c\u9762",
+    "\u7522\u54c1\u6a19\u793a",
+    "\u4e0a\u65b9",
+    "\u5074\u6a19",
+    "\u65c1\u908a",
+    "\u5beb\u8457",
+    "\u986f\u793a",
+)
 DISTANT_VIEW_TEXT = "\u9060\u666f"
 NEGATION_TEXTS = (
     "\u6c92\u6709",
@@ -165,6 +190,8 @@ def single_missing_ratio(records: list[dict[str, object]], candidate_names: set[
 
 
 def has_positive_followme_indicator(text: str) -> bool:
+    if has_followme_display_fixture_indicator(text):
+        return True
     lower = text.lower()
     for token in FOLLOWME_RISK_TEXTS:
         start = 0
@@ -178,6 +205,29 @@ def has_positive_followme_indicator(text: str) -> bool:
                 return True
             start = index + len(token_lower)
     return False
+
+
+def has_followme_display_fixture_indicator(text: str) -> bool:
+    raw = str(text or "")
+    upper = raw.upper().replace(" ", "")
+    has_followme = "FOLLOWME" in upper or "FOLLOWME" in upper.replace("FOLLOW ME", "FOLLOWME")
+    if not has_followme:
+        return False
+    has_samsung = "SAMSUNG" in upper or "\u4e09\u661f" in raw
+    has_fixture = any(term in raw for term in FOLLOWME_DISPLAY_FIXTURE_TERMS)
+    has_label_context = any(term in raw for term in FOLLOWME_DISPLAY_LABEL_TERMS)
+    has_negative_product_context = any(
+        term in raw
+        for term in (
+            "\u53ea\u662f\u6d77\u5831",
+            "\u55ae\u7d14\u6d77\u5831",
+            "\u5ee3\u544a\u6d77\u5831",
+            "\u4e0d\u662f\u5546\u54c1",
+            "\u4e0d\u662f\u4e3b\u89d2",
+            "\u65c1\u908a\u5ee3\u544a",
+        )
+    )
+    return has_samsung and (has_fixture or has_label_context) and not has_negative_product_context
 
 
 def followme_distant_risk(records: list[dict[str, object]], candidate_names: set[str]) -> list[str]:
