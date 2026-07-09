@@ -20,9 +20,9 @@ The user-facing sequence must be:
 
 1. Show the photo in the main preview.
 2. Play that photo's AI narration/typewriter text to completion.
-3. As soon as a new photo is visible in the main preview, show that same photo at the top of `辨識紀錄` as `處理中 / AI 即時判讀中`, even if the next AI narration has not started yet.
+3. Do not show unfinished backend items in `辨識紀錄`. The right rail is for completed, frontend-revealed records only.
 4. When that AI narration has finished but the next photo's narration has not started, keep the completed narration visible as a held previous-summary state. Never let the AI narration pane go blank or collapse to a black empty area during normal running.
-5. Only after AI narration completes, replace the placeholder with that photo's parsed thumbnail/model/price/status.
+5. Only after AI narration completes, reveal that photo's parsed thumbnail/model/price/status in `辨識紀錄`.
 
 The backend may finish multiple photos ahead, but the right panel must never reveal a photo's model/price/status before its AI narration has finished. It also must not leave the previous completed result at the top while a new photo is typing, because that looks like mismatched metadata. In `dashboard/src/App.jsx`, prefer the display queue and already-presented cutoff over `recent_results` whenever a queue exists. `recent_results` is backend-speed data and will confuse viewers if shown early.
 
@@ -298,8 +298,9 @@ npm.cmd --prefix dashboard run build
 ## 2026-07-04 UI And Runner Rules
 
 - Current dashboard build: `v19.29 (AI判讀視覺微調)`.
-- Boss-facing sequence must look like: photo appears, AI narration types, the same photo appears as `處理中 / AI 即時判讀中` in `辨識紀錄`, the completed narration stays visible until the next narration begins, then the parsed result appears after AI narration finishes.
+- Boss-facing sequence must look like: photo appears, AI narration types, the completed narration stays visible until the next narration begins, then the parsed result appears in `辨識紀錄` after AI narration finishes. Do not show unfinished backend queue items in the right rail.
 - Backend may process ahead, but the visible filename, preview, AI narration, and lower-left `辨識中` panel must all refer to the same displayed photo.
+- If backend correction changes `遠景` to `單機-FollowMe`, the UI must use the corrected final narration instead of raw live text that still says `不是 FollowMe`, `沒有 FollowMe`, or `整體符合遠景`.
 - The lower-left panel must preserve the historical AI judgment record, including `[THINK]` summaries and final classification lines. Filter only raw `JSON Error`, initialization/debug messages, batch start/stop noise, and internal queue wording.
 - Do not let `圖片損壞`, `無法識別圖片格式`, stop/interruption messages, or queue maintenance logs fill the lower-left panel. If live logs are only noise, show readable recent `display_queue` summaries instead.
 - Never black out, dim, or collapse the main preview between photos. Keep the previous full-resolution photo visible until the next full-resolution image has loaded.
@@ -342,6 +343,7 @@ npm.cmd --prefix dashboard run build
 
 - Staged rerun may rescue obvious foreground FollowMe false-distant outputs to `單機` plus a conservative FollowMe model before merge. Missing price still remains blocked by current-year upload guards, so this prevents false `遠景` upload without treating incomplete rows as finished.
 - `_ocr_staging` folders must be removed on abort or staging-copy failure to avoid filling `D:`.
+- After rerun, do a visual spot-check of remaining current-year distant risks. On 2026-07-09, `_ocr_audit\distant_followme_risk_2026_latest_visual_spotcheck.csv` still showed 6 likely single and 1 unclear among 10 risks, so "completed rerun" was not enough to approve upload.
 
 ## 2026-07-08 FollowMe With Nearby Non-Samsung Products
 

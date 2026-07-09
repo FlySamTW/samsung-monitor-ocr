@@ -383,7 +383,15 @@ The audit catches records saved as `遠景` even though evidence still contains 
 
 The sample CSV is not a rerun list. It includes high-risk rows and a deterministic sample of apparently true distant rows so another AI can estimate whether distant precision is improving after reruns. If a user-confirmed FollowMe or single foreground monitor appears in this sample, expand the risk rules before allowing 2026 uploads.
 
+2026-07-09 visual spot-check after v19.34 reruns produced `_ocr_audit\distant_followme_risk_2026_latest_visual_spotcheck.csv`: 3 true distant, 6 likely single, 1 unclear. Therefore "rerun completed" is not sufficient proof; current-year distant rows remain blocked unless the risk audit and visual spot-check no longer show likely single/FollowMe cases.
+
 `tools\prepare_drive_upload_manifest.py` reads `_ocr_audit\distant_followme_risk_*_latest.csv`; listed files are marked `current_year_followme_or_distant_risk_needs_rerun` and must stay out of Drive until rerun/repair clears them.
+
+## 2026-07-09 Dashboard Reveal Guard
+
+- The right-side `辨識紀錄` rail must only show frontend-revealed records while OCR is running. Do not backfill it directly from backend `display_queue`, because that makes the right thumbnail/result appear before the current photo's AI narration has finished and causes long-run drift.
+- Do not show a pending/processing card in `辨識紀錄` as if it were a completed OCR result. The visible sequence remains: photo appears, `AI 即時判讀中` types, then the completed record is revealed in the rail.
+- If backend correction changes a row from `遠景` to `單機-FollowMe`, the saved/displayed narration must be the corrected final narration. Never leave raw live text saying `不是 FollowMe`, `沒有 FollowMe`, or `整體符合遠景` beside a corrected FollowMe filename/card.
 
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 

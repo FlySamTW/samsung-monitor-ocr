@@ -888,29 +888,9 @@ const App = () => {
       }
     : null;
   const pendingPanelResult = activePendingResult || livePendingResult;
-  const liveRightPanelBackfill = (() => {
-    if (!isRunning) return [];
-    const used = new Set();
-    const activeKey = activePresentation?._queueKey || "";
-    if (pendingPanelResult?._queueKey) used.add(pendingPanelResult._queueKey);
-    if (activeKey) used.add(activeKey);
-    revealedResults.forEach((item) => {
-      if (item?._queueKey) used.add(item._queueKey);
-    });
-    return displayQueueHistoryItems
-      .filter((item) => {
-        if (!item?._queueKey) return false;
-        if (item._queueKey === activeKey) return false;
-        if (used.has(item._queueKey)) return false;
-        used.add(item._queueKey);
-        return true;
-      })
-      .map((item) => ({ ...item, _isCurrent: false, _backfilled: true }));
-  })();
+  const liveRightPanelBackfill = [];
   const rightPanelItems = (isRunning || revealedResults.length > 0)
-    ? (pendingPanelResult
-        ? [pendingPanelResult, ...revealedResults, ...liveRightPanelBackfill]
-        : [...revealedResults, ...liveRightPanelBackfill])
+    ? [...revealedResults]
         .slice(0, MAX_REVEALED_RESULTS)
     : (historicalPanelItems.length > 0 ? historicalPanelItems : displayQueueHistoryItems);
   const displayedFileName = activePresentation?.file_name || (isRunning ? (data.stream_file || data.current_file || "-") : (visibleImage ? "上一張畫面保留" : "-"));
