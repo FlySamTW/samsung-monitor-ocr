@@ -51,7 +51,7 @@ from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
-VERSION = "v19.35 (final narration and 2026 distant quarantine)"
+VERSION = "v19.36 (strict distant quarantine and disk-safe rerun)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -573,16 +573,45 @@ def is_followme_standard_name(model):
 
 def has_strong_single_unit_evidence(text):
     raw_text = str(text or "")
-    return has_followme_display_fixture_clue(raw_text) or has_positive_followme_physical_clue(raw_text) or any(term in raw_text for term in [
+    single_subject_terms = [
         "同一台主角",
         "只有一台",
         "單一主角",
+        "主角商品",
+        "主角自己的",
+        "主角螢幕",
+        "主體是",
+        "主角是",
+        "前景",
+        "中央一台",
+        "中間一台",
+        "中間的螢幕",
+        "主要螢幕",
+        "側標",
+        "實體標籤",
+        "實體價牌",
+        "型號標籤",
         "不是遠景",
         "不屬於遠景",
         "不符合遠景",
         "一般單機",
         "單機條件",
-    ])
+    ]
+    return (
+        has_followme_display_fixture_clue(raw_text)
+        or has_positive_followme_physical_clue(raw_text)
+        or any(term in raw_text for term in single_subject_terms)
+    )
+
+
+def should_demote_distant_to_single_review(view_type, context_text=""):
+    """A distant-view answer with its own single-subject clues is unsafe."""
+    raw_text = str(context_text or "")
+    if view_type != "遠景":
+        return False
+    if not has_strong_single_unit_evidence(raw_text):
+        return False
+    return True
 
 
 def should_block_rescue_from_distant_view(view_type, context_text=""):
@@ -2140,9 +2169,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             "你是三星商化照片 OCR 助理。每張照片都是全新任務，只看目前圖片。\n"
             "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
             "分類規則：\n"
-            "1. 遠景：畫面主要是多台/整排/展示牆，沒有單一主角可對應型號與店內價，即使看到多張價牌也仍是遠景；只有主角自己的價牌清楚可讀才可跳到單機。遠景不填 model/price。\n"
-            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、Samsung FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；FollowMe 標牌若貼在直立展示螢幕/立式展示上，即使不是白色圓形底座也不能判遠景；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
-            "3. 單機：一般三星螢幕或可看到主角價牌。若讀不到型號或價格，仍輸出單機並留空。\n"
+            "1. 遠景：必須同時符合「多台/整排/展示牆」且「沒有單一主角可對應型號與店內價」。不能只因背景很多台就判遠景；只要畫面有前景/中央/中間一台主螢幕、主角自己的價牌、側標、型號標籤、或可疑似對應同一台商品，就先判單機並盡量讀取，讀不到才留空。遠景不填 model/price。\n"
+            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、Samsung FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；FollowMe 標牌若貼在直立展示螢幕/立式展示/獨立展示螢幕上，即使不是白色圓形底座也不能判遠景；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
+            "3. 單機：一般三星螢幕、它牌主角螢幕、FollowMe、或可看到主角價牌/側標/實體標籤都屬於單機。若讀不到型號或價格，仍輸出單機並留空，不要改成遠景。\n"
             "4. 它牌單機：若主角明確是非三星螢幕，只在 model 填「它牌(品牌)」，例如 它牌(ACER)、它牌(ASUS)、它牌(LG)，不要填它牌的實際型號。\n"
             "價格規則：只讀主角自己的實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；它牌主角若有清楚店內價也可保留，但不做 Samsung 官網比價；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"
             "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
@@ -2928,6 +2957,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 console.print("[dim]⚠️ [遠景保護] 遠景描述中的零散型號/價格不補入正式答案[/dim]")
             data_obj["model"] = None
             data_obj["price"] = None
+        elif should_demote_distant_to_single_review(data_obj.get("view_type"), thinking_text):
+            console.print("[yellow]⚠️ [遠景降級] 遠景答案含單一主角/側標/價牌/FollowMe 線索 → 改單機待補，不當遠景放行[/yellow]")
+            data_obj["view_type"] = "單機"
+            data_obj["category"] = "單機"
+            data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
 
         side_label_followme = rescue_followme_32_from_side_label(thinking_text)
         if side_label_followme and data_obj.get("view_type") == "遠景":

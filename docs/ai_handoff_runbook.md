@@ -435,6 +435,19 @@ Important implementation notes:
 - `tools\rerun_staged_candidates.py` now performs conservative FollowMe rescue before the abort check: obvious foreground FollowMe false-distant results become `單機` with an inferred FollowMe family model, while missing prices remain blocked by current-year upload guards.
 - The tool also removes `_ocr_staging` folders on abort or staging-copy failure. If `D:` fills again, check stale `_ocr_staging` first.
 
+## 2026-07-09 Pause And Next Resume
+
+- User requested a full pause, disk cleanup, git, and AI handoff.
+- Do not restart OCR/upload automatically when reading this runbook. First inspect `docs\handoff_20260709_pause.md`.
+- At pause, no OCR/backend/upload process should be alive. If one is alive unexpectedly, diagnose before continuing.
+- Waste cleanup removed output staging, upload staging, repo logs, non-venv caches, old flat-output backups, and old bad/no-compare 2026 backups.
+- The next resume should prioritize 2026 only:
+  - completed: `202605` pass3, 80/80;
+  - remaining: `202604` 190, `202603` 31, `202602` 176, `202601` 154.
+- Use `_ocr_audit\current_year_distant_and_risk_v1936_pass3_selected_20260709_1605.csv` as the latest candidate list.
+- Rebuild risk audit and upload manifest after each 2026 batch. Upload only rows that become ready.
+- Last known manifest snapshot: `total_images=65546`, `ready=52122`, `uploaded_skipped=52122`, `ready_pending=0`, `review_required=13424`, `stale_uploaded_review_required=0`.
+
 ## 2026-07-08 FollowMe With Nearby Non-Samsung Products
 
 - User-confirmed bad sample: `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` was described as LG CordZero foreground plus `Samsung Follow Me` standing display and incorrectly treated as distant view. The backend now allows Samsung FollowMe rescue even when LG text appears nearby, as long as Samsung FollowMe/standing-display evidence exists.

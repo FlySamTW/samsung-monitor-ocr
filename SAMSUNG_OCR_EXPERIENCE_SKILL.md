@@ -364,6 +364,15 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 
 `tools\prepare_drive_upload_manifest.py` reads `_ocr_audit\distant_followme_risk_*_latest.csv`; any listed output file is review-required with `current_year_followme_or_distant_risk_needs_rerun` and must not be uploaded until rerun/repair clears it.
 
+## 2026-07-09 Pause Handoff Skill Note
+
+- If taking over after the pause, read `docs\handoff_20260709_pause.md` first.
+- The project is intentionally stopped. Do not assume a missing OCR process is a crash.
+- Resume 2026 before older years. v19.36 pass3 completed `202605`; continue `202604`, `202603`, `202602`, then `202601` from `_ocr_audit\current_year_distant_and_risk_v1936_pass3_selected_20260709_1605.csv`.
+- Current-year `遠景` is not automatically trusted. Re-audit with `tools\audit_distant_followme_risk.py`, rebuild upload manifest, and upload only ready rows.
+- `tools\rerun_staged_candidates.py` is disk-safe by default and should not create huge flat-output backups unless `--keep-flat-output-backup` is explicitly requested.
+- Never upload `review_required` rows. Last pause snapshot: `ready_pending=0`, `uploaded_skipped=52122`, `review_required=13424`.
+
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 
 - `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.

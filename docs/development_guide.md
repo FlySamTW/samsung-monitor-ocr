@@ -395,6 +395,18 @@ Important: visual spot-check CSV files are only for estimating rule quality. The
 - Do not show a pending/processing card in `辨識紀錄` as if it were a completed OCR result. The visible sequence remains: photo appears, `AI 即時判讀中` types, then the completed record is revealed in the rail.
 - If backend correction changes a row from `遠景` to `單機-FollowMe`, the saved/displayed narration must be the corrected final narration. Never leave raw live text saying `不是 FollowMe`, `沒有 FollowMe`, or `整體符合遠景` beside a corrected FollowMe filename/card.
 
+## 2026-07-09 Pause Handoff
+
+- Project was paused by user request after disk cleanup. Do not resume old-year OCR first.
+- No backend, staged rerun, recursive OCR, auto-rerun waiter, rclone uploader, or upload helper should be running at handoff.
+- Waste folders removed: output `_ocr_staging`, Drive upload staging, repo `logs`, non-venv Python caches, old `flat_output_backup_before_*`, and old `_bad_no_compare_2026_backup_*`.
+- Backend version is now `v19.36 (strict distant quarantine and disk-safe rerun)`.
+- `tools\rerun_staged_candidates.py` is now disk-safe by default: it removes old flat output for the target folder before rebuilding, instead of moving the entire folder output into huge backup directories. Use `--keep-flat-output-backup` only when explicitly needed.
+- Latest v19.36 pass3 completed only `202605` (80/80 success). Remaining current-year pass3 candidates are `202604` 190, `202603` 31, `202602` 176, `202601` 154.
+- Continue from `_ocr_audit\current_year_distant_and_risk_v1936_pass3_selected_20260709_1605.csv`; preserve completed `202605`.
+- Latest upload manifest had `ready_pending=0`, `uploaded_skipped=52122`, `review_required=13424`. Do not upload `review_required`.
+- Full handoff is in `docs\handoff_20260709_pause.md`.
+
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 
 - `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.

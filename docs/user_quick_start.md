@@ -58,6 +58,10 @@ set LOCAL_LLM_CONTEXT_LENGTH=16384
 - 左側 AI 判讀區若顯示 `上一張摘要保留中 · 下一張判讀中`，代表系統正在準備下一段判讀內容；這是為了避免監看畫面中途變黑或空白。
 - 若 OCR 很快，介面會略過太舊的展示項來追上最新照片，但不會刪除 OCR 結果或輸出檔案。
 - 上傳 Google Drive 的進度不放在主介面；需要時查看 `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json`。
+## Pause Handoff Note
+
+If this project is handed to another AI after 2026-07-09, do not press a restart button or resume old-year OCR first. Read `docs\handoff_20260709_pause.md`, then continue the 2026 pass3 rerun before returning to older years. Upload only rows marked ready by the Drive manifest; review-required rows must stay local until rerun or manual correction clears them.
+
 ## Dashboard viewing rule
 
 During a live run, the main screen is intentionally staged for viewers: photo first, AI judgment text always visible, then the right-side result is revealed. If the system is already judging the next photo, the AI area may hold the previous summary with a status label instead of going blank.

@@ -101,6 +101,30 @@ FOLLOWME_DISPLAY_LABEL_TERMS = (
     "\u5beb\u8457",
     "\u986f\u793a",
 )
+SINGLE_UNIT_RISK_TEXTS = (
+    "\u5224\u65b7\u662f\u55ae\u6a5f",
+    "\u9019\u5f35\u5df2\u5b8c\u6210\u8fa8\u8b58\uff1a\u55ae\u6a5f",
+    "\u55ae\u4e00\u4e3b\u89d2",
+    "\u4e3b\u89d2\u5546\u54c1",
+    "\u4e3b\u89d2\u81ea\u5df1\u7684",
+    "\u4e3b\u89d2\u87a2\u5e55",
+    "\u4e3b\u9ad4\u662f",
+    "\u4e3b\u89d2\u662f",
+    "\u524d\u666f",
+    "\u4e2d\u592e\u4e00\u53f0",
+    "\u4e2d\u9593\u4e00\u53f0",
+    "\u4e2d\u9593\u7684\u87a2\u5e55",
+    "\u4e3b\u8981\u87a2\u5e55",
+    "\u5074\u6a19",
+    "\u5be6\u9ad4\u6a19\u7c64",
+    "\u5be6\u9ad4\u50f9\u724c",
+    "\u578b\u865f\u6a19\u7c64",
+    "\u4e0d\u662f\u9060\u666f",
+    "\u4e0d\u5c6c\u65bc\u9060\u666f",
+    "\u4e0d\u7b26\u5408\u9060\u666f",
+    "\u4e00\u822c\u55ae\u6a5f",
+    "\u55ae\u6a5f\u689d\u4ef6",
+)
 DISTANT_VIEW_TEXT = "\u9060\u666f"
 NEGATION_TEXTS = (
     "\u6c92\u6709",
@@ -207,6 +231,25 @@ def has_positive_followme_indicator(text: str) -> bool:
     return False
 
 
+def has_single_unit_indicator(text: str) -> bool:
+    raw = str(text or "")
+    if has_positive_followme_indicator(raw):
+        return True
+    lower = raw.lower()
+    for token in SINGLE_UNIT_RISK_TEXTS:
+        token_lower = token.lower()
+        start = 0
+        while True:
+            index = lower.find(token_lower, start)
+            if index < 0:
+                break
+            before = lower[max(0, index - 28) : index]
+            if not any(negation in before for negation in NEGATION_TEXTS):
+                return True
+            start = index + len(token_lower)
+    return False
+
+
 def has_followme_display_fixture_indicator(text: str) -> bool:
     raw = str(text or "")
     upper = raw.upper().replace(" ", "")
@@ -293,6 +336,15 @@ def build_rescued_followme_thinking(record: dict[str, object], evidence: str) ->
     )
 
 
+def build_demoted_single_thinking(record: dict[str, object]) -> str:
+    model = str(record.get("model") or record.get("human_model") or "").strip() or NO_MODEL_TEXT
+    price = str(record.get("price") or record.get("human_price") or "").strip() or NO_PRICE_TEXT
+    return (
+        f"最終校正：這張含單一主角、側標、實體價牌或 FollowMe 線索，不能當遠景放行；"
+        f"暫判為{SINGLE_VIEW_TEXT}，型號 {model}，價格 {price}。"
+    )
+
+
 def rescue_followme_distant_records(records: list[dict[str, object]], candidate_names: set[str]) -> list[str]:
     """Turn obvious foreground FollowMe false-distant outputs into single-unit candidates.
 
@@ -330,6 +382,37 @@ def rescue_followme_distant_records(records: list[dict[str, object]], candidate_
         record["stream_buffer"] = record["thinking"]
         rescued.append(name)
     return rescued
+
+
+def demote_single_clue_distant_records(records: list[dict[str, object]], candidate_names: set[str]) -> list[str]:
+    """Turn unsafe distant outputs with single-unit clues into blocked single-unit rows."""
+    demoted: list[str] = []
+    for record in records:
+        name = str(record.get("file_name") or record.get("filename") or "")
+        if name not in candidate_names:
+            continue
+        view_text = " ".join(text_value(record.get(key)) for key in ("view_type", "category", "human_category"))
+        if DISTANT_VIEW_TEXT not in view_text:
+            continue
+        evidence = " ".join(
+            text_value(record.get(key))
+            for key in (
+                "thinking",
+                "stream_buffer",
+                "raw",
+                "notes",
+                "model",
+                "human_model",
+            )
+        )
+        if not has_single_unit_indicator(evidence):
+            continue
+        record["view_type"] = SINGLE_VIEW_TEXT
+        record["category"] = SINGLE_VIEW_TEXT
+        record["thinking"] = build_demoted_single_thinking(record)
+        record["stream_buffer"] = record["thinking"]
+        demoted.append(name)
+    return demoted
 
 
 def abort_reason_for_rerun(
@@ -483,7 +566,7 @@ def merge_records(
     return merged, updated, appended
 
 
-def backup_existing_outputs(audit_folder: Path, dry_run: bool) -> tuple[Path, int]:
+def clear_existing_outputs(audit_folder: Path, dry_run: bool, keep_backup: bool = False) -> tuple[Path, int, str]:
     copied_rows = read_dict_csv(audit_folder / "copied.csv")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = audit_folder / f"flat_output_backup_before_staged_rerun_{stamp}"
@@ -497,9 +580,13 @@ def backup_existing_outputs(audit_folder: Path, dry_run: bool) -> tuple[Path, in
             continue
         count += 1
         if not dry_run:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(target), str(backup_dir / target.name))
-    return backup_dir, count
+            if keep_backup:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(target), str(backup_dir / target.name))
+            else:
+                target.unlink()
+    action = "backed_up" if keep_backup else "removed"
+    return backup_dir, count, action
 
 
 def split_plan(plan: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -516,7 +603,11 @@ def rebuild_outputs(
     period: str,
     merged_rows: list[dict[str, str]],
 ) -> dict[str, object]:
-    backup_dir, backup_count = backup_existing_outputs(audit_folder, args.dry_run)
+    backup_dir, backup_count, backup_action = clear_existing_outputs(
+        audit_folder,
+        args.dry_run,
+        getattr(args, "keep_flat_output_backup", False),
+    )
     success_path = audit_folder / "success_records.csv"
     if success_path.exists() and not args.dry_run:
         backup_success = audit_folder / f"success_records.csv.before_staged_rerun_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -548,7 +639,8 @@ def rebuild_outputs(
         "blocked_path": str(blocked_path) if blocked_plan else "",
         "copied": len(copied),
         "backed_up": backup_count,
-        "backup_dir": str(backup_dir) if backup_count else "",
+        "backup_action": backup_action,
+        "backup_dir": str(backup_dir) if backup_count and backup_action == "backed_up" else "",
     }
 
 
@@ -602,6 +694,10 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     if rescued_followme:
         summary["rescued_followme_distant"] = len(rescued_followme)
         summary["rescued_followme_sample"] = ";".join(rescued_followme[:5])
+    demoted_single = demote_single_clue_distant_records(rerun_records, candidate_names)
+    if demoted_single:
+        summary["demoted_distant_single_clue"] = len(demoted_single)
+        summary["demoted_distant_single_sample"] = ";".join(demoted_single[:5])
     abort_reason, guard_details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
     if abort_reason:
         summary.update(guard_details)
@@ -623,7 +719,11 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     summary["processed"] = (status.get("stats") or {}).get("processed", "")
     summary["aborted"] = 0
     summary["abort_reason"] = ""
-    print(f"[export] {source_folder.name} updated={updated} copied={summary.get('copied')} backup={summary.get('backed_up')}", flush=True)
+    print(
+        f"[export] {source_folder.name} updated={updated} copied={summary.get('copied')} "
+        f"old_outputs_{summary.get('backup_action')}={summary.get('backed_up')}",
+        flush=True,
+    )
     restore_backend_work_dir(args.backend_url, source_folder)
     if not args.keep_staging:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -643,6 +743,11 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-staging", action="store_true")
+    parser.add_argument(
+        "--keep-flat-output-backup",
+        action="store_true",
+        help="保留上一輪 flat output 照片備份；預設直接刪除舊輸出以避免大量重跑塞滿硬碟。",
+    )
     parser.add_argument("--max-folders", type=int, default=0)
     parser.add_argument("--max-per-folder", type=int, default=0)
     parser.add_argument("--poll-seconds", type=int, default=30)
