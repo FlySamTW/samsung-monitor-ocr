@@ -369,3 +369,13 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 - `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.
 - It does not interrupt an active staged rerun and does not touch the visible dashboard on port 5000.
 - Current live waiter was started on 2026-07-08 around 23:38 with output logs `logs\followme_risk_waiter_*.log` and main script log `logs\followme_risk_after_current_*.log`.
+
+## 2026-07-09 Current-Year Distant Escalation
+
+- Current-year distant-view precision is not trusted. A visual sample after rerun still showed many likely single/FollowMe foreground products, so 2026 distant-view rows are blocked by default.
+- Upload gate: current/future-year distant-view output must not go to Drive unless it is visually accepted as true distant or corrected to a concrete `單機`, `FollowMe`, or `它牌(...)` result.
+- `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv` for current-year files that were uploaded before stricter gates but are now review-required. Treat those as stale remote deliverables to remove or replace after rerun.
+- Active 2026 repair flow: scan with `tools\rerun_questionable_records.py`, then run `tools\rerun_staged_candidates.py --reason-contains 遠景` against the resulting current-year candidate CSV, then refresh risk audit and upload manifests.
+- `tools\rerun_staged_candidates.py` must restore the backend work directory to the original source folder before deleting `_ocr_staging`; otherwise the dashboard can keep polling a deleted staging path and repeatedly show "Failed to list actual files".
+- Backend/UI rule: durable AI history and right-side result cards must use the final post-processed narration from `build_final_display_thinking()`. Never leave a corrected FollowMe result beside visible text saying it is not FollowMe or is distant view.
+- Live 2026 distant rerun started 2026-07-09: log `logs\current_year_distant_staged_rerun_20260709_103552.out.log`, candidates `_ocr_audit\current_year_distant_staged_rerun_candidates_20260709_103552.csv`, summary `_ocr_audit\current_year_distant_staged_rerun_summary_20260709_103552.csv`.

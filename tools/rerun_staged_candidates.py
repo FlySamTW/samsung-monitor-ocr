@@ -410,6 +410,14 @@ def staging_dir_for(root: Path, stamp: str, folder: Path, period: str) -> Path:
     return root / stamp / f"{period}_{safe_name}_{digest}"
 
 
+def restore_backend_work_dir(base_url: str, source_folder: Path) -> None:
+    """Move the dashboard/backend away from a temporary staging folder."""
+    try:
+        json_request(base_url, "/api/set_work_dir", {"dir": str(source_folder)}, timeout=30)
+    except Exception as exc:
+        print(f"[warn] restore work dir failed: {source_folder} error={exc}", flush=True)
+
+
 def stage_images(rows: list[dict[str, object]], staging_dir: Path) -> int:
     staging_dir.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -601,6 +609,7 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
         summary["aborted"] = 1
         summary["abort_reason"] = abort_reason
         print(f"[abort] {source_folder.name} reason={abort_reason} details={guard_details}", flush=True)
+        restore_backend_work_dir(args.backend_url, source_folder)
         if not args.keep_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
         return summary
@@ -615,6 +624,7 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     summary["aborted"] = 0
     summary["abort_reason"] = ""
     print(f"[export] {source_folder.name} updated={updated} copied={summary.get('copied')} backup={summary.get('backed_up')}", flush=True)
+    restore_backend_work_dir(args.backend_url, source_folder)
     if not args.keep_staging:
         shutil.rmtree(staging_dir, ignore_errors=True)
     return summary

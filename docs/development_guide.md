@@ -398,3 +398,17 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 - `tools\run_followme_risk_rerun_after_current.ps1` waits for the current staged rerun to finish, refreshes `distant_followme_risk_2026_latest.csv/json`, restarts only backend port 5001 so the latest FollowMe rules are loaded, and then staged-reruns just those risk rows.
 - It does not interrupt an active staged rerun and does not touch the visible dashboard on port 5000.
 - Current live waiter was started on 2026-07-08 around 23:38 with output logs `logs\followme_risk_waiter_*.log` and main script log `logs\followme_risk_after_current_*.log`.
+
+## 2026-07-09 Current-Year Distant Escalation
+
+- A visual spot-check of 2026 distant-view output found an unacceptable false-distant rate: the sample included many likely single/FolloMe foreground products. Therefore current-year distant-view is not a low-risk class.
+- Current/future-year distant-view output must stay out of Drive unless it is visually accepted as true distant or corrected to a concrete `單機` / `FollowMe` / `它牌(...)` result.
+- `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv`. These are files that were already uploaded earlier but are now blocked by stricter review gates; do not count them as done.
+- The active 2026 repair path is:
+  1. scan current-year questionable records with `tools\rerun_questionable_records.py`;
+  2. rerun only the distant bucket with `tools\rerun_staged_candidates.py --reason-contains 遠景`;
+  3. refresh `tools\audit_distant_followme_risk.py`;
+  4. rebuild upload manifests and upload only `ready` rows.
+- `tools\rerun_staged_candidates.py` must restore the backend work directory to the original source folder before deleting `_ocr_staging`. Otherwise the dashboard can keep polling a deleted staging path and repeatedly report "Failed to list actual files".
+- The backend must log/display only final corrected AI narration after post-processing. Raw model narration may temporarily stream while processing, but durable history/result cards must use `build_final_display_thinking()` so a corrected FollowMe result never remains beside text saying it is not FollowMe or is distant view.
+- 2026-07-09 live run: `logs\current_year_distant_staged_rerun_20260709_103552.out.log`, candidates `D:\00_商化\00_已OCR照片\_ocr_audit\current_year_distant_staged_rerun_candidates_20260709_103552.csv`, summary `D:\00_商化\00_已OCR照片\_ocr_audit\current_year_distant_staged_rerun_summary_20260709_103552.csv`.

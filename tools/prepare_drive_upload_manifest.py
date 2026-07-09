@@ -77,25 +77,48 @@ def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[str]]:
     return uploaded_names, uploaded_paths
 
 
-def load_current_year_risk_names(output_root: Path) -> set[str]:
+def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
+    """Load current-year distant rows that passed a visual spot-check."""
+    audit_root = output_root / "_ocr_audit"
+    accepted: set[str] = set()
+    for path in audit_root.glob("distant_followme_risk_*_latest_visual_spotcheck.csv"):
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                if (row.get("visual_judgment") or "").strip() != "true_distant":
+                    continue
+                target_name = (row.get("target_name") or "").strip()
+                if target_name:
+                    accepted.add(target_name)
+    return accepted
+
+
+def load_current_year_risk_names(output_root: Path, accepted_distant_names: set[str] | None = None) -> set[str]:
     """Load current-year FollowMe/distant quality risks that must not upload."""
     audit_root = output_root / "_ocr_audit"
+    accepted_distant_names = accepted_distant_names or set()
     risk_names: set[str] = set()
     for path in audit_root.glob("distant_followme_risk_*_latest.csv"):
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             for row in csv.DictReader(f):
                 target_name = (row.get("target_name") or "").strip()
-                if target_name:
+                if target_name and target_name not in accepted_distant_names:
                     risk_names.add(target_name)
     return risk_names
 
 
-def classify_file(path: Path, output_root: Path, max_bytes: int, risk_names: set[str] | None = None) -> ManifestRow:
+def classify_file(
+    path: Path,
+    output_root: Path,
+    max_bytes: int,
+    risk_names: set[str] | None = None,
+    accepted_distant_names: set[str] | None = None,
+) -> ManifestRow:
     file_name = path.name
     period = infer_period(file_name)
     year = period[:4] if period else ""
     reasons: list[str] = []
     risk_names = risk_names or set()
+    accepted_distant_names = accepted_distant_names or set()
 
     if not period:
         reasons.append("missing_period")
@@ -127,7 +150,8 @@ def classify_file(path: Path, output_root: Path, max_bytes: int, risk_names: set
         symbol = price_match.group("symbol") if price_match else ""
         if period_year >= 2026:
             if is_distant_view:
-                reasons.append("current_year_distant_view_needs_rerun")
+                if file_name not in accepted_distant_names:
+                    reasons.append("current_year_distant_view_needs_rerun")
             elif not price_match:
                 reasons.append("current_year_missing_price")
             elif (not is_other_brand) and symbol not in COMPARE_SYMBOLS:
@@ -163,6 +187,46 @@ def write_csv(path: Path, rows: list[ManifestRow]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row))
+
+
+def write_stale_uploaded_review_csv(path: Path, rows: list[ManifestRow], uploaded_names: set[str]) -> int:
+    """List files already uploaded earlier but now blocked by stricter review gates."""
+    stale_rows: list[ManifestRow] = []
+    for row in rows:
+        try:
+            is_current_year = bool(row.year) and int(row.year) >= 2026
+        except ValueError:
+            is_current_year = False
+        if row.file_name in uploaded_names and is_current_year:
+            stale_rows.append(row)
+    fieldnames = [
+        "year",
+        "drive_folder",
+        "file_name",
+        "source_path",
+        "reasons",
+        "status",
+        "remote_path",
+        "action",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in stale_rows:
+            writer.writerow(
+                {
+                    "year": row.year,
+                    "drive_folder": row.drive_folder,
+                    "file_name": row.file_name,
+                    "source_path": row.source_path,
+                    "reasons": row.reasons,
+                    "status": "uploaded_but_now_review_required",
+                    "remote_path": f"{row.drive_folder}/{row.file_name}",
+                    "action": "remove_remote_or_replace_after_rerun",
+                }
+            )
+    return len(stale_rows)
 
 
 def newest_first_key(row: ManifestRow) -> tuple[int, str]:
@@ -220,7 +284,8 @@ def main() -> int:
     default_uploaded_log = manifest_dir / "drive_upload_uploaded.csv"
     uploaded_log = Path(args.uploaded_log).resolve() if args.uploaded_log else default_uploaded_log
     uploaded_names, uploaded_paths = load_uploaded(uploaded_log)
-    risk_names = load_current_year_risk_names(output_root)
+    accepted_distant_names = load_visual_accepted_distant_names(output_root)
+    risk_names = load_current_year_risk_names(output_root, accepted_distant_names)
 
     all_rows: list[ManifestRow] = []
     for path in sorted(output_root.rglob("*")):
@@ -234,7 +299,7 @@ def main() -> int:
             continue
         if path.suffix.lower() not in IMAGE_EXTS:
             continue
-        all_rows.append(classify_file(path, output_root, args.max_bytes, risk_names))
+        all_rows.append(classify_file(path, output_root, args.max_bytes, risk_names, accepted_distant_names))
 
     all_rows.sort(key=newest_first_key)
     ready_rows = sorted((row for row in all_rows if row.status == "ready"), key=newest_first_key)
@@ -251,6 +316,11 @@ def main() -> int:
     write_csv(manifest_dir / "drive_upload_ready_pending.csv", pending_rows)
     write_csv(manifest_dir / "drive_upload_review_required.csv", review_rows)
     write_csv(manifest_dir / "drive_upload_next_batch.csv", upload_rows)
+    stale_uploaded_review = write_stale_uploaded_review_csv(
+        manifest_dir / "drive_upload_stale_uploaded_review_required.csv",
+        review_rows,
+        uploaded_names,
+    )
 
     staging_map = ""
     if upload_rows and not args.no_stage:
@@ -273,9 +343,11 @@ def main() -> int:
         "uploaded_skipped": len(ready_rows) - len(pending_rows),
         "ready_pending": len(pending_rows),
         "review_required": len(review_rows),
+        "stale_uploaded_review_required": stale_uploaded_review,
         "next_batch": len(upload_rows),
         "staging_map": staging_map,
         "max_bytes": args.max_bytes,
+        "visual_accepted_distant": len(accepted_distant_names),
         "ready_by_year": dict(sorted(by_year.items(), reverse=True)),
         "pending_by_year": dict(sorted(pending_by_year.items(), reverse=True)),
     }

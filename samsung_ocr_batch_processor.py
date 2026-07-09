@@ -51,7 +51,7 @@ from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 
-VERSION = "v19.34 (FollowMe display-sign rescue)"
+VERSION = "v19.35 (final narration and 2026 distant quarantine)"
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -3087,9 +3087,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 for code_term, natural_term in replacements.items():
                     clean_think = re.sub(re.escape(code_term), natural_term, clean_think, flags=re.IGNORECASE)
 
-                # [v17.26 Fix] Ensure what we show is what we save
-                # We update the 'thinking' field in result_json LATER, so we just log here.
-                orchestrator.log_system(f"[THINK] {clean_think}")
+                # Do not write the raw model narration into the durable UI log yet.
+                # Post-processing may rescue false distant-view / FollowMe cases later;
+                # the user-facing history must show the final corrected narration.
 
             # ... (Rest of existing validation logic for model/price/cat) ...
             parsed_model = result_json.get("model")
@@ -3306,6 +3306,12 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # Ensure we use the safest thinking_text version captured earlier
     final_think = thinking_text if 'thinking_text' in locals() else ""
     result_json['thinking'] = build_final_display_thinking(result_json, final_think)
+    if orchestrator:
+        final_display_thinking = str(result_json.get('thinking') or '').strip()
+        if final_display_thinking:
+            orchestrator.log_system(f"[THINK] {final_display_thinking}")
+            if getattr(orchestrator, 'stream_file', None) == fname:
+                orchestrator.stream_buffer = to_tc(final_display_thinking[:800])
 
     return result_json
 
