@@ -78,15 +78,38 @@ def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[str]]:
 
 
 def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
-    """Load current-year distant rows that passed a visual spot-check."""
+    """Load explicitly approved current-year distant rows.
+
+    Visual spot-check files are intentionally not used for upload approval. A
+    spot-check estimates whether the OCR rules are improving; it does not prove
+    every current-year distant-view file is safe to send to Drive.
+    """
     audit_root = output_root / "_ocr_audit"
     accepted: set[str] = set()
-    for path in audit_root.glob("distant_followme_risk_*_latest_visual_spotcheck.csv"):
+    approval_files = [
+        audit_root / "current_year_distant_upload_approval.csv",
+        audit_root / "current_year_distant_upload_approval_latest.csv",
+    ]
+    approval_files.extend(sorted(audit_root.glob("current_year_distant_upload_approval_*.csv")))
+    for path in approval_files:
+        if not path.exists():
+            continue
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             for row in csv.DictReader(f):
-                if (row.get("visual_judgment") or "").strip() != "true_distant":
+                verdict = (
+                    row.get("upload_approved")
+                    or row.get("verified_status")
+                    or row.get("visual_judgment")
+                    or ""
+                ).strip()
+                if verdict not in {"true_distant", "approved", "yes", "1", "Y", "y"}:
                     continue
-                target_name = (row.get("target_name") or "").strip()
+                target_name = (
+                    row.get("target_name")
+                    or row.get("file_name")
+                    or row.get("current_target_name")
+                    or ""
+                ).strip()
                 if target_name:
                     accepted.add(target_name)
     return accepted

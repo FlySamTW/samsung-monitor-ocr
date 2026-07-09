@@ -385,6 +385,8 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 
 2026-07-09 visual spot-check after v19.34 reruns produced `_ocr_audit\distant_followme_risk_2026_latest_visual_spotcheck.csv`: 3 true distant, 6 likely single, 1 unclear. Therefore "rerun completed" is not sufficient proof; current-year distant rows remain blocked unless the risk audit and visual spot-check no longer show likely single/FollowMe cases.
 
+Important: visual spot-check CSV files are only for estimating rule quality. They must not be used as upload approval. `tools\prepare_drive_upload_manifest.py` intentionally ignores `distant_followme_risk_*_latest_visual_spotcheck.csv` when deciding whether a current/future-year `遠景` file is Drive-ready. A current/future-year distant file can only become upload-ready if it is corrected to a concrete `單機` / `FollowMe` / `它牌(...)` result, or if it appears in an explicit approval file such as `_ocr_audit\current_year_distant_upload_approval.csv` with `upload_approved=approved` or `verified_status=true_distant`.
+
 `tools\prepare_drive_upload_manifest.py` reads `_ocr_audit\distant_followme_risk_*_latest.csv`; listed files are marked `current_year_followme_or_distant_risk_needs_rerun` and must stay out of Drive until rerun/repair clears them.
 
 ## 2026-07-09 Dashboard Reveal Guard
@@ -402,7 +404,7 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 ## 2026-07-09 Current-Year Distant Escalation
 
 - A visual spot-check of 2026 distant-view output found an unacceptable false-distant rate: the sample included many likely single/FolloMe foreground products. Therefore current-year distant-view is not a low-risk class.
-- Current/future-year distant-view output must stay out of Drive unless it is visually accepted as true distant or corrected to a concrete `單機` / `FollowMe` / `它牌(...)` result.
+- Current/future-year distant-view output must stay out of Drive unless it is explicitly approved in `_ocr_audit\current_year_distant_upload_approval.csv` or corrected to a concrete `單機` / `FollowMe` / `它牌(...)` result. Do not treat spot-check samples as approval.
 - `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv`. These are files that were already uploaded earlier but are now blocked by stricter review gates; do not count them as done.
 - Use `tools\cleanup_stale_drive_review_uploads.py` only after reviewing the stale list. It dry-runs by default; with `--execute` it removes stale current-year remote files and removes those names from `drive_upload_uploaded.csv` so corrected or visually accepted outputs can upload again later.
 - The active 2026 repair path is:

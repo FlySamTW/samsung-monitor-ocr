@@ -373,7 +373,7 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 ## 2026-07-09 Current-Year Distant Escalation
 
 - Current-year distant-view precision is not trusted. A visual sample after rerun still showed many likely single/FollowMe foreground products, so 2026 distant-view rows are blocked by default.
-- Upload gate: current/future-year distant-view output must not go to Drive unless it is visually accepted as true distant or corrected to a concrete `單機`, `FollowMe`, or `它牌(...)` result.
+- Upload gate: current/future-year distant-view output must not go to Drive unless it is explicitly approved in `_ocr_audit\current_year_distant_upload_approval.csv` or corrected to a concrete `單機`, `FollowMe`, or `它牌(...)` result. Visual spot-check files are only for measuring rule quality and must not be treated as upload approval.
 - `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv` for current-year files that were uploaded before stricter gates but are now review-required. Treat those as stale remote deliverables to remove or replace after rerun.
 - `tools\cleanup_stale_drive_review_uploads.py` can remove those stale current-year Drive files. It dry-runs by default; `--execute` also removes matching rows from `drive_upload_uploaded.csv` so corrected or accepted files are not accidentally skipped later.
 - Active 2026 repair flow: scan with `tools\rerun_questionable_records.py`, then run `tools\rerun_staged_candidates.py --reason-contains 遠景` against the resulting current-year candidate CSV, then refresh risk audit and upload manifests.

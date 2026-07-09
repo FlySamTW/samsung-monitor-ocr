@@ -139,7 +139,7 @@ M-年月-縣市-行政區-通路-店名-類別-型號-價格-原流水號.jpg
 
 非三星主角螢幕不是 `型號未辨識`：重新辨識若確認主角是它牌，型號欄寫 `它牌(品牌)`，例如 `它牌(ACER)`、`它牌(ASUS)`、`它牌(LG)`；不填它牌實際型號。
 
-2026 與未來年度的 `遠景` 不是可直接上傳狀態。遠景誤判可能其實是單機、FollowMe 或它牌單機，因此要先進重辨識候選；確認仍是遠景後才放行 Drive。
+2026 與未來年度的 `遠景` 不是可直接上傳狀態。遠景誤判可能其實是單機、FollowMe 或它牌單機，因此要先進重辨識候選；確認仍是遠景後也不能只靠抽樣放行 Drive。`distant_followme_risk_*_latest_visual_spotcheck.csv` 只用來評估規則品質，不是上傳許可。只有兩種情況可以放行：一是重辨識後修成具體 `單機` / `FollowMe` / `它牌(...)`，二是列在 `_ocr_audit\current_year_distant_upload_approval.csv` 且有 `upload_approved=approved` 或 `verified_status=true_distant`。
 
 範例：
 
