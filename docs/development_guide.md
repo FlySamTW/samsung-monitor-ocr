@@ -404,6 +404,7 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 - A visual spot-check of 2026 distant-view output found an unacceptable false-distant rate: the sample included many likely single/FolloMe foreground products. Therefore current-year distant-view is not a low-risk class.
 - Current/future-year distant-view output must stay out of Drive unless it is visually accepted as true distant or corrected to a concrete `單機` / `FollowMe` / `它牌(...)` result.
 - `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv`. These are files that were already uploaded earlier but are now blocked by stricter review gates; do not count them as done.
+- Use `tools\cleanup_stale_drive_review_uploads.py` only after reviewing the stale list. It dry-runs by default; with `--execute` it removes stale current-year remote files and removes those names from `drive_upload_uploaded.csv` so corrected or visually accepted outputs can upload again later.
 - The active 2026 repair path is:
   1. scan current-year questionable records with `tools\rerun_questionable_records.py`;
   2. rerun only the distant bucket with `tools\rerun_staged_candidates.py --reason-contains 遠景`;
