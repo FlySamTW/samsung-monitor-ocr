@@ -22,6 +22,19 @@ def digest(path: Path, algorithm: str) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""): h.update(chunk)
     return h.hexdigest()
 
+def remote_md5(item: dict) -> str:
+    hashes = item.get("Hashes") if isinstance(item.get("Hashes"), dict) else {}
+    return str(hashes.get("MD5") or item.get("MD5") or item.get("Hash") or "").strip().lower()
+
+def remote_matches_receipt(item: dict, *, file_id: str, size: int, md5: str) -> bool:
+    try: remote_size = int(item.get("Size", -1))
+    except (TypeError, ValueError): return False
+    return (
+        str(item.get("ID") or "") == str(file_id or "")
+        and remote_size == int(size)
+        and remote_md5(item) == str(md5 or "").lower()
+    )
+
 def identity(row: dict[str, str]) -> str:
     original = (row.get("original_source_path") or row.get("source_path") or "").strip()
     period = (row.get("period") or row.get("year") or "").strip()
@@ -50,7 +63,9 @@ class Reconciler:
         return self.runner(self.rclone, args)
 
     def ls(self, remote_path: str) -> list[dict]:
-        rc, out, err = self.call(["lsjson", f"{self.remote}:{remote_path}", "--files-only"])
+        rc, out, err = self.call([
+            "lsjson", f"{self.remote}:{remote_path}", "--files-only", "--hash-type", "MD5"
+        ])
         if rc: raise RuntimeError(f"lsjson failed: {err.strip()}")
         try: value = json.loads(out or "[]")
         except json.JSONDecodeError as exc: raise RuntimeError(f"invalid lsjson: {exc}") from exc
@@ -73,7 +88,7 @@ class Reconciler:
         try: matches = self.ls(remote_path)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
         if len(matches) > 1: self.set_error(row, "duplicate remote name"); return
-        if matches and (int(matches[0].get("Size", -1)) != size or str(matches[0].get("Hash") or matches[0].get("MD5") or "").lower() != md5):
+        if matches and (int(matches[0].get("Size", -1)) != size or remote_md5(matches[0]) != md5):
             self.set_error(row, "remote name exists with size/hash mismatch"); return
         if matches:
             row.update(status="new_uploaded_verified", new_drive_file_id=str(matches[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt="preexisting_hash_identical")
@@ -82,26 +97,45 @@ class Reconciler:
         if rc: self.set_error(row, f"copyto failed: {err.strip()}"); return
         try: after = self.ls(remote_path)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
-        if len(after) != 1 or int(after[0].get("Size", -1)) != size or str(after[0].get("Hash") or after[0].get("MD5") or "").lower() != md5:
+        if len(after) != 1 or int(after[0].get("Size", -1)) != size or remote_md5(after[0]) != md5:
             self.set_error(row, "new upload readback size/hash mismatch"); return
         row.update(status="new_uploaded_verified", new_drive_file_id=str(after[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt=out[-1000:])
 
     def trash_old(self, row: dict, dry_plan: bool = False) -> None:
         if row.get("status") == "old_trashed_verified": return
-        if row.get("status") != "new_uploaded_verified": self.set_error(row, "new upload is not verified"); return
+        pending = row.get("status") == "old_trash_pending"
+        if row.get("status") not in {"new_uploaded_verified", "old_trash_pending"}: self.set_error(row, "new upload is not verified"); return
         old_path, old_id, new_path = row.get("old_remote_path", ""), row.get("old_drive_file_id", ""), row.get("new_remote_path", "")
         if not old_id or not old_path or old_path == new_path: self.set_error(row, "old ID/path missing or paths equal"); return
         if dry_plan:
             row["planned_command"] = ["lsjson", f"{self.remote}:{old_path}", "then deletefile --drive-use-trash and readback"]; return
         try: old = self.ls(old_path)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
+        if pending and not old:
+            try: new_after = self.ls(new_path)
+            except RuntimeError as exc: self.set_error(row, str(exc)); return
+            if len(new_after) != 1 or not remote_matches_receipt(
+                new_after[0],
+                file_id=str(row.get("new_drive_file_id") or ""),
+                size=int(row.get("new_remote_size") or -1),
+                md5=str(row.get("new_remote_md5") or ""),
+            ):
+                self.set_error(row, "pending trash recovery could not verify surviving new file"); return
+            row.update(status="old_trashed_verified", old_disposal_receipt="readback_old_absent_after_pending")
+            return
         if len(old) != 1 or str(old[0].get("ID", "")) != old_id: self.set_error(row, "old remote ID/path mismatch"); return
-        row["status"] = "old_trash_pending"; self.save()
+        if not pending:
+            row["status"] = "old_trash_pending"; self.save()
         rc, out, err = self.call(["deletefile", f"{self.remote}:{old_path}", "--drive-use-trash"])
         if rc: self.set_error(row, f"trash failed: {err.strip()}"); return
         try: old_after, new_after = self.ls(old_path), self.ls(new_path)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
-        if old_after or len(new_after) != 1 or str(new_after[0].get("ID", "")) != row.get("new_drive_file_id", ""):
+        if old_after or len(new_after) != 1 or not remote_matches_receipt(
+            new_after[0],
+            file_id=str(row.get("new_drive_file_id") or ""),
+            size=int(row.get("new_remote_size") or -1),
+            md5=str(row.get("new_remote_md5") or ""),
+        ):
             self.set_error(row, "trash/readback verification failed"); return
         row.update(status="old_trashed_verified", old_disposal_receipt=out[-1000:])
 

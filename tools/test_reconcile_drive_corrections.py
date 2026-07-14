@@ -25,7 +25,7 @@ class ReconcileDriveTests(unittest.TestCase):
     def test_upload_sequence_no_overwrite_and_readback(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({}); rec=self.rec(root,[self.make(root)],fake); rec.upload_new(rec.rows[0]);
-            self.assertEqual([c[0] for c in fake.calls],['lsjson','copyto','lsjson']); self.assertIn('--immutable',fake.calls[1]); self.assertEqual(rec.rows[0]['status'],'new_uploaded_verified')
+            self.assertEqual([c[0] for c in fake.calls],['lsjson','copyto','lsjson']); self.assertIn('--immutable',fake.calls[1]); self.assertIn('--hash-type',fake.calls[0]); self.assertIn('MD5',fake.calls[0]); self.assertEqual(rec.rows[0]['status'],'new_uploaded_verified')
     def test_duplicate_mismatch_and_missing_old_id_fail_closed(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({'2026/new.jpg':[{'ID':'a','Size':3,'MD5':'bad'},{'ID':'b','Size':3,'MD5':'bad'}]}); rec=self.rec(root,[self.make(root)],fake); rec.upload_new(rec.rows[0]); self.assertIn('duplicate',rec.rows[0]['last_error'])
@@ -33,7 +33,16 @@ class ReconcileDriveTests(unittest.TestCase):
     def test_hash_mismatch_and_trash_readback_failure(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({'2026/new.jpg':[{'ID':'new','Size':99,'MD5':'bad'}]}); rec=self.rec(root,[self.make(root)],fake); rec.upload_new(rec.rows[0]); self.assertIn('mismatch',rec.rows[0]['last_error'])
-            fake=FakeRclone({'2026/old.jpg':[{'ID':'old-id','Size':3,'MD5':'x'}],'2026/new.jpg':[{'ID':'new-id','Size':3,'MD5':'x'}]}); rec=self.rec(root,[self.make(root,status='new_uploaded_verified',new_remote_path='2026/new.jpg',new_drive_file_id='new-id')],fake); rec.trash_old(rec.rows[0]); self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
+            md5='22af645d1859cb5ca6da0c484f1f37ea'; fake=FakeRclone({'2026/old.jpg':[{'ID':'old-id','Size':3,'Hashes':{'MD5':'x'}}],'2026/new.jpg':[{'ID':'new-id','Size':3,'Hashes':{'MD5':md5}}]}); rec=self.rec(root,[self.make(root,status='new_uploaded_verified',new_remote_path='2026/new.jpg',new_drive_file_id='new-id',new_remote_size=3,new_remote_md5=md5)],fake); rec.trash_old(rec.rows[0]); self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
+
+    def test_pending_trash_recovers_by_readback_without_deleting_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
+            fake=FakeRclone({'2026/old.jpg':[],'2026/new.jpg':[{'ID':'new-id','Size':3,'Hashes':{'MD5':md5}}]})
+            row=self.make(root,status='old_trash_pending',new_remote_path='2026/new.jpg',new_drive_file_id='new-id',new_remote_size=3,new_remote_md5=md5)
+            rec=self.rec(root,[row],fake); rec.trash_old(rec.rows[0])
+            self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
+            self.assertEqual([call[0] for call in fake.calls],['lsjson','lsjson'])
     def test_rerun_idempotency_and_dry_plan(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({'2026/new.jpg':[{'ID':'new','Size':3,'MD5':'22af645d1859cb5ca6da0c484f1f37ea'}]}); row=self.make(root); rec=self.rec(root,[row],fake); rec.upload_new(row); calls=len(fake.calls); rec.upload_new(row); self.assertEqual(len(fake.calls),calls)
