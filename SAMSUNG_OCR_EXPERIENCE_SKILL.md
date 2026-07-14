@@ -444,6 +444,7 @@ The pre-v19.45 correction ledger is not authoritative because it contains stale 
 模型比較只能使用 `tools/model_benchmark_sidecar.py` 的 bounded sidecar。它必須以 fixed `ocr_demo_50` blind set、同一 production prompt 與同一影像證據執行；不能把 benchmark 當成訓練或修改 OCR 權重。dry-run 不會碰 LM Studio，真正執行必須明確 `--execute`。
 
 sidecar 的硬守門是：API `is_running=false`、沒有任何 rerun/recursive/watcher/uploader、所有指定模型已完整下載、endpoint 為 localhost、raw JSONL 可重入保存。任何模型切換後都必須在 finally 還原 `qwen/qwen3-vl-8b` 與 context；不得停止或重啟正常 OCR，也不得上傳照片。
+Windows 程序清單必須由 UTF-8 JSON 安全解析，列舉失敗或空白解析錯誤一律拒絕 benchmark；不能把錯誤當作「沒有 runner」。取得 lock 前後都要重查 API 與程序，以關閉競態。FollowMe 被判成中文 `遠景` 或英文 `distant_view` 都屬危險誤判。
 
 採用候選模型前，先要求整體 exact/field accuracy 改善或至少不退步；遠景、FollowMe、型號幻覺等危險錯誤率全部不得退步。latency 只作 accuracy 通過後的次順位，不得用速度掩蓋辨識退化。InternVL 只有在本機下載完成並通過完整性檢查後才列入執行候選。
 ## v19.45 Evidence Contract

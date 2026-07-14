@@ -492,6 +492,8 @@ npm.cmd --prefix dashboard run build
 
 `tools/model_benchmark_sidecar.py` 是獨立、受限的 accuracy-first 模型比較工具，目標資料固定為 `samples/ocr_demo_50`。預設只 dry-run；只有明確加入 `--execute` 才會對 LM Studio 做 load/inference。它會 fail closed：OCR API 必須 idle，且不得有 rerun、recursive、watcher 或 uploader 程序；endpoint 只能是本機 LM Studio，照片與 raw output 不會上傳或呼叫外部服務。
 
+Windows process discovery must use UTF-8 JSON from `Get-CimInstance`; a command failure, invalid JSON, or unreadable inventory is a hard refusal, never an empty-process assumption. The sidecar checks both API idle and the process inventory before claiming the benchmark lock and again immediately after claiming it. FollowMe danger scoring treats both `遠景` and `distant_view` as the same dangerous misclassification.
+
 Interlock: the sidecar and four-hour watcher share `00_已OCR照片\_ocr_audit\model_benchmark.lock`. It is created atomically and records PID, timestamp, and model list. The watcher waits and logs before every backend, staged, recursive, or uploader launch. The sidecar claims the lock, rechecks idle state, and removes its own lock in `finally`; a stale lock requires explicit `--recover-stale-lock`, an absent owner PID, and the age threshold.
 
 The stalled InternVL artifact has a separate download-only helper: `tools\resume_internvl35_range.ps1`. It uses the proven Hugging Face byte range and `curl --continue-at -` against the preserved `.part`; it never loads a model or touches OCR. The helper is single-owner, refuses shrink/duplicate downloaders, requires exact byte count and SHA256 before atomic rename, and preserves the partial plus failure status on every error.

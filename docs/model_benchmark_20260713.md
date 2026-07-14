@@ -16,6 +16,8 @@
 
 只有在候選已由操作者另行載入、且主線 OCR 已停止或有獨立 LM Studio instance 時，才可把同一批盲測輸出交給評分器。這個 benchmark 工具本身不會 load/unload、啟停 server 或切換模型。
 
+`model_benchmark_sidecar.py` 的實際執行會用 UTF-8 JSON 列舉 Windows 專案程序；列舉失敗即拒絕 benchmark。它在取得獨占 lock 前後各確認一次 API idle 且沒有 watcher、staged/recursive runner 或 uploader，避免在檢查與切模之間發生競態。中文 `遠景` 與英文 `distant_view` 都會計入 FollowMe 危險誤判。
+
 ```powershell
 .\.venv\Scripts\python.exe tools\model_benchmark_manifest.py build
 .\.venv\Scripts\python.exe tools\model_benchmark_score.py docs/model_benchmark_manifest.json predictions.jsonl --model qwen/qwen3-vl-8b --out runs/model_benchmark/qwen3-vl-8b.score.json

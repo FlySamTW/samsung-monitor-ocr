@@ -137,14 +137,32 @@ def loaded_snapshot(lms: str) -> dict[str, dict[str, Any]]:
 def project_processes() -> list[str]:
     if os.name != "nt":
         return []
-    command = "Get-CimInstance Win32_Process | %% { if ($_.CommandLine) { $_.CommandLine } }"
+    command = (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+        "$items=@(Get-CimInstance Win32_Process | ForEach-Object { "
+        "if ($_.CommandLine) { [string]$_.CommandLine } }); "
+        "ConvertTo-Json -InputObject $items -Compress"
+    )
     p = subprocess.run(["powershell", "-NoProfile", "-Command", command],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
-    return [x for x in p.stdout.splitlines() if str(ROOT).lower() in x.lower()]
+    if p.returncode:
+        raise SafetyError(f"cannot enumerate project processes: {p.stderr.strip() or p.stdout.strip()}")
+    try:
+        values = json.loads(p.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise SafetyError("cannot parse project process inventory") from exc
+    if not isinstance(values, list):
+        values = [values]
+    root = str(ROOT).casefold()
+    return [str(value) for value in values if value and root in str(value).casefold()]
 
 
-def assert_idle(status_url: str, processes: list[str] | None = None) -> dict[str, Any]:
-    status = get_json(status_url)
+def assert_idle(
+    status_url: str,
+    processes: list[str] | None = None,
+    status_getter: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    status = status_getter() if status_getter else get_json(status_url)
     if status.get("is_running"):
         raise SafetyError("OCR backend is running; benchmark refused")
     processes = project_processes() if processes is None else processes
@@ -213,7 +231,7 @@ def score(case: dict[str, Any], prediction: dict[str, Any] | None, latency: floa
     dangerous = []
     if "distant_view" in tags and got.get("view_type") not in {None, expected.get("view_type")}:
         dangerous.append("distant_view_misclassification")
-    if ("followme" in tags or "followme_pro" in tags) and got.get("view_type") == "distant_view":
+    if ("followme" in tags or "followme_pro" in tags) and got.get("view_type") in {"distant_view", "遠景"}:
         dangerous.append("followme_misclassification")
     if "hallucination_guard" in tags and got.get("model") not in {None, expected.get("model")}:
         dangerous.append("model_hallucination")
@@ -227,7 +245,11 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
         completion: Callable[[str, str, list[str], int], str] | None = None) -> dict[str, Any]:
     local_url(args.api_base)
     status_getter = status_getter or (lambda: get_json(args.backend_url.rstrip("/") + "/api/status"))
-    status = assert_idle(args.backend_url.rstrip("/") + "/api/status", process_getter() if process_getter else None)
+    status = assert_idle(
+        args.backend_url.rstrip("/") + "/api/status",
+        process_getter() if process_getter else None,
+        status_getter=status_getter,
+    )
     manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
     requested = bool(args.models)
     lms = lms or lms_path()
@@ -250,7 +272,11 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
                                         stale_age_seconds=args.stale_lock_age_seconds)
     try:
         # Claim first, then re-check idle state to close the watcher/sidecar race.
-        status = assert_idle(args.backend_url.rstrip("/") + "/api/status", process_getter() if process_getter else None)
+        status = assert_idle(
+            args.backend_url.rstrip("/") + "/api/status",
+            process_getter() if process_getter else None,
+            status_getter=status_getter,
+        )
         for model in selected:
             for identifier in list(loaded_snapshot(lms)):
                 run_lms(lms, ["unload", identifier], 120)

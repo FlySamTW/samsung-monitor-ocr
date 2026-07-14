@@ -14,7 +14,7 @@ import model_benchmark_sidecar as sidecar
 
 
 class SidecarTests(unittest.TestCase):
-    def test_atomic_lock_and_conservative_stale_recovery(self):
+    def test_atomic_lock_and_live_owner_prevents_stale_recovery(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "_ocr_audit" / sidecar.LOCK_NAME
             owner = sidecar.acquire_benchmark_lock(path, ["qwen/qwen3-vl-8b"], pid_exists=lambda _: True)
@@ -73,6 +73,25 @@ class SidecarTests(unittest.TestCase):
             with self.assertRaises(sidecar.SafetyError):
                 sidecar.assert_idle("http://127.0.0.1:5000/api/status", ["tools\\rerun_staged_candidates.py"])
 
+    def test_process_inventory_is_utf8_json_and_enumeration_failure_is_fatal(self):
+        command_line = str(sidecar.ROOT / "tools" / "rerun_staged_candidates.py")
+        ok = type("Result", (), {"returncode": 0, "stdout": json.dumps([command_line]), "stderr": ""})()
+        with patch.object(sidecar.subprocess, "run", return_value=ok) as run:
+            self.assertEqual(sidecar.project_processes(), [command_line])
+            command = run.call_args.args[0][-1]
+            self.assertIn("ForEach-Object", command)
+            self.assertIn("ConvertTo-Json", command)
+            self.assertNotIn("%%", command)
+        failed = type("Result", (), {"returncode": 1, "stdout": "", "stderr": "CIM failed"})()
+        with patch.object(sidecar.subprocess, "run", return_value=failed):
+            with self.assertRaises(sidecar.SafetyError):
+                sidecar.project_processes()
+
+    def test_chinese_distant_followme_result_is_counted_as_dangerous(self):
+        case = {"id":"x","tags":["followme"],"expected":{"view_type":"單機","model":"FollowMe M7","price":"無價格"}}
+        result = sidecar.score(case, {"view_type":"遠景","model":None,"price":None}, 0.1, None)
+        self.assertIn("followme_misclassification", result["dangerous_categories"])
+
     def test_mock_execute_is_resumable_and_restores_baseline(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -93,15 +112,18 @@ class SidecarTests(unittest.TestCase):
                 calls.append(command)
                 if command[0] == "ps": return "qwen/qwen3-vl-8b 16384"
                 return "ok"
-            with patch.object(sidecar, "get_json", return_value={"is_running": False}), \
-                 patch.object(sidecar, "visible_models", return_value={"qwen/qwen3-vl-8b"}), \
+            status_calls = []
+            def status_getter():
+                status_calls.append(True); return {"is_running": False}
+            with patch.object(sidecar, "visible_models", return_value={"qwen/qwen3-vl-8b"}), \
                  patch.object(sidecar, "loaded_snapshot", return_value={"qwen/qwen3-vl-8b": {"context_length": 16384}}), \
                  patch.object(sidecar, "run_lms", side_effect=fake_lms), \
                  patch.object(sidecar, "encode_image", return_value="full"), \
                  patch.object(sidecar, "crop_bytes", return_value=["crop"]), \
                  patch.object(sidecar, "post_completion", return_value='{"view_type":"single","model":"S","price":"100"}'):
-                result = sidecar.run(args, process_getter=lambda: [], lms="lms")
+                result = sidecar.run(args, status_getter=status_getter, process_getter=lambda: [], lms="lms")
             self.assertEqual(result["new_records"], 1)
+            self.assertEqual(len(status_calls), 2)
             self.assertTrue(any(c[:2] == ["load", "qwen/qwen3-vl-8b"] for c in calls))
             self.assertEqual(calls[-2][:2], ["unload", "qwen/qwen3-vl-8b"])
             self.assertEqual(calls[-1][:2], ["load", "qwen/qwen3-vl-8b"])
