@@ -63,7 +63,13 @@ UNKNOWN_VALUES = {
 TRUTHY = {"1", "true", "yes", "y"}
 SUCCESS_HEADERS = [
     "timestamp",
+    "started_at",
+    "completed_at",
     "file_name",
+    "source_path",
+    "original_source_path",
+    "source_item_id",
+    "period",
     "category",
     "view_type",
     "screen_status",
@@ -76,6 +82,15 @@ SUCCESS_HEADERS = [
     "price_diff_percent",
     "duration",
     "run_id",
+    "model_id",
+    "evidence_contract_version",
+    "evidence_contract_valid",
+    "evidence_contract_errors",
+    "complete_screen_count",
+    "unique_main",
+    "label_ownership",
+    "followme_physical_evidence",
+    "normalized_evidence",
     "review_status",
     "human_category",
     "human_model",
@@ -105,7 +120,11 @@ def write_dict_csv(path: Path, rows: list[dict[str, object]], headers: list[str]
         writer = csv.DictWriter(handle, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({header: row.get(header, "") for header in headers})
+            values = {}
+            for header in headers:
+                value = row.get(header, "")
+                values[header] = json.dumps(value, ensure_ascii=False, separators=(",", ":")) if isinstance(value, (dict, list)) else value
+            writer.writerow(values)
 
 
 def json_request(base_url: str, path: str, payload: dict | None = None, timeout: int = 30):
@@ -147,8 +166,9 @@ def is_complete_auto_verified(row: dict[str, str]) -> bool:
         return False
     if norm(row.get("auto_verified")).lower() not in TRUTHY:
         return False
+    required_attempts = 3 if is_distant(row) else (2 if "FOLLOWME" in norm(row.get("model")).upper().replace(" ", "") else 1)
     try:
-        if int(norm(row.get("ocr_attempt")) or "0") < 3:
+        if int(norm(row.get("ocr_attempt")) or "0") < required_attempts:
             return False
     except ValueError:
         return False

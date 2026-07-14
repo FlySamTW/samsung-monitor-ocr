@@ -508,6 +508,15 @@ Drive correction reconciliation is local-only by default: `tools\reconcile_drive
 Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate.
 
 Each pass is recorded in a bounded, idempotent `v1945_evidence_trace.jsonl` without image bytes or secrets. Boundary upgrades must finish the current folder, verify idle, then start v19.45 with the existing staging/history preserved. Do not restart mid-folder.
+
+## Compact status and operator-facing metadata contract (2026-07-14)
+
+- `/api/status` is a live monitor transport, not the durable history store. It must report `status_contract_version=compact-v2`, expose at most the bounded recent presentation window, and never include `thumb_b64`, base64 images, raw model output, or full evidence objects.
+- The current bound is 12 presentation events (hard maximum 24). `recent_results` is compatibility-only, capped at 10 and stripped to display fields. Full per-photo pass history is loaded on demand from `/api/presentation_history/<source_item_id>`.
+- A production status response must remain below 500 KB. Multi-megabyte polling is a UI correctness defect because parsing/backpressure can blank or stall the AI pane even when OCR is healthy.
+- The results rail is an operator summary. Do not print retry reason, internal model id, timestamps, previous-result summary, decision codes, or expanded pass history on every card. Those fields belong in the click-through inspection/history view.
+- Never render placeholder copy such as `第 未提供 輪 · 未提供 · 未提供`. A pass label is shown only when at least one pass metadata field exists; missing legacy metadata is hidden.
+- Deploy frontend assets without an empty-file interval: copy hashed assets first and replace `dist/index.html` last. Backend source upgrades use `tools/safe_backend_boundary_upgrade.ps1`, require two consecutive quiet-boundary observations, verify the port-5000 process tree, then validate compact-v2, payload size, history API and fingerprint before releasing the interlock.
 # Presentation Synchronization Iron Rule
 
 The backend `presentation_id` is the sole identity key. The active photo, AI live interpretation, active right-side placeholder, revealed card, and inspection modal must all use one immutable presentation snapshot and the same `presentation_id` and sequence. Running UI state must never join by filename, index, source path, `current_file`, `stream_file`, or `recent_results`. Reveal a right-side card only after that snapshot's narration completes; never discard the active item through watchdog or backpressure, and preserve the previous image until the next image is ready so transitions do not flash black. Any dashboard presentation change requires the deterministic 500-item soak and a rebuilt dashboard.

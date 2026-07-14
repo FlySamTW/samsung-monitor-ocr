@@ -7,7 +7,11 @@ from pathlib import Path
 import samsung_ocr_batch_processor as batch
 
 from skills.audit_fields import evidence_contract_decision, immediate_retry_decision, validate_evidence_contract
-from tools.prepare_drive_upload_manifest import classify_file, load_v1945_trace_names
+from tools.prepare_drive_upload_manifest import (
+    classify_file,
+    load_complete_auto_verified_names,
+    load_v1945_trace_names,
+)
 from tools.rerun_questionable_records import is_complete_auto_verified
 from skills.batch_orchestrator import _append_v1945_trace
 from samsung_ocr_batch_processor import _merge_v1945_json_objects
@@ -80,6 +84,44 @@ class EvidenceContractTests(unittest.TestCase):
         row = {"view_type": "遠景", "model": None, "price": None, **evidence(3, False, "not_visible")}
         self.assertTrue(validate_evidence_contract(row)[0])
 
+    def test_valid_single_is_auto_verified_without_forcing_extra_passes(self):
+        row = {
+            "file_name": "M-202605-test.jpg", "view_type": "單機", "category": "單機",
+            "model": "S24F332EAC", "price": "2390", "quality_issue": "",
+            "thinking": "唯一主角自己的規格牌與價格牌清楚可讀。",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+
+    def test_current_year_followme_requires_second_consistent_pass(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        row = {
+            "file_name": "M-202605-followme.jpg", "view_type": "單機", "category": "單機",
+            "model": 'FollowMe M7 32"', "price": "12900", "quality_issue": "",
+            "thinking": "同一台實機有白色垂直支架與圓形底座，規格與價格屬於唯一主角。",
+            **evidence(1, True, "matched", physical),
+        }
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(first["retry"])
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
+
+    def test_distant_structured_evidence_still_requires_supporting_narration(self):
+        row = {
+            "file_name": "M-202605-distant.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "", "thinking": "整體符合遠景條件。",
+            **evidence(3, False, "not_visible"),
+        }
+        decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("evidence_thinking_conflict", decision["reasons"])
+
     def test_three_visible_one_complete_is_single_only_with_matched_label(self):
         row = {"view_type": "單機", "model": "S32ABC123", "price": "12900", **evidence(3, True, "matched")}
         self.assertTrue(validate_evidence_contract(row)[0])
@@ -121,15 +163,27 @@ class EvidenceContractTests(unittest.TestCase):
             audit = root / "_ocr_audit" / "sample"
             audit.mkdir(parents=True)
             trace = audit / "v1945_evidence_trace.jsonl"
-            trace.write_text(json.dumps({"trace_version": "v19.45", "file_name": "M-202601-test.jpg"}) + "\n", encoding="utf-8")
-            self.assertEqual(load_v1945_trace_names(root), {"M-202601-test.jpg"})
-            row = {"auto_verified": "true", "auto_review_required": "false", "ocr_attempt": "3", "evidence_contract_version": "v19.45", "evidence_contract_valid": "true", "file_name": "M-202601-test.jpg", "period": "202601", "thinking": "ok", "run_id": "r"}
+            target_name = "M-202601-test-單機-S24F332EAC-✓＄2390-1.jpg"
+            with (audit / "copied.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["original_name", "target_name"])
+                writer.writeheader()
+                writer.writerow({"original_name": "source-test.jpg", "target_name": target_name})
+            trace.write_text(json.dumps({
+                "trace_version": "v19.45", "file_name": "source-test.jpg", "period": "202601",
+                "guard_decision": {"verified": True},
+            }) + "\n", encoding="utf-8")
+            self.assertEqual(load_v1945_trace_names(root), {target_name})
+            row = {"auto_verified": "true", "auto_review_required": "false", "ocr_attempt": "1", "evidence_contract_version": "v19.45", "evidence_contract_valid": "true", "file_name": "source-test.jpg", "period": "202601", "view_type": "單機", "model": "S24F332EAC", "thinking": "ok", "run_id": "r"}
             self.assertTrue(is_complete_auto_verified(row))
-            path = root / "M-202601-no-trace.jpg"
+            with (audit / "success_records.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerow(row)
+            self.assertEqual(load_complete_auto_verified_names(root), {target_name})
+            path = root / target_name
             path.write_bytes(b"x")
-            classified = classify_file(path, root, 10_000_000, set(), set(), True, set(), {path.name}, set())
-            self.assertEqual(classified.status, "review")
-            self.assertIn("v1945_evidence_trace_missing", classified.reasons)
+            classified = classify_file(path, root, 10_000_000, set(), set(), True, set(), {path.name}, {path.name})
+            self.assertNotIn("v1945_evidence_trace_missing", classified.reasons)
 
     def test_trace_append_is_idempotent_and_excludes_image_payload(self):
         with tempfile.TemporaryDirectory() as tmp:

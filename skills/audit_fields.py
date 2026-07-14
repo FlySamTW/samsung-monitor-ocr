@@ -249,7 +249,7 @@ def immediate_retry_decision(
     record["normalized_evidence"] = contract["normalized_evidence"]
     if not contract["valid"]:
         reasons.extend(contract["reasons"])
-    if "?" in view_type and contract["valid"]:
+    if "遠景" in view_type and contract["valid"]:
         if not _explicit_three_complete(thinking) or not _no_unique_main_evidence(thinking):
             reasons.append("evidence_thinking_conflict")
 
@@ -292,11 +292,13 @@ def immediate_retry_decision(
         promo_only = _text_has_any(thinking, PROMO_ONLY_CLUES)
         if physical_count < 2 or (promo_only and physical_count < 3):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
+        if current_year and attempt < 2:
+            reasons.append("2026 FollowMe 必須完成第二輪實體證據複核")
 
     reasons = list(dict.fromkeys(reasons))
     retry = bool(reasons) and attempt < max_attempts
     unresolved = bool(reasons) and attempt >= max_attempts
-    verified = False
+    verified = bool(contract["valid"] and not reasons and "遠景" not in view_type)
 
     if "遠景" in view_type and attempt >= max_attempts and not reasons:
         views = [str(item.get("view_type") or item.get("category") or "") for item in history] + [view_type]

@@ -305,6 +305,9 @@ const App = () => {
   const [typewriterReady, setTypewriterReady] = useState(false);
   const [presentationInvariantError, setPresentationInvariantError] = useState("");
   const [expandedHistoryKeys, setExpandedHistoryKeys] = useState({});
+  const [historyCache, setHistoryCache] = useState({});
+  const [historyLoading, setHistoryLoading] = useState({});
+  const [historyErrors, setHistoryErrors] = useState({});
 
   const getQueueKey = (item) => {
     if (!item) return "";
@@ -345,7 +348,23 @@ const App = () => {
     4: "慢模型仲裁"
   }[Number(item?.pass_index)] || "未提供");
 
-  const formatMetaValue = (value) => value === null || value === undefined || value === "" ? "未提供" : String(value);
+  const formatMetaValue = (value) => {
+    if (value === null || value === undefined || value === "") return "未提供";
+    if (Array.isArray(value)) return value.length ? value.join("、") : "無";
+    if (typeof value === "object") return Object.entries(value)
+      .filter(([, item]) => item !== null && item !== undefined && item !== "")
+      .map(([key, item]) => `${key}: ${Array.isArray(item) ? item.join("、") : String(item)}`)
+      .join("；") || "無";
+    return String(value);
+  };
+  const formatDecision = (value) => ({
+    retry_scheduled: "已安排下一輪",
+    accepted: "已通過自動守門",
+    review_required: "需慢模型或人工校正"
+  }[String(value || "")] || formatMetaValue(value));
+  const hasPassMetadata = (item) => Boolean(
+    item && (item.pass_index || item.pass_label || item.model_id)
+  );
   const getNarrationFullText = (item) => String(item?.narration || item?.stream_buffer || "").trim();
 
   const trimDisplayNarration = (text) => {
@@ -640,8 +659,9 @@ const App = () => {
     let intervalId;
     const poll = async () => { await fetchData(); };
     poll();
-    // [v19.8] Faster polling (500ms) for smoother photo/AI narration sync.
-    const intervalMs = 500;
+    // A model pass takes far longer than a second. Avoid overlapping large
+    // legacy status responses while keeping the operator view responsive.
+    const intervalMs = 2000;
     // if (data?.stats?.is_running) console.log(`⏱️ 同步頻率證據: ${intervalMs}ms`);
     intervalId = setInterval(poll, intervalMs);
     return () => clearInterval(intervalId);
@@ -841,6 +861,8 @@ const App = () => {
   const overallPercent = overallTotal ? Math.min(100, Math.max(0, (overallProcessed / overallTotal) * 100)) : 0;
   const folderTotal = Number(overallProgress.total_folders || 0);
   const folderDone = Number(overallProgress.completed_folders || 0);
+  const reviewProgress = data.review_progress || {};
+  const isReviewRun = reviewProgress.mode === 'current_year_review';
   const showPendingResult = activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
   const activePendingResult = showPendingResult
     ? {
@@ -883,19 +905,43 @@ const App = () => {
   const visibleLogLines = cleanLmLogLines.length >= 3 ? cleanLmLogLines : queueHistoryLines;
   const historyItems = [...revealedResults, ...(Array.isArray(data.presentation_queue) ? data.presentation_queue.map(normalizePresentationItem).filter(Boolean) : [])]
     .reduce((items, item) => items.some((entry) => entry._queueKey === item._queueKey) ? items : [...items, item], []);
-  const historyBySourceId = historyItems.reduce((groups, item) => {
+  const localHistoryBySourceId = historyItems.reduce((groups, item) => {
     if (!item.source_item_id) return groups;
     const key = String(item.source_item_id);
     groups[key] = groups[key] || [];
     groups[key].push(item);
     return groups;
   }, {});
-  const getHistoryFor = (item) => item?.source_item_id ? (historyBySourceId[String(item.source_item_id)] || [])
-    .sort((a, b) => Number(a.pass_index || 0) - Number(b.pass_index || 0) || Number(a.presentation_sequence || 0) - Number(b.presentation_sequence || 0)) : [];
-  const toggleHistory = (item) => {
+  const getHistoryFor = (item) => {
+    if (!item?.source_item_id) return [];
+    const key = String(item.source_item_id);
+    const combined = [...(historyCache[key] || []), ...(localHistoryBySourceId[key] || [])]
+      .map((entry) => normalizePresentationItem(entry))
+      .filter(Boolean)
+      .reduce((items, entry) => items.some((existing) => existing._queueKey === entry._queueKey) ? items : [...items, entry], []);
+    return combined.sort((a, b) => Number(a.presentation_sequence || 0) - Number(b.presentation_sequence || 0));
+  };
+  const toggleHistory = async (item) => {
     if (!item?.source_item_id) return;
     const key = String(item.source_item_id);
-    setExpandedHistoryKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+    const opening = !expandedHistoryKeys[key];
+    setExpandedHistoryKeys((prev) => ({ ...prev, [key]: opening }));
+    if (!opening || historyCache[key] || historyLoading[key]) return;
+    setHistoryLoading((prev) => ({ ...prev, [key]: true }));
+    setHistoryErrors((prev) => ({ ...prev, [key]: "" }));
+    try {
+      const response = await fetch(`/api/presentation_history/${encodeURIComponent(key)}?limit=50`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "判讀歷程暫時無法載入");
+      const items = (Array.isArray(payload.items) ? payload.items : [])
+        .map((entry) => normalizePresentationItem(entry))
+        .filter(Boolean);
+      setHistoryCache((prev) => ({ ...prev, [key]: items }));
+    } catch (historyError) {
+      setHistoryErrors((prev) => ({ ...prev, [key]: historyError.message || "判讀歷程暫時無法載入" }));
+    } finally {
+      setHistoryLoading((prev) => ({ ...prev, [key]: false }));
+    }
   };
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
@@ -925,7 +971,7 @@ const App = () => {
                </span>
                 <div style={{ width: '330px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
-                    <span style={{ fontWeight: '800', color: '#ffffff' }}>總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
+                    <span style={{ fontWeight: '800', color: '#ffffff' }}>初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
                     <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
                   </div>
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
@@ -934,7 +980,7 @@ const App = () => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
                     <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
                     <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
-                    <span>本資料夾 {formatCount(stats.processed)}/{formatCount(stats.total || 0)}</span>
+                    <span>{isReviewRun ? `${reviewProgress.period || '目前'} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}{isReviewRun && reviewProgress.current_pass ? ` · 第 ${reviewProgress.current_pass} 輪` : ''}</span>
                   </div>
                 </div>
                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -1101,9 +1147,11 @@ const App = () => {
                                           上一張摘要保留中 · 下一張判讀中
                                       </div>
                                    )}
-                                   <div style={{ color: '#67e8f9', fontSize: '0.72rem', marginBottom: '5px' }}>
-                                     第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)} · {formatMetaValue(activePresentation?.model_id)}
-                                   </div>
+                                   {hasPassMetadata(activePresentation) && (
+                                     <div style={{ color: '#67e8f9', fontSize: '0.72rem', marginBottom: '5px' }}>
+                                       第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)}{activePresentation?.model_id ? ` · ${activePresentation.model_id}` : ''}
+                                     </div>
+                                   )}
                                    {visibleNarration}
                                    {!isHeldNarration && <span className="typing-dots"></span>}
                                </div>
@@ -1218,7 +1266,7 @@ const App = () => {
                                     <span data-testid="active-placeholder-badge" style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>處理中</span>
                                     <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>AI 即時判讀中</span>
                                   </div>
-                                  <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>第 {formatMetaValue(pendingPanelResult.pass_index)} 輪 · {getPassLabel(pendingPanelResult)}</div>
+                                  {hasPassMetadata(pendingPanelResult) && <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>第 {formatMetaValue(pendingPanelResult.pass_index)} 輪 · {getPassLabel(pendingPanelResult)}</div>}
                                 </div>
                               </div>
                             </div>
@@ -1229,7 +1277,7 @@ const App = () => {
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
-                                         <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>第 {formatMetaValue(res.pass_index)} 輪 · {getPassLabel(res)}</div>
+                                         {hasPassMetadata(res) && <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>第 {formatMetaValue(res.pass_index)} 輪 · {getPassLabel(res)}</div>}
                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
@@ -1338,20 +1386,6 @@ const App = () => {
                                                  {rerunQueue[res.file_name] ? '已排隊' : '再辨識'}
                                              </button>}
                                           </div>
-                                          <div style={{ marginTop: '6px', fontSize: '0.62rem', color: '#cbd5e1', lineHeight: 1.5 }}>
-                                            <div>retry_reason: {formatMetaValue(res.retry_reason)} · decision: {formatMetaValue(res.decision)}</div>
-                                            <div>model_id: {formatMetaValue(res.model_id)}</div>
-                                            <div>started_at: {formatMetaValue(res.started_at)} · completed_at: {formatMetaValue(res.completed_at)}</div>
-                                            <div>previous_result_summary: {formatMetaValue(res.previous_result_summary)}</div>
-                                          </div>
-                                          {res.source_item_id && <button type="button" onClick={() => toggleHistory(res)} style={{ marginTop: '6px', background: 'transparent', color: '#7dd3fc', border: '1px solid #155e75', borderRadius: '3px', padding: '3px 6px', fontSize: '0.62rem', cursor: 'pointer' }}>本張判讀歷程 ({getHistoryFor(res).length})</button>}
-                                          {res.source_item_id && expandedHistoryKeys[String(res.source_item_id)] && <div style={{ marginTop: '5px', borderLeft: '2px solid #155e75', paddingLeft: '7px' }}>
-                                            {getHistoryFor(res).map((pass) => <div key={pass._queueKey} style={{ marginBottom: '6px' }}>
-                                              <div style={{ color: '#bae6fd', fontWeight: 800 }}>第 {formatMetaValue(pass.pass_index)} 輪 · {getPassLabel(pass)} · {formatMetaValue(pass.decision)}</div>
-                                              <div style={{ color: '#94a3b8' }}>retry_reason: {formatMetaValue(pass.retry_reason)} · model_id: {formatMetaValue(pass.model_id)}</div>
-                                              <div style={{ color: '#e5e7eb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{getNarrationFullText(pass) || '未提供'}</div>
-                                            </div>)}
-                                          </div>}
                                      </div>
                                  </div>
                              </div>
@@ -1708,14 +1742,22 @@ const App = () => {
                        boxShadow: '0 -5px 25px rgba(0,0,0,0.8)'
                    }}>
                       <div style={{ position: 'absolute', left: '12px', bottom: '76px', right: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px 14px', padding: '7px 10px', background: 'rgba(17,17,17,0.96)', border: '1px solid #333', borderRadius: '4px', fontSize: '0.68rem', color: '#cbd5e1' }}>
-                        <span>第 {formatMetaValue(inspectImage.pass_index)} 輪 · {getPassLabel(inspectImage)}</span>
-                        <span>retry_reason: {formatMetaValue(inspectImage.retry_reason)}</span>
-                        <span>model_id: {formatMetaValue(inspectImage.model_id)}</span>
-                        <span>started_at: {formatMetaValue(inspectImage.started_at)}</span>
-                        <span>completed_at: {formatMetaValue(inspectImage.completed_at)}</span>
-                        <span>decision: {formatMetaValue(inspectImage.decision)}</span>
-                        <span>previous_result_summary: {formatMetaValue(inspectImage.previous_result_summary)}</span>
+                        {hasPassMetadata(inspectImage) && <span>第 {formatMetaValue(inspectImage.pass_index)} 輪 · {getPassLabel(inspectImage)}</span>}
+                        {inspectImage.retry_reason && <span>複核原因：{formatMetaValue(inspectImage.retry_reason)}</span>}
+                        {inspectImage.model_id && <span>使用模型：{inspectImage.model_id}</span>}
+                        {inspectImage.started_at && <span>開始：{inspectImage.started_at}</span>}
+                        {inspectImage.completed_at && <span>完成：{inspectImage.completed_at}</span>}
+                        {inspectImage.decision && <span>判讀結果：{formatDecision(inspectImage.decision)}</span>}
+                        {inspectImage.previous_result_summary && <span>上一輪摘要：{formatMetaValue(inspectImage.previous_result_summary)}</span>}
                         {inspectImage.source_item_id && <button type="button" onClick={() => toggleHistory(inspectImage)} style={{ background: 'transparent', color: '#7dd3fc', border: '1px solid #155e75', borderRadius: '3px', padding: '2px 6px', fontSize: '0.68rem', cursor: 'pointer' }}>本張判讀歷程</button>}
+                        {inspectImage.source_item_id && expandedHistoryKeys[String(inspectImage.source_item_id)] && <div style={{ flexBasis: '100%', maxHeight: '180px', overflowY: 'auto', borderTop: '1px solid #334155', paddingTop: '6px' }}>
+                          {historyLoading[String(inspectImage.source_item_id)] && <div style={{ color: '#7dd3fc' }}>判讀歷程載入中...</div>}
+                          {historyErrors[String(inspectImage.source_item_id)] && <div style={{ color: '#fca5a5' }}>{historyErrors[String(inspectImage.source_item_id)]}</div>}
+                          {getHistoryFor(inspectImage).map((pass) => <div key={pass._queueKey} style={{ marginBottom: '7px' }}>
+                            {hasPassMetadata(pass) && <div style={{ color: '#bae6fd', fontWeight: 800 }}>第 {formatMetaValue(pass.pass_index)} 輪 · {getPassLabel(pass)}{pass.decision ? ` · ${formatDecision(pass.decision)}` : ''}</div>}
+                            <div style={{ color: '#e5e7eb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{getNarrationFullText(pass) || '未提供'}</div>
+                          </div>)}
+                        </div>}
                       </div>
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>檔名</span>

@@ -158,15 +158,6 @@ def main() -> None:
     }
     first = immediate_retry_decision(distant_record, 1, [], 3)
     assert first["retry"] is True
-    history = [
-        {"complete_screen_count": 4, "unique_main": False, "label_ownership": "not_visible", "followme_physical_evidence": []},
-        {"view_type": "遠景", "category": "遠景"},
-        {"view_type": "遠景", "category": "遠景"},
-    ]
-    history = [
-        {"view_type": "?", "category": "?", "complete_screen_count": 4, "unique_main": False, "label_ownership": "not_visible", "followme_physical_evidence": []},
-        {"view_type": "?", "category": "?", "complete_screen_count": 4, "unique_main": False, "label_ownership": "not_visible", "followme_physical_evidence": []},
-    ]
     history = [dict(distant_record), dict(distant_record)]
     third = immediate_retry_decision(distant_record, 3, history, 3)
     assert third["unresolved"] is False

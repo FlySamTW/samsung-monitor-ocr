@@ -20,6 +20,7 @@ from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 PERIOD_RE = re.compile(r"^M-(\d{6})-")
+PERIOD_ANYWHERE_RE = re.compile(r"(?<!\d)(20\d{4})(?!\d)")
 PRICE_TOKEN_RE = re.compile(
     r"-(?P<symbol>[\u2191\u2193\u2713\u2714\?\uff1f]?)[\uff04$](?P<price>\d+)-"
 )
@@ -61,6 +62,33 @@ class ManifestRow:
 def infer_period(file_name: str) -> str:
     match = PERIOD_RE.match(file_name)
     return match.group(1) if match else ""
+
+
+def infer_period_from_text(*values: object) -> str:
+    match = PERIOD_ANYWHERE_RE.search(" ".join(str(value or "") for value in values))
+    return match.group(1) if match else ""
+
+
+def load_copied_target_index(output_root: Path) -> dict[tuple[str, str], set[str]]:
+    """Map (period, original source filename) to published flat filenames."""
+    index: dict[tuple[str, str], set[str]] = {}
+    audit_root = output_root / "_ocr_audit"
+    if not audit_root.is_dir():
+        return index
+    for copied_path in audit_root.glob("*/copied.csv"):
+        try:
+            with copied_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    original = str(row.get("original_name") or "").strip()
+                    target = str(row.get("target_name") or "").strip()
+                    if not target and row.get("target_path"):
+                        target = Path(str(row["target_path"])).name
+                    period = infer_period(target) or infer_period_from_text(copied_path.parent.name)
+                    if original and target and period:
+                        index.setdefault((period, original), set()).add(target)
+        except (OSError, UnicodeError, csv.Error):
+            continue
+    return index
 
 
 def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[tuple[str, str]]]:
@@ -182,9 +210,10 @@ def load_audit_review_required_names(output_root: Path) -> set[str]:
     return blocked_names
 
 def load_complete_auto_verified_names(output_root: Path) -> set[str]:
-    """Return only rows with traceable v19.44 three-pass verification evidence."""
+    """Return published names whose category-specific v19.45 verification completed."""
     names: set[str] = set()
     truthy = {"1", "true", "yes", "y"}
+    copied_index = load_copied_target_index(output_root)
     for path in (output_root / "_ocr_audit").glob("*/success_records.csv"):
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
@@ -192,33 +221,55 @@ def load_complete_auto_verified_names(output_root: Path) -> set[str]:
                     continue
                 if str(row.get("auto_review_required") or "").strip().lower() in truthy:
                     continue
+                view = " ".join(str(row.get(key) or "") for key in ("view_type", "category"))
+                model = str(row.get("model") or "").upper().replace(" ", "")
+                required_attempts = 3 if "遠景" in view or "DISTANT" in view.upper() else (2 if "FOLLOWME" in model else 1)
                 try:
-                    if int(str(row.get("ocr_attempt") or "0")) < 3:
+                    if int(str(row.get("ocr_attempt") or "0")) < required_attempts:
                         continue
                 except ValueError:
                     continue
                 evidence = " ".join(str(row.get(key) or "").strip() for key in ("thinking", "stream_buffer", "raw_response"))
                 trace = str(row.get("run_id") or row.get("timestamp") or "").strip()
-                view = " ".join(str(row.get(key) or "") for key in ("view_type", "category"))
                 strict_distant = True
                 if "遠景" in view or "DISTANT" in view.upper():
                     upper = evidence.upper()
                     strict_distant = ("3" in evidence or "三" in evidence) and any(
                         token in upper for token in ("NO UNIQUE", "MULTIPLE", "無唯一", "無法鎖定", "無法確定")
                     )
-                if evidence and trace and strict_distant and row.get("file_name"):
-                    names.add(str(row["file_name"]).strip())
+                original = str(row.get("file_name") or "").strip()
+                period = infer_period(original) or infer_period_from_text(
+                    row.get("period"), row.get("original_source_path"), row.get("source_path"), path.parent.name
+                )
+                if evidence and trace and strict_distant and original:
+                    targets = copied_index.get((period, original), set())
+                    if targets:
+                        names.update(targets)
+                    elif infer_period(original):
+                        names.add(original)
     return names
 
 
 def load_v1945_trace_names(output_root: Path) -> set[str]:
     names: set[str] = set()
+    copied_index = load_copied_target_index(output_root)
     for path in (output_root / "_ocr_audit").rglob("v1945_evidence_trace.jsonl"):
         try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                item = json.loads(line)
-                if item.get("file_name") and item.get("trace_version") == "v19.45":
-                    names.add(str(item["file_name"]).strip())
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    item = json.loads(line)
+                    decision = item.get("guard_decision") or {}
+                    if item.get("trace_version") != "v19.45" or decision.get("verified") is not True:
+                        continue
+                    original = str(item.get("file_name") or "").strip()
+                    period = str(item.get("period") or "") or infer_period_from_text(
+                        item.get("original_source_path"), item.get("source_path"), path.parent.name
+                    )
+                    targets = copied_index.get((period, original), set())
+                    if targets:
+                        names.update(targets)
+                    elif infer_period(original):
+                        names.add(original)
         except (OSError, ValueError, TypeError):
             continue
     return names

@@ -30,6 +30,14 @@ file, recent results, index, or filename joins.
 - Every presentation change requires the 500-item soak, dashboard build, and
   live 3-transition browser verification. Preserve `logs/ui_sync_v1944_live.*`.
 
+## Compact status and clean result-rail rule (2026-07-14)
+
+- `/api/status` is bounded live transport. `compact-v2` exposes at most 12 recent presentation events (hard maximum 24), no inline image/base64/raw evidence, and a small compatibility-only `recent_results`. Durable pass history is read by stable `source_item_id` through the history API.
+- Treat a status response above 500 KB as a production failure. Large repeated payloads can make the AI narration disappear or appear frozen while OCR itself remains healthy.
+- The right result rail shows only thumbnail, filename and concise operator result/badges. Internal retry reason, model id, timestamps, decision code, previous-result summary and expanded history belong only in the click-through inspection view.
+- If pass metadata is absent, hide the pass row. Never render `第 未提供 輪 · 未提供 · 未提供` or equivalent placeholder chains.
+- Frontend-only fixes may be deployed without stopping OCR by placing hashed assets first and replacing `dist/index.html` last. Backend upgrades must wait for two consecutive idle/complete/no-worker observations and pass compact/history/fingerprint verification before releasing the shared interlock.
+
 ## v19.37 Non-Regression Guard (2026-07-10)
 
 - Local LM Studio instances may run Qwen3-VL with only an 8K context. The full historical prompt is longer than that after image tokens are included. Runtime requests must use `build_runtime_system_prompt()`; when the full file is too long, it must select the maintained compact ruleset rather than sending an over-limit request. A context-limit error is a retryable configuration fault, never a valid OCR outcome.

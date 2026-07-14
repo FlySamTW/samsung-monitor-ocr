@@ -29,6 +29,17 @@
 
 ## 3. 2026-07-14 接手時的即時狀態
 
+### 2026-07-14 15:16 接續更新
+
+- Dashboard 已由使用者實際開啟於 `http://127.0.0.1:5000/`；後端與 LM Studio listener 持續存在，沒有因前端修正或測試中斷。
+- 202604 已前進至約 `230/366`，成功 `230`、失敗 `0`；即時數字仍會繼續變動。
+- 使用者回報的兩個 UI 回歸已修正並以無空窗方式更新前端：AI 區不再顯示 `第 未提供 輪 · 未提供 · 未提供`，右側結果卡不再展開 `model_id`、開始/完成時間、複核原因、上一輪摘要等內部欄位。完整歷程只在點開照片後按需顯示。
+- 正式前端入口目前指向 `dashboard/dist/assets/index-BUPjyTM8.js`；舊資源仍保留，更新時先放資源、最後切 index，沒有重啟 OCR。
+- 舊後端 `/api/status` 目前仍傳 200 筆 presentation 與 50 筆 `recent_results`，單次約 `6.78 MB`。新版來源已改為 `compact-v2`：live window 最多 12 筆、不得含 base64/raw evidence，完整歷程改走 `/api/presentation_history/<source_item_id>`，守門驗證要求整包小於 500 KB。
+- `history API`、穩定 `source_item_id`、每輪 pass metadata、evidence trace 位置、上傳來源映射與 category-specific pass gate 均已完成；完整 critical regression、500-item soak、PowerShell parser 與獨立 Vite build 已通過。
+- 背景安全切換器 PID `17484` 已啟動，lock 為 `_ocr_audit/model_benchmark.lock`、purpose=`backend_upgrade_v1945`。它必須連續兩次確認 API idle、processed=total、無 staged/recursive/uploader，才會依 port 5000 listener 與 repo-owned process tree 切換後端；任何 compact/history/fingerprint 驗證失敗都保留 lock 並停止後續流程。
+- C 槽約 349.93 GB、D 槽約 365.62 GB 可用，先前 C 槽低空間風險已解除；仍不可刪除 audit、transaction、來源、輸出或上傳 receipt。
+
 ### OCR
 
 - 後端版本：`v19.45 (accuracy-first evidence contract)`。
@@ -131,27 +142,27 @@
 9. 放大檢視需支援原圖 1:1、拖曳與合理縮放，不能只顯示縮小圖，也不能拉動後版面錯位。
 10. 每次建置後必須實際重整瀏覽器並做至少 500-item soak；不能只看 build 成功。
 
-## 8. 本次尚未部署的程式修改
+## 8. 本次部署狀態
 
-以下為工作樹中的半完成修改，不能誤認為目前後端已使用：
+以下來源修改已完成與通過測試，但後端仍要等安全邊界才會載入：
 
-- `skills/batch_orchestrator.py`：新增每輪 presentation event、`source_item_id`、pass metadata、上一輪摘要、append-only JSONL audit 與 gzip rotation。
-- `samsung_ocr_batch_processor.py`：開始調整 immutable presentation snapshot，但 history API、audit/model/pass config 與完整路由尚未完成。
-- `dashboard/src/App.jsx`：加入輪次/history 顯示的初稿並已 build；目前仍需把技術欄位改成正式中文，並改成真正按需 history API，而非只讀記憶體佇列。
-- 這些來源修改尚未在安全邊界重啟後端部署。Dashboard `dist` 已被 build 改動，Flask 可能熱讀新前端資產，因此接手者要特別核對「前端新版 + 後端舊版」不相容問題。
+- `skills/batch_orchestrator.py`：每輪 immutable event、穩定 `source_item_id`、pass metadata、上一輪摘要、append-only JSONL/gzip history、來源映射與無影像 public history 已完成。
+- `samsung_ocr_batch_processor.py`：history API、review progress、`compact-v2` status、12 筆 presentation window 與精簡 recent results 已完成，尚未由目前 live 後端載入。
+- `dashboard/src/App.jsx` 與 `dashboard/dist`：正式中文、按需歷程、缺值輪次隱藏、右側卡片清理與 2 秒 legacy polling 已部署；目前可相容舊後端。
+- `tools/safe_backend_boundary_upgrade.ps1` 正在等待整個 active staged runner 自然結束，不會在 202604 月份切換時搶停。安全切換後需再次量測 status payload、history route，並觀察至少 30 張與第 2/3 輪插隊。
 
 ## 9. 已知未解決與重大風險
 
 1. **準確率仍未達標**：使用者抽查仍發現 FollowMe/Pro、遠景/單機、清楚/不清楚、價牌歸屬、非法型號等錯誤。
 2. **遠景錯誤比例曾很高**：2026 已上傳遠景也需 stale audit；不能因已上傳就視為正確。
-3. **UI 同步反覆回歸**：需完成每輪持久事件、history API 與 500-item 真實長跑驗證。
+3. **UI 同步仍需 live soak**：每輪持久事件、history API 與 deterministic 500-item soak 已完成；待安全切換後仍需實際觀察至少 30 張與第 2/3 輪插隊。
 4. **全域進度語意不完整**：65,331 是唯一初次辨識，不含複核。UI 應同時顯示初次總進度、目前資料夾、目前輪次與複核進度。
 5. **人工校正學習鏈需核對**：CSV 有資料不代表正式 OCR 已讀取；需確認通用人工規則熱載入、離線回歸與污染防護均真正接線。
 6. **模型 benchmark 未正式完成**：必須固定 50 張困難盲測，同 prompt、同影像、temperature 0，比較分類/型號/價格/FollowMe/遠景與耗時；未通過不可換主線。
 7. **價格來源與合法型號驗證**：LLM 結果曾被後處理清空或出現虛構型號，需查明資料載入與 validation 是否在每輪一致執行。
 8. **上傳 stale 資料**：897 張已上傳但後來變 review；要有可追溯的替換/刪除/重新上傳流程，不可直接忽略。
-9. **C 槽空間低**：需清理可安全刪除的 cache/log/舊壓縮包，但不可刪 audit、transaction、source、output 或上傳 receipt。
-10. **測試失敗**：`tools/test_immediate_retry_queue.py` 目前因 mock 的「好結果」缺少 v19.45 evidence contract 欄位而進第三輪。應補完整測試 fixture，不可放寬正式守門。
+9. **空間規則仍要保留**：C/D 目前空間充足，但不可因此刪除 audit、transaction、source、output 或上傳 receipt。
+10. **關鍵測試已修復**：immediate retry fixture 已補齊 v19.45 evidence，critical regression、history API、500-item soak、upload guard 與 dashboard build 皆已通過；後續不得放寬正式守門。
 
 ## 10. Sandbox/權限事件的確切原因
 
@@ -165,9 +176,9 @@
 
 1. 先查 `api/status` 兩次（間隔約 60 秒）、5000/1234 listener、程序父子關係、lock、目前檔案與 audit mtime；正常就不要中斷。
 2. 確認仍在 2026-first 接力，禁止舊年份 runner 搶占。
-3. 完成本次半成品：後端每輪事件持久化、history API、pass config；前端改成正式中文且按需載入歷程。
-4. 修好 `test_immediate_retry_queue.py` 的 evidence fixture，執行 py_compile、presentation soak、immediate retry、v19.45 evidence、upload guard、命名與 dashboard build。
-5. 在照片/資料夾安全邊界部署；部署前確認只有一組程序，部署後重新整理瀏覽器，連續觀察至少 30 張與 2/3 輪插隊。
+3. 確認 `safe_backend_boundary_upgrade` guard 仍在等待，不得手動刪除其 interlock 或中途重啟後端。
+4. 安全切換完成後確認 `status_contract_version=compact-v2`、status <500 KB、queue <=24、history API 可讀、前端指紋一致。
+5. 連續觀察至少 30 張與第 2/3 輪插隊；照片、AI 文字、右側卡片與 modal 的 presentation id 必須一致，且不得再出現缺值輪次或內部欄位。
 6. 2026 每批完成後重跑 distant/FollowMe risk audit、manifest 與 review split；只有 fresh ready 可上傳。
 7. 處理 stale uploaded 2026 遠景：重新辨識、更新檔名，並安全替換雲端錯檔。
 8. 用固定 50 張盲測完成 Qwen3-VL 8B、Gemma 4 12B QAT、Qwen3.5 9B VLM、MiniCPM/InternVL 等候選比較；準確率優先。

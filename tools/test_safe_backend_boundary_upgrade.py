@@ -20,9 +20,17 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('purpose="backend_upgrade_v1945"', self.script)
 
     def test_boundary_proof_requires_idle_complete_and_no_workers(self):
+        self.assertIn('if ([bool]$status.is_running) { return $false }', self.script)
         self.assertIn('[int]$stats.processed -ne [int]$stats.total', self.script)
         self.assertIn('rerun_staged_candidates\\.py|recursive_ocr_flat_export\\.py|rerun_questionable_records\\.py', self.script)
         self.assertIn('rclone_drive_upload\\.py|rclone\\.exe', self.script)
+        self.assertIn('$quietCount -ge 2', self.script)
+
+    def test_backend_stop_targets_verified_port_listener_and_process_tree(self):
+        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort 5000', self.script)
+        self.assertIn('port 5000 is not owned by the Samsung OCR backend', self.script)
+        self.assertIn('backend listener ancestry is not owned by repo', self.script)
+        self.assertIn('listener_pid=$listenerId; process_ids=$orderedIds', self.script)
 
     def test_supervisor_interlock_is_fail_closed(self):
         self.assertIn('planned_backend_upgrade_interlock', self.supervisor)
@@ -32,6 +40,9 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('upgrade_failed_lock_retained', self.script)
         self.assertIn('throw "new backend verification failed; lock retained"', self.script)
         self.assertIn('Remove-Item -LiteralPath $lockPath -Force', self.script)
+        self.assertIn('status_contract_version -eq "compact-v2"', self.script)
+        self.assertIn('$payloadBytes -lt 500000', self.script)
+        self.assertIn('/api/presentation_history/', self.script)
 
     def test_lock_payload_is_atomic_and_recoverable(self):
         self.assertIn('New-Item -ItemType File -Path $lockPath', self.script)

@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> int:
     commands = [
         [sys.executable, str(ROOT / "tools" / "test_presentation_soak.py")],
+        [sys.executable, str(ROOT / "tools" / "test_presentation_history_api.py")],
+        [sys.executable, str(ROOT / "tools" / "test_immediate_retry_queue.py")],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_v1945_evidence_contract"],
         [sys.executable, str(ROOT / "tools" / "test_runtime_safety_guards.py")],
     ]
     for command in commands:

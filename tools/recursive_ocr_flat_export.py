@@ -52,7 +52,11 @@ def write_dict_csv(path: Path, rows: List[Dict[str, object]], headers: List[str]
         writer = csv.DictWriter(handle, fieldnames=headers)
         writer.writeheader()
         for row in rows:
-            writer.writerow({header: row.get(header, "") for header in headers})
+            values = {}
+            for header in headers:
+                value = row.get(header, "")
+                values[header] = json.dumps(value, ensure_ascii=False, separators=(",", ":")) if isinstance(value, (dict, list)) else value
+            writer.writerow(values)
 
 
 def read_dict_csv(path: Path) -> List[Dict[str, str]]:
@@ -310,7 +314,13 @@ def current_year_review_gate_count(output_dir: Path) -> tuple[int, Path]:
 def write_results_snapshot(path: Path, records: List[dict]) -> None:
     headers = [
         "timestamp",
+        "started_at",
+        "completed_at",
         "file_name",
+        "source_path",
+        "original_source_path",
+        "source_item_id",
+        "period",
         "category",
         "view_type",
         "screen_status",
@@ -323,6 +333,15 @@ def write_results_snapshot(path: Path, records: List[dict]) -> None:
         "price_diff_percent",
         "duration",
         "run_id",
+        "model_id",
+        "evidence_contract_version",
+        "evidence_contract_valid",
+        "evidence_contract_errors",
+        "complete_screen_count",
+        "unique_main",
+        "label_ownership",
+        "followme_physical_evidence",
+        "normalized_evidence",
         "review_status",
         "human_category",
         "human_model",
@@ -334,6 +353,7 @@ def write_results_snapshot(path: Path, records: List[dict]) -> None:
         "model_validation_failed",
         "rejected_model",
         "price_conflict_detected",
+        "thinking",
     ]
     write_dict_csv(path, records, headers)
 

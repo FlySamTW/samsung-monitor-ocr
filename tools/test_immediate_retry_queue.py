@@ -38,10 +38,14 @@ def main() -> None:
                 return {
                     "view_type": "單機", "category": "單機", "model": None, "price": None,
                     "quality_issue": "沒有規格和價格牌", "thinking": "唯一主角但標籤仍需仔細重讀。",
+                    "complete_screen_count": 1, "unique_main": True,
+                    "label_ownership": "matched", "followme_physical_evidence": [],
                 }
             return {
                 "view_type": "單機", "category": "單機", "model": "S24F332EAC", "price": "2390",
                 "quality_issue": "", "thinking": "唯一主角自己的規格牌與價格牌清楚可讀。",
+                "complete_screen_count": 1, "unique_main": True,
+                "label_ownership": "matched", "followme_physical_evidence": [],
             }
 
         orchestrator = BatchOrchestrator({
@@ -67,7 +71,11 @@ def main() -> None:
         assert [item[0] for item in calls[:3]] == ["A.jpg", "A.jpg", "B.jpg"], calls
         assert calls[1][1:] == (2, 1), calls
         assert len(orchestrator.recent_results) == 2
-        assert len(orchestrator.display_queue) == 2
+        assert len(orchestrator.display_queue) == 3
+        a_events = [item for item in orchestrator.display_queue if item.get("file_name") == "A.jpg"]
+        assert [item.get("pass_index") for item in a_events] == [1, 2]
+        assert len({item.get("source_item_id") for item in a_events}) == 1
+        assert len({item.get("presentation_id") for item in a_events}) == 2
         assert all(row.get("model") == "S24F332EAC" for row in orchestrator.recent_results)
         assert all(row.get("ocr_attempt") in {1, 2} for row in orchestrator.recent_results)
 

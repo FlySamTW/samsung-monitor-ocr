@@ -24,9 +24,11 @@ log = logging.getLogger("rich")
 
 def _append_v1945_trace(output_dir, result, review_decision, retry_reasons):
     """Append one idempotent, bounded pass trace without image payloads."""
-    source = str(result.get("source_path") or result.get("file_name") or "")
-    key = hashlib.sha256(f"{source}|{result.get('run_id','')}|{result.get('ocr_attempt','')}".encode("utf-8")).hexdigest()
-    path = Path(output_dir) / "v1945_evidence_trace.jsonl"
+    source = str(result.get("original_source_path") or result.get("source_path") or result.get("file_name") or "")
+    source_item_id = str(result.get("source_item_id") or hashlib.sha256(source.casefold().encode("utf-8")).hexdigest())
+    key = hashlib.sha256(f"{source_item_id}|{result.get('run_id','')}|{result.get('ocr_attempt','')}".encode("utf-8")).hexdigest()
+    destination = Path(output_dir)
+    path = destination if destination.suffix.lower() == ".jsonl" else destination / "v1945_evidence_trace.jsonl"
     existing = set()
     if path.is_file():
         try:
@@ -42,8 +44,12 @@ def _append_v1945_trace(output_dir, result, review_decision, retry_reasons):
         "trace_id": key,
         "trace_version": "v19.45",
         "timestamp": datetime.now().isoformat(),
-        "source_identity": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-        "source_path": source,
+        "source_identity": source_item_id,
+        "source_item_id": source_item_id,
+        "source_path": str(result.get("source_path") or source),
+        "original_source_path": source,
+        "period": str(result.get("period") or ""),
+        "audit_folder": str(result.get("audit_folder") or ""),
         "file_name": result.get("file_name"),
         "attempt": result.get("ocr_attempt"),
         "run_id": result.get("run_id"),
@@ -133,6 +139,7 @@ class BatchOrchestrator:
         self.max_auto_attempts = max(1, int(config.get("max_auto_attempts", 3)))
         self.auto_attempts = {}
         self.auto_result_history = {}
+        self.source_metadata_map = {}
         
         # [v16.12] Force Rerun Queue
         self.priority_queue = [] 
@@ -308,6 +315,10 @@ class BatchOrchestrator:
             "price": result.get("price"),
             "screen_status": result.get("screen_status"),
             "quality_issue": result.get("quality_issue"),
+            "complete_screen_count": result.get("complete_screen_count"),
+            "unique_main": result.get("unique_main"),
+            "label_ownership": result.get("label_ownership"),
+            "followme_physical_evidence": result.get("followme_physical_evidence") or [],
             "thinking": str(result.get("thinking") or "")[:1200],
             "reasons": list(reasons),
         }
@@ -320,6 +331,43 @@ class BatchOrchestrator:
         except (OSError, ValueError):
             source = str(source_path or "").casefold()
         return hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()
+
+    @staticmethod
+    def _infer_period(*values: object) -> str:
+        import re
+        text = " ".join(str(value or "") for value in values)
+        match = re.search(r"(?<!\d)(20\d{2}(?:0[1-9]|1[0-2]))(?!\d)", text)
+        return match.group(1) if match else ""
+
+    def _load_source_metadata_map(self, image_dir: str) -> dict[str, dict]:
+        path = Path(image_dir) / ".ocr_source_map.json"
+        if not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            rows = payload.get("items", payload) if isinstance(payload, dict) else {}
+            if not isinstance(rows, dict):
+                return {}
+            return {
+                str(name): dict(metadata)
+                for name, metadata in rows.items()
+                if isinstance(metadata, dict)
+            }
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            self.log_system(f"⚠️ 來源身分對照表讀取失敗: {exc}")
+            return {}
+
+    def _source_metadata(self, filename: str, processing_path: object) -> dict:
+        mapped = dict(self.source_metadata_map.get(str(filename), {}) or {})
+        processing = str(Path(str(processing_path)).resolve())
+        original = str(mapped.get("original_source_path") or mapped.get("source_path") or processing)
+        source_item_id = str(mapped.get("source_item_id") or self._source_item_id(original))
+        return {
+            "source_item_id": source_item_id,
+            "original_source_path": original,
+            "period": str(mapped.get("period") or self._infer_period(original, processing, filename)),
+            "audit_folder": str(mapped.get("audit_folder") or ""),
+        }
 
     def _pass_metadata(self, attempt: int) -> tuple[int, str]:
         role = str(self.config.get("presentation_role") or "auto").strip().lower()
@@ -397,12 +445,21 @@ class BatchOrchestrator:
         thumbnail: str = "",
     ) -> dict:
         """Queue and persist exactly one immutable event for every OCR pass."""
-        structured = {
-            key: value for key, value in dict(result or {}).items()
-            if key not in {"thumb_b64", "image_b64", "base64"}
-        }
-        source_path = str(result.get("source_path") or "")
-        source_item_id = self._source_item_id(source_path or result.get("file_name"))
+        structured_keys = (
+            "view_type", "category", "screen_status", "quality_issue", "model", "price",
+            "price_status", "price_symbol", "official_price", "price_diff_percent",
+            "complete_screen_count", "unique_main", "label_ownership",
+            "followme_physical_evidence", "normalized_evidence",
+            "evidence_contract_version", "evidence_contract_valid", "evidence_contract_errors",
+            "auto_verified", "auto_review_required", "review_status",
+        )
+        structured = {key: result.get(key) for key in structured_keys if key in result}
+        processing_source_path = str(result.get("source_path") or "")
+        source_path = str(result.get("original_source_path") or processing_source_path)
+        source_item_id = str(
+            result.get("source_item_id")
+            or self._source_item_id(source_path or result.get("file_name"))
+        )
         pass_index, pass_label = self._pass_metadata(attempt)
         with self._state_lock:
             self.presentation_sequence += 1
@@ -421,6 +478,8 @@ class BatchOrchestrator:
                 "ocr_attempt": max(1, int(attempt or 1)),
                 "retry_reason": list(dict.fromkeys(str(x) for x in retry_reasons if str(x).strip())),
                 "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
+                "accuracy_profile": str(self.config.get("accuracy_profile") or "strict"),
+                "evidence_contract_version": str(result.get("evidence_contract_version") or ""),
                 "started_at": started_at,
                 "completed_at": completed_at,
                 "previous_result_summary": self._previous_result_summary(previous_results),
@@ -444,6 +503,18 @@ class BatchOrchestrator:
             self._append_presentation_audit(event)
         return event
 
+    @staticmethod
+    def _public_presentation_event(item: dict) -> dict:
+        safe = {
+            key: value for key, value in dict(item or {}).items()
+            if key not in {"thumb_b64", "image_b64", "base64", "raw_model_output", "raw_objects"}
+        }
+        safe["structured_result"] = {
+            key: value for key, value in dict(safe.get("structured_result") or {}).items()
+            if key not in {"thumb_b64", "image_b64", "base64", "raw_model_output", "raw_objects"}
+        }
+        return safe
+
     def get_presentation_history(self, source_item_id: str, limit: int = 12) -> list[dict]:
         """Read one photo's pass history on demand without retaining all jobs in RAM."""
         wanted = str(source_item_id or "").strip()
@@ -451,9 +522,11 @@ class BatchOrchestrator:
             return []
         limit = max(1, min(50, int(limit or 12)))
         found: dict[str, dict] = {}
-        for item in reversed(self.display_queue):
+        with self._state_lock:
+            live_items = list(self.display_queue)
+        for item in reversed(live_items):
             if item.get("source_item_id") == wanted:
-                found[str(item.get("presentation_id"))] = dict(item)
+                found[str(item.get("presentation_id"))] = self._public_presentation_event(item)
         audit_dir = self._presentation_audit_dir()
         if audit_dir.is_dir() and len(found) < limit:
             paths = sorted(audit_dir.glob("presentation_*.jsonl*"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -466,7 +539,7 @@ class BatchOrchestrator:
                                 continue
                             item = json.loads(line)
                             if item.get("source_item_id") == wanted:
-                                found[str(item.get("presentation_id"))] = item
+                                found[str(item.get("presentation_id"))] = self._public_presentation_event(item)
                 except (OSError, UnicodeError, json.JSONDecodeError):
                     continue
                 if len(found) >= limit:
@@ -1002,6 +1075,7 @@ class BatchOrchestrator:
 
             batch_image_dir = str(Path(self.image_dir).resolve())
             self.active_image_dir = batch_image_dir
+            self.source_metadata_map = self._load_source_metadata_map(batch_image_dir)
             self.stop_event.clear()
             self.is_running = True
             self.stats['is_running'] = True
@@ -1428,6 +1502,7 @@ class BatchOrchestrator:
                 # Add Metadata
                 norm_result['file_name'] = fname
                 norm_result['source_path'] = str(Path(img_path).resolve())
+                norm_result.update(self._source_metadata(fname, img_path))
                 norm_result['timestamp'] = datetime.now().isoformat()
                 norm_result['duration'] = round(duration, 2)
                 norm_result['run_id'] = run_id
@@ -1445,7 +1520,12 @@ class BatchOrchestrator:
                         self.max_auto_attempts,
                     ) or review_decision
                 retry_reasons = [str(x) for x in review_decision.get("reasons", []) if str(x).strip()]
-                _append_v1945_trace(self.output_dir, norm_result, review_decision, retry_reasons)
+                _append_v1945_trace(
+                    self.config.get("evidence_trace_path") or self.output_dir,
+                    norm_result,
+                    review_decision,
+                    retry_reasons,
+                )
                 norm_result['auto_retry_reasons'] = "；".join(dict.fromkeys(retry_reasons))
                 norm_result['auto_verified'] = bool(review_decision.get("verified"))
                 pass_completed_at = datetime.now().isoformat()
@@ -1621,6 +1701,7 @@ class BatchOrchestrator:
                         "started_at": pass_started_at,
                         "completed_at": error_completed_at,
                     }
+                    error_result.update(self._source_metadata(fname, img_path))
                     error_thumb = ""
                     if os.path.isfile(img_path):
                         try:

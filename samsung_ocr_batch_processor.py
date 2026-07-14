@@ -115,6 +115,19 @@ def get_frontend_asset_fingerprint():
 _presentation_next_id = 0
 _presentation_by_source = {}
 _presentation_events = []
+STATUS_PRESENTATION_WINDOW = max(3, min(24, int(os.environ.get("OCR_STATUS_PRESENTATION_WINDOW", "12"))))
+
+_STATUS_EVENT_FIELDS = (
+    "presentation_id", "presentation_sequence", "source_item_id", "file_name", "source_path",
+    "pass_index", "pass_label", "ocr_attempt", "retry_reason", "model_id", "accuracy_profile",
+    "evidence_contract_version", "started_at", "completed_at", "previous_result_summary",
+    "decision", "narration", "stream_buffer",
+)
+_STATUS_RESULT_FIELDS = (
+    "file_name", "source_path", "view_type", "category", "model", "price", "screen_status",
+    "quality_issue", "price_symbol", "price_status", "official_price", "price_diff_percent",
+    "auto_verified", "duration", "timestamp",
+)
 
 
 def _presentation_snapshot(raw, source_hint=""):
@@ -140,22 +153,36 @@ def _presentation_snapshot(raw, source_hint=""):
     return item
 
 
+def _compact_status_result(raw):
+    """Expose only fields that the live dashboard renders; never inline images or raw evidence."""
+    source = dict(raw or {})
+    return {key: source[key] for key in _STATUS_RESULT_FIELDS if source.get(key) not in (None, "")}
+
+
+def _compact_status_presentation(raw):
+    source = dict(raw or {})
+    compact = {key: source[key] for key in _STATUS_EVENT_FIELDS if source.get(key) not in (None, "")}
+    result = _compact_status_result(source.get("result") or source.get("structured_result") or {})
+    compact["result"] = result
+    return compact
+
+
 def _presentation_payload(orchestrator):
-    """Return immutable snapshots in backend sequence order, capped at 200."""
+    """Return a small immutable live window; full per-photo history stays on the history API."""
     global _presentation_events
+    if not getattr(orchestrator, "is_running", False):
+        _presentation_events = []
+        return []
     live = list(getattr(orchestrator, "display_queue", []) or [])
+    current_events = []
+    seen = set()
     for index, raw in enumerate(live):
         item = _presentation_snapshot(raw, f"live-{index}")
-        existing = {event["presentation_id"] for event in _presentation_events}
-        if item["presentation_id"] not in existing:
-            _presentation_events.append(item)
-    if not getattr(orchestrator, "is_running", False):
-        for index, raw in enumerate(list(getattr(orchestrator, "recent_results", []) or [])):
-            item = _presentation_snapshot(raw, f"history-{index}")
-            if item["presentation_id"] not in {event["presentation_id"] for event in _presentation_events}:
-                _presentation_events.append(item)
-    _presentation_events = _presentation_events[-200:]
-    return [dict(event, result=dict(event.get("result") or {})) for event in _presentation_events]
+        if item["presentation_id"] not in seen:
+            current_events.append(item)
+            seen.add(item["presentation_id"])
+    _presentation_events = current_events[-200:]
+    return [_compact_status_presentation(event) for event in _presentation_events[-STATUS_PRESENTATION_WINDOW:]]
 
 
 V1945_OUTPUT_CONTRACT = (
@@ -3748,9 +3775,23 @@ def get_status():
         # memory.  They are useful only while a batch is live; returning them
         # while idle makes the dashboard request deleted staging paths.
         presentation_queue = _presentation_payload(orchestrator)
+        current_dir_text = str(getattr(orchestrator, 'image_dir', None) or "")
+        period_match = re.search(r"(?<!\d)(20\d{4})(?!\d)", current_dir_text)
+        current_attempt = int((getattr(orchestrator, "auto_attempts", {}) or {}).get(current_file, 0) or 0)
+        review_progress = {
+            "mode": "current_year_review" if "_ocr_staging" in current_dir_text else "initial_ocr",
+            "period": period_match.group(1) if period_match else "",
+            "processed": stats["processed"],
+            "success": stats["success"],
+            "failed": stats["failed"],
+            "total": stats["total"],
+            "current_pass": current_attempt,
+            "current_file": current_file,
+        }
 
         status_obj = {
             "version": VERSION,
+            "status_contract_version": "compact-v2",
             "frontend_asset_fingerprint": get_frontend_asset_fingerprint(),
             "accuracy_profile": ACCURACY_PROFILE,
             "manual_rule_count": int(getattr(orchestrator, "manual_rule_count", 0) or 0),
@@ -3762,12 +3803,15 @@ def get_status():
             "last_image_cost": last_image_cost,
             "stats": stats,
             "overall_progress": overall_progress,
+            "review_progress": review_progress,
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
             "presentation_sequence": presentation_queue[-1].get("presentation_sequence") if presentation_queue else 0,
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
-            "recent_results": orchestrator.recent_results,
+            # Kept for API compatibility, but bounded and stripped of image/raw
+            # payloads. The current dashboard uses presentation_queue instead.
+            "recent_results": [_compact_status_result(item) for item in list(orchestrator.recent_results)[:10]],
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
             "is_running": orchestrator.is_running,
             "image_dir": getattr(orchestrator, 'image_dir', None), # [v19.8] Current source folder for dashboard
@@ -3781,6 +3825,29 @@ def get_status():
         return jsonify(status_obj)
     except Exception as e:
         return jsonify({"error": f"獲取狀態失敗: {str(e)}"}), 500
+
+@flask_app.route('/api/presentation_history/<source_item_id>', methods=['GET'])
+def get_presentation_history(source_item_id):
+    """按穩定照片身分讀取每輪不可變判讀歷程。"""
+    if not orchestrator:
+        return jsonify({"error": "Orchestrator 未初始化"}), 500
+    if not re.fullmatch(r"[0-9a-f]{64}", str(source_item_id or "")):
+        return jsonify({"error": "source_item_id 格式不正確"}), 400
+    try:
+        limit = int(request.args.get("limit", "12"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit 必須是整數"}), 400
+    limit = max(1, min(50, limit))
+    try:
+        items = orchestrator.get_presentation_history(source_item_id, limit=limit)
+        return jsonify({
+            "source_item_id": source_item_id,
+            "count": len(items),
+            "items": items,
+        })
+    except Exception as exc:
+        log.error(f"Presentation history API error: {exc}")
+        return jsonify({"error": "判讀歷程暫時無法載入"}), 500
 
 @flask_app.route('/api/logs', methods=['GET'])
 def get_logs():
@@ -4480,6 +4547,12 @@ def main():
     config = {
         "image_dir": args.dir,
         "output_dir": ".", # Root for csvs
+        "audit_dir": str(AUDIT_DIR),
+        "evidence_trace_path": str(AUDIT_DIR / "v1945_evidence_trace.jsonl"),
+        "source_root": str(SOURCE_ROOT),
+        "model_id": args.model,
+        "accuracy_profile": ACCURACY_PROFILE,
+        "presentation_role": "production",
         "output_file": "final_results_v4.csv", # Legacy
         "assets_dir": "assets",
         "model_list_file": "型號表.txt",

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import math
 import os
 import shutil
@@ -507,6 +508,7 @@ def stage_images(rows: list[dict[str, object]], staging_dir: Path) -> int:
     staging_dir.mkdir(parents=True, exist_ok=True)
     count = 0
     seen: set[str] = set()
+    source_map: dict[str, dict[str, str]] = {}
     for row in rows:
         source = Path(str(row.get("source_path") or ""))
         if not source.exists() or not source.is_file():
@@ -516,7 +518,22 @@ def stage_images(rows: list[dict[str, object]], staging_dir: Path) -> int:
             continue
         seen.add(target.name)
         shutil.copy2(source, target)
+        original = str(source.resolve())
+        source_map[target.name] = {
+            "source_item_id": hashlib.sha256(original.casefold().encode("utf-8")).hexdigest(),
+            "original_source_path": original,
+            "period": str(row.get("period") or infer_period_from_text(original)),
+            "audit_folder": str(row.get("audit_folder") or ""),
+        }
         count += 1
+    if source_map:
+        map_path = staging_dir / ".ocr_source_map.json"
+        temp_path = staging_dir / ".ocr_source_map.json.tmp"
+        temp_path.write_text(
+            json.dumps({"version": 1, "items": source_map}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temp_path, map_path)
     return count
 
 

@@ -24,6 +24,8 @@ node_modules/
 
 # Logs and Results
 runs/
+logs/
+v1945_evidence_trace.jsonl
 *.csv
 *.xlsx
 results.json

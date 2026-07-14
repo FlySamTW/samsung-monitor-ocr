@@ -125,6 +125,42 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("get_frontend_asset_fingerprint", backend)
         self.assertIn("_frontend_asset_cache", backend)
 
+    def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("/api/presentation_history/", app)
+        self.assertIn("historyCache", app)
+        self.assertIn("判讀歷程載入中", app)
+        self.assertIn("複核原因：", app)
+        self.assertIn("使用模型：", app)
+        self.assertIn("初次辨識總進度", app)
+        for visible_technical_label in (
+            ">retry_reason:", ">model_id:", ">started_at:",
+            ">completed_at:", ">decision:", ">previous_result_summary:",
+        ):
+            self.assertNotIn(visible_technical_label, app)
+
+    def test_result_rail_hides_internal_history_metadata_and_missing_pass_labels(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        rail_start = app.index('data-testid="result-rail"')
+        rail_end = app.index('{showReviewPanel && (', rail_start)
+        rail = app[rail_start:rail_end]
+        for internal_detail in (
+            "formatMetaValue(res.retry_reason)",
+            "formatDecision(res.decision)",
+            "formatMetaValue(res.model_id)",
+            "formatMetaValue(res.started_at)",
+            "formatMetaValue(res.completed_at)",
+            "formatMetaValue(res.previous_result_summary)",
+            "toggleHistory(res)",
+        ):
+            self.assertNotIn(internal_detail, rail)
+        self.assertIn("hasPassMetadata(activePresentation)", app)
+        self.assertIn("hasPassMetadata(pendingPanelResult)", app)
+        self.assertIn("hasPassMetadata(res)", rail)
+        self.assertIn("hasPassMetadata(inspectImage)", app)
+        self.assertIn("hasPassMetadata(pass)", app)
+        self.assertNotIn("第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)} · {formatMetaValue(activePresentation?.model_id)}", app)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -27,6 +27,12 @@ function Log([string]$Event, [hashtable]$Data = @{}) {
 function Get-Status {
     try { return Invoke-RestMethod -Uri "$BackendUrl/api/status" -TimeoutSec 8 } catch { return $null }
 }
+function Get-StatusPayloadBytes {
+    try {
+        $json = Invoke-RestMethod -Uri "$BackendUrl/api/status" -TimeoutSec 8 | ConvertTo-Json -Compress -Depth 15
+        return [Text.Encoding]::UTF8.GetByteCount($json)
+    } catch { return [int64]::MaxValue }
+}
 function Owned([string]$Pattern) {
     @(Get-CimInstance Win32_Process | Where-Object {
         $_.CommandLine -and $_.CommandLine -match $Pattern -and $_.CommandLine -match [regex]::Escape($RepoRoot) -and $_.CommandLine -notmatch "safe_backend_boundary_upgrade"
@@ -46,6 +52,7 @@ function Acquire-Lock {
 }
 function Test-QuietBoundary($status) {
     if (-not $status) { return $false }
+    if ([bool]$status.is_running) { return $false }
     $stats = $status.stats
     if ([int]$stats.processed -ne [int]$stats.total) { return $false }
     # Backend can advance immediately after the final item; the expected
@@ -58,18 +65,50 @@ function Test-QuietBoundary($status) {
     # to the existing summaries and the idle processed==total gate above.
     return (Test-Path $auditDir) -and (Test-Path $OutputDir)
 }
+function Get-BackendProcessTree {
+    $all = @(Get-CimInstance Win32_Process)
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction Stop)
+    if ($listeners.Count -ne 1) { throw "expected exactly one port 5000 listener, found $($listeners.Count)" }
+    $listenerId = [int]$listeners[0].OwningProcess
+    $byId = @{}
+    foreach ($proc in $all) { $byId[[int]$proc.ProcessId] = $proc }
+    if (-not $byId.ContainsKey($listenerId)) { throw "port 5000 listener process was not found" }
+    if ([string]$byId[$listenerId].CommandLine -notmatch "samsung_ocr_batch_processor\.py") {
+        throw "port 5000 is not owned by the Samsung OCR backend"
+    }
+
+    $tree = @()
+    $current = $byId[$listenerId]
+    $repoProven = $false
+    while ($current) {
+        if ([string]$current.CommandLine -match "samsung_ocr_batch_processor\.py") { $tree += $current }
+        if ([string]$current.CommandLine -match [regex]::Escape($RepoRoot)) { $repoProven = $true }
+        $parentId = [int]$current.ParentProcessId
+        if ($parentId -le 0 -or -not $byId.ContainsKey($parentId)) { break }
+        $current = $byId[$parentId]
+        if ([string]$current.CommandLine -notmatch "samsung_ocr_batch_processor\.py" -and $repoProven) { break }
+    }
+    if (-not $repoProven) { throw "backend listener ancestry is not owned by repo $RepoRoot" }
+    return @($tree | Sort-Object ProcessId -Unique)
+}
 function Stop-BackendGracefully {
-    $procs = @(Owned "samsung_ocr_batch_processor\.py")
-    if ($procs.Count -ne 1) { throw "expected exactly one owned backend, found $($procs.Count)" }
-    $pid = [int]$procs[0].ProcessId
-    Log "backend_stop_requested" @{ pid=$pid }
-    Stop-Process -Id $pid -ErrorAction Stop
+    $procs = @(Get-BackendProcessTree)
+    $listenerId = [int](Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)
+    $orderedIds = @($listenerId) + @($procs | ForEach-Object { [int]$_.ProcessId } | Where-Object { $_ -ne $listenerId })
+    Log "backend_stop_requested" @{ listener_pid=$listenerId; process_ids=$orderedIds }
+    foreach ($processId in $orderedIds) {
+        Stop-Process -Id $processId -ErrorAction SilentlyContinue
+    }
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        if (-not (Get-Process -Id $pid -ErrorAction SilentlyContinue)) { Log "backend_stopped" @{ pid=$pid }; return }
+        $remaining = @($orderedIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($remaining.Count -eq 0 -and -not (Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction SilentlyContinue)) {
+            Log "backend_stopped" @{ process_ids=$orderedIds }
+            return
+        }
         Start-Sleep -Seconds 1
     }
-    throw "backend did not exit gracefully; pid=$pid retained for manual recovery"
+    throw "backend process tree did not exit cleanly; manual recovery required"
 }
 function Start-And-Verify {
     $launcher = Join-Path $RepoRoot "tools\windows_user_launcher.ps1"
@@ -79,8 +118,11 @@ function Start-And-Verify {
     $deadline=(Get-Date).AddSeconds($VerifyTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         $s=Get-Status
-        if ($s -and -not [bool]$s.is_running -and [string]$s.version -like "v19.45*" -and [string]$s.accuracy_profile -eq "strict" -and $s.frontend_asset_fingerprint -and $null -ne $s.presentation_queue) {
-            Log "upgrade_verified" @{ version=$s.version; fingerprint=$s.frontend_asset_fingerprint; queue_count=@($s.presentation_queue).Count }
+        $payloadBytes = Get-StatusPayloadBytes
+        if ($s -and -not [bool]$s.is_running -and [string]$s.version -like "v19.45*" -and [string]$s.status_contract_version -eq "compact-v2" -and [string]$s.accuracy_profile -eq "strict" -and $s.frontend_asset_fingerprint -and $null -ne $s.presentation_queue -and @($s.presentation_queue).Count -le 24 -and $payloadBytes -lt 500000) {
+            $historyProbe = Invoke-RestMethod -Uri "$BackendUrl/api/presentation_history/$('0' * 64)?limit=1" -TimeoutSec 8
+            if ($null -eq $historyProbe.items) { throw "presentation history API contract missing" }
+            Log "upgrade_verified" @{ version=$s.version; status_contract=$s.status_contract_version; fingerprint=$s.frontend_asset_fingerprint; queue_count=@($s.presentation_queue).Count; payload_bytes=$payloadBytes }
             return
         }
         Start-Sleep -Seconds 2
@@ -91,9 +133,16 @@ function Start-And-Verify {
 try {
     Acquire-Lock
     $started=(Get-Date)
+    $quietCount=0
     while (((Get-Date)-$started).TotalSeconds -lt $WaitTimeoutSeconds) {
         $s=Get-Status
-        if (Test-QuietBoundary $s) { Log "boundary_proven" @{ folder=$s.current_relative_dir; processed=$s.stats.processed; total=$s.stats.total }; break }
+        if (Test-QuietBoundary $s) {
+            $quietCount += 1
+            Log "boundary_observed" @{ observation=$quietCount; folder=$s.current_relative_dir; processed=$s.stats.processed; total=$s.stats.total }
+            if ($quietCount -ge 2) { Log "boundary_proven" @{ folder=$s.current_relative_dir; processed=$s.stats.processed; total=$s.stats.total }; break }
+        } else {
+            $quietCount=0
+        }
         Log "waiting_for_boundary" @{ running=if($s){[bool]$s.is_running}else{$null}; processed=if($s){$s.stats.processed}else{$null}; total=if($s){$s.stats.total}else{$null}; folder=if($s){$s.current_relative_dir}else{$null} }
         Start-Sleep -Seconds ([math]::Max(5,$PollSeconds))
     }

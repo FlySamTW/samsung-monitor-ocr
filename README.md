@@ -224,7 +224,7 @@ Critical unresolved issues (updated 2026-07-03):
 - Current-year price `?`: For 2026 and future folders, if OCR has a store price but Samsung/PChome reference is unknown, the export stops and writes `price_review_required.csv`; use `--allow-no-symbol-for-unknown` only when the business rule accepts outputting 2026 records without a price symbol.
 - PChome fallback: `skills/official_price.py` now tries PChome 24h Shopping after Samsung. FollowMe generic names are mapped to product codes (`FollowMe Pro M7 43"` -> `S43FM703UC`). Verify this before trusting old `？` filenames such as `FollowMe_Pro_M7_43吋-？＄12990`.
 - Low price bug: The old 3000 cutoff wrongly erased real prices like `S24F332EAC / 2390`. Code was changed to allow prices >= 2000 when a Samsung monitor label is clear. Handwritten clearance/sale tags are a narrow exception: if the physical card clearly says `促銷價` / `展示出清` / `出清` / `展示機` / `福利品` / `清倉` / `特賣`, a handwritten 4-digit price such as `1999` is valid. Existing completed rows with `(無價格)` may still need rerun or thinking-text rescue.
-- UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder. The right panel is intentionally delayed: it must not show a thumbnail's parsed result until that photo's LLM self-talk has finished playing.
+- UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder. The right panel is intentionally delayed: it must not show a thumbnail's parsed result until that photo's AI 即時判讀 has finished playing.
 - Distant-view classification: A stronger guard was added (`samsung_ocr_batch_processor.py`): no Samsung model + no price + thinking mentions distant-view keywords => force `view_type=遠景` and clear model/price. Already-processed misclassified rows still need repair or rerun.
 - 91 null-model candidates remain after two targeted reruns; 8 S27CG552EC records have store prices much higher than the PChome reference price (4990) and need manual review.
 - Black-screen / unclear detections (`screen_status`, `quality_issue`) are not yet reflected in output filenames; naming rule and `photo_rename_planner.py` need updating.
@@ -262,10 +262,10 @@ The repo intentionally includes only the small portable sample set at `samples/o
 
 # 2026-07-04 Operator Notes
 
-- Current dashboard build is `v19.14 (LLM Log Restored)`.
-- The user-facing flow must look sequential: main photo appears, LLM self-talk types out, then the thumbnail/result is revealed in `辨識紀錄`.
-- The backend may process the next photo early, but the UI must not show that parsed result before its self-talk finishes.
-- The lower-left log area is intentional and must keep the historical LLM record visible (`[THINK]` and final classification lines). Filter only internal noise such as initialization/debug/JSON errors.
+- Historical build at the time of this note was `v19.14`; see the latest section below for the current UI contract.
+- The user-facing flow must look sequential: main photo appears, AI 即時判讀 types out, then the thumbnail/result is revealed in `辨識紀錄`.
+- The backend may process the next photo early, but the UI must not show that parsed result before its AI narration finishes.
+- The lower-left log area is intentional and must keep the historical AI record visible (`[THINK]` and final classification lines). Filter only internal noise such as initialization/debug/JSON errors.
 - Google Drive upload is handled by rclone remote `samsung_ocr_drive`; use year folders only (`2026`, `2025`, ...).
 - Odyssey Ark / Ark Mini LED 55-inch upright or curved desk displays are treated as `S55BG970NC`; do not borrow nearby S27/S32 small-monitor labels.
 - Non-Python upload entrypoint: `UPLOAD_READY_PHOTOS_TO_GOOGLE_DRIVE.bat`.
@@ -303,3 +303,11 @@ After any dashboard/backend presentation change, run
 `npm.cmd --prefix dashboard run build`. With the local runtime already up,
 also verify at least 3 complete photo -> AI -> revealed-card transitions and
 retain `logs/ui_sync_v1944_live.json` plus `logs/ui_sync_v1944_live.png`.
+
+# 2026-07-14 Compact Status And Clean Dashboard
+
+- The operator-facing result rail shows only the thumbnail, filename, concise model/price/status and normal badges. Retry reasons, internal model ids, timestamps, decision codes, previous-pass summaries and expanded pass history belong in the click-through inspection view.
+- Missing legacy pass metadata is hidden. The dashboard must never display placeholder chains such as `第 未提供 輪 · 未提供 · 未提供`.
+- `/api/status` uses the bounded `compact-v2` contract after the next safe backend boundary: at most 12 live presentation events (hard maximum 24), no inline image/base64/raw evidence, and a response below 500 KB. Full pass history is loaded from `/api/presentation_history/<source_item_id>` only when requested.
+- `tools/safe_backend_boundary_upgrade.ps1` waits for two consecutive idle/complete/no-worker observations, verifies the port-5000 process tree, restarts only the backend, then validates compact status, history API and frontend fingerprint before releasing its interlock.
+- A frontend-only repair can stay live during OCR: build to staging, place hashed assets first, and replace `dashboard/dist/index.html` last. Do not empty the live asset directory while the monitor is open.

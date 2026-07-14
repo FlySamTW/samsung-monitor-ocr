@@ -1,0 +1,179 @@
+"""Regression tests for durable per-photo presentation history."""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from threading import RLock
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import samsung_ocr_batch_processor as backend
+from skills.batch_orchestrator import BatchOrchestrator
+from tools.rerun_staged_candidates import stage_images
+
+
+class PresentationHistoryTests(unittest.TestCase):
+    def test_live_status_presentation_window_is_small_and_has_no_inline_images(self):
+        class FakeOrchestrator:
+            is_running = True
+            recent_results = []
+            display_queue = [
+                {
+                    "presentation_id": f"p-{index:09d}",
+                    "presentation_sequence": index,
+                    "source_item_id": f"{index:064x}",
+                    "file_name": f"photo-{index}.jpg",
+                    "source_path": f"D:/photos/photo-{index}.jpg",
+                    "narration": "判讀摘要" * 40,
+                    "thumb_b64": "MUST_NOT_LEAK" * 10000,
+                    "raw_model_output": "MUST_NOT_LEAK",
+                    "result": {
+                        "view_type": "單機",
+                        "model": f"M{index}",
+                        "thumb_b64": "MUST_NOT_LEAK",
+                        "raw_objects": ["MUST_NOT_LEAK"],
+                    },
+                }
+                for index in range(40)
+            ]
+
+        previous_events = backend._presentation_events
+        previous_next_id = backend._presentation_next_id
+        previous_by_source = backend._presentation_by_source
+        backend._presentation_events = []
+        backend._presentation_next_id = 0
+        backend._presentation_by_source = {}
+        try:
+            items = backend._presentation_payload(FakeOrchestrator())
+        finally:
+            backend._presentation_events = previous_events
+            backend._presentation_next_id = previous_next_id
+            backend._presentation_by_source = previous_by_source
+
+        encoded = json.dumps(items, ensure_ascii=False)
+        self.assertEqual(len(items), backend.STATUS_PRESENTATION_WINDOW)
+        self.assertLess(len(encoded.encode("utf-8")), 100_000)
+        self.assertNotIn("MUST_NOT_LEAK", encoded)
+        self.assertEqual(items[-1]["presentation_id"], "p-000000039")
+
+    def test_idle_or_new_batch_never_replays_prior_presentation_events(self):
+        class IdleOrchestrator:
+            is_running = False
+            display_queue = []
+            recent_results = [{"presentation_id": "p-stale", "file_name": "deleted-staging.jpg"}]
+
+        class NewBatchOrchestrator:
+            is_running = True
+            recent_results = []
+            display_queue = [{
+                "presentation_id": "p-new",
+                "presentation_sequence": 900,
+                "file_name": "current-batch.jpg",
+                "source_path": "D:/current/current-batch.jpg",
+                "result": {"view_type": "單機", "model": "M7"},
+            }]
+
+        previous_events = backend._presentation_events
+        try:
+            backend._presentation_events = [{
+                "presentation_id": "p-stale",
+                "presentation_sequence": 899,
+                "file_name": "deleted-staging.jpg",
+            }]
+            self.assertEqual(backend._presentation_payload(IdleOrchestrator()), [])
+            self.assertEqual(
+                [item["presentation_id"] for item in backend._presentation_payload(NewBatchOrchestrator())],
+                ["p-new"],
+            )
+        finally:
+            backend._presentation_events = previous_events
+
+    def test_staging_source_map_preserves_original_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "商化照片-202604" / "M-test-1.jpg"
+            source.parent.mkdir()
+            source.write_bytes(b"image-placeholder")
+            staging = root / "staging"
+            audit_folder = root / "_ocr_audit" / "202604_sample"
+            rows = [{
+                "source_path": str(source),
+                "period": "202604",
+                "audit_folder": str(audit_folder),
+            }]
+            self.assertEqual(stage_images(rows, staging), 1)
+            payload = json.loads((staging / ".ocr_source_map.json").read_text(encoding="utf-8"))
+            metadata = payload["items"][source.name]
+            self.assertEqual(metadata["original_source_path"], str(source.resolve()))
+            self.assertEqual(metadata["period"], "202604")
+            self.assertEqual(len(metadata["source_item_id"]), 64)
+
+    def test_disk_and_live_history_merge_without_image_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_root = Path(tmp)
+            history_dir = audit_root / "presentation_history"
+            history_dir.mkdir(parents=True)
+            source_id = "a" * 64
+            disk_event = {
+                "presentation_id": "p-disk",
+                "presentation_sequence": 1,
+                "source_item_id": source_id,
+                "pass_index": 1,
+                "narration": "第一輪",
+                "thumb_b64": "MUST_NOT_LEAK",
+                "result": {"view_type": "單機"},
+            }
+            (history_dir / "presentation_20260714.jsonl").write_text(
+                json.dumps(disk_event, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+            orchestrator.config = {"audit_dir": str(audit_root)}
+            orchestrator.output_dir = str(audit_root)
+            orchestrator._state_lock = RLock()
+            orchestrator.display_queue = [{
+                "presentation_id": "p-live",
+                "presentation_sequence": 2,
+                "source_item_id": source_id,
+                "pass_index": 2,
+                "narration": "第二輪",
+                "thumb_b64": "MUST_NOT_LEAK",
+                "result": {"view_type": "單機"},
+            }]
+
+            items = orchestrator.get_presentation_history(source_id, limit=12)
+            self.assertEqual([item["presentation_id"] for item in items], ["p-disk", "p-live"])
+            self.assertTrue(all("thumb_b64" not in item for item in items))
+            self.assertNotIn("MUST_NOT_LEAK", json.dumps(items, ensure_ascii=False))
+
+    def test_history_api_validates_id_and_limit(self):
+        class FakeOrchestrator:
+            def get_presentation_history(self, source_item_id, limit=12):
+                return [{
+                    "presentation_id": "p-1",
+                    "presentation_sequence": 1,
+                    "source_item_id": source_item_id,
+                }][:limit]
+
+        previous = backend.orchestrator
+        backend.orchestrator = FakeOrchestrator()
+        try:
+            client = backend.flask_app.test_client()
+            bad = client.get("/api/presentation_history/not-a-valid-id")
+            self.assertEqual(bad.status_code, 400)
+            bad_limit = client.get(f"/api/presentation_history/{'b' * 64}?limit=nope")
+            self.assertEqual(bad_limit.status_code, 400)
+            response = client.get(f"/api/presentation_history/{'b' * 64}?limit=999")
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["source_item_id"], "b" * 64)
+            self.assertEqual(payload["count"], 1)
+        finally:
+            backend.orchestrator = previous
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
