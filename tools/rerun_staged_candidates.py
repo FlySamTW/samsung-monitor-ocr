@@ -945,7 +945,29 @@ def resume_existing_then_continue(
     status = json_request(args.backend_url, "/api/status", timeout=30)
     active_grouped, remaining_items = split_groups_at_current_staging(status, grouped, args.staging_root)
     active_rows = [row for group_rows in active_grouped.values() for row in group_rows]
-    active_summary = attach_existing_group(args, active_rows, active_grouped)
+    active_key = next(iter(active_grouped))
+    original_keep_staging = bool(args.keep_staging)
+    # Keep the active staging directory until the dashboard is moved back to
+    # the original source folder.  Deleting it first creates a visible broken-
+    # image window while the next group is being staged.
+    args.keep_staging = True
+    try:
+        active_summary = attach_existing_group(args, active_rows, active_grouped)
+    finally:
+        args.keep_staging = original_keep_staging
+    if not original_keep_staging:
+        restore_backend_work_dir(args.backend_url, Path(active_key[0]))
+        active_staging_text = str(active_summary.get("staging_dir") or "")
+        if not active_staging_text:
+            raise RuntimeError("resume refused cleanup: active summary has no staging directory")
+        active_staging_dir = Path(active_staging_text).resolve()
+        try:
+            active_staging_dir.relative_to(Path(args.staging_root).resolve())
+        except ValueError as exc:
+            raise RuntimeError(
+                f"resume refused cleanup: active staging directory is outside staging root: {active_staging_dir}"
+            ) from exc
+        shutil.rmtree(active_staging_dir, ignore_errors=True)
     summaries = read_dict_csv(Path(args.run_summary_csv))
     active_dir = str(active_summary.get("staging_dir") or "")
     if not any(str(row.get("staging_dir") or "") == active_dir for row in summaries):

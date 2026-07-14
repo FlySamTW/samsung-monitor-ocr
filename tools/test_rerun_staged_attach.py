@@ -37,6 +37,40 @@ class AttachExistingTests(unittest.TestCase):
         self.assertEqual([key[2] for key in active], ["202604"])
         self.assertEqual([key[2] for key, _rows in remaining], ["202603"])
 
+    def test_resume_restores_dashboard_before_cleaning_active_staging_and_skips_prior_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging_root = root / "staging"; staging_root.mkdir()
+            groups = {}
+            sources = {}
+            current = None
+            for period in ("202605", "202604", "202603"):
+                source = root / period; source.mkdir(); sources[period] = source
+                digest = __import__("hashlib").sha1(str(source.resolve()).encode()).hexdigest()[:8]
+                groups[(str(source), str(root / f"audit-{period}"), period)] = [{"period": period}]
+                if period == "202604":
+                    current = staging_root / f"{period}_demo_{digest}"; current.mkdir()
+            args = SimpleNamespace(
+                backend_url="http://mock", staging_root=str(staging_root), keep_staging=False,
+                run_summary_csv=str(root / "summary.csv"), max_folders=0, max_per_folder=0,
+            )
+            status = {"current_relative_dir": str(current)}
+            active_summary = {"staging_dir": str(current), "period": "202604"}
+            later_summary = {"staging_dir": str(staging_root / "later"), "period": "202603"}
+            with patch.object(mod, "json_request", return_value=status), \
+                 patch.object(mod, "attach_existing_group", return_value=active_summary) as attach, \
+                 patch.object(mod, "restore_backend_work_dir") as restore, \
+                 patch.object(mod, "run_group", return_value=later_summary) as run, \
+                 patch.object(mod.shutil, "rmtree") as remove, \
+                 patch.object(mod, "write_dict_csv"):
+                summaries = mod.resume_existing_then_continue(args, groups, "stamp")
+        self.assertEqual([row["period"] for row in summaries], ["202604", "202603"])
+        self.assertEqual(next(iter(attach.call_args.args[2]))[2], "202604")
+        self.assertEqual(run.call_args.args[3], "202603")
+        restore.assert_called_once_with("http://mock", sources["202604"])
+        remove.assert_called_once_with(current, ignore_errors=True)
+        self.assertFalse(args.keep_staging)
+
     def test_attach_polls_and_never_starts_or_switches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
