@@ -899,6 +899,72 @@ def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tup
     return summary
 
 
+def split_groups_at_current_staging(
+    status: dict[str, object],
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]],
+    staging_root: str | Path,
+) -> tuple[
+    dict[tuple[str, str, str], list[dict[str, object]]],
+    list[tuple[tuple[str, str, str], list[dict[str, object]]]],
+]:
+    """Select the active group and only the groups that follow it.
+
+    Earlier groups are already finalized by the interrupted runner.  Matching
+    uses the same period plus source-folder digest contract as staging creation,
+    so a similarly named folder cannot make recovery skip unrelated work.
+    """
+    current_dir = _status_work_dir(status)
+    staging_root_path = Path(staging_root).resolve()
+    try:
+        current_dir.relative_to(staging_root_path)
+    except ValueError as exc:
+        raise RuntimeError(f"resume refused: current work directory is outside staging root: {current_dir}") from exc
+
+    items = list(grouped.items())
+    matches: list[int] = []
+    for index, ((source_folder_text, _audit_folder_text, period), _rows) in enumerate(items):
+        source_folder = Path(source_folder_text).resolve()
+        digest = hashlib.sha1(str(source_folder).encode("utf-8")).hexdigest()[:8]
+        if current_dir.name.startswith(f"{period}_") and current_dir.name.endswith(f"_{digest}"):
+            matches.append(index)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"resume refused: expected exactly one input group for current staging directory, got {len(matches)}"
+        )
+    active_index = matches[0]
+    active_key, active_rows = items[active_index]
+    return {active_key: active_rows}, items[active_index + 1 :]
+
+
+def resume_existing_then_continue(
+    args,
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]],
+    stamp: str,
+) -> list[dict[str, object]]:
+    """Finalize the active group, skip prior groups, and run later groups."""
+    status = json_request(args.backend_url, "/api/status", timeout=30)
+    active_grouped, remaining_items = split_groups_at_current_staging(status, grouped, args.staging_root)
+    active_rows = [row for group_rows in active_grouped.values() for row in group_rows]
+    active_summary = attach_existing_group(args, active_rows, active_grouped)
+    summaries = read_dict_csv(Path(args.run_summary_csv))
+    active_dir = str(active_summary.get("staging_dir") or "")
+    if not any(str(row.get("staging_dir") or "") == active_dir for row in summaries):
+        summaries.append(active_summary)
+        write_dict_csv(Path(args.run_summary_csv), summaries, list(active_summary.keys()))
+    print(f"[resume] finalized active group {active_summary.get('staging_dir')}", flush=True)
+
+    total_remaining = len(remaining_items)
+    for index, ((source_folder, audit_folder, period), group_rows) in enumerate(remaining_items, start=1):
+        if args.max_folders and index > args.max_folders:
+            break
+        if args.max_per_folder and len(group_rows) > args.max_per_folder:
+            group_rows = group_rows[: args.max_per_folder]
+        summary = run_group(args, source_folder, audit_folder, period, group_rows, index, total_remaining, stamp)
+        summaries.append(summary)
+        write_dict_csv(Path(args.run_summary_csv), summaries, list(summary.keys()))
+    return summaries
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rerun only candidate images through staging folders and merge results.")
     parser.add_argument("--source-root", default=str(DEFAULT_SOURCE_ROOT))
@@ -911,6 +977,11 @@ def main() -> int:
     parser.add_argument("--reason-contains", action="append", default=[])
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--attach-existing", action="store_true", help="Finalize the one API-reported existing staging group without starting or switching work.")
+    parser.add_argument(
+        "--resume-existing-then-continue",
+        action="store_true",
+        help="Finalize the API-reported active group, skip prior groups, then execute only later input groups.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-staging", action="store_true")
     parser.add_argument(
@@ -958,6 +1029,17 @@ def main() -> int:
     ]
     write_dict_csv(Path(args.output_csv), selected_rows, headers)
     print(f"[scan] selected={len(selected_rows)} groups={len(grouped)} skipped={skipped} csv={args.output_csv}", flush=True)
+    if args.attach_existing and args.resume_existing_then_continue:
+        parser.error("--attach-existing and --resume-existing-then-continue are mutually exclusive")
+    if args.resume_existing_then_continue:
+        if not args.execute:
+            parser.error("--resume-existing-then-continue requires --execute")
+        try:
+            resume_existing_then_continue(args, grouped, stamp)
+            return 0
+        except Exception as exc:
+            print(f"[resume-refused] {exc}", flush=True)
+            return 2
     if args.attach_existing:
         try:
             summary = attach_existing_group(args, selected_rows, grouped)

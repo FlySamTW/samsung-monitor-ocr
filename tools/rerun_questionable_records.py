@@ -323,13 +323,37 @@ def records_to_map(records: list[dict[str, object]]) -> dict[str, dict[str, str]
     return mapped
 
 
-def wait_for_folder_done(base_url: str, folder: Path, timeout_minutes: int, poll_seconds: int) -> dict:
+def wait_for_folder_done(
+    base_url: str,
+    folder: Path,
+    timeout_minutes: int,
+    poll_seconds: int,
+    *,
+    max_consecutive_status_errors: int = 6,
+    retry_sleep_seconds: float | None = None,
+) -> dict:
     deadline = time.time() + timeout_minutes * 60
     last_line = 0.0
     stable_done_polls = 0
     last_done_tuple = None
+    consecutive_status_errors = 0
     while time.time() < deadline:
-        status = json_request(base_url, "/api/status", timeout=30)
+        try:
+            status = json_request(base_url, "/api/status", timeout=30)
+            consecutive_status_errors = 0
+        except Exception as exc:
+            consecutive_status_errors += 1
+            if consecutive_status_errors > max_consecutive_status_errors:
+                raise
+            print(
+                f"[warn] status poll failed {consecutive_status_errors}/{max_consecutive_status_errors}: {exc}",
+                flush=True,
+            )
+            delay = retry_sleep_seconds
+            if delay is None:
+                delay = min(5.0, max(1.0, float(poll_seconds)))
+            time.sleep(max(0.0, delay))
+            continue
         stats = status.get("stats") or {}
         running = bool(status.get("is_running") or stats.get("is_running"))
         processed = int(stats.get("processed") or 0)

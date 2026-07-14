@@ -152,6 +152,7 @@
 - `tools/safe_backend_boundary_upgrade.ps1` 正在等待整個 active staged runner 自然結束，不會在月份切換時搶停。邊界成立後會先執行 `tools/migrate_legacy_v1945_trace.py --execute`；目前真實 trace dry-run 已達 1,437/1,437、unresolved=0、ambiguous=0，但正式檔只會在 trace 停止增長後寫入。安全切換後需再次量測 status payload、history route，並觀察至少 30 張與第 2/3 輪插隊。
 - 2026 `copied.csv` 已盤點 5,951 個唯一原圖身分，缺檔=0、衝突=0、歧義=0；`tools/build_v1945_evidence_backfill.py` dry-run 產生 5,951 筆待補證據。平面輸出額外 123 張皆已以 SHA-256 證明為 202605 舊命名副本，暫不刪除，待 Drive stale reconciliation 完成後再處理。
 - 左側 AI 判讀區已改為「同步 live stream 優先、最新完成判讀永不空白」，舊後端首次只取最新 1 筆，不再先重播 200 筆。另已發現舊後端回報指紋 `ac3107fb9cbd7537` 與實際資產不一致，會每 30 秒重載清空畫面；指紋重載現已限定只在 `compact-v2` 啟用。真實 API live stream 已捕捉同一張由 10→90→180 字且 `stream_file=current_file`；8 項 presentation soak 通過。Windows 工具因無法確認 Chrome URL 而連續三次拒絕擷圖，實際畫面證據仍待補。
+- 15:47 原 `current_year_first_pass` staged wrapper 因一次 Python traceback 提前退出，但 port 5000 後端仍健康處理 202604，故沒有重啟。已啟動 `--resume-existing-then-continue`：依 period+來源 digest 附著 202604、跳過已完成 202605，之後只續接 202603/202602/202601；另啟動帶 `-SkipCurrentYearFirstPass -AllowPlannedBackendUpgradeInterlock -SkipRecursiveResume` 的 current-year watcher，第一輪完成後只做第二輪、第三輪與遠景/FollowMe review，最後把 idle 邊界交給現有安全升級器。暫時性 status API 錯誤現可連續重試 6 次，其他鎖仍 fail-closed。
 
 ## 9. 已知未解決與重大風險
 

@@ -7,9 +7,36 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rerun_staged_candidates as mod
+import rerun_questionable_records as questionable
 
 
 class AttachExistingTests(unittest.TestCase):
+    def test_wait_tolerates_transient_status_failures(self):
+        done = {"is_running": False, "stats": {"processed": 1, "total": 1, "success": 1, "failed": 0}}
+        with patch.object(questionable, "json_request", side_effect=[OSError("temporary"), done]) as request:
+            result = questionable.wait_for_folder_done(
+                "http://mock", Path("group"), 1, 0, max_consecutive_status_errors=2, retry_sleep_seconds=0
+            )
+        self.assertEqual(result, done)
+        self.assertEqual(request.call_count, 2)
+
+    def test_resume_selects_active_group_and_only_later_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging_root = root / "staging"; staging_root.mkdir()
+            groups = {}
+            for period in ("202605", "202604", "202603"):
+                source = root / period; source.mkdir()
+                digest = __import__("hashlib").sha1(str(source.resolve()).encode()).hexdigest()[:8]
+                groups[(str(source), str(root / f"audit-{period}"), period)] = [{"period": period}]
+                if period == "202604":
+                    current = staging_root / f"{period}_demo_{digest}"; current.mkdir()
+            active, remaining = mod.split_groups_at_current_staging(
+                {"current_relative_dir": str(current)}, groups, staging_root
+            )
+        self.assertEqual([key[2] for key in active], ["202604"])
+        self.assertEqual([key[2] for key, _rows in remaining], ["202603"])
+
     def test_attach_polls_and_never_starts_or_switches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

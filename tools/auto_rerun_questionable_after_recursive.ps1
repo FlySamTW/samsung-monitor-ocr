@@ -9,7 +9,10 @@ param(
     [string[]]$FinalModels = @("qwen3.5-9b-vlm", "qwen/qwen2.5-vl-7b", "gemma-4-12b-it-qat"),
     [bool]$CurrentYearFirst = $true,
     [bool]$RunAllYearsAfterCurrentYear = $true,
-    [switch]$CurrentYearOnly
+    [switch]$CurrentYearOnly,
+    [switch]$SkipCurrentYearFirstPass,
+    [switch]$AllowPlannedBackendUpgradeInterlock,
+    [switch]$SkipRecursiveResume
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +52,18 @@ function Write-RunLog {
 function Wait-ForBenchmarkLock {
     param([string]$Action)
     while (Test-Path -LiteralPath $BenchmarkLockPath) {
+        if ($AllowPlannedBackendUpgradeInterlock) {
+            try {
+                $lock = Get-Content -LiteralPath $BenchmarkLockPath -Raw | ConvertFrom-Json
+                $owner = Get-Process -Id ([int]$lock.pid) -ErrorAction SilentlyContinue
+                if ($lock.purpose -eq "backend_upgrade_v1945" -and $owner) {
+                    Write-RunLog "planned backend-upgrade interlock acknowledged; continuing recovery action=$Action owner=$($lock.pid)"
+                    return
+                }
+            } catch {
+                # Invalid or racing lock content remains fail-closed below.
+            }
+        }
         Write-RunLog "benchmark lock present; waiting before $Action path=$BenchmarkLockPath"
         Start-Sleep -Seconds ([math]::Max(1, [math]::Min($PollSeconds, 30)))
     }
@@ -350,8 +365,12 @@ try {
     }
 
     if ($CurrentYearFirst) {
-        Write-RunLog "phase=current_year_first_pass"
-        Invoke-QuestionablePass -Label "current_year_first_pass" -Model $PrimaryModel -IncludeOlder $false
+        if ($SkipCurrentYearFirstPass) {
+            Write-RunLog "phase=current_year_first_pass skipped_by_recovery"
+        } else {
+            Write-RunLog "phase=current_year_first_pass"
+            Invoke-QuestionablePass -Label "current_year_first_pass" -Model $PrimaryModel -IncludeOlder $false
+        }
         Write-RunLog "phase=current_year_immediate_pass_2"
         Invoke-QuestionablePass -Label "current_year_immediate_pass_2" -Model $PrimaryModel -IncludeOlder $false
         Write-RunLog "phase=current_year_immediate_pass_3"
@@ -392,7 +411,11 @@ try {
         } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding UTF8
         Write-RunLog "current-year rerun completion marker written path=$markerPath"
     }
-    Start-Recursive-IfNeeded
+    if ($SkipRecursiveResume) {
+        Write-RunLog "recursive OCR resume skipped; planned backend upgrade/backfill owns the next boundary"
+    } else {
+        Start-Recursive-IfNeeded
+    }
     Write-RunLog "watcher finished"
 } finally {
     Pop-Location

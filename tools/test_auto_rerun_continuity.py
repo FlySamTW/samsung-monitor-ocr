@@ -28,5 +28,9 @@ class AutoRerunContinuityTests(unittest.TestCase):
     def test_lock_is_rechecked_before_main_loop_decisions(self):
         self.assertIn('Wait-ForBenchmarkLock "main loop"', SCRIPT)
 
+    def test_recovery_can_yield_next_boundary_to_planned_upgrade(self):
+        self.assertIn("SkipRecursiveResume", SCRIPT)
+        self.assertIn("planned backend upgrade/backfill owns the next boundary", SCRIPT)
+
 if __name__ == "__main__":
     unittest.main()
