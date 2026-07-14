@@ -43,13 +43,24 @@ class ReconcileDriveTests(unittest.TestCase):
             rec=self.rec(root,[row],fake); rec.trash_old(rec.rows[0])
             self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
             self.assertEqual([call[0] for call in fake.calls],['lsjson','lsjson'])
+
+    def test_discover_old_is_read_only_and_unchanged_name_never_trashes_itself(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
+            fake=FakeRclone({'2026/new.jpg':[{'ID':'same-id','Size':3,'Hashes':{'MD5':md5}}]})
+            row=self.make(root,old_remote_path='2026/new.jpg',old_drive_file_id='')
+            rec=self.rec(root,[row],fake); rec.discover_old(rec.rows[0])
+            self.assertEqual(rec.rows[0]['old_drive_file_id'],'same-id')
+            self.assertEqual([call[0] for call in fake.calls],['lsjson'])
+            rec.upload_new(rec.rows[0]); self.assertEqual(rec.rows[0]['status'],'unchanged_remote_verified')
+            calls=len(fake.calls); rec.trash_old(rec.rows[0]); self.assertEqual(len(fake.calls),calls)
     def test_rerun_idempotency_and_dry_plan(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({'2026/new.jpg':[{'ID':'new','Size':3,'MD5':'22af645d1859cb5ca6da0c484f1f37ea'}]}); row=self.make(root); rec=self.rec(root,[row],fake); rec.upload_new(row); calls=len(fake.calls); rec.upload_new(row); self.assertEqual(len(fake.calls),calls)
             row['status']='new_ready'; fake=FakeRclone({}); rec=self.rec(root,[row],fake); rec.upload_new(row,dry_plan=True); self.assertIn('planned_command',row); self.assertEqual(fake.calls,[])
     def test_execute_requires_phase_and_schema_tokens(self):
         src=(Path(__file__).parent/'reconcile_drive_corrections.py').read_text(encoding='utf-8')
-        for token in ('upload-new','trash-old','--immutable','--drive-use-trash','new_uploaded_verified','old_trash_pending'):
+        for token in ('discover-old','upload-new','trash-old','--immutable','--drive-use-trash','new_uploaded_verified','unchanged_remote_verified','old_trash_pending'):
             self.assertIn(token,src)
 
 if __name__=='__main__': unittest.main()

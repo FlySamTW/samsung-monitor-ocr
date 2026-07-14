@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-STATUSES = {"detected", "new_ready", "new_uploaded_verified", "old_trash_pending", "old_trashed_verified"}
+STATUSES = {"detected", "new_ready", "new_uploaded_verified", "unchanged_remote_verified", "old_trash_pending", "old_trashed_verified"}
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists(): return []
@@ -74,8 +74,22 @@ class Reconciler:
     def set_error(self, row: dict, error: str) -> None:
         row["last_error"] = error; row["last_error_at"] = datetime.now().isoformat(timespec="seconds")
 
+    def discover_old(self, row: dict, dry_plan: bool = False) -> None:
+        if row.get("old_drive_file_id"): return
+        old_path = str(row.get("old_remote_path") or "")
+        if not old_path: self.set_error(row, "old remote path missing"); return
+        if dry_plan:
+            row["planned_command"] = ["lsjson", f"{self.remote}:{old_path}", "--files-only", "--hash-type", "MD5"]
+            return
+        try: matches = self.ls(old_path)
+        except RuntimeError as exc: self.set_error(row, str(exc)); return
+        if len(matches) != 1 or not str(matches[0].get("ID") or ""):
+            self.set_error(row, "old remote path is missing or ambiguous"); return
+        row["old_drive_file_id"] = str(matches[0]["ID"])
+        row["old_id_discovery_receipt"] = "unique_path_readback"
+
     def upload_new(self, row: dict, dry_plan: bool = False) -> None:
-        if row.get("status") in {"new_uploaded_verified", "old_trash_pending", "old_trashed_verified"}: return
+        if row.get("status") in {"new_uploaded_verified", "unchanged_remote_verified", "old_trash_pending", "old_trashed_verified"}: return
         local = Path(row.get("local_path") or row.get("source_path") or "")
         name = row.get("corrected_file_name") or local.name
         if not local.is_file(): self.set_error(row, "local corrected file missing"); return
@@ -91,7 +105,8 @@ class Reconciler:
         if matches and (int(matches[0].get("Size", -1)) != size or remote_md5(matches[0]) != md5):
             self.set_error(row, "remote name exists with size/hash mismatch"); return
         if matches:
-            row.update(status="new_uploaded_verified", new_drive_file_id=str(matches[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt="preexisting_hash_identical")
+            status = "unchanged_remote_verified" if row.get("old_remote_path") == remote_path else "new_uploaded_verified"
+            row.update(status=status, new_drive_file_id=str(matches[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt="preexisting_hash_identical")
             return
         rc, out, err = self.call(["copyto", str(local), f"{self.remote}:{remote_path}", "--immutable", "--drive-use-trash"])
         if rc: self.set_error(row, f"copyto failed: {err.strip()}"); return
@@ -99,10 +114,11 @@ class Reconciler:
         except RuntimeError as exc: self.set_error(row, str(exc)); return
         if len(after) != 1 or int(after[0].get("Size", -1)) != size or remote_md5(after[0]) != md5:
             self.set_error(row, "new upload readback size/hash mismatch"); return
-        row.update(status="new_uploaded_verified", new_drive_file_id=str(after[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt=out[-1000:])
+        status = "unchanged_remote_verified" if row.get("old_remote_path") == remote_path else "new_uploaded_verified"
+        row.update(status=status, new_drive_file_id=str(after[0].get("ID", "")), new_remote_path=remote_path, new_remote_size=size, new_remote_md5=md5, new_upload_receipt=out[-1000:])
 
     def trash_old(self, row: dict, dry_plan: bool = False) -> None:
-        if row.get("status") == "old_trashed_verified": return
+        if row.get("status") in {"unchanged_remote_verified", "old_trashed_verified"}: return
         pending = row.get("status") == "old_trash_pending"
         if row.get("status") not in {"new_uploaded_verified", "old_trash_pending"}: self.set_error(row, "new upload is not verified"); return
         old_path, old_id, new_path = row.get("old_remote_path", ""), row.get("old_drive_file_id", ""), row.get("new_remote_path", "")
@@ -140,12 +156,13 @@ class Reconciler:
         row.update(status="old_trashed_verified", old_disposal_receipt=out[-1000:])
 
 def main() -> int:
-    ap=argparse.ArgumentParser(); ap.add_argument("--output-dir",required=True); ap.add_argument("--ledger",default=""); ap.add_argument("--remote",default="samsung_ocr_drive"); ap.add_argument("--rclone",default="rclone"); ap.add_argument("--execute",action="store_true"); ap.add_argument("--phase",choices=("upload-new","trash-old"),default="")
+    ap=argparse.ArgumentParser(); ap.add_argument("--output-dir",required=True); ap.add_argument("--ledger",default=""); ap.add_argument("--remote",default="samsung_ocr_drive"); ap.add_argument("--rclone",default="rclone"); ap.add_argument("--execute",action="store_true"); ap.add_argument("--phase",choices=("discover-old","upload-new","trash-old"),default="")
     args=ap.parse_args(); out=Path(args.output_dir).resolve(); md=out/"_drive_upload"; ledger=Path(args.ledger) if args.ledger else md/"drive_correction_reconciliation.jsonl"
     if args.execute and not args.phase: ap.error("--execute requires explicit --phase")
     rec=Reconciler(ledger,args.remote,args.rclone,args.execute)
     for row in rec.rows:
-        if args.phase == "trash-old": rec.trash_old(row, dry_plan=not args.execute)
+        if args.phase == "discover-old": rec.discover_old(row, dry_plan=not args.execute)
+        elif args.phase == "trash-old": rec.trash_old(row, dry_plan=not args.execute)
         else: rec.upload_new(row, dry_plan=not args.execute)
     rec.save()
     print(json.dumps({"execute":args.execute,"phase":args.phase or "plan","rows":len(rec.rows),"status_counts":{s:sum(r.get("status")==s for r in rec.rows) for s in STATUSES}},ensure_ascii=False))

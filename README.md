@@ -247,6 +247,7 @@ Google Drive upload handoff:
 - Only upload rows from `drive_upload_next_batch.csv` / `staging_map.csv`. Do not upload `review_required` rows; they need rerun or manual review first.
 - Upload batches are newest-period first (`2026` before `2025` before `2024`). Filenames containing `無型號` are review rows and must not be uploaded until corrected/rerun.
 - Record completed uploads in `_drive_upload\drive_upload_uploaded.csv`; the next manifest run skips those files so uploads can resume safely on another machine.
+- Stale uploaded corrections are never deleted directly from the manifest. After the 2026 evidence backfill and a fresh manifest, rebuild the UTF-8 replacement ledger with `python tools/build_drive_correction_reconciliation.py --output-dir D:\00_商化\00_已OCR照片` (dry-run first, then `--execute` only when `safe_to_replace=true`). Missing historical Drive IDs use the read-only `reconcile_drive_corrections.py --execute --phase discover-old`; upload/readback must verify ID, size, and MD5 before the separate recoverable-trash phase.
 
 Manual review panel:
 - The dashboard has a separate `待人工校正` drawer for rows blocked by `_drive_upload\drive_upload_review_required.csv`; keep it out of the main boss-facing monitor unless someone opens it intentionally.
