@@ -32,5 +32,10 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("SkipRecursiveResume", SCRIPT)
         self.assertIn("planned backend upgrade/backfill owns the next boundary", SCRIPT)
 
+    def test_fresh_manifest_precedes_fail_closed_drive_ledger_rebuild(self):
+        self.assertIn("build_drive_correction_reconciliation.py", SCRIPT)
+        main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]
+        self.assertLess(main_tail.index("Rebuild-DriveCorrectionLedgerIfSafe"), main_tail.index("Start-Uploader-IfNeeded"))
+
 if __name__ == "__main__":
     unittest.main()

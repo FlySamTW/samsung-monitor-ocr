@@ -187,6 +187,30 @@ function Refresh-UploadAndReviewSplit {
     Write-RunLog "review split exit=$LASTEXITCODE"
 }
 
+function Rebuild-DriveCorrectionLedgerIfSafe {
+    $builder = Join-Path $RepoRoot "tools\build_drive_correction_reconciliation.py"
+    if (-not (Test-Path -LiteralPath $builder)) {
+        Write-RunLog "drive correction ledger rebuild skipped; builder missing path=$builder"
+        return
+    }
+    $year = (Get-Date).Year
+    Write-RunLog "rebuilding Drive correction ledger from fresh manifest year=$year"
+    $builderOutput = @(& $Python $builder --output-dir $OutputDir --year $year --execute 2>&1)
+    $builderExit = $LASTEXITCODE
+    $builderText = ($builderOutput -join "`n")
+    if ($builderExit -ne 0) {
+        Write-RunLog "drive correction ledger rebuild failed closed exit=$builderExit detail=$builderText"
+        return
+    }
+    try {
+        $summary = $builderText | ConvertFrom-Json
+        Write-RunLog ("drive correction ledger rebuilt rows={0} ready={1} blocked={2} discover_old={3}" -f `
+            $summary.ledger_rows, $summary.new_ready, $summary.gate_blocked, $summary.old_drive_id_discovery_required)
+    } catch {
+        Write-RunLog "drive correction ledger rebuild returned unreadable summary; ledger remains local-only detail=$builderText"
+    }
+}
+
 function Start-Uploader-IfNeeded {
     Wait-ForBenchmarkLock "uploader launch/check"
     $pendingCsv = Join-Path $OutputDir "_drive_upload\drive_upload_ready_pending.csv"
@@ -400,6 +424,7 @@ try {
     }
 
     Refresh-UploadAndReviewSplit
+    Rebuild-DriveCorrectionLedgerIfSafe
     Start-Uploader-IfNeeded
     if ($CurrentYearFirst) {
         $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
