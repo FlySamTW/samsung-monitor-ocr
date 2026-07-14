@@ -84,7 +84,8 @@ class PresentationSoakTests(unittest.TestCase):
             self.assertNotIn(forbidden, app)
         self.assertIn('data-presentation-id={activePresentation?.presentation_id', app)
         self.assertIn('data-testid="active-photo" data-presentation-id={activePresentation?.presentation_id', app)
-        self.assertIn('data-testid="narration-container" data-presentation-id={activePresentation?.presentation_id', app)
+        self.assertIn('data-testid="narration-container"', app)
+        self.assertIn('data-presentation-id={activePresentation?.presentation_id', app)
         self.assertIn('data-testid="result-card" data-presentation-id={res.presentation_id', app)
         self.assertIn('data-testid="inspection-modal" data-presentation-id={inspectImage.presentation_id', app)
         self.assertIn('data-testid="active-placeholder" data-presentation-id={pendingPanelResult.presentation_id', app)
@@ -131,7 +132,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertNotIn('setActivePresentation(null);\n    setDisplayedBuffer("");\n    setDisplayTargetKey("");', app)
         self.assertIn('Never discard an unrevealed item', app)
         self.assertIn('incomingQueue.slice(-1)', app)
-        self.assertIn('latestBackendNarration?.text', app)
+        self.assertIn('const visibleNarrationSnapshot = activeNarrationSnapshot', app)
+        self.assertIn('|| latestBackendNarration;', app)
 
     def test_backend_status_exposes_cached_asset_fingerprint(self):
         backend = (Path(__file__).resolve().parents[1] / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
