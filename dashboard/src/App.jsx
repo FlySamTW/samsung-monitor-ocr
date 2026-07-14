@@ -337,7 +337,10 @@ const App = () => {
       pass_label: item.pass_label || result.pass_label || "",
       retry_reason: item.retry_reason || result.retry_reason || "",
       previous_result_summary: item.previous_result_summary || result.previous_result_summary || "",
-      model_id: item.model_id || result.model_id || item.model || result.model || "",
+      // model_id is the inference engine identifier, not the detected product
+      // model.  Mixing those fields made legacy rows render a fake pass header
+      // such as "第 未提供 輪 · 未提供 · S27...".
+      model_id: item.model_id || result.model_id || "",
       started_at: item.started_at || result.started_at || "",
       completed_at: item.completed_at || result.completed_at || "",
       decision: item.decision || result.decision || "",
@@ -367,9 +370,15 @@ const App = () => {
     accepted: "已通過自動守門",
     review_required: "需慢模型或人工校正"
   }[String(value || "")] || formatMetaValue(value));
-  const hasPassMetadata = (item) => Boolean(
-    item && (item.pass_index || item.pass_label || item.model_id)
-  );
+  const hasPassMetadata = (item) => Boolean(item && (item.pass_index || item.pass_label));
+  const getPassHeading = (item) => {
+    if (!hasPassMetadata(item)) return "";
+    const parts = [];
+    if (item?.pass_index) parts.push(`第 ${formatMetaValue(item.pass_index)} 輪`);
+    const label = item?.pass_label || (item?.pass_index ? getPassLabel(item) : "");
+    if (label) parts.push(label);
+    return parts.join(" · ");
+  };
   const getNarrationFullText = (item) => String(item?.narration || item?.stream_buffer || "").trim();
 
   const trimDisplayNarration = (text) => {
@@ -920,6 +929,19 @@ const App = () => {
   const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
   const liveStreamSnapshot = getSyncedLiveStream();
   const latestBackendNarration = getLatestBackendNarration();
+  // The API snapshot is the display authority.  Animation state may lag or be
+  // reset during a handoff, but it must never be able to blank a narration
+  // that the backend has already supplied.
+  const activeNarrationSnapshot = activePresentation
+    ? {
+        fileName: activePresentation.file_name || "",
+        text: getQueueDisplayText(activePresentation),
+        key: activePresentation._queueKey
+      }
+    : null;
+  const visibleNarrationSnapshot = activeNarrationSnapshot
+    || liveStreamSnapshot
+    || latestBackendNarration;
   const displayedFileName = activePresentation?.file_name
     || liveStreamSnapshot?.fileName
     || latestBackendNarration?.fileName
@@ -929,18 +951,18 @@ const App = () => {
   const currentFileLabel = data.current_file && data.current_file !== "None"
     ? data.current_file
     : (data.latest_result_file || "-");
-  const visibleNarration = narrationDisplay.text
+  const visibleNarration = visibleNarrationSnapshot?.text
+    || narrationDisplay.text
     || displayedBuffer
-    || liveStreamSnapshot?.text
-    || latestBackendNarration?.text
     || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
   const isHeldNarration = narrationPhase !== "typing";
-  const narrationStatusLabel = displayTargetKey.startsWith("live:")
+  const visibleNarrationKey = visibleNarrationSnapshot?.key || displayTargetKey || "";
+  const narrationStatusLabel = visibleNarrationKey.startsWith("live:")
     ? "AI 即時判讀中"
-    : displayTargetKey.startsWith("latest:")
+    : visibleNarrationKey.startsWith("latest:")
       ? "最新完成判讀"
       : narrationPhase === "typing"
         ? "AI 判讀內容播放中"
@@ -1167,7 +1189,7 @@ const App = () => {
 
                   <div className="log-wall" style={{ flex: 1, padding: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0a0a0f', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem', position: 'relative' }}>
                       {/* 1. Top Pane: Active Stream Only */}
-                       <div ref={streamBufferRef} data-testid="narration-container" data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
+                       <div ref={streamBufferRef} data-testid="narration-container" data-narration-source={visibleNarrationKey} data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
                             {visibleNarration ? (
                                <div style={{
                                    wordBreak: 'break-all',
@@ -1197,7 +1219,7 @@ const App = () => {
                                         background: isHeldNarration ? '#64748b' : '#22d3ee',
                                         boxShadow: isHeldNarration ? 'none' : '0 0 8px #22d3ee'
                                       }} />
-                                      {narrationStatusLabel}
+                                      LLM 判讀內容 · {narrationStatusLabel}
                                    </div>
                                    {false && isHeldNarration && (
                                       <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>
@@ -1206,7 +1228,7 @@ const App = () => {
                                    )}
                                    {hasPassMetadata(activePresentation) && (
                                      <div style={{ color: '#67e8f9', fontSize: '0.72rem', marginBottom: '5px' }}>
-                                       第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)}{activePresentation?.model_id ? ` · ${activePresentation.model_id}` : ''}
+                                       {getPassHeading(activePresentation)}{activePresentation?.model_id ? ` · ${activePresentation.model_id}` : ''}
                                      </div>
                                    )}
                                    {visibleNarration}
@@ -1323,7 +1345,7 @@ const App = () => {
                                     <span data-testid="active-placeholder-badge" style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>處理中</span>
                                     <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>AI 即時判讀中</span>
                                   </div>
-                                  {hasPassMetadata(pendingPanelResult) && <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>第 {formatMetaValue(pendingPanelResult.pass_index)} 輪 · {getPassLabel(pendingPanelResult)}</div>}
+                                  {hasPassMetadata(pendingPanelResult) && <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>{getPassHeading(pendingPanelResult)}</div>}
                                 </div>
                               </div>
                             </div>
@@ -1334,7 +1356,7 @@ const App = () => {
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
-                                         {hasPassMetadata(res) && <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>第 {formatMetaValue(res.pass_index)} 輪 · {getPassLabel(res)}</div>}
+                                         {hasPassMetadata(res) && <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>{getPassHeading(res)}</div>}
                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
@@ -1799,7 +1821,7 @@ const App = () => {
                        boxShadow: '0 -5px 25px rgba(0,0,0,0.8)'
                    }}>
                       <div style={{ position: 'absolute', left: '12px', bottom: '76px', right: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px 14px', padding: '7px 10px', background: 'rgba(17,17,17,0.96)', border: '1px solid #333', borderRadius: '4px', fontSize: '0.68rem', color: '#cbd5e1' }}>
-                        {hasPassMetadata(inspectImage) && <span>第 {formatMetaValue(inspectImage.pass_index)} 輪 · {getPassLabel(inspectImage)}</span>}
+                        {hasPassMetadata(inspectImage) && <span>{getPassHeading(inspectImage)}</span>}
                         {inspectImage.retry_reason && <span>複核原因：{formatMetaValue(inspectImage.retry_reason)}</span>}
                         {inspectImage.model_id && <span>使用模型：{inspectImage.model_id}</span>}
                         {inspectImage.started_at && <span>開始：{inspectImage.started_at}</span>}
@@ -1811,7 +1833,7 @@ const App = () => {
                           {historyLoading[String(inspectImage.source_item_id)] && <div style={{ color: '#7dd3fc' }}>判讀歷程載入中...</div>}
                           {historyErrors[String(inspectImage.source_item_id)] && <div style={{ color: '#fca5a5' }}>{historyErrors[String(inspectImage.source_item_id)]}</div>}
                           {getHistoryFor(inspectImage).map((pass) => <div key={pass._queueKey} style={{ marginBottom: '7px' }}>
-                            {hasPassMetadata(pass) && <div style={{ color: '#bae6fd', fontWeight: 800 }}>第 {formatMetaValue(pass.pass_index)} 輪 · {getPassLabel(pass)}{pass.decision ? ` · ${formatDecision(pass.decision)}` : ''}</div>}
+                            {hasPassMetadata(pass) && <div style={{ color: '#bae6fd', fontWeight: 800 }}>{getPassHeading(pass)}{pass.decision ? ` · ${formatDecision(pass.decision)}` : ''}</div>}
                             <div style={{ color: '#e5e7eb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{getNarrationFullText(pass) || '未提供'}</div>
                           </div>)}
                         </div>}

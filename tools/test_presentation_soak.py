@@ -173,7 +173,22 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("hasPassMetadata(res)", rail)
         self.assertIn("hasPassMetadata(inspectImage)", app)
         self.assertIn("hasPassMetadata(pass)", app)
+        self.assertIn("const getPassHeading = (item)", app)
+        self.assertIn("if (!hasPassMetadata(item)) return \"\"", app)
+        self.assertNotIn("item.model_id || result.model_id || item.model || result.model", app)
+        self.assertNotIn("第 {formatMetaValue(activePresentation?.pass_index)} 輪", app)
         self.assertNotIn("第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)} · {formatMetaValue(activePresentation?.model_id)}", app)
+
+    def test_backend_narration_snapshot_cannot_be_hidden_by_animation_state(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const activeNarrationSnapshot = activePresentation", app)
+        self.assertIn("const visibleNarrationSnapshot = activeNarrationSnapshot", app)
+        visible_start = app.index("const visibleNarration = visibleNarrationSnapshot?.text")
+        visible_end = app.index("const narrationPhase", visible_start)
+        visible = app[visible_start:visible_end]
+        self.assertLess(visible.index("visibleNarrationSnapshot?.text"), visible.index("narrationDisplay.text"))
+        self.assertIn('data-narration-source={visibleNarrationKey}', app)
+        self.assertIn("LLM 判讀內容 · {narrationStatusLabel}", app)
 
 
 if __name__ == "__main__":
