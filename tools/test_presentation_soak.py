@@ -111,13 +111,26 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("presentation key divergence", app)
         self.assertIn("presentation_sequence || 0", app)
 
-    def test_running_mode_has_no_cross_item_live_fallback_or_active_drop(self):
+    def test_running_mode_uses_only_identity_synced_live_stream_and_keeps_active_queue_priority(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('const getNarrationFileName = () => activePresentation?.file_name || "";', app)
+        self.assertIn('liveFile !== currentFile', app)
+        self.assertIn('key: `live:${liveFile}`', app)
+        self.assertIn('if (activePresentation) {', app)
+        target_start = app.index('const getDisplayTarget = () =>')
+        target_end = app.index('const imageReadyForDisplay', target_start)
+        target = app[target_start:target_end]
+        self.assertLess(target.index('if (activePresentation)'), target.index('getSyncedLiveStream()'))
+        self.assertIn('const live = getSyncedLiveStream();', target)
+        live_start = app.index('const getSyncedLiveStream = () =>')
+        live_end = app.index('const getLatestBackendNarration', live_start)
+        live = app[live_start:live_end]
+        self.assertIn('data.stream_buffer', live)
         self.assertNotIn('activePresentation?.file_name || data.stream_file || data.current_file', app)
         self.assertNotIn('prepareNarrationHandoff("", data.current_file', app)
         self.assertNotIn('setActivePresentation(null);\n    setDisplayedBuffer("");\n    setDisplayTargetKey("");', app)
         self.assertIn('Never discard an unrevealed item', app)
+        self.assertIn('incomingQueue.slice(-1)', app)
+        self.assertIn('latestBackendNarration?.text', app)
 
     def test_backend_status_exposes_cached_asset_fingerprint(self):
         backend = (Path(__file__).resolve().parents[1] / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")

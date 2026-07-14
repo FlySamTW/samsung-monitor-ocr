@@ -183,6 +183,7 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 - Do not let later `displayedBuffer` updates downgrade a revealed queue key back to a typing/live-judging label.
 - Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make AI narration flash too quickly during high-throughput batches.
 - User-facing UI copy must say `AI`, never `LLM`, and must never expose the old four-character internal shorthand (`自言` + `自語`). Use labels such as `AI 即時判讀中`, `照片已切換 · 等待 AI 開始輸出`, and `本張摘要完成 · 右側結果已揭露`.
+- The AI narration panel must never render blank while a batch is running. A live stream is eligible only when `stream_file === current_file`; otherwise keep the latest completed presentation narration visible. On first hydration from a legacy backend, accept only the newest event instead of replaying the full 200-event payload before showing live output.
 
 # Dashboard Sync No-Regression Contract (2026-07-07)
 
@@ -508,6 +509,8 @@ Drive correction reconciliation is local-only by default: `tools\reconcile_drive
 Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate.
 
 Each pass is recorded in a bounded, idempotent `v1945_evidence_trace.jsonl` without image bytes or secrets. Boundary upgrades must finish the entire active staged runner, verify idle, then start v19.45 with the existing staging/history preserved. `tools/migrate_legacy_v1945_trace.py` resolves legacy staging-only rows through the current-year and 202603 recovery candidate CSVs, adds stable original-source identities, deduplicates by trace ID, and atomically writes `_ocr_audit/v1945_evidence_trace.jsonl`. Any invalid, unresolved, or ambiguous row is fail-closed and must block the backend restart. Do not restart mid-folder or between months of the same staged runner.
+
+After the compact-v2 backend is verified, `tools/build_v1945_evidence_backfill.py` reads every 2026 `copied.csv` source mapping and emits only source identities that do not yet have a verified v19.45 trace. The builder is resumable and fail-closed for missing, invalid, or conflicting sources. The boundary guard starts that staged backfill before releasing its interlock; the continuity supervisor must see either the interlock or the running backfill, never an unowned idle gap.
 
 ## Compact status and operator-facing metadata contract (2026-07-14)
 

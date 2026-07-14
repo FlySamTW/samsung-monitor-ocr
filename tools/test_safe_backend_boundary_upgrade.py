@@ -23,6 +23,7 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('if ([bool]$status.is_running) { return $false }', self.script)
         self.assertIn('[int]$stats.processed -ne [int]$stats.total', self.script)
         self.assertIn('rerun_staged_candidates\\.py|recursive_ocr_flat_export\\.py|rerun_questionable_records\\.py', self.script)
+        self.assertIn('auto_rerun_questionable_after_recursive\\.ps1', self.script)
         self.assertIn('rclone_drive_upload\\.py|rclone\\.exe', self.script)
         self.assertIn('$quietCount -ge 2', self.script)
 
@@ -41,6 +42,15 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
             self.script.index('    Invoke-LegacyTraceMigration\n    Stop-BackendGracefully'),
             self.script.index('    Start-And-Verify\n'),
         )
+
+    def test_verified_upgrade_starts_full_year_evidence_backfill_before_unlock(self):
+        self.assertIn('function Start-EvidenceBackfill', self.script)
+        self.assertIn('build_v1945_evidence_backfill.py', self.script)
+        self.assertIn('v1945_evidence_backfill_2026.csv', self.script)
+        self.assertIn('evidence_backfill_started', self.script)
+        self.assertIn('upgrade_verified_and_evidence_backfill_started', self.script)
+        sequence = self.script.index('    Start-And-Verify\n    Start-EvidenceBackfill\n    Remove-Item')
+        self.assertGreater(sequence, self.script.index('    Invoke-LegacyTraceMigration\n'))
 
     def test_supervisor_interlock_is_fail_closed(self):
         self.assertIn('planned_backend_upgrade_interlock', self.supervisor)

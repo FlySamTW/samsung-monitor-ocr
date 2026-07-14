@@ -17,6 +17,7 @@ def main() -> int:
         [sys.executable, str(ROOT / "tools" / "test_runtime_safety_guards.py")],
         [sys.executable, "-m", "unittest", "-v", "tools.test_migrate_legacy_v1945_trace"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_safe_backend_boundary_upgrade"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_build_v1945_evidence_backfill"],
     ]
     for command in commands:
         print("[critical]", " ".join(command), flush=True)

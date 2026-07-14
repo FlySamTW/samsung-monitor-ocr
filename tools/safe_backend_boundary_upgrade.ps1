@@ -1,5 +1,6 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$SourceRoot = "",
     [string]$OutputDir = "D:\00_商化\00_已OCR照片",
     [string]$BackendUrl = "http://127.0.0.1:5000",
     [string]$ExpectedFolder = "",
@@ -58,7 +59,7 @@ function Test-QuietBoundary($status) {
     # Backend can advance immediately after the final item; the expected
     # expected folder complete snapshot is the handoff boundary.
     if ($ExpectedFolder -and [string]$status.current_relative_dir -notlike "*$ExpectedFolder*") { return $false }
-    $staged = @(Owned "rerun_staged_candidates\.py|recursive_ocr_flat_export\.py|rerun_questionable_records\.py")
+    $staged = @(Owned "rerun_staged_candidates\.py|recursive_ocr_flat_export\.py|rerun_questionable_records\.py|auto_rerun_questionable_after_recursive\.ps1")
     $uploader = @(Owned "rclone_drive_upload\.py|rclone\.exe")
     if ($staged.Count -gt 0 -or $uploader.Count -gt 0) { return $false }
     # Require the audit/output area to exist; detailed folder proof is delegated
@@ -171,6 +172,69 @@ function Start-And-Verify {
     }
     throw "new backend verification failed; lock retained"
 }
+function Start-EvidenceBackfill {
+    $python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    $builder = Join-Path $RepoRoot "tools\build_v1945_evidence_backfill.py"
+    $runner = Join-Path $RepoRoot "tools\rerun_staged_candidates.py"
+    $candidateCsv = Join-Path $auditDir "v1945_evidence_backfill_2026.csv"
+    $resultCsv = Join-Path $auditDir "v1945_evidence_backfill_2026_results.csv"
+    $summaryCsv = Join-Path $auditDir "v1945_evidence_backfill_2026_run_summary.csv"
+    if (-not (Test-Path -LiteralPath $SourceRoot)) { throw "evidence backfill source root missing: $SourceRoot" }
+    foreach ($required in @($python,$builder,$runner)) {
+        if (-not (Test-Path -LiteralPath $required)) { throw "evidence backfill dependency missing: $required" }
+    }
+
+    $output = & $python $builder `
+        --audit-dir $auditDir `
+        --year 2026 `
+        --output $candidateCsv `
+        --execute
+    $exitCode = $LASTEXITCODE
+    $outputText = $output -join [Environment]::NewLine
+    if ($exitCode -ne 0) { throw "evidence backfill candidate build failed closed (exit $exitCode): $outputText" }
+    try { $summary = $outputText | ConvertFrom-Json } catch { throw "evidence backfill builder returned invalid JSON: $outputText" }
+    if (-not [bool]$summary.executed) { throw "evidence backfill candidate CSV was not written: $outputText" }
+    $candidateCount = [int]$summary.candidate_rows
+    Log "evidence_backfill_candidates_verified" @{
+        candidates=$candidateCount
+        sources=[int]$summary.unique_year_sources
+        already_verified=[int]$summary.already_verified_year_sources
+        candidate_csv=$candidateCsv
+    }
+    if ($candidateCount -eq 0) {
+        Log "evidence_backfill_not_required" @{ reason="all_current_year_sources_verified" }
+        return
+    }
+
+    $stdout = Join-Path $logDir "v1945_evidence_backfill_$stamp.out.log"
+    $stderr = Join-Path $logDir "v1945_evidence_backfill_$stamp.err.log"
+    $args = @(
+        $runner,
+        "--source-root",$SourceRoot,
+        "--output-dir",$OutputDir,
+        "--backend-url",$BackendUrl,
+        "--input-csv",$candidateCsv,
+        "--output-csv",$resultCsv,
+        "--run-summary-csv",$summaryCsv,
+        "--execute",
+        "--poll-seconds","10",
+        "--timeout-minutes","360"
+    )
+    $process = Start-Process -FilePath $python -WorkingDirectory $RepoRoot -WindowStyle Hidden `
+        -ArgumentList $args -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        if ($process.HasExited) { throw "evidence backfill runner exited early with code $($process.ExitCode); inspect $stderr" }
+        $status = Get-Status
+        $ownedRunner = @(Owned "rerun_staged_candidates\.py")
+        if (($status -and [bool]$status.is_running) -or $ownedRunner.Count -gt 0) {
+            Log "evidence_backfill_started" @{ pid=$process.Id; candidates=$candidateCount; stdout=$stdout; stderr=$stderr }
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "evidence backfill runner did not start within 60 seconds"
+}
 
 try {
     Acquire-Lock
@@ -193,9 +257,10 @@ try {
     Invoke-LegacyTraceMigration
     Stop-BackendGracefully
     Start-And-Verify
+    Start-EvidenceBackfill
     Remove-Item -LiteralPath $lockPath -Force
     $script:lockOwned=$false
-    Log "lock_released" @{ reason="upgrade_verified" }
+    Log "lock_released" @{ reason="upgrade_verified_and_evidence_backfill_started" }
 } catch {
     Log "upgrade_failed_lock_retained" @{ error=$_.Exception.Message; lock=$lockPath }
     exit 1

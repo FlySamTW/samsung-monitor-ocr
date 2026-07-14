@@ -297,6 +297,7 @@ const App = () => {
   const isAdvancingRef = useRef(false);
   const acceptedPresentationKeysRef = useRef(new Set());
   const revealedKeysRef = useRef(new Set());
+  const presentationHydratedRef = useRef(false);
   const activePresentationRef = useRef(null);
   const narrationDisplayRef = useRef(narrationDisplay);
   const latestDisplayQueueKeysRef = useRef(new Set());
@@ -380,7 +381,26 @@ const App = () => {
     return trimDisplayNarration(`這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`);
   };
 
-  const getNarrationFileName = () => activePresentation?.file_name || "";
+  const getSyncedLiveStream = () => {
+    const liveFile = String(data.stream_file || "").trim();
+    const currentFile = String(data.current_file || "").trim();
+    const text = String(data.stream_buffer || "").trim();
+    if (!liveFile || !currentFile || liveFile !== currentFile || !text) return null;
+    return { fileName: liveFile, text: trimDisplayNarration(text), key: `live:${liveFile}` };
+  };
+
+  const getLatestBackendNarration = () => {
+    const queue = Array.isArray(data.presentation_queue) ? data.presentation_queue : [];
+    const latest = normalizePresentationItem(queue[queue.length - 1]);
+    if (!latest) return null;
+    const text = getQueueDisplayText(latest);
+    return text ? { fileName: latest.file_name || "", text, key: `latest:${latest._queueKey}` } : null;
+  };
+
+  const getNarrationFileName = () => {
+    if (activePresentation?.file_name) return activePresentation.file_name;
+    return getSyncedLiveStream()?.fileName || getLatestBackendNarration()?.fileName || "";
+  };
 
   const prepareNarrationHandoff = (nextKey = "", nextFileName = "") => {
     setNarrationDisplay((prev) => {
@@ -431,9 +451,16 @@ const App = () => {
     latestDisplayQueueKeysRef.current = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
     if (incomingQueue.length === 0) return;
 
+    // The legacy backend exposes 200 historical events.  On initial load the
+    // operator needs the newest completed item, not a minutes-long replay that
+    // prevents the current model stream from ever becoming visible.
+    const queueForHydration = presentationHydratedRef.current
+      ? incomingQueue
+      : incomingQueue.slice(-1);
+    presentationHydratedRef.current = true;
     const incoming = [];
     const activeKey = activePresentationRef.current?._queueKey;
-    incomingQueue.forEach((raw) => {
+    queueForHydration.forEach((raw) => {
       const item = normalizePresentationItem(raw);
       if (!item) return;
       if (item._queueKey === activeKey) return;
@@ -467,7 +494,8 @@ const App = () => {
     const activeKey = activePresentation?._queueKey || "";
     const narrationKey = displayTargetKey || narrationDisplay.key || "";
     const narrationIsCommitted = narrationDisplay.phase === "typing" || narrationDisplay.phase === "revealed";
-    if (activeKey && narrationKey && narrationIsCommitted && activeKey !== narrationKey) {
+    const narrationIsQueueItem = narrationKey && !narrationKey.startsWith("live:") && !narrationKey.startsWith("latest:");
+    if (activeKey && narrationKey && narrationIsCommitted && narrationIsQueueItem && activeKey !== narrationKey) {
       setPresentationInvariantError(`presentation key divergence: ${activeKey} != ${narrationKey}`);
       setDisplayedBuffer("");
       setDisplayTargetKey("");
@@ -516,6 +544,10 @@ const App = () => {
         key: activePresentation._queueKey
       };
     }
+    const live = getSyncedLiveStream();
+    if (live) return { target: live.text, isQueue: false, key: live.key };
+    const latest = getLatestBackendNarration();
+    if (latest) return { target: latest.text, isQueue: false, key: latest.key };
     return { target: "", isQueue: false, key: "" };
   };
 
@@ -529,7 +561,7 @@ const App = () => {
     setDisplayTargetKey(key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
-  }, [activePresentation?._queueKey, data.current_file, data.stream_file]);
+  }, [activePresentation?._queueKey, data.current_file, data.stream_file, data.stream_buffer]);
 
   useEffect(() => {
     if (!displayTargetKey || !imageReadyForDisplay) return;
@@ -612,8 +644,16 @@ const App = () => {
       setImageFailed(false);
       setCurrentThumb(activePresentation.thumb_b64 || null);
       setCurrentImage(getResultImageSrc(activePresentation));
+      return;
     }
-  }, [activePresentation]);
+    const live = getSyncedLiveStream();
+    if (live?.fileName) {
+      setImageLoaded(false);
+      setImageFailed(false);
+      setCurrentThumb(null);
+      setCurrentImage(`/api/image/${encodeURIComponent(live.fileName)}`);
+    }
+  }, [activePresentation, data.stream_file, data.current_file, data.stream_buffer]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
@@ -874,19 +914,32 @@ const App = () => {
     : null;
   const pendingPanelResult = activePendingResult;
   const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
-  const displayedFileName = activePresentation?.file_name || (visibleImage ? "上一張畫面保留" : "-");
+  const liveStreamSnapshot = getSyncedLiveStream();
+  const latestBackendNarration = getLatestBackendNarration();
+  const displayedFileName = activePresentation?.file_name
+    || liveStreamSnapshot?.fileName
+    || latestBackendNarration?.fileName
+    || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
   const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
   const currentFileLabel = data.current_file && data.current_file !== "None"
     ? data.current_file
     : (data.latest_result_file || "-");
-  const visibleNarration = narrationDisplay.text || displayedBuffer || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
+  const visibleNarration = narrationDisplay.text
+    || displayedBuffer
+    || liveStreamSnapshot?.text
+    || latestBackendNarration?.text
+    || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
   const isHeldNarration = narrationPhase !== "typing";
-  const narrationStatusLabel = narrationPhase === "typing"
+  const narrationStatusLabel = displayTargetKey.startsWith("live:")
     ? "AI 即時判讀中"
+    : displayTargetKey.startsWith("latest:")
+      ? "最新完成判讀"
+      : narrationPhase === "typing"
+        ? "AI 判讀內容播放中"
     : narrationPhase === "revealed"
       ? "本張摘要完成 · 右側結果已揭露"
       : narrationPhase === "warming"
