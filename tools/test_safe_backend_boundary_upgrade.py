@@ -32,6 +32,16 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('backend listener ancestry is not owned by repo', self.script)
         self.assertIn('listener_pid=$listenerId; process_ids=$orderedIds', self.script)
 
+    def test_trace_migration_is_fail_closed_and_precedes_backend_stop(self):
+        self.assertIn('function Invoke-LegacyTraceMigration', self.script)
+        self.assertIn('--execute', self.script)
+        self.assertIn('legacy_trace_migration_verified', self.script)
+        self.assertIn('unresolved_rows -ne 0', self.script)
+        self.assertLess(
+            self.script.index('    Invoke-LegacyTraceMigration\n    Stop-BackendGracefully'),
+            self.script.index('    Start-And-Verify\n'),
+        )
+
     def test_supervisor_interlock_is_fail_closed(self):
         self.assertIn('planned_backend_upgrade_interlock', self.supervisor)
         self.assertIn('if ($planned.purpose -eq "backend_upgrade_v1945")', self.supervisor)

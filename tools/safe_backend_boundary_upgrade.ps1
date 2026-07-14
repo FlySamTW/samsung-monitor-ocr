@@ -110,6 +110,48 @@ function Stop-BackendGracefully {
     }
     throw "backend process tree did not exit cleanly; manual recovery required"
 }
+function Invoke-LegacyTraceMigration {
+    $python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    $migrationTool = Join-Path $RepoRoot "tools\migrate_legacy_v1945_trace.py"
+    $sourceTrace = Join-Path $RepoRoot "v1945_evidence_trace.jsonl"
+    $destinationTrace = Join-Path $auditDir "v1945_evidence_trace.jsonl"
+    $currentCandidate = Get-ChildItem -LiteralPath $auditDir -Filter "questionable_rerun_candidates_current_year_first_pass_*.csv" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $recoveryCandidate = Join-Path $auditDir "questionable_rerun_candidates_202603_v1945_recovery_20260714.csv"
+
+    if (-not (Test-Path -LiteralPath $python)) { throw "trace migration Python runtime missing: $python" }
+    if (-not (Test-Path -LiteralPath $migrationTool)) { throw "trace migration tool missing: $migrationTool" }
+    if (-not (Test-Path -LiteralPath $sourceTrace)) { throw "legacy trace missing: $sourceTrace" }
+    if (-not $currentCandidate) { throw "current-year first-pass candidate CSV missing" }
+    if (-not (Test-Path -LiteralPath $recoveryCandidate)) { throw "202603 recovery candidate CSV missing: $recoveryCandidate" }
+
+    Log "legacy_trace_migration_started" @{
+        source=$sourceTrace
+        destination=$destinationTrace
+        current_candidate=$currentCandidate.FullName
+        recovery_candidate=$recoveryCandidate
+    }
+    $output = & $python $migrationTool `
+        --source $sourceTrace `
+        --destination $destinationTrace `
+        --candidate-csv $currentCandidate.FullName `
+        --candidate-csv $recoveryCandidate `
+        --execute
+    $exitCode = $LASTEXITCODE
+    $outputText = $output -join [Environment]::NewLine
+    if ($exitCode -ne 0) { throw "legacy trace migration failed closed (exit $exitCode): $outputText" }
+    try { $summary = $outputText | ConvertFrom-Json } catch { throw "legacy trace migration returned invalid JSON: $outputText" }
+    if (-not [bool]$summary.executed -or [int]$summary.unresolved_rows -ne 0 -or -not (Test-Path -LiteralPath $destinationTrace)) {
+        throw "legacy trace migration did not produce a complete durable trace: $outputText"
+    }
+    Log "legacy_trace_migration_verified" @{
+        source_rows=[int]$summary.source_rows
+        destination_rows=[int]$summary.destination_rows_after
+        unresolved_rows=[int]$summary.unresolved_rows
+        destination=$destinationTrace
+    }
+}
 function Start-And-Verify {
     $launcher = Join-Path $RepoRoot "tools\windows_user_launcher.ps1"
     $out = Join-Path $logDir "boundary_launcher_$stamp.out.log"
@@ -148,6 +190,7 @@ try {
     }
     $s=Get-Status
     if (-not (Test-QuietBoundary $s)) { throw "boundary proof timeout or incomplete staging" }
+    Invoke-LegacyTraceMigration
     Stop-BackendGracefully
     Start-And-Verify
     Remove-Item -LiteralPath $lockPath -Force
