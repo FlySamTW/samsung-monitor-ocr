@@ -97,6 +97,36 @@ const ResultThumbnail = ({ res, onClick }) => {
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
+const COMPACT_STATUS_CONTRACT = "compact-v2";
+const COMPACT_STATUS_POLL_MS = 2000;
+const LEGACY_STATUS_POLL_MS = 5000;
+const MAX_CLIENT_STATUS_PRESENTATIONS = 24;
+const stripHeavyStatusFields = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const {
+    thumb_b64,
+    image_b64,
+    raw_model_output,
+    raw_response,
+    raw_objects,
+    evidence_images,
+    ...light
+  } = value;
+  return light;
+};
+const sanitizeStatusPayload = (apiResult) => ({
+  ...apiResult,
+  presentation_queue: (Array.isArray(apiResult?.presentation_queue) ? apiResult.presentation_queue : [])
+    .slice(-MAX_CLIENT_STATUS_PRESENTATIONS)
+    .map((item) => ({
+      ...stripHeavyStatusFields(item),
+      result: stripHeavyStatusFields(item?.result)
+    })),
+  // Running presentation state is sourced only from presentation_queue.
+  // Keeping legacy recent_results retains tens of duplicate image payloads.
+  recent_results: []
+});
+
 const isReadableLmLogLine = (line) => {
   const text = String(line || '').trim();
   if (!text) return false;
@@ -143,9 +173,13 @@ const App = () => {
   };
 
   const [data, setData] = useState(defaultState);
-  const [currentImage, setCurrentImage] = useState(null);
+  const [currentImageTarget, setCurrentImageTarget] = useState({ src: null, key: "", fileName: "" });
   const [currentThumb, setCurrentThumb] = useState(null);
-  const [visibleImage, setVisibleImage] = useState(null);
+  const [visibleImageTarget, setVisibleImageTarget] = useState({ src: null, key: "", fileName: "" });
+  const currentImage = currentImageTarget.src;
+  const currentImagePresentationKey = currentImageTarget.key;
+  const visibleImage = visibleImageTarget.src;
+  const visibleImagePresentationKey = visibleImageTarget.key;
   const [imagePreparing, setImagePreparing] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -200,7 +234,7 @@ const App = () => {
     try {
       const response = await fetch('/api/status');
       if (!response.ok) throw new Error('API Error');
-      const apiResult = await response.json();
+      const apiResult = sanitizeStatusPayload(await response.json());
       const activeFile = apiResult.current_file && apiResult.current_file !== 'None'
         ? apiResult.current_file
         : null;
@@ -214,9 +248,11 @@ const App = () => {
 
       setError(null);
       setIsConnected(true); // [v18.67] 連線成功
+      return syncedResult;
     } catch (err) {
       setError(err.message);
       setIsConnected(false); // [v18.67] 連線失敗
+      return null;
     }
   };
 
@@ -330,8 +366,8 @@ const App = () => {
       file_name: item.file_name || result.file_name,
       source_path: item.source_path || result.source_path,
       thumb_b64: item.thumb_b64 || result.thumb_b64,
-      stream_buffer: item.stream_buffer || result.stream_buffer || result.thinking || "",
-      narration: item.narration || result.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
+      stream_buffer: item.full_ai_narration || item.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
+      narration: item.full_ai_narration || item.narration || result.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
       source_item_id: item.source_item_id || result.source_item_id || "",
       pass_index: item.pass_index ?? result.pass_index,
       pass_label: item.pass_label || result.pass_label || "",
@@ -559,12 +595,25 @@ const App = () => {
     }
     const live = getSyncedLiveStream();
     if (live) return { target: live.text, isQueue: false, key: live.key };
-    const latest = getLatestBackendNarration();
-    if (latest) return { target: latest.text, isQueue: false, key: latest.key };
+    if (!isRunning) {
+      const latest = getLatestBackendNarration();
+      if (latest) return { target: latest.text, isQueue: false, key: latest.key };
+    }
     return { target: "", isQueue: false, key: "" };
   };
 
-  const imageReadyForDisplay = !currentImage || imageLoaded || imageFailed;
+  const activeVisualKey = activePresentation?._queueKey || "";
+  const liveVisualSnapshot = getSyncedLiveStream();
+  const expectedVisualKey = activeVisualKey || liveVisualSnapshot?.key || currentImagePresentationKey;
+  const imageBelongsToActivePresentation = Boolean(
+    expectedVisualKey
+    && currentImagePresentationKey === expectedVisualKey
+    && visibleImagePresentationKey === expectedVisualKey
+    && visibleImage === currentImage
+  );
+  const imageReadyForDisplay = activePresentation
+    ? Boolean(currentImagePresentationKey === activeVisualKey && (imageBelongsToActivePresentation || imageFailed))
+    : (!currentImage || imageLoaded || imageFailed);
 
   // Stage the illusion deliberately: photo first, then AI narration, then result.
   useEffect(() => {
@@ -656,7 +705,11 @@ const App = () => {
       setImageLoaded(false);
       setImageFailed(false);
       setCurrentThumb(activePresentation.thumb_b64 || null);
-      setCurrentImage(getResultImageSrc(activePresentation));
+      setCurrentImageTarget({
+        src: getResultImageSrc(activePresentation),
+        key: activePresentation._queueKey,
+        fileName: activePresentation.file_name || ""
+      });
       return;
     }
     const live = getSyncedLiveStream();
@@ -664,7 +717,11 @@ const App = () => {
       setImageLoaded(false);
       setImageFailed(false);
       setCurrentThumb(null);
-      setCurrentImage(`/api/image/${encodeURIComponent(live.fileName)}`);
+      setCurrentImageTarget({
+        src: `/api/image/${encodeURIComponent(live.fileName)}`,
+        key: `live:${live.fileName}`,
+        fileName: live.fileName
+      });
     }
   }, [activePresentation, data.stream_file, data.current_file, data.stream_buffer]);
 
@@ -686,7 +743,11 @@ const App = () => {
     const img = new window.Image();
     img.onload = () => {
       if (cancelled) return;
-      setVisibleImage(currentImage);
+      setVisibleImageTarget({
+        src: currentImage,
+        key: currentImagePresentationKey,
+        fileName: currentImageTarget.fileName
+      });
       setImageLoaded(true);
       setImageFailed(false);
       setImagePreparing(false);
@@ -702,22 +763,39 @@ const App = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentImage]);
+  }, [currentImage, currentImagePresentationKey, currentImageTarget.fileName]);
 
 
 
   // Poll API with Dynamic Interval
   useEffect(() => {
     console.log("App: useEffect (Polling) Start");
-    let intervalId;
-    const poll = async () => { await fetchData(); };
+    let timerId = null;
+    let cancelled = false;
+    let inFlight = false;
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      let snapshot = null;
+      try {
+        snapshot = await fetchData();
+      } finally {
+        inFlight = false;
+        if (!cancelled) {
+          const delay = snapshot?.status_contract_version === COMPACT_STATUS_CONTRACT
+            ? COMPACT_STATUS_POLL_MS
+            : LEGACY_STATUS_POLL_MS;
+          timerId = window.setTimeout(poll, delay);
+        }
+      }
+    };
     poll();
-    // A model pass takes far longer than a second. Avoid overlapping large
-    // legacy status responses while keeping the operator view responsive.
-    const intervalMs = 2000;
-    // if (data?.stats?.is_running) console.log(`⏱️ 同步頻率證據: ${intervalMs}ms`);
-    intervalId = setInterval(poll, intervalMs);
-    return () => clearInterval(intervalId);
+    // Recursive timeout schedules only after parsing and rendering the prior
+    // response, so a multi-megabyte legacy payload can never overlap itself.
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
   }, []); // Remove dependency on is_running to avoid re-bind loops
 
   useEffect(() => {
@@ -929,22 +1007,36 @@ const App = () => {
   const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
   const liveStreamSnapshot = getSyncedLiveStream();
   const latestBackendNarration = getLatestBackendNarration();
+  const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot && narrationDisplay.text
+    ? {
+        fileName: narrationDisplay.fileName || visibleImageTarget.fileName || "",
+        text: narrationDisplay.text,
+        key: narrationDisplay.key || visibleImagePresentationKey
+      }
+    : null;
   // The API snapshot is the display authority.  Animation state may lag or be
   // reset during a handoff, but it must never be able to blank a narration
   // that the backend has already supplied.
   const activeNarrationSnapshot = activePresentation
     ? {
         fileName: activePresentation.file_name || "",
-        text: getQueueDisplayText(activePresentation),
+        text: imageBelongsToActivePresentation || imageFailed
+          ? getQueueDisplayText(activePresentation)
+          : "照片載入中；為避免照片與判讀錯配，本筆 LLM 判讀將在同一張照片確認後顯示。",
         key: activePresentation._queueKey
       }
     : null;
+  // Identity is stronger than freshness: while a queued photo is on screen,
+  // only narration from that exact presentation may be rendered.  A newer
+  // backend stream belongs to the next photo and must wait for handoff.
   const visibleNarrationSnapshot = activeNarrationSnapshot
     || liveStreamSnapshot
-    || latestBackendNarration;
+    || heldNarrationSnapshot
+    || (!isRunning ? latestBackendNarration : null);
   const displayedFileName = activePresentation?.file_name
     || liveStreamSnapshot?.fileName
-    || latestBackendNarration?.fileName
+    || heldNarrationSnapshot?.fileName
+    || (!isRunning ? latestBackendNarration?.fileName : "")
     || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
   const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
@@ -960,6 +1052,15 @@ const App = () => {
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
   const isHeldNarration = narrationPhase !== "typing";
   const visibleNarrationKey = visibleNarrationSnapshot?.key || displayTargetKey || "";
+  const matchingVisibleImage = visibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
+    ? visibleImage
+    : null;
+  const heldPresentation = !activePresentation && visibleNarrationKey && !visibleNarrationKey.startsWith("live:")
+    ? revealedResults.find((item) => item._queueKey === visibleNarrationKey) || null
+    : null;
+  const visiblePresentation = activePresentation || heldPresentation;
+  const visiblePresentationId = visiblePresentation?.presentation_id || "";
+  const visiblePresentationSequence = visiblePresentation?.presentation_sequence ?? "";
   const narrationStatusLabel = visibleNarrationKey.startsWith("live:")
     ? "AI 即時判讀中"
     : visibleNarrationKey.startsWith("latest:")
@@ -1075,7 +1176,7 @@ const App = () => {
           </div>
       )}
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
+      <div className="dashboard-body" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '8px' }}>
             <div style={{ padding: '10px 14px', background: '#111', borderRadius: '6px', border: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}>
               <div className="status-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 0.9fr) minmax(280px, 1fr) minmax(320px, 1.25fr) auto', gap: '14px', alignItems: 'center', minWidth: 0 }}>
                 <div style={{ minWidth: 0 }}>
@@ -1147,7 +1248,7 @@ const App = () => {
               </div>
            </div>
 
-            <div className="monitor-workspace" style={{ flex: 1, display: 'flex', gap: '10px', overflow: 'hidden' }}>
+            <div className="monitor-workspace" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', gap: '10px', overflow: 'hidden' }}>
               <div className="main-monitor-panel" data-presentation-invariant={presentationInvariantError || "ok"} style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ flex: '0 0 50%', position: 'relative', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
                       <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
@@ -1159,17 +1260,17 @@ const App = () => {
                             {displayedFileName}
                           </span>
                       </div>
-                      <div data-testid="active-photo" data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
-                          {(visibleImage || currentImage || currentThumb) ? (
+                      <div data-testid="active-photo" data-presentation-key={expectedVisualKey} data-presentation-id={visiblePresentationId} data-presentation-sequence={visiblePresentationSequence} style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
+                          {(matchingVisibleImage || currentImage || currentThumb) ? (
                               <>
-                                  {!visibleImage && imagePreparing && !imageFailed && (
+                                  {!matchingVisibleImage && imagePreparing && !imageFailed && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
                                           <span style={{fontSize:'0.75rem'}}>照片載入中</span>
                                       </div>
                                   )}
-                                  {visibleImage && <img key={visibleImage} src={visibleImage} data-testid="main-preview-image" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
-                                  {imageFailed && !visibleImage && (
+                                  {matchingVisibleImage && <img key={matchingVisibleImage} src={matchingVisibleImage} data-testid="main-preview-image" data-presentation-key={visibleImagePresentationKey} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
+                                  {imageFailed && !matchingVisibleImage && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
                                           <span style={{fontSize:'0.75rem'}}>照片切換中</span>
@@ -1189,7 +1290,7 @@ const App = () => {
 
                   <div className="log-wall" style={{ flex: 1, padding: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0a0a0f', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem', position: 'relative' }}>
                       {/* 1. Top Pane: Active Stream Only */}
-                       <div ref={streamBufferRef} data-testid="narration-container" data-narration-source={visibleNarrationKey} data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
+                       <div ref={streamBufferRef} data-testid="narration-container" data-narration-source={visibleNarrationKey} data-presentation-id={visiblePresentationId} data-presentation-sequence={visiblePresentationSequence} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
                             {visibleNarration ? (
                                <div style={{
                                    wordBreak: 'break-all',

@@ -141,6 +141,10 @@
 8. 右側固定在主畫面右方，寬度需足以辨識檔名但不可過寬；本介面為有獨立顯示卡的桌機展示，不必設計手機堆疊。
 9. 放大檢視需支援原圖 1:1、拖曳與合理縮放，不能只顯示縮小圖，也不能拉動後版面錯位。
 10. 每次建置後必須實際重整瀏覽器並做至少 500-item soak；不能只看 build 成功。
+11. **身分優先於新鮮度**：只要畫面已有 active presentation，判讀區必須先取該 presentation 的文字；禁止用下一張的 live stream、latest result 或歷史文字覆蓋。
+12. 主照片也必須記錄自己的 presentation key。舊照片可以在「舊 presentation 仍為 active」時保留以避免黑屏；一旦 active key 前進，舊照片必須隱藏，直到同 key 的新圖載入成功。載入失敗時顯示該筆錯誤狀態，絕不可顯示舊照片配新文字。
+13. 完成事件的判讀文字優先取同一結果的完整 `thinking` / `full_ai_narration`；一句「已完成辨識」只能當最後退路，且模型未回傳完整文字時必須明說，不得偽裝成完整判讀。
+14. 永久回歸測試必須同時驗證：主照片、判讀區、處理中卡與右側結果卡的 `presentation_id` 相同；禁止 `live-first` 與任何跨照片 history fallback。
 
 ## 8. 本次部署狀態
 
@@ -151,7 +155,9 @@
 - `dashboard/src/App.jsx` 與 `dashboard/dist`：正式中文、按需歷程、缺值輪次隱藏、右側卡片清理與 2 秒 legacy polling 已部署；目前可相容舊後端。
 - `tools/safe_backend_boundary_upgrade.ps1` 正在等待整個 active staged runner 自然結束，不會在月份切換時搶停。邊界成立後會先執行 `tools/migrate_legacy_v1945_trace.py --execute`；目前真實 trace dry-run 已達 1,437/1,437、unresolved=0、ambiguous=0，但正式檔只會在 trace 停止增長後寫入。安全切換後需再次量測 status payload、history route，並觀察至少 30 張與第 2/3 輪插隊。
 - 2026 `copied.csv` 已盤點 5,951 個唯一原圖身分，缺檔=0、衝突=0、歧義=0；`tools/build_v1945_evidence_backfill.py` dry-run 產生 5,951 筆待補證據。平面輸出額外 123 張皆已以 SHA-256 證明為 202605 舊命名副本，暫不刪除，待 Drive stale reconciliation 完成後再處理。
-- 左側 AI 判讀區已改為「同步 live stream 優先、最新完成判讀永不空白」，舊後端首次只取最新 1 筆，不再先重播 200 筆。另已發現舊後端回報指紋 `ac3107fb9cbd7537` 與實際資產不一致，會每 30 秒重載清空畫面；指紋重載現已限定只在 `compact-v2` 啟用。後續修正又將 API 當下可用的 active/live/latest narration snapshot 放在動畫 state 之前，新版資產標題為「LLM 判讀內容」，舊 row 的產品型號不再被誤當成 model ID，因此不會再出現「第 未提供 輪」。修正 commit 為 `0b67bc4`，新資產 `index-BP6Ewctj.js` 已由 port 5000 以 HTTP 200 提供。真實 API live stream 已捕捉同一張由 10→90→180 字且 `stream_file=current_file`；9 項 presentation soak 通過。Windows 工具仍因無法確認 Chrome URL 而拒絕擷圖，已另開新 Dashboard 視窗，但實際畫面證據仍待補。
+- 2026-07-14 重新確認「live stream 優先」會把下一張文字配到仍在畫面的上一張照片，因此已永久撤銷。現在固定為 active presentation 優先，照片載入也用同一 key 守門；後端完成事件優先攜帶同一結果的完整判讀，前端禁止跨照片 history fallback。另已修正「無法讀取唯一主角自己的規格」因否定詞視窗過短而被反轉成單機的問題，並新增 staged merge 的 `structured_narration_conflict` fail-closed 守門。這些變更不需中斷目前 OCR；後端部分會在既有安全邊界升級後載入。
+- 同日晚間以既有 Chrome Dashboard 分頁完成連續交接驗證：4 個時間點中，完成事件的 photo key、image key、narration source、photo/narration presentation ID 均相同；播放中的處理卡也與同一 `presentation_id` 相同，`data-presentation-invariant=ok`，預覽與判讀區高度各約 395/394 px，仍維持左側各半版面。測試過程未開新視窗，先前 3 個額外 Chrome 測試設定檔已刪除。
+- 202604 第一輪進行到 325/366 時，新守門器已唯讀抓到 17 筆 `structured_narration_conflict`。因當前 legacy runner 啟動時已載入舊規則，已在 `D:\00_商化\00_已OCR照片\_safety_snapshots\20260714_pre_202604_first_pass_conflict_guard` 保存完整 audit 與 366 個既有平面輸出；舊 watcher 已移除，`tools/protect_staged_conflict_handoff.ps1` 正等待 legacy runner 自然結束，屆時會隔離舊 merge、以 SHA-256 還原安全快照，再啟動新版第二/第三輪 watcher。後端與模型程序未停止。
 - 15:47 原 `current_year_first_pass` staged wrapper 因一次 Python traceback 提前退出，但 port 5000 後端仍健康處理 202604，故沒有重啟。已啟動 `--resume-existing-then-continue`：依 period+來源 digest 附著 202604、跳過已完成 202605，之後只續接 202603/202602/202601；另啟動帶 `-SkipCurrentYearFirstPass -AllowPlannedBackendUpgradeInterlock -SkipRecursiveResume` 的 current-year watcher，第一輪完成後只做第二輪、第三輪與遠景/FollowMe review，最後把 idle 邊界交給現有安全升級器。暫時性 status API 錯誤現可連續重試 6 次，其他鎖仍 fail-closed。
 - 舊 `drive_correction_reconciliation.jsonl` 共 897 筆，全部仍帶舊 gate 且部分路徑已 mojibake，已隔離為 `_drive_upload\drive_correction_reconciliation.pre_v1945_mojibake_20260714.jsonl`，目前正式 ledger 路徑不存在，禁止拿隔離檔操作 Drive。新 `tools/build_drive_correction_reconciliation.py` 以 UTF-8 copied 原圖身分、目前輸出 SHA-256、fresh manifest 與唯一上傳 ID 重建；現況 dry-run 可映射 893 筆、4 筆因 manifest 尚未刷新而 fail-closed，預估 50 筆需改名替換、847 筆同名只需 hash 驗證、830 筆需用只讀 `discover-old` 取得唯一 Drive ID。必須等 v19.45 backfill 與 manifest fresh 後再 execute。
 - 模型 sidecar 原 Windows 程序命令使用錯誤的 `%%`，實測回傳 0 筆而可能漏掉 idle API 下仍存活的 watcher/runner；現已改成 UTF-8 JSON CIM 清單，命令失敗或 JSON 無法解析即 fail closed，並在原子 lock 前後各重查一次。實機唯讀驗證目前能看見 6 個專案程序及至少 watcher/staged runner；沒有啟動 benchmark 或切換模型。中文 `遠景` 的 FollowMe 錯判也已納入 danger score。

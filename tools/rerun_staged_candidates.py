@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -214,6 +215,47 @@ def single_missing_ratio(records: list[dict[str, object]], candidate_names: set[
         if SINGLE_VIEW_TEXT in view_text and missing_model(model) and missing_price(price):
             bad += 1
     return bad / len(matched), bad, len(matched)
+
+
+def has_explicit_distant_conclusion(value: object) -> bool:
+    text = text_value(value)
+    if not text:
+        return False
+    if re.search(r'["\']view_type["\']\s*:\s*["\']遠景["\']', text, flags=re.IGNORECASE):
+        return True
+    conclusions = ("整體符合「遠景」條件", "符合「遠景」條件", "符合遠景條件")
+    for conclusion in conclusions:
+        start = 0
+        while True:
+            index = text.find(conclusion, start)
+            if index < 0:
+                break
+            before = text[max(0, index - 12):index]
+            if not any(token in before for token in ("不", "並非", "不是", "未", "無法判定")):
+                return True
+            start = index + len(conclusion)
+    return False
+
+
+def structured_narration_conflicts(
+    records: list[dict[str, object]], candidate_names: set[str]
+) -> list[str]:
+    """Return impossible single-unit rows whose own evidence concludes distant view."""
+    conflicts: list[str] = []
+    for record in records:
+        name = str(record.get("file_name") or record.get("filename") or "")
+        if name not in candidate_names:
+            continue
+        view_text = " ".join(text_value(record.get(key)) for key in ("view_type", "category", "human_category"))
+        if SINGLE_VIEW_TEXT not in view_text or DISTANT_VIEW_TEXT in view_text:
+            continue
+        evidence = " ".join(
+            text_value(record.get(key))
+            for key in ("thinking", "stream_buffer", "raw", "raw_model_output", "notes")
+        )
+        if has_explicit_distant_conclusion(evidence):
+            conflicts.append(name)
+    return conflicts
 
 
 def has_positive_followme_indicator(text: str) -> bool:
@@ -435,6 +477,17 @@ def abort_reason_for_rerun(
     required = math.ceil(len(candidate_names) * args.min_completion_ratio)
     if len(matched_names) < required:
         return "incomplete_staged_rerun", {"matched_records": len(matched_names), "required_records": required}
+
+    narration_conflicts = structured_narration_conflicts(rerun_records, candidate_names)
+    if narration_conflicts:
+        return (
+            "structured_narration_conflict",
+            {
+                "matched_records": len(matched_names),
+                "conflicting_records": len(narration_conflicts),
+                "sample": ";".join(narration_conflicts[:5]),
+            },
+        )
 
     ratio, bad_count, matched_count = single_missing_ratio(rerun_records, candidate_names)
     if matched_count >= args.min_quality_guard_records and ratio >= args.max_single_missing_ratio:

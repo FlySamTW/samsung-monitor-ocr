@@ -445,6 +445,18 @@ class BatchOrchestrator:
         thumbnail: str = "",
     ) -> dict:
         """Queue and persist exactly one immutable event for every OCR pass."""
+        generic_prefix = "這張已完成辨識："
+        raw_output = str(result.get("raw_model_output") or "").strip()
+        raw_narration = raw_output.split("\n\n{", 1)[0].strip() if raw_output else ""
+        narration_candidates = (
+            str(result.get("thinking") or "").strip(),
+            str(narration or "").strip(),
+            raw_narration,
+        )
+        detailed_narration = next(
+            (text for text in narration_candidates if text and not text.startswith(generic_prefix)),
+            next((text for text in narration_candidates if text), ""),
+        )
         structured_keys = (
             "view_type", "category", "screen_status", "quality_issue", "model", "price",
             "price_status", "price_symbol", "official_price", "price_diff_percent",
@@ -483,9 +495,9 @@ class BatchOrchestrator:
                 "started_at": started_at,
                 "completed_at": completed_at,
                 "previous_result_summary": self._previous_result_summary(previous_results),
-                "full_ai_narration": str(narration or ""),
-                "narration": str(narration or ""),
-                "stream_buffer": str(narration or ""),
+                "full_ai_narration": detailed_narration,
+                "narration": detailed_narration,
+                "stream_buffer": detailed_narration,
                 "structured_result": structured,
                 "decision": str(decision or ""),
                 "result": {

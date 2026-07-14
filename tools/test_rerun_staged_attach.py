@@ -11,6 +11,25 @@ import rerun_questionable_records as questionable
 
 
 class AttachExistingTests(unittest.TestCase):
+    def test_quality_guard_rejects_structured_single_when_own_narration_concludes_distant(self):
+        records = [{
+            "file_name": "wall.jpg",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": None,
+            "thinking": "可見多台完整螢幕，無法鎖定唯一主角，整體符合「遠景」條件。",
+            "raw_model_output": '{"view_type":"遠景","model":null,"price":null}',
+        }]
+        args = SimpleNamespace(
+            min_completion_ratio=0.98,
+            min_quality_guard_records=20,
+            max_single_missing_ratio=0.65,
+        )
+        reason, details = mod.abort_reason_for_rerun(args, records, {"wall.jpg"}, [])
+        self.assertEqual(reason, "structured_narration_conflict")
+        self.assertEqual(details["conflicting_records"], 1)
+
     def test_wait_tolerates_transient_status_failures(self):
         done = {"is_running": False, "stats": {"processed": 1, "total": 1, "success": 1, "failed": 0}}
         with patch.object(questionable, "json_request", side_effect=[OSError("temporary"), done]) as request:

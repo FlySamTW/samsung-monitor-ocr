@@ -27,6 +27,14 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_negated_unique_subject_wording_remains_distant_evidence(self):
+        narration = (
+            "畫面中可見多台螢幕並排展示，無法鎖定唯一主角，"
+            "也無法讀取唯一主角自己的規格與價格，因此整體符合「遠景」條件。"
+        )
+        self.assertFalse(batch.has_strong_single_unit_evidence(narration))
+        self.assertTrue(batch.has_explicit_distant_layout_evidence(narration))
+
     def test_prompt_examples_all_have_core_and_evidence(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         objects = batch._extract_balanced_json_objects(prompt)

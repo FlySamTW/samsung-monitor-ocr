@@ -121,7 +121,7 @@ _STATUS_EVENT_FIELDS = (
     "presentation_id", "presentation_sequence", "source_item_id", "file_name", "source_path",
     "pass_index", "pass_label", "ocr_attempt", "retry_reason", "model_id", "accuracy_profile",
     "evidence_contract_version", "started_at", "completed_at", "previous_result_summary",
-    "decision", "narration", "stream_buffer",
+    "decision", "full_ai_narration", "narration", "stream_buffer",
 )
 _STATUS_RESULT_FIELDS = (
     "file_name", "source_path", "view_type", "category", "model", "price", "screen_status",
@@ -834,7 +834,10 @@ def has_strong_single_unit_evidence(text):
                 break
             if term in {"不是遠景", "不屬於遠景", "不符合遠景"}:
                 return True
-            before = raw_text[max(0, index - 8):index]
+            # Keep enough left context to preserve negation in phrases such as
+            # "無法讀取唯一主角自己的規格".  An eight-character window dropped
+            # the leading "無" and repeatedly inverted explicit distant views.
+            before = raw_text[max(0, index - 20):index]
             if not any(negation in before for negation in negations):
                 return True
             start = index + len(term)
@@ -899,6 +902,7 @@ def has_explicit_distant_layout_evidence(context_text=""):
         "沒有明確的主角",
         "沒有明確主角",
         "沒有單一主角",
+        "無法鎖定唯一主角",
         "無法指定唯一主角",
         "無法指定主角",
         "沒有指定主角",
@@ -953,7 +957,10 @@ def build_final_display_thinking(result, original_thinking=""):
         )
 
     if not thinking or thinking == "...":
-        return f"這張已完成辨識：{view_type or '單機'}，{final_model}，{final_price}。"
+        return (
+            "AI 本輪未回傳完整判讀文字；"
+            f"目前僅能確認結構化結果：{view_type or '待複核'}，{final_model}，{final_price}。"
+        )
 
     return thinking
 

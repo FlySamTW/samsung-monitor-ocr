@@ -543,8 +543,8 @@ body,
 
 .log-wall {
   overflow-y: auto !important;
-  flex: 1 !important;
-  height: 100% !important;
+  flex: 1 1 0 !important;
+  height: auto !important;
   min-height: 0 !important;
 }
 

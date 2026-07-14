@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from threading import RLock
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -17,6 +18,38 @@ from tools.rerun_staged_candidates import stage_images
 
 
 class PresentationHistoryTests(unittest.TestCase):
+    def test_queue_event_prefers_same_result_detailed_narration(self):
+        orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+        orchestrator.config = {"model_id": "local-model", "accuracy_profile": "strict"}
+        orchestrator.last_model_name = "local-model"
+        orchestrator.presentation_sequence = 0
+        orchestrator.display_queue = []
+        orchestrator._state_lock = RLock()
+        result = {
+            "file_name": "wall.jpg",
+            "source_path": "D:/photos/wall.jpg",
+            "run_id": "run-1",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "thinking": "可見三台以上完整螢幕，且無法鎖定唯一主角，因此符合遠景條件。",
+        }
+        with patch.object(orchestrator, "_append_presentation_audit"):
+            event = orchestrator.queue_presentation_event(
+                result=result,
+                attempt=1,
+                started_at="2026-07-14T10:00:00",
+                completed_at="2026-07-14T10:00:10",
+                previous_results=[],
+                retry_reasons=[],
+                decision="accepted",
+                narration="這張已完成辨識：遠景，無型號，無價格。",
+            )
+        self.assertEqual(event["narration"], result["thinking"])
+        self.assertEqual(event["stream_buffer"], result["thinking"])
+        self.assertEqual(event["full_ai_narration"], result["thinking"])
+
     def test_live_status_presentation_window_is_small_and_has_no_inline_images(self):
         class FakeOrchestrator:
             is_running = True

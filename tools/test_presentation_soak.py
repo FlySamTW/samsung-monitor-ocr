@@ -82,10 +82,10 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertNotRegex(key_body, r"completed_at|source_path|file_name|recent_results|\|\|.*index")
         for forbidden in ("live-pending|", "liveRightPanelBackfill", "recent_results ||", "data.display_queue"):
             self.assertNotIn(forbidden, app)
-        self.assertIn('data-presentation-id={activePresentation?.presentation_id', app)
-        self.assertIn('data-testid="active-photo" data-presentation-id={activePresentation?.presentation_id', app)
+        self.assertIn('const visiblePresentationId = visiblePresentation?.presentation_id || ""', app)
+        self.assertIn('data-testid="active-photo" data-presentation-key={expectedVisualKey} data-presentation-id={visiblePresentationId}', app)
         self.assertIn('data-testid="narration-container"', app)
-        self.assertIn('data-presentation-id={activePresentation?.presentation_id', app)
+        self.assertIn('data-presentation-id={visiblePresentationId}', app)
         self.assertIn('data-testid="result-card" data-presentation-id={res.presentation_id', app)
         self.assertIn('data-testid="inspection-modal" data-presentation-id={inspectImage.presentation_id', app)
         self.assertIn('data-testid="active-placeholder" data-presentation-id={pendingPanelResult.presentation_id', app)
@@ -133,7 +133,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('Never discard an unrevealed item', app)
         self.assertIn('incomingQueue.slice(-1)', app)
         self.assertIn('const visibleNarrationSnapshot = activeNarrationSnapshot', app)
-        self.assertIn('|| latestBackendNarration;', app)
+        self.assertIn('|| (!isRunning ? latestBackendNarration : null);', app)
+        self.assertNotIn('const visibleNarrationSnapshot = liveStreamSnapshot', app)
 
     def test_backend_status_exposes_cached_asset_fingerprint(self):
         backend = (Path(__file__).resolve().parents[1] / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
@@ -185,6 +186,7 @@ class PresentationSoakTests(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const activeNarrationSnapshot = activePresentation", app)
         self.assertIn("const visibleNarrationSnapshot = activeNarrationSnapshot", app)
+        self.assertNotIn("const visibleNarrationSnapshot = liveStreamSnapshot", app)
         visible_start = app.index("const visibleNarration = visibleNarrationSnapshot?.text")
         visible_end = app.index("const narrationPhase", visible_start)
         visible = app[visible_start:visible_end]
@@ -192,6 +194,50 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('data-narration-source={visibleNarrationKey}', app)
         self.assertIn("LLM 判讀內容 · {narrationStatusLabel}", app)
 
+    def test_photo_and_narration_share_one_presentation_identity(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("currentImagePresentationKey === expectedVisualKey", app)
+        self.assertIn("visibleImagePresentationKey === expectedVisualKey", app)
+        self.assertIn("setCurrentImageTarget({", app)
+        self.assertIn("setVisibleImageTarget({", app)
+        self.assertIn('data-presentation-key={visibleImagePresentationKey}', app)
+        self.assertIn('data-testid="active-photo" data-presentation-key={expectedVisualKey}', app)
+        self.assertIn("為避免照片與判讀錯配", app)
+        self.assertNotIn("{visibleImage && <img", app)
+
+    def test_running_handoff_never_bypasses_queue_with_latest_result(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot", app)
+        self.assertIn("|| heldNarrationSnapshot", app)
+        self.assertIn("|| (!isRunning ? latestBackendNarration : null)", app)
+        target_start = app.index("const getDisplayTarget = () =>")
+        target_end = app.index("const activeVisualKey", target_start)
+        target = app[target_start:target_end]
+        self.assertIn("if (!isRunning)", target)
+        self.assertNotIn("if (latest) return", target.split("if (!isRunning)", 1)[0])
+
+    def test_legacy_status_polling_is_bounded_non_overlapping_and_lightweight(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const LEGACY_STATUS_POLL_MS = 5000", app)
+        self.assertIn("const MAX_CLIENT_STATUS_PRESENTATIONS = 24", app)
+        self.assertIn("sanitizeStatusPayload(await response.json())", app)
+        self.assertIn("recent_results: []", app)
+        self.assertIn("if (cancelled || inFlight) return", app)
+        self.assertIn("timerId = window.setTimeout(poll, delay)", app)
+        polling_start = app.index("// Poll API with Dynamic Interval")
+        polling_end = app.index("useEffect(() => {\n    console.log(\"App: useEffect (Initial Styles) Start\")", polling_start)
+        self.assertNotIn("setInterval", app[polling_start:polling_end])
+
+    def test_dashboard_containment_preserves_finalized_half_screen_layout(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        css = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "index.css").read_text(encoding="utf-8")
+        self.assertIn('className="dashboard-body" style={{ flex: 1, minWidth: 0, minHeight: 0', app)
+        self.assertIn('className="monitor-workspace" style={{ flex: 1, minWidth: 0, minHeight: 0', app)
+        self.assertIn("flexDirection: 'column', minWidth: 0", app)
+        self.assertIn("flex: '0 0 50%'", app)
+        self.assertIn("width: clamp(360px, 23vw, 430px) !important", app)
+        self.assertIn("flex: 1 1 0 !important;\n  height: auto !important;", css)
+        self.assertNotIn("height: 100% !important;\n  min-height: 0 !important;", css)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
