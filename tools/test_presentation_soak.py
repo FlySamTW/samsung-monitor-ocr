@@ -102,6 +102,7 @@ class PresentationSoakTests(unittest.TestCase):
     def test_asset_mismatch_reload_is_cached_and_cooldown_guarded(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("frontend_asset_fingerprint", app)
+        self.assertIn("data.status_contract_version !== 'compact-v2'", app)
         self.assertIn("getLoadedAssetFingerprint", app)
         self.assertIn("sessionStorage.getItem(key)", app)
         self.assertIn("Date.now() - last < 30000", app)

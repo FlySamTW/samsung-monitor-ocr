@@ -222,7 +222,11 @@ const App = () => {
 
   useEffect(() => {
     const serverFingerprint = String(data.frontend_asset_fingerprint || '');
-    if (!serverFingerprint) return;
+    // A pre-compact backend was started before the latest hot-deployed UI and
+    // can report a stale cached fingerprint forever.  Reloading against that
+    // value creates a 30-second refresh loop that repeatedly clears narration.
+    // compact-v2 recomputes and verifies the served asset contract.
+    if (data.status_contract_version !== 'compact-v2' || !serverFingerprint) return;
     let cancelled = false;
     getLoadedAssetFingerprint().then((loadedFingerprint) => {
       if (cancelled || !loadedFingerprint || loadedFingerprint === serverFingerprint) return;
@@ -233,7 +237,7 @@ const App = () => {
       window.location.replace(`/?ui=${encodeURIComponent(serverFingerprint)}`);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [data.frontend_asset_fingerprint]);
+  }, [data.frontend_asset_fingerprint, data.status_contract_version]);
 
   // [v19.15 UX] Frontend-owned presentation queue. The backend may run ahead,
   // but the viewer only sees: photo -> typed AI narration -> right-side result.

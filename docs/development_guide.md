@@ -184,6 +184,7 @@ The live monitor is supervisor-facing, so it must look alive without mixing meta
 - Keep named pacing constants for the typewriter interval and revealed-summary hold. The live monitor must be readable, so avoid magic numbers that make AI narration flash too quickly during high-throughput batches.
 - User-facing UI copy must say `AI`, never `LLM`, and must never expose the old four-character internal shorthand (`自言` + `自語`). Use labels such as `AI 即時判讀中`, `照片已切換 · 等待 AI 開始輸出`, and `本張摘要完成 · 右側結果已揭露`.
 - The AI narration panel must never render blank while a batch is running. A live stream is eligible only when `stream_file === current_file`; otherwise keep the latest completed presentation narration visible. On first hydration from a legacy backend, accept only the newest event instead of replaying the full 200-event payload before showing live output.
+- Asset-fingerprint reloads are enabled only after the backend reports `status_contract_version=compact-v2`. A legacy backend can retain a pre-deploy fingerprint in memory; treating that stale value as authoritative causes a 30-second reload loop and repeatedly clears the narration state.
 
 # Dashboard Sync No-Regression Contract (2026-07-07)
 

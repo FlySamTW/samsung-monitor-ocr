@@ -151,7 +151,7 @@
 - `dashboard/src/App.jsx` 與 `dashboard/dist`：正式中文、按需歷程、缺值輪次隱藏、右側卡片清理與 2 秒 legacy polling 已部署；目前可相容舊後端。
 - `tools/safe_backend_boundary_upgrade.ps1` 正在等待整個 active staged runner 自然結束，不會在月份切換時搶停。邊界成立後會先執行 `tools/migrate_legacy_v1945_trace.py --execute`；目前真實 trace dry-run 已達 1,437/1,437、unresolved=0、ambiguous=0，但正式檔只會在 trace 停止增長後寫入。安全切換後需再次量測 status payload、history route，並觀察至少 30 張與第 2/3 輪插隊。
 - 2026 `copied.csv` 已盤點 5,951 個唯一原圖身分，缺檔=0、衝突=0、歧義=0；`tools/build_v1945_evidence_backfill.py` dry-run 產生 5,951 筆待補證據。平面輸出額外 123 張皆已以 SHA-256 證明為 202605 舊命名副本，暫不刪除，待 Drive stale reconciliation 完成後再處理。
-- 左側 AI 判讀區已改為「同步 live stream 優先、最新完成判讀永不空白」，舊後端首次只取最新 1 筆，不再先重播 200 筆。served asset 為 `index-bEOWjYW6.js`，8 項 presentation soak 通過；Windows 工具因無法確認 Chrome URL 而連續三次拒絕擷圖，實際畫面證據仍待補。
+- 左側 AI 判讀區已改為「同步 live stream 優先、最新完成判讀永不空白」，舊後端首次只取最新 1 筆，不再先重播 200 筆。另已發現舊後端回報指紋 `ac3107fb9cbd7537` 與實際資產不一致，會每 30 秒重載清空畫面；指紋重載現已限定只在 `compact-v2` 啟用。真實 API live stream 已捕捉同一張由 10→90→180 字且 `stream_file=current_file`；8 項 presentation soak 通過。Windows 工具因無法確認 Chrome URL 而連續三次拒絕擷圖，實際畫面證據仍待補。
 
 ## 9. 已知未解決與重大風險
 
