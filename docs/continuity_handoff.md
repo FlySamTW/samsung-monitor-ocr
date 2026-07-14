@@ -1,7 +1,7 @@
 # Samsung Monitor OCR 專案完整移交
 
-> 更新時間：2026-07-14（Asia/Taipei）  
-> 專案根目錄：`D:\00_商化\samsung-monitor-ocr`  
+> 更新時間：2026-07-14（Asia/Taipei）
+> 專案根目錄：`D:\00_商化\samsung-monitor-ocr`
 > 本文件供下一個 AI 直接接手。所有數字都可能隨執行變動，接手後必須先查 API、程序、audit 與上傳摘要，不可直接沿用本文數字。
 
 ## 1. 最終目標與不可違反的鐵律
