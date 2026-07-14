@@ -296,7 +296,7 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
                 except Exception as exc:
                     error = f"inference_error: {exc}"
                     text = ""
-                row = {"key": key, "model": model, "case_id": case["id"], "context_length": actual_context,
+                row = {"key": key, "candidate_model": model, "case_id": case["id"], "context_length": actual_context,
                        "raw_text": text, "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        **score(case, prediction, time.perf_counter() - started, error)}
                 with raw.open("a", encoding="utf-8") as fh:

@@ -27,6 +27,8 @@
 
 `fully_correct_rate` 要求 view type、model、price 三欄全對；`distant_or_followme_danger_rate` 計算遠景被判成單機/FollowMe，或 FollowMe 被判成遠景；`field_accuracy` 分別報告型號、價格與視角欄位；`mean_latency_ms` 只平均有回報 latency 的 case。缺失輸出會列入 failure，不會靜默剔除分母。
 
+Sidecar raw schema separates `candidate_model` (the VLM under test) from `model` (the predicted Samsung product). The v2 scorer filters shared JSONL by `candidate_model`; missing, duplicate, unknown, mixed-model, parse-error, or inference-failure rows remain in the denominator and set `benchmark_gate_pass=false`. Promotion decisions must require this protocol gate before comparing accuracy or latency.
+
 ## 目前結論
 
 在本次不中斷主線的限制下，沒有切換候選模型，也沒有偽造候選分數。既有紀錄支持 `qwen/qwen3-vl-8b` 留在 production；Qwen3.5 9B 曾有 8K context failure，Gemma 4 12B QAT 與候選模型仍需獨立載入後用此固定集實測。以準確率第一的門檻，先選能在 16K+ context 通過盲測、且遠景/FollowMe 危險誤判率最低者，再比較速度。

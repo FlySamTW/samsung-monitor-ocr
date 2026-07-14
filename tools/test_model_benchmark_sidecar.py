@@ -127,7 +127,10 @@ class SidecarTests(unittest.TestCase):
             self.assertTrue(any(c[:2] == ["load", "qwen/qwen3-vl-8b"] for c in calls))
             self.assertEqual(calls[-2][:2], ["unload", "qwen/qwen3-vl-8b"])
             self.assertEqual(calls[-1][:2], ["load", "qwen/qwen3-vl-8b"])
-            self.assertEqual(len((root / "out" / "raw.jsonl").read_text(encoding="utf-8").splitlines()), 1)
+            raw_rows = [json.loads(line) for line in (root / "out" / "raw.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(raw_rows), 1)
+            self.assertEqual(raw_rows[0]["candidate_model"], "qwen/qwen3-vl-8b")
+            self.assertEqual(raw_rows[0]["model"], "S")
             sidecar.run(args, process_getter=lambda: [], lms="lms") if False else None
 
 

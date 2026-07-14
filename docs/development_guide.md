@@ -512,6 +512,8 @@ Drive correction reconciliation is local-only by default: `tools\reconcile_drive
 
 執行前會確認每個指定模型已完整存在於本機 LM Studio，記錄原本載入模型/context，對所有候選使用同一 production prompt、全景與 deterministic evidence crops、固定 inference settings，逐模型順序測試。raw 結果寫入 `runs/model_benchmark_sidecar/raw.jsonl`，可重入且不覆蓋已完成 `(model, case)`；結果包含原始輸出、延遲、解析錯誤、context 與危險錯誤分類。無論中途成功或失敗，finally 都會恢復 `qwen/qwen3-vl-8b` 與指定 context。
 
+Raw rows use `candidate_model` for the tested VLM and keep `model` for the predicted Samsung product; never overload those fields. `model_benchmark_score.py` v2 filters by candidate and treats missing, duplicate, unexpected, mixed-model, parse-error, and inference-error rows as protocol failures that remain in the 50-case denominator. A model is not eligible for promotion unless `benchmark_gate_pass=true`.
+
 模型決策 gate 以整體 field/exact accuracy 為第一順位，遠景誤判、FollowMe 誤判、型號幻覺等危險分類不得退步；只有 accuracy 不退步時才用 latency 作次順位。benchmark 不會改 production prompt、OCR 權重或 runtime 設定；不要在 OCR 執行中使用 `--execute`。
 ## v19.45 Evidence Contract
 
