@@ -1030,12 +1030,6 @@ const App = () => {
   const isReviewRun = reviewProgress.mode === 'current_year_review' || activeDirectoryText.includes('_ocr_staging');
   const reviewPeriodMatches = [...activeDirectoryText.matchAll(/20\d{4}/g)];
   const reviewPeriodLabel = reviewProgress.period || reviewPeriodMatches.at(-1)?.[0] || '本輪';
-  const primaryProgressTotal = isReviewRun && Number(stats.total || 0) > 0 ? Number(stats.total) : overallTotal;
-  const primaryProgressProcessed = isReviewRun ? Number(stats.processed || 0) : overallProcessed;
-  const primaryProgressPercent = primaryProgressTotal
-    ? Math.min(100, Math.max(0, (primaryProgressProcessed / primaryProgressTotal) * 100))
-    : 0;
-  const primaryRemaining = Math.max(0, primaryProgressTotal - primaryProgressProcessed);
   const liveStreamSnapshot = getSyncedLiveStream();
   const showPendingResult = !liveStreamSnapshot && activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
   const activePendingResult = showPendingResult
@@ -1212,14 +1206,14 @@ const App = () => {
                </span>
                 <div style={{ width: '330px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
-                    <span style={{ fontWeight: '800', color: '#ffffff' }}>{isReviewRun ? `${reviewPeriodLabel} 複核進度` : '初次辨識總進度'} {formatCount(primaryProgressProcessed)}/{formatCount(primaryProgressTotal)} 張</span>
-                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{primaryProgressPercent.toFixed(1)}%</span>
+                    <span style={{ fontWeight: '800', color: '#ffffff' }}>初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
+                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
                   </div>
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${primaryProgressPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
+                    <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
-                    <span>剩餘 {formatCount(isReviewRun ? primaryRemaining : overallProgress.remaining_images)} 張</span>
+                    <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
                     <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
                     <span>{isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}{isReviewRun && reviewProgress.current_pass ? ` · 第 ${reviewProgress.current_pass} 輪` : ''}</span>
                   </div>

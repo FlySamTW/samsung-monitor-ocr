@@ -152,9 +152,11 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("複核原因：", app)
         self.assertIn("使用模型：", app)
         self.assertIn("初次辨識總進度", app)
-        self.assertIn("`${reviewPeriodLabel} 複核進度`", app)
-        self.assertIn("primaryProgressProcessed", app)
-        self.assertIn("primaryProgressPercent", app)
+        self.assertIn("初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張", app)
+        self.assertIn("`${overallPercent}%`", app)
+        self.assertIn("formatCount(overallProgress.remaining_images)", app)
+        self.assertNotIn("primaryProgressProcessed", app)
+        self.assertNotIn("primaryProgressPercent", app)
         self.assertIn("reviewPeriodMatches.at(-1)", app)
         for visible_technical_label in (
             ">retry_reason:", ">model_id:", ">started_at:",
