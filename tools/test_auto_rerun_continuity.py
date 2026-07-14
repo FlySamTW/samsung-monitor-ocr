@@ -32,6 +32,12 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("SkipRecursiveResume", SCRIPT)
         self.assertIn("planned backend upgrade/backfill owns the next boundary", SCRIPT)
 
+    def test_full_project_mode_skips_current_year_and_writes_completion_marker(self):
+        self.assertIn("SkipCurrentYearPhases", SCRIPT)
+        self.assertIn("$CurrentYearFirst -and -not $SkipCurrentYearPhases", SCRIPT)
+        self.assertIn("full_project_rerun_cycle_complete.json", SCRIPT)
+        self.assertIn("all_year_questionable_review = $true", SCRIPT)
+
     def test_fresh_manifest_precedes_fail_closed_drive_ledger_rebuild(self):
         self.assertIn("build_drive_correction_reconciliation.py", SCRIPT)
         main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]

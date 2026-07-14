@@ -32,6 +32,22 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("rclone_drive_upload.py", self.source)
         self.assertNotIn("--no-resume", self.source)
 
+    def test_full_project_transition_waits_for_fresh_current_year_marker(self):
+        self.assertIn("full_project_continuation_requested.json", self.source)
+        self.assertIn("current_year_rerun_cycle_complete.json", self.source)
+        self.assertIn("full_project_rerun_cycle_complete.json", self.source)
+        self.assertIn("Full-Project-ContinuationReady", self.source)
+        self.assertIn("currentYear.completed_at", self.source)
+        self.assertIn("request.requested_at", self.source)
+
+    def test_full_project_starts_recursive_before_all_year_watcher(self):
+        recursive = self.source.index('"tools\\recursive_ocr_flat_export.py"')
+        watcher = self.source.index('"-SkipCurrentYearPhases"')
+        self.assertLess(recursive, watcher)
+        self.assertIn('"--ignore-current-year-review-gate"', self.source)
+        self.assertIn('"-SkipRecursiveResume"', self.source)
+        self.assertIn('"full_project_pipeline_started"', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

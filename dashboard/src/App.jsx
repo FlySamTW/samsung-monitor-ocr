@@ -434,8 +434,39 @@ const App = () => {
     const liveFile = String(data.stream_file || "").trim();
     const currentFile = String(data.current_file || "").trim();
     const text = String(data.stream_buffer || "").trim();
-    if (!liveFile || !currentFile || liveFile !== currentFile || !text) return null;
-    return { fileName: liveFile, text: trimDisplayNarration(text), key: `live:${liveFile}` };
+    if (!isRunning || !currentFile || currentFile === "None") return null;
+
+    // LM Studio may not emit a new token for many seconds, or an individual
+    // retry can time out after an earlier pass already produced a detailed
+    // explanation.  Keep the current photo visible and reuse only detailed
+    // thinking from this exact filename; never fall back to another photo.
+    const logs = Array.isArray(data.lm_logs) ? data.lm_logs : [];
+    let belongsToCurrentFile = false;
+    const currentFileThinking = [];
+    logs.forEach((rawLine) => {
+      const line = String(rawLine || "");
+      if (line.includes("載入圖片:")) {
+        belongsToCurrentFile = line.includes(currentFile);
+        return;
+      }
+      if (belongsToCurrentFile && line.includes("[THINK]")) {
+        currentFileThinking.push(line.split("[THINK]").slice(1).join("[THINK]").trim());
+      }
+    });
+    const detailedThinking = [...currentFileThinking]
+      .reverse()
+      .find((value) => value.length >= 45 && !value.startsWith("這張已完成辨識："));
+    const sameFileStream = liveFile === currentFile ? text : "";
+    const liveText = sameFileStream
+      || detailedThinking
+      || `正在分析 ${currentFile}；等待本輪 AI 回傳第一段判讀文字。`;
+    const liveDir = String(data.current_relative_dir || data.image_dir || "").trim();
+    return {
+      fileName: currentFile,
+      text: trimDisplayNarration(liveText),
+      key: `live:${liveDir}|${currentFile}`,
+      hasModelText: Boolean(sameFileStream || detailedThinking)
+    };
   };
 
   const getLatestBackendNarration = () => {
@@ -586,6 +617,8 @@ const App = () => {
   }, [activePresentation, pendingQueue]);
 
   const getDisplayTarget = () => {
+    const live = getSyncedLiveStream();
+    if (live) return { target: live.text, isQueue: false, key: live.key };
     if (activePresentation) {
       return {
         target: getQueueDisplayText(activePresentation),
@@ -593,8 +626,6 @@ const App = () => {
         key: activePresentation._queueKey
       };
     }
-    const live = getSyncedLiveStream();
-    if (live) return { target: live.text, isQueue: false, key: live.key };
     if (!isRunning) {
       const latest = getLatestBackendNarration();
       if (latest) return { target: latest.text, isQueue: false, key: latest.key };
@@ -602,8 +633,8 @@ const App = () => {
     return { target: "", isQueue: false, key: "" };
   };
 
-  const activeVisualKey = activePresentation?._queueKey || "";
   const liveVisualSnapshot = getSyncedLiveStream();
+  const activeVisualKey = liveVisualSnapshot?.key || activePresentation?._queueKey || "";
   const expectedVisualKey = activeVisualKey || liveVisualSnapshot?.key || currentImagePresentationKey;
   const imageBelongsToActivePresentation = Boolean(
     expectedVisualKey
@@ -611,7 +642,7 @@ const App = () => {
     && visibleImagePresentationKey === expectedVisualKey
     && visibleImage === currentImage
   );
-  const imageReadyForDisplay = activePresentation
+  const imageReadyForDisplay = liveVisualSnapshot || activePresentation
     ? Boolean(currentImagePresentationKey === activeVisualKey && (imageBelongsToActivePresentation || imageFailed))
     : (!currentImage || imageLoaded || imageFailed);
 
@@ -623,7 +654,7 @@ const App = () => {
     setDisplayTargetKey(key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
-  }, [activePresentation?._queueKey, data.current_file, data.stream_file, data.stream_buffer]);
+  }, [activePresentation?._queueKey, data.current_file, data.current_relative_dir, data.stream_file, data.stream_buffer, data.lm_logs]);
 
   useEffect(() => {
     if (!displayTargetKey || !imageReadyForDisplay) return;
@@ -660,10 +691,11 @@ const App = () => {
     }, isQueue ? QUEUE_TYPEWRITER_INTERVAL_MS : LIVE_TYPEWRITER_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [activePresentation, data.stream_buffer, pendingQueue.length, typewriterReady, displayTargetKey]);
+  }, [activePresentation, data.stream_buffer, data.lm_logs, pendingQueue.length, typewriterReady, displayTargetKey]);
 
   // Only after AI narration has finished may the item enter the right-side record.
   useEffect(() => {
+    if (getSyncedLiveStream()) return;
     if (!activePresentation) return;
     const target = getQueueDisplayText(activePresentation);
     if (!target || displayedBuffer.length < target.length || isAdvancingRef.current) return;
@@ -697,10 +729,22 @@ const App = () => {
         isAdvancingRef.current = false;
       }
     };
-  }, [activePresentation, displayedBuffer]);
+  }, [activePresentation, displayedBuffer, data.current_file, data.stream_file, data.stream_buffer]);
 
   // Choose displayed image: queued completed result, or live current_file.
   useEffect(() => {
+    const live = getSyncedLiveStream();
+    if (live?.fileName) {
+      setImageLoaded(false);
+      setImageFailed(false);
+      setCurrentThumb(null);
+      setCurrentImageTarget({
+        src: `/api/image/${encodeURIComponent(live.fileName)}`,
+        key: live.key,
+        fileName: live.fileName
+      });
+      return;
+    }
     if (activePresentation) {
       setImageLoaded(false);
       setImageFailed(false);
@@ -712,18 +756,7 @@ const App = () => {
       });
       return;
     }
-    const live = getSyncedLiveStream();
-    if (live?.fileName) {
-      setImageLoaded(false);
-      setImageFailed(false);
-      setCurrentThumb(null);
-      setCurrentImageTarget({
-        src: `/api/image/${encodeURIComponent(live.fileName)}`,
-        key: `live:${live.fileName}`,
-        fileName: live.fileName
-      });
-    }
-  }, [activePresentation, data.stream_file, data.current_file, data.stream_buffer]);
+  }, [activePresentation, data.current_file, data.current_relative_dir]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
@@ -993,8 +1026,18 @@ const App = () => {
   const folderTotal = Number(overallProgress.total_folders || 0);
   const folderDone = Number(overallProgress.completed_folders || 0);
   const reviewProgress = data.review_progress || {};
-  const isReviewRun = reviewProgress.mode === 'current_year_review';
-  const showPendingResult = activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
+  const activeDirectoryText = String(data.current_relative_dir || data.image_dir || "");
+  const isReviewRun = reviewProgress.mode === 'current_year_review' || activeDirectoryText.includes('_ocr_staging');
+  const reviewPeriodMatches = [...activeDirectoryText.matchAll(/20\d{4}/g)];
+  const reviewPeriodLabel = reviewProgress.period || reviewPeriodMatches.at(-1)?.[0] || '本輪';
+  const primaryProgressTotal = isReviewRun && Number(stats.total || 0) > 0 ? Number(stats.total) : overallTotal;
+  const primaryProgressProcessed = isReviewRun ? Number(stats.processed || 0) : overallProcessed;
+  const primaryProgressPercent = primaryProgressTotal
+    ? Math.min(100, Math.max(0, (primaryProgressProcessed / primaryProgressTotal) * 100))
+    : 0;
+  const primaryRemaining = Math.max(0, primaryProgressTotal - primaryProgressProcessed);
+  const liveStreamSnapshot = getSyncedLiveStream();
+  const showPendingResult = !liveStreamSnapshot && activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
   const activePendingResult = showPendingResult
     ? {
         ...activePresentation,
@@ -1003,9 +1046,18 @@ const App = () => {
         _pendingReveal: true
       }
     : null;
-  const pendingPanelResult = activePendingResult;
+  const livePendingResult = liveStreamSnapshot
+    ? {
+        file_name: liveStreamSnapshot.fileName,
+        _queueKey: liveStreamSnapshot.key,
+        presentation_id: liveStreamSnapshot.key,
+        presentation_sequence: '',
+        _isCurrent: true,
+        _pendingReveal: true
+      }
+    : null;
+  const pendingPanelResult = livePendingResult || activePendingResult;
   const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
-  const liveStreamSnapshot = getSyncedLiveStream();
   const latestBackendNarration = getLatestBackendNarration();
   const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot && narrationDisplay.text
     ? {
@@ -1029,12 +1081,12 @@ const App = () => {
   // Identity is stronger than freshness: while a queued photo is on screen,
   // only narration from that exact presentation may be rendered.  A newer
   // backend stream belongs to the next photo and must wait for handoff.
-  const visibleNarrationSnapshot = activeNarrationSnapshot
-    || liveStreamSnapshot
+  const visibleNarrationSnapshot = liveStreamSnapshot
+    || activeNarrationSnapshot
     || heldNarrationSnapshot
     || (!isRunning ? latestBackendNarration : null);
-  const displayedFileName = activePresentation?.file_name
-    || liveStreamSnapshot?.fileName
+  const displayedFileName = liveStreamSnapshot?.fileName
+    || activePresentation?.file_name
     || heldNarrationSnapshot?.fileName
     || (!isRunning ? latestBackendNarration?.fileName : "")
     || (visibleImage ? "上一張畫面保留" : "-");
@@ -1043,23 +1095,32 @@ const App = () => {
   const currentFileLabel = data.current_file && data.current_file !== "None"
     ? data.current_file
     : (data.latest_result_file || "-");
-  const visibleNarration = visibleNarrationSnapshot?.text
-    || narrationDisplay.text
-    || displayedBuffer
-    || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : "");
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
-  const isHeldNarration = narrationPhase !== "typing";
   const visibleNarrationKey = visibleNarrationSnapshot?.key || displayTargetKey || "";
+  const narrationAnimationOwnsDisplay = Boolean(
+    visibleNarrationKey
+    && displayTargetKey === visibleNarrationKey
+    && (typewriterReady || displayedBuffer)
+  );
+  const visibleNarration = narrationAnimationOwnsDisplay
+    ? (displayedBuffer || "正在接收本張照片的 AI 判讀文字...")
+    : (visibleNarrationSnapshot?.text
+      || narrationDisplay.text
+      || displayedBuffer
+      || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : ""));
+  const isHeldNarration = !visibleNarrationKey.startsWith("live:") && narrationPhase !== "typing";
   const matchingVisibleImage = visibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
     ? visibleImage
     : null;
   const heldPresentation = !activePresentation && visibleNarrationKey && !visibleNarrationKey.startsWith("live:")
     ? revealedResults.find((item) => item._queueKey === visibleNarrationKey) || null
     : null;
-  const visiblePresentation = activePresentation || heldPresentation;
-  const visiblePresentationId = visiblePresentation?.presentation_id || "";
+  const visiblePresentation = visibleNarrationKey.startsWith("live:") ? null : (activePresentation || heldPresentation);
+  const visiblePresentationId = visibleNarrationKey.startsWith("live:")
+    ? visibleNarrationKey
+    : (visiblePresentation?.presentation_id || "");
   const visiblePresentationSequence = visiblePresentation?.presentation_sequence ?? "";
   const narrationStatusLabel = visibleNarrationKey.startsWith("live:")
     ? "AI 即時判讀中"
@@ -1151,16 +1212,16 @@ const App = () => {
                </span>
                 <div style={{ width: '330px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
-                    <span style={{ fontWeight: '800', color: '#ffffff' }}>初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
-                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
+                    <span style={{ fontWeight: '800', color: '#ffffff' }}>{isReviewRun ? `${reviewPeriodLabel} 複核進度` : '初次辨識總進度'} {formatCount(primaryProgressProcessed)}/{formatCount(primaryProgressTotal)} 張</span>
+                    <span style={{ color: '#22c55e', fontWeight: '800' }}>{primaryProgressPercent.toFixed(1)}%</span>
                   </div>
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
+                    <div style={{ height: '100%', width: `${primaryProgressPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
-                    <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
+                    <span>剩餘 {formatCount(isReviewRun ? primaryRemaining : overallProgress.remaining_images)} 張</span>
                     <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
-                    <span>{isReviewRun ? `${reviewProgress.period || '目前'} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}{isReviewRun && reviewProgress.current_pass ? ` · 第 ${reviewProgress.current_pass} 輪` : ''}</span>
+                    <span>{isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}{isReviewRun && reviewProgress.current_pass ? ` · 第 ${reviewProgress.current_pass} 輪` : ''}</span>
                   </div>
                 </div>
                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>

@@ -10,6 +10,7 @@ param(
     [bool]$CurrentYearFirst = $true,
     [bool]$RunAllYearsAfterCurrentYear = $true,
     [switch]$CurrentYearOnly,
+    [switch]$SkipCurrentYearPhases,
     [switch]$SkipCurrentYearFirstPass,
     [switch]$AllowPlannedBackendUpgradeInterlock,
     [switch]$SkipRecursiveResume
@@ -388,7 +389,7 @@ try {
         Start-Sleep -Seconds $PollSeconds
     }
 
-    if ($CurrentYearFirst) {
+    if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
         if ($SkipCurrentYearFirstPass) {
             Write-RunLog "phase=current_year_first_pass skipped_by_recovery"
         } else {
@@ -426,7 +427,7 @@ try {
     Refresh-UploadAndReviewSplit
     Rebuild-DriveCorrectionLedgerIfSafe
     Start-Uploader-IfNeeded
-    if ($CurrentYearFirst) {
+    if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
         $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
         [pscustomobject]@{
             completed_at = (Get-Date -Format "s")
@@ -435,6 +436,17 @@ try {
             current_year_only = [bool]$CurrentYearOnly
         } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding UTF8
         Write-RunLog "current-year rerun completion marker written path=$markerPath"
+    }
+    if (-not $CurrentYearOnly -and $SkipCurrentYearPhases) {
+        $fullMarkerPath = Join-Path $OutputDir "_ocr_audit\full_project_rerun_cycle_complete.json"
+        [pscustomobject]@{
+            completed_at = (Get-Date -Format "s")
+            primary_model = $PrimaryModel
+            primary_passes = $PrimaryPasses
+            all_year_questionable_review = $true
+            final_model_review = $true
+        } | ConvertTo-Json | Set-Content -LiteralPath $fullMarkerPath -Encoding UTF8
+        Write-RunLog "full-project rerun completion marker written path=$fullMarkerPath"
     }
     if ($SkipRecursiveResume) {
         Write-RunLog "recursive OCR resume skipped; planned backend upgrade/backfill owns the next boundary"

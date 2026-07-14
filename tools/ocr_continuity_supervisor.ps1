@@ -15,6 +15,9 @@ $BenchmarkLockPath = Join-Path $audit "model_benchmark.lock"
 $logDir = Join-Path $RepoRoot "logs"
 $lockPath = Join-Path $audit "ocr_continuity_supervisor.lock"
 $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
+$fullProjectRequestPath = Join-Path $audit "full_project_continuation_requested.json"
+$currentYearCompletePath = Join-Path $audit "current_year_rerun_cycle_complete.json"
+$fullProjectCompletePath = Join-Path $audit "full_project_rerun_cycle_complete.json"
 $logPath = Join-Path $logDir ("ocr_continuity_supervisor_{0}.jsonl" -f (Get-Date -Format "yyyyMMdd"))
 $python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
@@ -53,6 +56,20 @@ function Invoke-Lms([string[]]$Args) {
 function Start-Hidden([string]$File, [string[]]$Args, [string]$OutFile, [string]$ErrFile) {
     Start-Process -FilePath $File -ArgumentList $Args -WorkingDirectory $RepoRoot -WindowStyle Hidden `
         -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile | Out-Null
+}
+function Read-JsonFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try { return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { return $null }
+}
+function Full-Project-ContinuationReady {
+    $request = Read-JsonFile $fullProjectRequestPath
+    $currentYear = Read-JsonFile $currentYearCompletePath
+    if (-not $request -or -not $currentYear) { return $false }
+    try {
+        return ([datetime]$currentYear.completed_at) -ge ([datetime]$request.requested_at)
+    } catch {
+        return $false
+    }
 }
 
 try {
@@ -123,7 +140,33 @@ try {
         Alert "staged_or_recursive_state_ambiguous" @{staged=$staged.Count;recursive=$recursive.Count}
         exit 8
     }
-    if ($watcher.Count -eq 0) {
+    $fullProjectDone = Test-Path -LiteralPath $fullProjectCompletePath
+    $fullProjectReady = Full-Project-ContinuationReady
+    if ($fullProjectDone) {
+        Log-Event "full_project_complete_noop" @{marker=$fullProjectCompletePath}
+    } elseif ($fullProjectReady -and $watcher.Count -eq 0) {
+        $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+        Start-Hidden $python @(
+            "tools\recursive_ocr_flat_export.py",
+            "--source-root",$SourceRoot,
+            "--output-dir",$OutputDir,
+            "--backend-url",$BackendUrl,
+            "--api-base",$ApiBase,
+            "--api-key","lm-studio",
+            "--model",$Model,
+            "--poll-seconds","20",
+            "--timeout-minutes","360",
+            "--ignore-current-year-review-gate"
+        ) (Join-Path $logDir "supervisor_full_recursive_$stamp.out.log") (Join-Path $logDir "supervisor_full_recursive_$stamp.err.log")
+        Start-Sleep -Seconds 1
+        Start-Hidden "powershell.exe" @(
+            "-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1",
+            "-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,
+            "-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2",
+            "-SkipCurrentYearPhases","-SkipRecursiveResume"
+        ) (Join-Path $logDir "supervisor_full_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_full_watcher_$stamp.err.log")
+        Log-Event "full_project_pipeline_started" @{request=$fullProjectRequestPath;current_year_marker=$currentYearCompletePath}
+    } elseif ($watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
         Start-Hidden "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1","-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly") (Join-Path $logDir "supervisor_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
         Log-Event "current_year_watcher_started"
