@@ -60,6 +60,7 @@ UNKNOWN_VALUES = {
     "?",
     "\uff1f",
 }
+TRUTHY = {"1", "true", "yes", "y"}
 SUCCESS_HEADERS = [
     "timestamp",
     "file_name",
@@ -80,6 +81,13 @@ SUCCESS_HEADERS = [
     "human_model",
     "human_price",
     "human_notes",
+    "ocr_attempt",
+    "auto_retry_reasons",
+    "auto_verified",
+    "auto_review_required",
+    "model_validation_failed",
+    "rejected_model",
+    "price_conflict_detected",
     "thinking",
 ]
 
@@ -133,9 +141,38 @@ def is_distant(row: dict[str, str]) -> bool:
     text = " ".join(norm(row.get(key)) for key in ["view_type", "category", "human_category"])
     return FAR in text
 
+def is_complete_auto_verified(row: dict[str, str]) -> bool:
+    """Only v19.45 contract rows may be terminal for current-year reruns."""
+    if norm(row.get("auto_review_required")).lower() in TRUTHY:
+        return False
+    if norm(row.get("auto_verified")).lower() not in TRUTHY:
+        return False
+    try:
+        if int(norm(row.get("ocr_attempt")) or "0") < 3:
+            return False
+    except ValueError:
+        return False
+    period = norm(row.get("period") or row.get("file_name") or row.get("source_path"))
+    if "2026" in period and norm(row.get("evidence_contract_version")) != "v19.45":
+        return False
+    if "2026" in period and norm(row.get("evidence_contract_valid")).lower() not in TRUTHY:
+        return False
+    evidence = " ".join(norm(row.get(key)) for key in ("thinking", "stream_buffer", "raw_response"))
+    return bool(evidence) and bool(norm(row.get("run_id")) or norm(row.get("timestamp")))
+
+def is_promo_followme_card(row: dict[str, str]) -> bool:
+    text = " ".join(norm(row.get(key)) for key in ("thinking", "stream_buffer", "raw_response", "model"))
+    upper = text.upper().replace(" ", "")
+    promo = any(token in upper for token in ("PROMO", "PROMOTIONAL", "ADVERTISEMENT", "廣告", "促銷", "宣傳"))
+    negative = any(token in upper for token in ("NOTFOLLOWME", "NOTAFOLLOWME", "不是FOLLOWME", "非FOLLOWME"))
+    physical = "NOPHYSICAL" not in upper and any(token in upper for token in ("STAND", "BASE", "TRAY", "支架", "底座", "托盤", "託盤"))
+    return "FOLLOWME" in upper and promo and negative and not physical
+
 
 def reason_for(row: dict[str, str]) -> list[str]:
     reasons: list[str] = []
+    if is_complete_auto_verified(row):
+        return []
     model = row.get("human_model") or row.get("model")
     price = row.get("human_price") or row.get("price")
     distant = is_distant(row)
@@ -145,6 +182,8 @@ def reason_for(row: dict[str, str]) -> list[str]:
         reasons.append(NO_MODEL_TEXT)
     if not distant and is_missing_price(price):
         reasons.append(NO_PRICE_TEXT)
+    if is_promo_followme_card(row):
+        reasons.append("FollowMe promotional card without physical FollowMe evidence")
     return reasons
 
 

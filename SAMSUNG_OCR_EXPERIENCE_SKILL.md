@@ -4,6 +4,40 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 
 # SAMSUNG_OCR_EXPERIENCE (Project Bible)
 
+## Presentation identity iron rules
+
+Dashboard asset freshness is also a presentation invariant: `/api/status`
+reports the fingerprint of the built script/css assets, and the frontend may
+perform one cache-busting `/?ui=` replace only on mismatch, guarded by a
+30-second session cooldown. A matching fingerprint must not reload, and this
+UI refresh must never restart OCR or the backend.
+
+The results rail may show one active placeholder above `revealedResults`. This
+is not a result: it must be the exact active snapshot and key, showing only
+the thumbnail, filename, `處理中`, and `AI 即時判讀中`. It disappears when the
+same snapshot becomes the top revealed card; never create it from current
+file, recent results, index, or filename joins.
+
+- Backend `presentation_id` is the sole identity truth; snapshots are
+  immutable and carry a monotonic sequence.
+- Photo, AI narration, revealed card, and modal must reference the same
+  snapshot. Never join them with filename, index, or `source_path`.
+- The right rail reads only revealed results. During OCR, neither
+  `recent_results` nor `current_file` may enter presentation as fallback.
+- Keep the previous image until the next image is loaded; never blank the main
+  preview during a normal transition.
+- Visible copy uses `AI`, never `LLM` or `自言自語`.
+- Every presentation change requires the 500-item soak, dashboard build, and
+  live 3-transition browser verification. Preserve `logs/ui_sync_v1944_live.*`.
+
+## v19.37 Non-Regression Guard (2026-07-10)
+
+- Local LM Studio instances may run Qwen3-VL with only an 8K context. The full historical prompt is longer than that after image tokens are included. Runtime requests must use `build_runtime_system_prompt()`; when the full file is too long, it must select the maintained compact ruleset rather than sending an over-limit request. A context-limit error is a retryable configuration fault, never a valid OCR outcome.
+- A confirmed FollowMe rescue is authoritative over a generic later sentence containing `遠景`. Do not let a final narration fallback overwrite a model that has Samsung FollowMe wording, a fixture/stand clue, or a positive physical clue.
+- Never promote `單機 + 無型號/無價格` to `遠景` merely because its narration says `展示區`, `貨架`, or `多台`. Promotion needs the explicit final distant conclusion plus at least two display-wall layout signals, and no single-unit or FollowMe evidence. Ambiguous cases remain single-unit review rows and stay blocked from Drive.
+- `display_queue` is a live batch-session transport only. Clear it before every new batch and do not expose it from `/api/status` while idle. Otherwise the dashboard can replay a deleted staging file and desynchronize photo, AI narration, and the right-side card.
+- Required regression command after touching these paths: `python tools/test_runtime_safety_guards.py`, then `npm --prefix dashboard run build`.
+
 ## Dashboard Live Sync Rule (2026-07-01)
 
 For live OCR runs, preview image, AI narration, and parsed result must never be mixed across filenames.
@@ -381,6 +415,13 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 
 ## 2026-07-09 Current-Year Distant Escalation
 
+Benchmark interlock: `tools/model_benchmark_sidecar.py` and the four-hour watcher use `00_已OCR照片\_ocr_audit\model_benchmark.lock`. The watcher may remain alive but must wait while this lock exists; it must not launch backend, staged/recursive runner, or uploader. Stale locks are never auto-deleted: recovery requires explicit recovery mode, proof that the owner PID is absent, and an age threshold. This does not stop normal OCR or require closing the UI.
+
+Unattended continuity uses `tools\ocr_continuity_supervisor.ps1` through the existing `SamsungOCR_PipelineWatchdog` task (startup, logon, and five-minute repetition). Its atomic lock and RepoRoot process matching are authoritative: healthy work is a no-op; hung backend, unavailable LM Studio with a different loaded model, or ambiguous staging is alert-only and fail-closed. It preserves `_ocr_audit`/staging/history, never uses restart/no-resume, and starts uploads only from ready-pending rows.
+If protected Task Scheduler registration is denied, install the non-admin fallback with `tools\install_ocr_continuity_daemon.ps1 -Action install`. It uses one hidden HKCU Run/Startup daemon, one atomic lock, immediate plus five-minute checks, bounded child execution, and a shutdown marker. Never install a second daemon or disable the existing four-hour backstop.
+The same installer creates `SamsungOCR_UserContinuityEnsure` as a current-user LIMITED five-minute `schtasks.exe` task. Its `ensure` action only starts the exact RepoRoot daemon when absent and refuses stale-lock recovery without proof; it must not create duplicate PowerShell trees.
+Drive corrections use `tools\reconcile_drive_corrections.py` in dry-run first. Stale uploaded rows remain frozen until corrected output has fresh gates, exact local identity/hash, verified new remote receipt/readback, and an explicit recoverable-trash receipt for the uniquely identified old Drive file. Never delete ambiguous IDs, duplicate names, or rows lacking hashes.
+
 - Current-year distant-view precision is not trusted. A visual sample after rerun still showed many likely single/FollowMe foreground products, so 2026 distant-view rows are blocked by default.
 - Upload gate: current/future-year distant-view output must not go to Drive unless it is explicitly approved in `_ocr_audit\current_year_distant_upload_approval.csv` or corrected to a concrete `單機`, `FollowMe`, or `它牌(...)` result. Visual spot-check files are only for measuring rule quality and must not be treated as upload approval.
 - `tools\prepare_drive_upload_manifest.py` writes `_drive_upload\drive_upload_stale_uploaded_review_required.csv` for current-year files that were uploaded before stricter gates but are now review-required. Treat those as stale remote deliverables to remove or replace after rerun.
@@ -389,3 +430,17 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 - `tools\rerun_staged_candidates.py` must restore the backend work directory to the original source folder before deleting `_ocr_staging`; otherwise the dashboard can keep polling a deleted staging path and repeatedly show "Failed to list actual files".
 - Backend/UI rule: durable AI history and right-side result cards must use the final post-processed narration from `build_final_display_thinking()`. Never leave a corrected FollowMe result beside visible text saying it is not FollowMe or is distant view.
 - Live 2026 distant rerun started 2026-07-09: log `logs\current_year_distant_staged_rerun_20260709_103552.out.log`, candidates `_ocr_audit\current_year_distant_staged_rerun_candidates_20260709_103552.csv`, summary `_ocr_audit\current_year_distant_staged_rerun_summary_20260709_103552.csv`.
+## 本機模型評測安全規範
+
+模型比較只能使用 `tools/model_benchmark_sidecar.py` 的 bounded sidecar。它必須以 fixed `ocr_demo_50` blind set、同一 production prompt 與同一影像證據執行；不能把 benchmark 當成訓練或修改 OCR 權重。dry-run 不會碰 LM Studio，真正執行必須明確 `--execute`。
+
+sidecar 的硬守門是：API `is_running=false`、沒有任何 rerun/recursive/watcher/uploader、所有指定模型已完整下載、endpoint 為 localhost、raw JSONL 可重入保存。任何模型切換後都必須在 finally 還原 `qwen/qwen3-vl-8b` 與 context；不得停止或重啟正常 OCR，也不得上傳照片。
+
+採用候選模型前，先要求整體 exact/field accuracy 改善或至少不退步；遠景、FollowMe、型號幻覺等危險錯誤率全部不得退步。latency 只作 accuracy 通過後的次順位，不得用速度掩蓋辨識退化。InternVL 只有在本機下載完成並通過完整性檢查後才列入執行候選。
+## v19.45 Evidence Contract
+
+The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Missing, contradictory, or cross-pass disagreement is `review_required`; prose keywords never rescue a result. Current-year upload readiness requires the v19.45 trace, while historical rows remain governed by their existing gates.
+
+## Presentation Synchronization Iron Rule
+
+`presentation_id` and `presentation_sequence` are the only UI identity truth. Photo, AI live interpretation, active placeholder, revealed card, and inspection modal must render from the same immutable snapshot. Running presentation state must not use filename/index/source-path joins or `current_file`, `stream_file`, or `recent_results` fallbacks. The right card appears only after the same snapshot's narration finishes. Active items are never dropped by watchdog or backpressure; a previous image remains visible until the next image is ready, so continuity never produces a black frame. Every dashboard presentation change requires the 500-item duplicate/out-of-order/overflow/remount soak and a fresh build.

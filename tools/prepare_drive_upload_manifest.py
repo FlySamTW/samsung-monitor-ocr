@@ -37,9 +37,13 @@ REVIEW_NAME_TOKENS = [
     "\u6c92\u6709\u50f9\u683c",  # no price label
     "\u6c92\u6709\u898f\u683c\u548c\u50f9\u683c\u724c",  # no spec and price label
     "\u9ed1\u5c4f",  # black screen
+    "SXXTEST",  # prompt/test placeholder model
+    "XXTEST",  # prompt/test placeholder model variant
+    "FollowMe MX",  # prompt placeholder FollowMe name
 ]
 COMPARE_SYMBOLS = {"\u2191", "\u2193", "\u2713", "\u2714"}
 UNKNOWN_SYMBOLS = {"?", "\uff1f"}
+CURRENT_YEAR = datetime.now().year
 
 
 @dataclass
@@ -59,11 +63,11 @@ def infer_period(file_name: str) -> str:
     return match.group(1) if match else ""
 
 
-def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[str]]:
+def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[tuple[str, str]]]:
     uploaded_names: set[str] = set()
-    uploaded_paths: set[str] = set()
+    uploaded_pairs: set[tuple[str, str]] = set()
     if not uploaded_log or not uploaded_log.exists():
-        return uploaded_names, uploaded_paths
+        return uploaded_names, uploaded_pairs
 
     with uploaded_log.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
@@ -72,9 +76,9 @@ def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[str]]:
             source_path = (row.get("source_path") or "").strip()
             if file_name:
                 uploaded_names.add(file_name)
-            if source_path:
-                uploaded_paths.add(str(Path(source_path).resolve()))
-    return uploaded_names, uploaded_paths
+            if source_path and file_name:
+                uploaded_pairs.add((str(Path(source_path).resolve()), file_name))
+    return uploaded_names, uploaded_pairs
 
 
 def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
@@ -129,12 +133,125 @@ def load_current_year_risk_names(output_root: Path, accepted_distant_names: set[
     return risk_names
 
 
+def load_audit_review_required_names(output_root: Path) -> set[str]:
+    """Map unresolved OCR records back to any already-published flat filename."""
+    audit_root = output_root / "_ocr_audit"
+    blocked_names: set[str] = set()
+    if not audit_root.is_dir():
+        return blocked_names
+
+    truthy = {"1", "true", "yes", "y"}
+    for folder in audit_root.iterdir():
+        if not folder.is_dir():
+            continue
+        copied_by_original: dict[str, str] = {}
+        copied_path = folder / "copied.csv"
+        if copied_path.is_file():
+            with copied_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    original = (row.get("original_name") or "").strip()
+                    target = (row.get("target_name") or "").strip()
+                    if not target and row.get("target_path"):
+                        target = Path(row["target_path"]).name
+                    if original and target:
+                        copied_by_original[original] = target
+
+        for blocked_path in folder.glob("blocked_after*.csv"):
+            with blocked_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    target = (row.get("target_name") or "").strip()
+                    original = (row.get("original_name") or row.get("file_name") or "").strip()
+                    if target:
+                        blocked_names.add(target)
+                    if original and original in copied_by_original:
+                        blocked_names.add(copied_by_original[original])
+
+        success_path = folder / "success_records.csv"
+        if success_path.is_file():
+            with success_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    unresolved = any(
+                        str(row.get(field) or "").strip().lower() in truthy
+                        for field in ("auto_review_required", "model_validation_failed", "price_conflict_detected")
+                    )
+                    if not unresolved:
+                        continue
+                    original = (row.get("file_name") or "").strip()
+                    if original in copied_by_original:
+                        blocked_names.add(copied_by_original[original])
+    return blocked_names
+
+def load_complete_auto_verified_names(output_root: Path) -> set[str]:
+    """Return only rows with traceable v19.44 three-pass verification evidence."""
+    names: set[str] = set()
+    truthy = {"1", "true", "yes", "y"}
+    for path in (output_root / "_ocr_audit").glob("*/success_records.csv"):
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                if str(row.get("auto_verified") or "").strip().lower() not in truthy:
+                    continue
+                if str(row.get("auto_review_required") or "").strip().lower() in truthy:
+                    continue
+                try:
+                    if int(str(row.get("ocr_attempt") or "0")) < 3:
+                        continue
+                except ValueError:
+                    continue
+                evidence = " ".join(str(row.get(key) or "").strip() for key in ("thinking", "stream_buffer", "raw_response"))
+                trace = str(row.get("run_id") or row.get("timestamp") or "").strip()
+                view = " ".join(str(row.get(key) or "") for key in ("view_type", "category"))
+                strict_distant = True
+                if "遠景" in view or "DISTANT" in view.upper():
+                    upper = evidence.upper()
+                    strict_distant = ("3" in evidence or "三" in evidence) and any(
+                        token in upper for token in ("NO UNIQUE", "MULTIPLE", "無唯一", "無法鎖定", "無法確定")
+                    )
+                if evidence and trace and strict_distant and row.get("file_name"):
+                    names.add(str(row["file_name"]).strip())
+    return names
+
+
+def load_v1945_trace_names(output_root: Path) -> set[str]:
+    names: set[str] = set()
+    for path in (output_root / "_ocr_audit").rglob("v1945_evidence_trace.jsonl"):
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                item = json.loads(line)
+                if item.get("file_name") and item.get("trace_version") == "v19.45":
+                    names.add(str(item["file_name"]).strip())
+        except (OSError, ValueError, TypeError):
+            continue
+    return names
+
+
+def current_year_risk_audit_is_fresh(output_root: Path, year: int) -> bool:
+    """Fail closed when the current-year risk report is missing or stale."""
+    audit_root = output_root / "_ocr_audit"
+    latest_risk = audit_root / f"distant_followme_risk_{year}_latest.csv"
+    if not latest_risk.is_file():
+        return False
+
+    newest_record_mtime = 0.0
+    for folder in audit_root.glob(f"*{year}*"):
+        if not folder.is_dir():
+            continue
+        for name in ("success_records.csv", "rename_plan.csv"):
+            path = folder / name
+            if path.is_file():
+                newest_record_mtime = max(newest_record_mtime, path.stat().st_mtime)
+    return latest_risk.stat().st_mtime >= newest_record_mtime
+
+
 def classify_file(
     path: Path,
     output_root: Path,
     max_bytes: int,
     risk_names: set[str] | None = None,
     accepted_distant_names: set[str] | None = None,
+    current_year_risk_fresh: bool = True,
+    audit_review_names: set[str] | None = None,
+    auto_verified_names: set[str] | None = None,
+    v1945_trace_names: set[str] | None = None,
 ) -> ManifestRow:
     file_name = path.name
     period = infer_period(file_name)
@@ -142,6 +259,9 @@ def classify_file(
     reasons: list[str] = []
     risk_names = risk_names or set()
     accepted_distant_names = accepted_distant_names or set()
+    audit_review_names = audit_review_names or set()
+    auto_verified_names = auto_verified_names or set()
+    v1945_trace_names = v1945_trace_names or set()
 
     if not period:
         reasons.append("missing_period")
@@ -166,11 +286,27 @@ def classify_file(
 
     if file_name in risk_names:
         reasons.append("current_year_followme_or_distant_risk_needs_rerun")
+    if file_name in audit_review_names:
+        reasons.append("ocr_auto_review_required")
 
     price_match = PRICE_TOKEN_RE.search(file_name)
     if period:
         period_year = int(year)
         symbol = price_match.group("symbol") if price_match else ""
+        # Scope freshness to rows whose safety depends on the risk audit. A
+        # stale current-year report must not globally downgrade unrelated rows.
+        risk_sensitive = (
+            is_distant_view
+            or "FollowMe" in file_name
+            or file_name in risk_names
+            or file_name in auto_verified_names
+        )
+        if period_year == CURRENT_YEAR and not current_year_risk_fresh and risk_sensitive:
+            reasons.append("current_year_risk_audit_missing_or_stale")
+        if period_year >= 2026 and file_name not in auto_verified_names:
+            reasons.append("auto_verified_evidence_missing")
+        if period_year >= 2026 and file_name not in v1945_trace_names:
+            reasons.append("v1945_evidence_trace_missing")
         if period_year >= 2026:
             if is_distant_view:
                 if file_name not in accepted_distant_names:
@@ -261,10 +397,9 @@ def newest_first_key(row: ManifestRow) -> tuple[int, str]:
 
 
 def stage_upload_batch(rows: list[ManifestRow], stage_dir: Path) -> Path:
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
     stage_dir.mkdir(parents=True, exist_ok=True)
-    for old_file in stage_dir.glob("upload_*"):
-        if old_file.is_file():
-            old_file.unlink()
 
     map_path = stage_dir.parent / "staging_map.csv"
     with map_path.open("w", encoding="utf-8-sig", newline="") as f:
@@ -272,9 +407,9 @@ def stage_upload_batch(rows: list[ManifestRow], stage_dir: Path) -> Path:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for index, row in enumerate(rows, start=1):
-            ext = Path(row.file_name).suffix.lower() or ".jpg"
-            stage_name = f"upload_{index:04d}{ext}"
-            stage_path = stage_dir / stage_name
+            year_dir = stage_dir / row.drive_folder
+            year_dir.mkdir(parents=True, exist_ok=True)
+            stage_path = year_dir / row.file_name
             shutil.copy2(row.source_path, stage_path)
             writer.writerow(
                 {
@@ -306,9 +441,13 @@ def main() -> int:
     manifest_dir = Path(args.manifest_dir).resolve() if args.manifest_dir else output_root / "_drive_upload"
     default_uploaded_log = manifest_dir / "drive_upload_uploaded.csv"
     uploaded_log = Path(args.uploaded_log).resolve() if args.uploaded_log else default_uploaded_log
-    uploaded_names, uploaded_paths = load_uploaded(uploaded_log)
+    uploaded_names, uploaded_pairs = load_uploaded(uploaded_log)
     accepted_distant_names = load_visual_accepted_distant_names(output_root)
     risk_names = load_current_year_risk_names(output_root, accepted_distant_names)
+    current_year_risk_fresh = current_year_risk_audit_is_fresh(output_root, CURRENT_YEAR)
+    audit_review_names = load_audit_review_required_names(output_root)
+    auto_verified_names = load_complete_auto_verified_names(output_root)
+    v1945_trace_names = load_v1945_trace_names(output_root)
 
     all_rows: list[ManifestRow] = []
     for path in sorted(output_root.rglob("*")):
@@ -322,7 +461,19 @@ def main() -> int:
             continue
         if path.suffix.lower() not in IMAGE_EXTS:
             continue
-        all_rows.append(classify_file(path, output_root, args.max_bytes, risk_names, accepted_distant_names))
+        all_rows.append(
+            classify_file(
+                path,
+                output_root,
+                args.max_bytes,
+                risk_names,
+                accepted_distant_names,
+                current_year_risk_fresh,
+                audit_review_names,
+                auto_verified_names,
+                v1945_trace_names,
+            )
+        )
 
     all_rows.sort(key=newest_first_key)
     ready_rows = sorted((row for row in all_rows if row.status == "ready"), key=newest_first_key)
@@ -330,7 +481,7 @@ def main() -> int:
     pending_rows = [
         row
         for row in ready_rows
-        if row.file_name not in uploaded_names and row.source_path not in uploaded_paths
+        if (row.source_path, row.file_name) not in uploaded_pairs
     ]
     upload_rows = pending_rows[: args.limit_ready] if args.limit_ready else pending_rows
 
@@ -371,6 +522,8 @@ def main() -> int:
         "staging_map": staging_map,
         "max_bytes": args.max_bytes,
         "visual_accepted_distant": len(accepted_distant_names),
+        "current_year_risk_audit_fresh": current_year_risk_fresh,
+        "ocr_auto_review_required": len(audit_review_names),
         "ready_by_year": dict(sorted(by_year.items(), reverse=True)),
         "pending_by_year": dict(sorted(pending_by_year.items(), reverse=True)),
     }

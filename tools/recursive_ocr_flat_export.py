@@ -327,6 +327,13 @@ def write_results_snapshot(path: Path, records: List[dict]) -> None:
         "human_category",
         "human_model",
         "human_price",
+        "ocr_attempt",
+        "auto_retry_reasons",
+        "auto_verified",
+        "auto_review_required",
+        "model_validation_failed",
+        "rejected_model",
+        "price_conflict_detected",
     ]
     write_dict_csv(path, records, headers)
 

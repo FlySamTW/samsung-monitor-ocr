@@ -324,7 +324,7 @@ function Start-Backend {
     )
 
     Write-Info "Starting OCR backend..."
-    Start-Process -FilePath $python -ArgumentList $args -WorkingDirectory $RepoRoot -WindowStyle Minimized -RedirectStandardOutput $outLog -RedirectStandardError $errLog | Out-Null
+    Start-Process -FilePath $python -ArgumentList $args -WorkingDirectory $RepoRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog | Out-Null
 
     for ($i = 0; $i -lt 45; $i++) {
         Start-Sleep -Seconds 1

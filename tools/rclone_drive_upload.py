@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import shutil
 import subprocess
@@ -145,12 +146,50 @@ def prepare_manifest(args, limit: int) -> Path:
         str(args.output_dir),
         "--limit-ready",
         str(limit),
-        "--no-stage",
     ]
     completed = subprocess.run(command, text=True)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
     return args.manifest_dir / "drive_upload_next_batch.csv"
+
+
+def load_staged_paths(manifest_dir: Path, rows: list[dict[str, str]]) -> dict[tuple[str, str], Path]:
+    """Return only staged files belonging to this manifest batch."""
+    staging_root = (manifest_dir / "staging").resolve()
+    map_rows = read_csv(manifest_dir / "staging_map.csv")
+    staged: dict[tuple[str, str], Path] = {}
+    for item in map_rows:
+        stage_path = Path(item.get("stage_file", "")).resolve()
+        try:
+            stage_path.relative_to(staging_root)
+        except ValueError:
+            continue
+        if not stage_path.is_file():
+            continue
+        key = (item.get("source_path", ""), item.get("file_name", ""))
+        staged[key] = stage_path
+
+    missing = [row.get("file_name", "") for row in rows if
+               (row.get("source_path", ""), row.get("file_name", "")) not in staged]
+    if missing:
+        raise SystemExit(f"staged upload files missing: {', '.join(missing[:5])}")
+    return staged
+
+
+def remote_file_map(args, year: str) -> dict[str, dict[str, object]]:
+    command = [str(args.rclone), "lsjson", f"{args.remote}:{year}", "--files-only"]
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        return {}
+    try:
+        entries = json.loads(completed.stdout or "[]")
+    except (TypeError, ValueError):
+        return {}
+    return {
+        str(entry.get("Name", "")): entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("Name")
+    }
 
 
 def write_files_from(manifest_dir: Path, year: str, rows: list[dict[str, str]]) -> Path:
@@ -174,39 +213,34 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         by_year.setdefault(year, []).append(row)
 
     uploaded_rows: list[dict[str, str]] = []
+    staged_paths = load_staged_paths(args.manifest_dir, rows)
+    staging_root = (args.manifest_dir / "staging").resolve()
     for year, year_rows in sorted(by_year.items(), reverse=True):
+        year_stage = (staging_root / year).resolve()
+        for row in year_rows:
+            stage_path = staged_paths[(row.get("source_path", ""), row.get("file_name", ""))]
+            if stage_path.parent != year_stage or stage_path.name != row.get("file_name", ""):
+                raise SystemExit(f"invalid staged upload path: {stage_path}")
         files_from = write_files_from(args.manifest_dir, year, year_rows)
-        remote_path = f"{args.remote}:{year}"
         command = [
-            str(args.rclone),
-            "copy",
-            str(args.output_dir),
-            remote_path,
-            "--files-from-raw",
-            str(files_from),
-            "--ignore-existing",
-            "--transfers",
-            str(args.transfers),
-            "--checkers",
-            str(args.checkers),
-            "--drive-stop-on-upload-limit",
-            "--stats",
-            "30s",
+            str(args.rclone), "copy", str(year_stage), f"{args.remote}:{year}",
+            "--files-from-raw", str(files_from), "--ignore-existing",
+            "--transfers", str(args.transfers), "--checkers", str(args.checkers),
+            "--drive-stop-on-upload-limit", "--stats", "30s",
         ]
         if args.dry_run:
             command.append("--dry-run")
         rc = run_command(command, args.log_path, execute=args.execute, timeout_seconds=args.rclone_timeout_seconds)
-        if rc == 124 and args.continue_on_timeout:
-            if args.execute and not args.dry_run and uploaded_rows:
-                append_uploaded(args.uploaded_log, uploaded_rows)
-                prepare_manifest(args, args.limit)
-            print("[upload] timeout treated as retryable; next cycle will resume with --ignore-existing", flush=True)
-            return len(uploaded_rows) or len(year_rows)
-        if rc != 0:
+        if rc not in {0, 124}:
             raise SystemExit(rc)
 
-        uploaded_at = datetime.now().isoformat(timespec="seconds")
+        remote_entries = remote_file_map(args, year) if args.execute and not args.dry_run else {}
         for row in year_rows:
+            remote_entry = remote_entries.get(row.get("file_name", ""), {})
+            if args.execute and not args.dry_run and not remote_entry:
+                print(f"[upload] remote file not confirmed; leaving pending: {row.get('file_name', '')}", flush=True)
+                continue
+            uploaded_at = datetime.now().isoformat(timespec="seconds")
             uploaded_rows.append(
                 {
                     "batch": f"{batch_id}_cycle{cycle:03d}",
@@ -214,12 +248,18 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
                     "source_path": row.get("source_path", ""),
                     "file_name": row.get("file_name", ""),
                     "drive_folder_id": year,
-                    "drive_file_id": "",
+                    "drive_file_id": str(remote_entry.get("ID", "")),
                     "url": f"rclone://{args.remote}/{year}/{row.get('file_name', '')}",
                     "uploaded_at": uploaded_at,
                     "uploader": "rclone",
                 }
             )
+        if rc == 124 and args.continue_on_timeout:
+            if args.execute and not args.dry_run and uploaded_rows:
+                append_uploaded(args.uploaded_log, uploaded_rows)
+                prepare_manifest(args, args.limit)
+            print("[upload] timeout treated as retryable; next cycle will resume with --ignore-existing", flush=True)
+            return len(uploaded_rows)
 
     if args.execute and not args.dry_run:
         append_uploaded(args.uploaded_log, uploaded_rows)

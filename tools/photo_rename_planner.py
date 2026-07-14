@@ -20,6 +20,7 @@ READY_STATUS = "ready"
 NO_CHANGE_STATUS = "no_change"
 CONFLICT_STATUS = "conflict"
 MISSING_SOURCE_STATUS = "missing_source"
+REVIEW_REQUIRED_STATUS = "review_required"
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 COMPARE_SYMBOLS_FOR_FILENAME = {
     "↑": "↑",
@@ -255,6 +256,18 @@ def make_plan(
         target_path = image_dir / target_name
         status = NO_CHANGE_STATUS if target_name == image_name else READY_STATUS
         reason = ""
+        review_flags = []
+        for field, label in (
+            ("auto_review_required", "三輪後仍需慢模型或人工校正"),
+            ("model_validation_failed", "型號未通過正式清單驗證"),
+            ("price_conflict_detected", "價格欄位互相衝突"),
+        ):
+            value = str(row.get(field) or "").strip().lower()
+            if value in {"1", "true", "yes", "y"}:
+                review_flags.append(label)
+        if review_flags:
+            status = REVIEW_REQUIRED_STATUS
+            reason = "；".join(review_flags)
         if target_path.exists() and target_name != image_name:
             status = CONFLICT_STATUS
             reason = "目標檔名已存在"

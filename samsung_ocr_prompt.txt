@@ -34,26 +34,21 @@
 
 ## 🔑 關卡1：遠景判定
 
-**必須同時符合以下全部條件**才是遠景（缺一不可）：
-1. 完全看不到任何清晰的型號或價格文字
-2. 螢幕數量超過 3 台，且大小差不多、全部完整入鏡
-3. 沒有 FollowMe 白色垂直支架
+先數「完整入鏡的螢幕本體」，被畫面邊緣裁掉、只露出一角或只露出部分面板者不計為完整一台。
 
-🔥 **只要能讀到「主角商品自己」標籤上的型號或價格 → 絕對不是遠景，直接跳過關卡1。**
-如果畫面是整排/展示牆/超過 3 台螢幕，只是看得到許多小價牌或多張標籤，但無法指定唯一主角與其自己的型號/價格，仍然是遠景，不可硬選其中一台當單機。
-即使畫面中有超過 3 台以上螢幕，只要能讀出其中一台的標籤，就是單機。
+**符合以下場景就是遠景：**
+1. 同一個展示牆、展示桌或整排中有 **3 台以上完整入鏡的螢幕**；
+2. 這些螢幕共同構成賣場陳列，無法鎖定唯一主角，也無法讀取「唯一主角自己的」規格與價格；
+3. 沒有一台可確認為前景 FollowMe 實機並同時連著自己的長直立支架、落地底座或托盤。
 
-🔥 **只要主角螢幕下方看得到白色/銀色直立支架、圓形底座或托盤 → 絕對不是遠景。**
-即使背景很多商品、旁邊有其他螢幕、螢幕正在播放人物/偶像/食物廣告，也要先進入關卡2 判斷 FollowMe。
+🔥 展示牆上看得到很多小價牌、規格牌，甚至可讀到其中一張的小字，仍然是遠景；多張標籤不能被任選一張，硬配成某台單機。
+🔥 畫面看起來有 3 台以上，但只有 **1 台完整入鏡**、其餘都被裁切或只露出局部時，才把那一台完整主體當「單機候選」。
+🔥 即使有 3 台完整入鏡，若其中一台明顯是唯一主角，而且它自己的規格與價格歸屬清楚，仍是單機；反之，無法指定唯一主角與自己的規格/價格，就一定是遠景。
+🔥 單一清晰價牌或側標只有在它與唯一主角螢幕的空間歸屬明確時，才是單機證據；一整排商品各自都有標籤仍屬遠景。
+🔥 FollowMe 文字、海報、螢幕廣告或促銷立牌本身不能推翻遠景；必須看見同一台前景實機的物理支架/底座/托盤歸屬。
 
-🔥 **只要有明確主角 Samsung / FollowMe 牌面、螢幕右上角/側邊 L 型規格側標、或主角下方促銷價牌 → 絕對不是一般遠景。**
-即使沒有拍到完整白色支架，也要先視為單機/FollowMe 候選；若最後判斷只是海報或廣告，應輸出單機並用 quality_issue 表示「沒有規格和價格牌」，不可輸出一般遠景。
-
-🔥 **只要畫面中有明確主角螢幕，且螢幕數量是 1-3 台 → 絕對不是遠景。**
-如果主角螢幕下方有實體商品標籤卡，即使型號/價格看不清楚，也要走分支C「一般單機」並用 quality_issue 表示問題，不可輸出遠景。
-如果你的描述出現「三台螢幕」「兩台螢幕」「一台螢幕」「下方有商品標籤」，JSON 的 view_type 必須是 "單機"。
-禁止輸出這種矛盾：描述說「三台螢幕並排、下方有商品標籤與價格牌」但 JSON 寫 "遠景"。
-⚠️ 「沒有 FollowMe 白色支架」只代表不是 FollowMe，不代表是遠景。一般桌上型/曲面螢幕本來就沒有白色支架；若只有 1-3 台且有商品標籤，必須進分支C。
+禁止輸出這種矛盾：描述說「3 台以上螢幕完整並排／整排展示牆」，JSON 卻寫「單機」。
+⚠️ 「沒有 FollowMe 白色支架」只代表不是 FollowMe，不會單獨決定遠景；遠景仍以完整入鏡台數與是否存在唯一主角判斷。
 
 ---
 
@@ -73,9 +68,9 @@
 - 活動立牌/促銷桌牌 = 立在桌面上的宣傳紙卡，可能列出 Smart Monitor FollowMe、手機、耳機等多個產品；它不是商品規格牌，也不能證明主角螢幕是 FollowMe。
 - FollowMe = 有白色垂直支架 + 地面圓盤底座的實體機器
 - 一般 Smart Monitor 桌上型短支架、螢幕下方固定桌腳或矩形底座不是 FollowMe；FollowMe 必須是獨立移動式長直桿、圓形落地底座與托盤/價牌平台。
-- 如果畫面同時看到「Samsung Follow Me / FollowMe 4K / 移動式智慧聯網組」牌面，且螢幕下方有白色圓形底座或展示立牌，必須優先判斷為 FollowMe 實機；不要被螢幕播放的人物廣告誤導成遠景。
-- 如果看到「Samsung FollowMe 4K / Samsung FollowMe 32 M5」等實體機牌面，且同一台螢幕連著白色立式外框、展示立牌、底部價牌或托盤，即使拍得較遠、垂直桿被螢幕遮住，也要進分支B，不可說「不是 FollowMe」。
-- 如果看到主角上方藍色「Samsung FollowMe 4K」牌面，右側有黑色規格側標（如 3840x2160 / HDR10 / HDMI / Type-C），且底部有促銷價牌，即使支架或底座被桌子/椅子/裁切遮住，也要視為同一台 FollowMe 實機候選，不可判一般遠景。
+- 「Samsung Follow Me / FollowMe 4K / 移動式智慧聯網組」牌面只能當輔助證據；還必須看見它屬於同一台主角螢幕，且該實機連著長直立支架、落地底座或托盤中的至少兩項。桌上宣傳卡、背景立牌、螢幕廣告與旁邊商品牌面都不算。
+- 如果看到「Samsung FollowMe 4K / Samsung FollowMe 32 M5」等牌面，但沒有可確認的同一實機物理結構，不得只憑文字判 FollowMe；回到完整入鏡台數與唯一主角規則判斷遠景/單機。
+- 主角上方藍色 FollowMe 牌面、側邊規格標與底部價牌，必須能沿著空間位置連回同一台實體螢幕；任一項屬於背景或鄰機都不可借用。
 - 如果前景主角是白色落地圓形底座、直桿、直立螢幕，上方或側邊可見 FollowMe Pro 4K / FollowMe 4K 牌面，即使背景有 QLED/OLED/TV 展示牆、多台電視或其他價牌，也必須先判 FollowMe；背景很多商品不是遠景理由。
 
 ---
@@ -90,14 +85,14 @@
 3. 立刻輸出 JSON，之後禁止再輸出任何文字
 
 **一般遠景 JSON**：
-{"view_type": "遠景", "screen_status": null, "quality_issue": null, "model": null, "price": null}
+{"view_type": "遠景", "screen_status": null, "quality_issue": null, "model": null, "price": null, "complete_screen_count": 3, "unique_main": false, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 ⚠️ 一般遠景的 quality_issue 必須是 null。
 只有「活動海報/廣告立牌/非真實螢幕」才可以使用 "沒有規格和價格牌"。
 如果畫面是多台真實螢幕，只是太遠看不清楚標籤，仍然是一般遠景，quality_issue: null。
 
 **活動海報/廣告立牌（非真實螢幕）JSON**：
-{"view_type": "遠景", "screen_status": null, "quality_issue": "沒有規格和價格牌", "model": null, "price": null}
+{"view_type": "遠景", "screen_status": null, "quality_issue": "沒有規格和價格牌", "model": null, "price": null, "complete_screen_count": 3, "unique_main": false, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 ---
 
@@ -115,7 +110,7 @@
 1. "FollowMe M5 32\""
 2. "FollowMe M7 32\""
 3. "FollowMe Pro M7 43\""
-禁止輸出 "FollowMe M7 43\""、"FollowMe 43\""、"FollowMe Pro 43\""、"FollowMe MX XX\"" 或任何未列在上面的變體。
+禁止輸出任何未列在上面三個標準名稱中的 FollowMe 變體。
 - 標籤/牌面寫 "FollowMe Pro"、"43"、"43吋"、"43型"、"M7 43"、S43FM70x，或一次付清價落在每日表的 Pro 43 價格帶 → 型號：FollowMe Pro M7 43"
 - 標籤/牌面寫 "FollowMe 32" + "M7"，或看到 Samsung 32吋 M7 / S32FM703UC / S32DM703UC → 型號：FollowMe M7 32"
 - 標籤/牌面寫 "FollowMe 32" + "M5"，或看到 Samsung 32吋 M5 / S32FM501EC / S32FM500EC，或一次付清價落在每日表的 M5 價格帶 → 型號：FollowMe M5 32"
@@ -173,7 +168,7 @@
 
 ### B-4. 輸出（70-100字自然語言 + JSON）
 ⚠️ JSON 的 view_type 仍填 "單機"；FollowMe 用 model 欄位表示，禁止把已確認的 FollowMe 寫成一般 S 開頭型號或 null。
-{"view_type": "單機", "screen_status": "正常|黑屏|藍屏", "quality_issue": "無|照不清楚|沒有價格牌", "model": "FollowMe M7 32\"", "price": "12900"}
+{"view_type": "單機", "screen_status": "正常|黑屏|藍屏", "quality_issue": "無|照不清楚|沒有價格牌", "model": "FollowMe M7 32\"", "price": "12900", "complete_screen_count": 1, "unique_main": true, "label_ownership": "matched", "followme_physical_evidence": [{"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"}, {"cue": "round_base", "same_subject": true, "strength": "strong"}]}
 
 ---
 
@@ -211,7 +206,7 @@
 - 禁止寫「主角標籤上寫 S27CG552EC」或「型號為 S27CG552EC」
 - 直接輸出這兩行：
 主角是 Odyssey Ark 55 吋大型桌上螢幕，依固定規則歸為 S55BG970NC；旁邊小螢幕型號不可借用。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "S55BG970NC", "price": null}
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "S55BG970NC", "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "matched", "followme_physical_evidence": []}
 輸出後立刻停止。
 
 ### C-3. 型號讀取（逐字讀取法，腦中執行）
@@ -297,16 +292,16 @@
 ### C-6. 分支C 的四種輸出結果
 
 **結果C-1：成功辨識**（有型號有價格）
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "S27CG552EC", "price": "4390"}
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "S27CG552EC", "price": "4390", "complete_screen_count": 1, "unique_main": true, "label_ownership": "matched", "followme_physical_evidence": []}
 
 **結果C-2：有型號無價格**
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有價格牌", "model": "S27CG552EC", "price": null}
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有價格牌", "model": "S27CG552EC", "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "matched", "followme_physical_evidence": []}
 
 **結果C-3：照片模糊看不清**
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "照不清楚", "model": null, "price": null}
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "照不清楚", "model": null, "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 **結果C-4：有單機但完全沒有規格牌**
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有規格牌", "model": null, "price": null}
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有規格牌", "model": null, "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 ---
 
@@ -340,30 +335,23 @@
 
 ## 📋 輸出範例
 
-⚠️ 重要警告：以下僅為格式參考，型號和價格是虛構的，絕對不能照抄！
-你必須逐字符從實際圖片中讀取型號，不能「自動補全」或「聯想」。
-禁止在最終答案輸出 SXXTEST001、SXXTEST002、SXXTEST003、FollowMe MX XX、X,XX0、0000；若你想輸出這些占位值，代表你其實沒看清楚，必須改成 model: null 或 price: null，並設定對應 quality_issue。
+⚠️ 重要警告：格式範例不得提供任何看似真實的型號或價格占位字串，避免模型照抄。
+你必須逐字符從實際圖片中讀取型號；讀不完整就填 null，不能「自動補全」或「聯想」。
 
-我看到螢幕下方藍色標籤，型號 SXXTEST001（逐字讀取，不是猜測），價格標籤上寫 $X,XX0（有千分位），螢幕正常。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "SXXTEST001", "price": "0000"}
+唯一主角與自己的標籤歸屬明確，但型號和價格文字皆無法完整確認。
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "照不清楚", "model": null, "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
-這台是 FollowMe，白色支架很明顯，標籤寫 NT$X,X00（有符號和千分位），螢幕正常顯示。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "無", "model": "FollowMe MX XX\"", "price": "0000"}
+唯一主角的型號可完整確認，但照片完全沒有它自己的價格欄位。
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有價格牌", "model": null, "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
-螢幕黑屏，但下方標籤看得清楚，SXXTEST002（每個字元都從圖片讀取），價格 X,XX0（有千分位）。
-{"view_type": "單機", "screen_status": "黑屏", "quality_issue": "無", "model": "SXXTEST002", "price": "0000"}
-
-標籤上有型號 SXXTEST003，但完全沒有價格欄位，我不能編撰價格。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "沒有價格牌", "model": "SXXTEST003", "price": null}
-
-標籤模糊，型號勉強看得出是 S27 開頭，但後面字元不清楚，我不能猜測完整型號。
-{"view_type": "單機", "screen_status": "正常", "quality_issue": "照不清楚", "model": null, "price": null}
+標籤模糊，型號只能看出部分字元，我不能猜測完整型號。
+{"view_type": "單機", "screen_status": "正常", "quality_issue": "照不清楚", "model": null, "price": null, "complete_screen_count": 1, "unique_main": true, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 這張是活動海報，上面有「我獨自升級」、「燦坤」品牌字樣，沒有商品型號和價格標籤。
-{"view_type": "遠景", "screen_status": null, "quality_issue": "沒有規格和價格牌", "model": null, "price": null}
+{"view_type": "遠景", "screen_status": null, "quality_issue": "沒有規格和價格牌", "model": null, "price": null, "complete_screen_count": 3, "unique_main": false, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 太遠了，超過 5 台螢幕，完全看不到標籤文字。整體符合「遠景」條件
-{"view_type": "遠景", "screen_status": null, "quality_issue": null, "model": null, "price": null}
+{"view_type": "遠景", "screen_status": null, "quality_issue": null, "model": null, "price": null, "complete_screen_count": 3, "unique_main": false, "label_ownership": "not_visible", "followme_physical_evidence": []}
 
 ---
 
@@ -420,3 +408,23 @@ v4.1.26 → 補強非三星單機：主角明確是它牌螢幕時，model 填�
 - 本任務只辨識 Samsung 螢幕/FollowMe；若畫面同時有 LG 吸塵器、家電、收銀台、手機櫃或其他非螢幕商品，這些不是本任務主體，不可因此把清楚可見的 Samsung FollowMe 螢幕判成遠景或它牌。
 - 只要同一畫面中可見「Samsung Follow Me / Samsung FollowMe / FollowMe 4K」牌面，且旁邊/下方是立式螢幕、白色立柱、圓形底座、托盤或落地展示結構，即使旁邊有 LG/其他品牌大物件，也必須優先進入 FollowMe 分支。
 - 禁止因為 FollowMe 螢幕旁邊還有其他商品、店面走道、收銀台或多個小價牌，就說「整體符合遠景」。遠景只適用於無法指定 Samsung 螢幕主體的展示牆/整排螢幕。
+## v19.45 Evidence Contract (machine-readable output only)
+
+Output exactly one JSON object per response. Core fields and all four evidence fields must be in that same object; do not output a second JSON object. They are evidence fields, not prose summaries:
+
+```json
+{
+  "view_type": "單機",
+  "screen_status": "正常",
+  "quality_issue": "無",
+  "model": null,
+  "price": null,
+  "category": null,
+  "complete_screen_count": 1,
+  "unique_main": true,
+  "label_ownership": "not_visible",
+  "followme_physical_evidence": [{"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"}, {"cue": "round_base", "same_subject": true, "strength": "strong"}]
+}
+```
+
+`complete_screen_count` is an integer or null. `unique_main` is true, false, or null. `label_ownership` must be exactly one of `matched`, `mismatched`, `ambiguous`, `not_visible`, `not_applicable`. Each evidence item is exactly one observed cue with `cue`, `same_subject`, and `strength`; cue must be one of `direct_followme_branding_on_unit`, `white_vertical_stand`, `round_base`, `portrait_display`, `attached_price_tray`, `attached_followme_product_card`, `screen_content_only`, `nearby_signage_only`, `unknown`; strength is `weak`, `strong`, or `direct`. Screen content and nearby signage are always weak; composite or unknown cues are unresolved. Use an empty list when no physical evidence exists. Do not infer these fields from natural-language explanation. Standard FollowMe requires the established white vertical stand plus round base evidence; never infer Pro from generic branding. If unknown, contradictory, or missing, let the guard mark it unresolved.

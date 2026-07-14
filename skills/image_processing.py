@@ -16,13 +16,18 @@ class ImageProcessor:
     def __init__(self, config: dict = None):
         defaults = {
             "max_size": 4096,
+            "crop_max_size": 4096,
+            "crop_jpeg_quality": 100,
             "max_dimensions": None,
             "contrast_factor": 1.2,
             "sharpness_factor": 1.5,
             "auto_orient": True,
             "detect_label_card": True,  # [v18.25] Enable by default for Dual Vision
+            "auto_high_res_crops": True,
             "bottom_label_strip": False,
             "bottom_center_zoom": False,
+            "evidence_attempt": 1,
+            "scene_tile_max": 3,
         }
         self.config = defaults
         if config:
@@ -58,6 +63,31 @@ class ImageProcessor:
         resized.thumbnail(box)
         applied_transforms.append(f"{label}_resize_long_edge_{target_edge}_to_{resized.width}x{resized.height}")
         return resized, True
+
+    def _resize_crop_if_needed(self, img: Image.Image, applied_transforms: list, label: str):
+        """Bound supplementary evidence independently from the low-res full scene."""
+        crop_limit = self.config.get("crop_max_size")
+        if crop_limit is None or max(img.size) <= int(crop_limit):
+            return img
+        resized = img.copy()
+        resized.thumbnail((int(crop_limit), int(crop_limit)))
+        applied_transforms.append(f"{label}_resize_long_edge_{int(crop_limit)}_to_{resized.width}x{resized.height}")
+        return resized
+
+    def _encode_crop(self, img: Image.Image) -> str:
+        buffer = io.BytesIO()
+        img.convert("RGB").save(buffer, format="JPEG", quality=int(self.config.get("crop_jpeg_quality", 100)))
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def _scene_tile_specs(self, width: int, height: int, attempt: int):
+        """Return bounded overlapping full-height tiles for retry-only evidence."""
+        if attempt == 2:
+            specs = (("scene_left", 0.00, 0.60), ("scene_right", 0.40, 1.00))
+        elif attempt >= 3:
+            specs = (("scene_left", 0.00, 0.48), ("scene_center", 0.26, 0.74), ("scene_right", 0.52, 1.00))
+        else:
+            return []
+        return [(label, (int(width * x1), 0, int(width * (x2 - x1)), height)) for label, x1, x2 in specs]
 
     def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
         """
@@ -188,7 +218,7 @@ class ImageProcessor:
             log.warning(f"Label card detection failed: {e}")
             return None, None
 
-    def process(self, image_path: str) -> dict:
+    def process(self, image_path: str, evidence_attempt: int = None) -> dict:
         """
         Reads and processes an image.
         Returns a dict containing:
@@ -207,9 +237,11 @@ class ImageProcessor:
                 original_size = img.size
                 
                 # 2. Label Card Detection (NEW [v18.25])
+                attempt = int(evidence_attempt if evidence_attempt is not None else self.config.get("evidence_attempt", 1) or 1)
                 label_b64 = None
                 bottom_label_b64 = None
                 bottom_center_b64 = None
+                scene_tiles = []
                 if self.config.get("detect_label_card"):
                     img_array = np.array(img)
                     cropped, bbox = self.detect_label_card(img_array)
@@ -217,32 +249,40 @@ class ImageProcessor:
                     if cropped is not None:
                         # Encode Label to Base64
                         label_img = Image.fromarray(cropped)
-                        label_img, _ = self._resize_if_needed(label_img, applied_transforms, "label")
-                        lbl_buffered = io.BytesIO()
-                        label_img.convert("RGB").save(lbl_buffered, format="JPEG", quality=95)
-                        label_b64 = base64.b64encode(lbl_buffered.getvalue()).decode('utf-8')
+                        label_img = self._resize_crop_if_needed(label_img, applied_transforms, "label")
+                        label_b64 = self._encode_crop(label_img)
                         applied_transforms.append(f"label_crop_found_{bbox}")
                         log.info(f"[Crop] Extracted high-res label card")
 
-                    if self.config.get("bottom_label_strip"):
+                    large_scene = max(img.size) > max(self._resize_box_for(img) or (0,))
+                    if self.config.get("bottom_label_strip") or (self.config.get("auto_high_res_crops") and large_scene):
                         bottom_cropped, bottom_bbox = self.crop_bottom_label_strip(img_array)
                         if bottom_cropped is not None:
                             bottom_img = Image.fromarray(bottom_cropped)
-                            bottom_img, _ = self._resize_if_needed(bottom_img, applied_transforms, "bottom_label")
-                            bottom_buffered = io.BytesIO()
-                            bottom_img.convert("RGB").save(bottom_buffered, format="JPEG", quality=95)
-                            bottom_label_b64 = base64.b64encode(bottom_buffered.getvalue()).decode('utf-8')
+                            bottom_img = self._resize_crop_if_needed(bottom_img, applied_transforms, "bottom_label")
+                            bottom_label_b64 = self._encode_crop(bottom_img)
                             applied_transforms.append(f"bottom_label_strip_{bottom_bbox}")
 
-                    if self.config.get("bottom_center_zoom"):
+                    if attempt <= 1 and (self.config.get("bottom_center_zoom") or (self.config.get("auto_high_res_crops") and large_scene)):
                         center_cropped, center_bbox = self.crop_bottom_center_zoom(img_array)
                         if center_cropped is not None:
                             center_img = Image.fromarray(center_cropped)
-                            center_img, _ = self._resize_if_needed(center_img, applied_transforms, "bottom_center")
-                            center_buffered = io.BytesIO()
-                            center_img.convert("RGB").save(center_buffered, format="JPEG", quality=95)
-                            bottom_center_b64 = base64.b64encode(center_buffered.getvalue()).decode('utf-8')
+                            center_img = self._resize_crop_if_needed(center_img, applied_transforms, "bottom_center")
+                            bottom_center_b64 = self._encode_crop(center_img)
                             applied_transforms.append(f"bottom_center_zoom_{center_bbox}")
+
+                    if large_scene and attempt >= 2:
+                        for tile_label, (x, y, w, h) in self._scene_tile_specs(img.width, img.height, attempt)[:int(self.config.get("scene_tile_max", 3))]:
+                            tile = Image.fromarray(img_array[y:y + h, x:x + w])
+                            tile = self._resize_crop_if_needed(tile, applied_transforms, tile_label)
+                            scene_tiles.append({
+                                "label": tile_label,
+                                "bbox": (x, y, w, h),
+                                "base64": self._encode_crop(tile),
+                                "size": tile.size,
+                                "attempt": attempt,
+                            })
+                            applied_transforms.append(f"{tile_label}_bbox_{(x, y, w, h)}_attempt_{attempt}")
 
                 # 3. Resize Full Image if too large (KEEP as context)
                 full_img = img.copy()
@@ -271,8 +311,12 @@ class ImageProcessor:
                         "label_found": label_b64 is not None,
                         "bottom_label_strip": bottom_label_b64 is not None,
                         "bottom_center_zoom": bottom_center_b64 is not None,
+                        "scene_tiles": [{k: v for k, v in tile.items() if k != "base64"} for tile in scene_tiles],
+                        "evidence_attempt": attempt,
+                        "source_path": str(image_path),
                         "transforms": applied_transforms
-                    }
+                    },
+                    "scene_tiles": scene_tiles,
                 }
 
         except Exception as e:

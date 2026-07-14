@@ -23,7 +23,7 @@ if (-not $OutputDir) {
 }
 
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-$Watchdog = Join-Path $RepoRoot "tools\ocr_upload_watchdog.ps1"
+$Watchdog = Join-Path $RepoRoot "tools\ocr_continuity_supervisor.ps1"
 if (-not (Test-Path -LiteralPath $Watchdog)) {
     throw "Watchdog script not found: $Watchdog"
 }
@@ -39,11 +39,11 @@ $taskArgs = @(
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs -WorkingDirectory $RepoRoot
 $start = (Get-Date).AddMinutes([math]::Max(1, $StartDelayMinutes))
-$trigger = New-ScheduledTaskTrigger `
-    -Once `
-    -At $start `
-    -RepetitionInterval (New-TimeSpan -Hours $IntervalHours) `
-    -RepetitionDuration (New-TimeSpan -Days 3650)
+$triggers = @(
+    (New-ScheduledTaskTrigger -AtStartup),
+    (New-ScheduledTaskTrigger -AtLogOn),
+    (New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650))
+)
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -54,7 +54,7 @@ $settings = New-ScheduledTaskSettingsSet `
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
+    -Trigger $triggers `
     -Settings $settings `
     -Description "Keeps Samsung OCR recursive runner, questionable rerun watcher, and rclone upload moving safely." `
     -Force | Out-Null
@@ -63,3 +63,14 @@ $info = Get-ScheduledTaskInfo -TaskName $TaskName
 Write-Output "Installed task: $TaskName"
 Write-Output "Next run: $($info.NextRunTime)"
 Write-Output "Interval hours: $IntervalHours"
+
+$obsolete = Get-ScheduledTask -TaskName "SamsungOCR_ResumeBatch" -ErrorAction SilentlyContinue
+if ($obsolete) {
+    $obsoleteInfo = Get-ScheduledTaskInfo -TaskName "SamsungOCR_ResumeBatch"
+    if (-not $obsoleteInfo.NextRunTime -or $obsoleteInfo.NextRunTime -lt (Get-Date)) {
+        Disable-ScheduledTask -TaskName "SamsungOCR_ResumeBatch" | Out-Null
+        Write-Output "Disabled obsolete one-shot task: SamsungOCR_ResumeBatch"
+    } else {
+        Write-Output "Kept obsolete task because it has a future trigger: SamsungOCR_ResumeBatch"
+    }
+}

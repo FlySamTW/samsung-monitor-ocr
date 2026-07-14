@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Regression test for per-photo immediate accuracy retries."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from PIL import Image
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from skills.audit_fields import immediate_retry_decision
+from skills.batch_orchestrator import BatchOrchestrator
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        image_dir = root / "202605"
+        image_dir.mkdir()
+        for name in ("A.jpg", "B.jpg"):
+            Image.new("RGB", (640, 480), "white").save(image_dir / name, quality=95)
+        model_list = root / "models.txt"
+        model_list.write_text("S24F332EAC\n", encoding="utf-8")
+        assets = root / "assets"
+        assets.mkdir()
+
+        calls: list[tuple[str, int, int]] = []
+
+        def processor(fname, image_b64, prompt_mgr, image_processor, processed_image=None, ocr_attempt=1, previous_results=None):
+            calls.append((fname, ocr_attempt, len(previous_results or [])))
+            if fname == "A.jpg" and ocr_attempt == 1:
+                return {
+                    "view_type": "單機", "category": "單機", "model": None, "price": None,
+                    "quality_issue": "沒有規格和價格牌", "thinking": "唯一主角但標籤仍需仔細重讀。",
+                }
+            return {
+                "view_type": "單機", "category": "單機", "model": "S24F332EAC", "price": "2390",
+                "quality_issue": "", "thinking": "唯一主角自己的規格牌與價格牌清楚可讀。",
+            }
+
+        orchestrator = BatchOrchestrator({
+            "image_dir": str(image_dir),
+            "output_dir": str(root / "out"),
+            "assets_dir": str(assets),
+            "model_list_file": str(model_list),
+            "max_dimensions": (2560, 1440),
+            "max_auto_attempts": 3,
+        })
+        orchestrator.set_processor_function(processor)
+        orchestrator.set_result_review_function(immediate_retry_decision)
+        old_session = image_dir / "20200101-0000-OCR成功.json"
+        old_session.write_text(json.dumps([{"file_name": "A.jpg", "model": "OLD"}]), encoding="utf-8")
+        assert orchestrator.force_rerun("A.jpg")
+        assert json.loads(old_session.read_text(encoding="utf-8")) == []
+        assert orchestrator.start_batch()
+
+        deadline = time.time() + 20
+        while orchestrator.is_running and time.time() < deadline:
+            time.sleep(0.05)
+        assert not orchestrator.is_running
+        assert [item[0] for item in calls[:3]] == ["A.jpg", "A.jpg", "B.jpg"], calls
+        assert calls[1][1:] == (2, 1), calls
+        assert len(orchestrator.recent_results) == 2
+        assert len(orchestrator.display_queue) == 2
+        assert all(row.get("model") == "S24F332EAC" for row in orchestrator.recent_results)
+        assert all(row.get("ocr_attempt") in {1, 2} for row in orchestrator.recent_results)
+
+        success_files = sorted(image_dir.glob("*-OCR成功.json"))
+        nonempty_success = [
+            path for path in success_files if json.loads(path.read_text(encoding="utf-8"))
+        ]
+        assert len(nonempty_success) == 1
+        saved = json.loads(nonempty_success[0].read_text(encoding="utf-8"))
+        assert len(saved) == 2
+        assert not any(row.get("quality_issue") == "沒有規格和價格牌" for row in saved)
+        print("immediate retry queue: ok")
+
+
+if __name__ == "__main__":
+    main()

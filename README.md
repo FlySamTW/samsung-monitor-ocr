@@ -295,3 +295,11 @@ The repo intentionally includes only the small portable sample set at `samples/o
 - This fast-forward is visual only. It must never delete OCR records, copied output photos, or audit rows.
 - Google Drive upload progress is separate. Check `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json` for uploaded, ready-pending, and review-required counts.
 - Unattended production machines should install `SamsungOCR_PipelineWatchdog` with `INSTALL_WATCHDOG_TASK.bat`. It runs every 4 hours, preserves existing audit/output state, restarts only missing OCR/upload helpers, and never uses `--no-resume`.
+
+### Critical presentation regression gate
+
+After any dashboard/backend presentation change, run
+`.\.venv\Scripts\python.exe tools\run_critical_regressions.py` and
+`npm.cmd --prefix dashboard run build`. With the local runtime already up,
+also verify at least 3 complete photo -> AI -> revealed-card transitions and
+retain `logs/ui_sync_v1944_live.json` plus `logs/ui_sync_v1944_live.png`.

@@ -3,9 +3,11 @@ import time
 import json
 import csv
 import logging
+import hashlib
+import gzip
 from datetime import datetime
 from pathlib import Path
-from threading import Thread, Event
+from threading import Thread, Event, RLock, current_thread
 from typing import List, Optional, Callable
 
 # Import Skills
@@ -15,8 +17,50 @@ from skills.model_matching import ModelMatcher
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import enrich_result_for_review
+from skills.model_validation import is_placeholder_model, strict_known_model
 
 log = logging.getLogger("rich")
+
+
+def _append_v1945_trace(output_dir, result, review_decision, retry_reasons):
+    """Append one idempotent, bounded pass trace without image payloads."""
+    source = str(result.get("source_path") or result.get("file_name") or "")
+    key = hashlib.sha256(f"{source}|{result.get('run_id','')}|{result.get('ocr_attempt','')}".encode("utf-8")).hexdigest()
+    path = Path(output_dir) / "v1945_evidence_trace.jsonl"
+    existing = set()
+    if path.is_file():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines()[-5000:]:
+                if line.strip():
+                    existing.add(json.loads(line).get("trace_id"))
+        except Exception:
+            existing = set()
+    if key in existing:
+        return
+    parsed = {k: v for k, v in result.items() if k not in {"thumb_b64", "image_b64", "base64"}}
+    entry = {
+        "trace_id": key,
+        "trace_version": "v19.45",
+        "timestamp": datetime.now().isoformat(),
+        "source_identity": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "source_path": source,
+        "file_name": result.get("file_name"),
+        "attempt": result.get("ocr_attempt"),
+        "run_id": result.get("run_id"),
+        "raw_output": str(result.get("raw_model_output") or "")[:12000],
+        "raw_objects": [str(x)[:12000] for x in (result.get("raw_objects") or [])[:3]],
+        "merge_mode": result.get("merge_mode"),
+        "merge_rejected_reason": result.get("merge_rejected_reason"),
+        "parsed_output": parsed,
+        "normalized_evidence": result.get("normalized_evidence"),
+        "guard_decision": {k: review_decision.get(k) for k in ("retry", "unresolved", "verified")},
+        "retry_reason": list(retry_reasons)[:20],
+        "accepted_reason": "evidence_contract_and_guard_verified" if review_decision.get("verified") else "",
+        "rejected_reason": list(retry_reasons)[:20] if not review_decision.get("verified") else [],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 class BatchOrchestrator:
     """
@@ -57,10 +101,14 @@ class BatchOrchestrator:
 
         self.is_running = False
         self.stop_event = Event() # Retained for functionality
+        self._state_lock = RLock()
+        self._worker_thread = None
+        self.active_image_dir = None
         self.current_file = None # [v9.92] Initialize to prevent AttributeError
         self.stream_file = None
         self.latest_result_file = None
         self.display_queue = [] # [v19.8 UX] Completed results waiting to be displayed
+        self.presentation_sequence = 0
         self.log_system("批次處理已停止。") # Added as per instruction
         self.save_data_file = None 
         self.recent_results = []
@@ -81,6 +129,10 @@ class BatchOrchestrator:
         
         # Processor Function (Dependency Injection)
         self.processor_fn = None 
+        self.result_review_fn = None
+        self.max_auto_attempts = max(1, int(config.get("max_auto_attempts", 3)))
+        self.auto_attempts = {}
+        self.auto_result_history = {}
         
         # [v16.12] Force Rerun Queue
         self.priority_queue = [] 
@@ -119,30 +171,51 @@ class BatchOrchestrator:
         """
         self.log_system(f"🔄 收到強制重跑請求: {filename}")
         
-        image_path = os.path.join(self.image_dir, filename)
-        if not os.path.isfile(image_path):
-            self.log_system(f"   ⚠️ 重跑略過：目前來源資料夾找不到照片 {filename}")
-            return False
+        with self._state_lock:
+            image_dir = self.active_image_dir or self.image_dir
+            image_path = os.path.join(image_dir, filename)
+            if not os.path.isfile(image_path):
+                self.log_system(f"   ⚠️ 重跑略過：目前來源資料夾找不到照片 {filename}")
+                return False
 
         # 1. Clean Memory State (Simple check, exact cleanup happens in loop)
         # We don't need to surgically remove from self.recent_results or stats immediately
         # because processing loop handles checking.
         
-        # 2. Clean Disk State (Force Clean)
-        json_path = os.path.join(self.image_dir, f"{os.path.splitext(filename)[0]}_ocr_result.json")
-        if os.path.exists(json_path):
-            try:
-                os.remove(json_path)
-                self.log_system(f"   🗑️ 已刪除舊結果檔案: {os.path.basename(json_path)}")
-            except Exception as e:
-                self.log_system(f"   ⚠️ 刪除舊檔失敗: {e}")
+        # 2. Invalidate every historical session record for this file.  Merely
+        # deleting a legacy per-image JSON allows an older session success to
+        # reappear after a failed rerun.
+        self._delete_records_from_disk([filename])
         
         # 3. Inject into Priority Queue
-        if filename not in self.priority_queue:
-            self.priority_queue.append(filename)
-            self.log_system(f"   ✅ 已加入優先佇列 (目前 {len(self.priority_queue)} 筆排隊中)")
-            return True
+        with self._state_lock:
+            self.auto_attempts.pop(filename, None)
+            self.auto_result_history.pop(filename, None)
+            if filename not in self.priority_queue:
+                self.priority_queue.append(filename)
+                self._persist_retry_state()
+                self.log_system(f"   ✅ 已加入優先佇列 (目前 {len(self.priority_queue)} 筆排隊中)")
+                return True
         return False
+
+    def set_work_dir(self, target_dir: str):
+        """Switch folders only when no batch thread can still read the old one."""
+        target_dir = str(Path(target_dir).resolve())
+        with self._state_lock:
+            worker_alive = bool(self._worker_thread and self._worker_thread.is_alive())
+            if self.is_running or worker_alive:
+                return False, "批次仍在執行或停止中，不能切換來源資料夾"
+
+            previous_dir = str(Path(self.image_dir).resolve()) if self.image_dir else ""
+            if previous_dir != target_dir:
+                # Filename-only queue entries are valid only inside their source folder.
+                self.priority_queue = []
+                self.retry_queue = []
+                self.session_processed = set()
+
+            self.image_dir = target_dir
+            self.config['image_dir'] = target_dir
+            return True, ""
 
     def refresh_stats(self):
         """
@@ -174,6 +247,234 @@ class BatchOrchestrator:
     def set_processor_function(self, fn: Callable):
         """Sets the function that performs the actual LLM call."""
         self.processor_fn = fn
+
+    def set_result_review_function(self, fn: Callable):
+        """Set the accuracy gate evaluated before any result becomes visible."""
+        self.result_review_fn = fn
+
+    def _retry_state_path(self) -> Path:
+        return Path(self.image_dir) / ".ocr_retry_queue.json"
+
+    def _persist_retry_state(self) -> None:
+        if not self.image_dir or not os.path.isdir(self.image_dir):
+            return
+        path = self._retry_state_path()
+        payload = {
+            "image_dir": str(Path(self.image_dir).resolve()),
+            "priority_queue": list(dict.fromkeys(self.priority_queue)),
+            "retry_queue": list(dict.fromkeys(self.retry_queue)),
+            "auto_attempts": self.auto_attempts,
+            "auto_result_history": self.auto_result_history,
+            "updated_at": datetime.now().isoformat(),
+        }
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temp_path, path)
+        except OSError as exc:
+            self.log_system(f"⚠️ 儲存複核佇列失敗: {exc}")
+
+    def _restore_retry_state(self) -> None:
+        path = self._retry_state_path()
+        if not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            expected = str(Path(self.image_dir).resolve())
+            if str(payload.get("image_dir") or "") != expected:
+                return
+            existing = lambda name: os.path.isfile(os.path.join(self.image_dir, str(name)))
+            self.priority_queue = [str(x) for x in payload.get("priority_queue", []) if existing(x)]
+            self.retry_queue = [str(x) for x in payload.get("retry_queue", []) if existing(x)]
+            self.auto_attempts = {
+                str(k): int(v) for k, v in (payload.get("auto_attempts") or {}).items() if existing(k)
+            }
+            self.auto_result_history = {
+                str(k): list(v) for k, v in (payload.get("auto_result_history") or {}).items() if existing(k)
+            }
+            if self.priority_queue or self.retry_queue:
+                self.log_system(
+                    f"♻️ 已恢復未完成複核佇列：人工 {len(self.priority_queue)}、自動 {len(self.retry_queue)}"
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self.log_system(f"⚠️ 複核佇列無法恢復，保留檔案供檢查: {exc}")
+
+    @staticmethod
+    def _history_snapshot(result: dict, reasons: list[str]) -> dict:
+        return {
+            "view_type": result.get("view_type"),
+            "category": result.get("category"),
+            "model": result.get("model"),
+            "price": result.get("price"),
+            "screen_status": result.get("screen_status"),
+            "quality_issue": result.get("quality_issue"),
+            "thinking": str(result.get("thinking") or "")[:1200],
+            "reasons": list(reasons),
+        }
+
+    @staticmethod
+    def _source_item_id(source_path: object) -> str:
+        """Stable identity for every pass of one source image in this batch."""
+        try:
+            source = str(Path(str(source_path or "")).resolve()).casefold()
+        except (OSError, ValueError):
+            source = str(source_path or "").casefold()
+        return hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()
+
+    def _pass_metadata(self, attempt: int) -> tuple[int, str]:
+        role = str(self.config.get("presentation_role") or "auto").strip().lower()
+        model_id = str(self.config.get("model_id") or getattr(self, "last_model_name", "") or "")
+        slow_models = ("qwen3.5", "qwen2.5", "gemma", "internvl", "minicpm", "paddleocr")
+        if role == "slow_model" or (role == "auto" and any(token in model_id.lower() for token in slow_models)):
+            return 4, "慢模型仲裁"
+        attempt = max(1, int(attempt or 1))
+        return attempt, {
+            1: "初次辨識",
+            2: "第二輪複核",
+            3: "第三輪獨立判讀",
+        }.get(attempt, f"第 {attempt} 輪複核")
+
+    @staticmethod
+    def _previous_result_summary(previous_results: list[dict]) -> dict:
+        if not previous_results:
+            return {}
+        previous = dict(previous_results[-1] or {})
+        return {
+            key: previous.get(key)
+            for key in (
+                "view_type", "category", "model", "price", "screen_status",
+                "quality_issue", "complete_screen_count", "unique_main",
+                "label_ownership", "reasons",
+            )
+            if previous.get(key) not in (None, "", [])
+        }
+
+    def _presentation_audit_dir(self) -> Path:
+        root = Path(str(self.config.get("audit_dir") or self.output_dir)).resolve()
+        return root / "presentation_history"
+
+    def _rotate_presentation_audit(self, path: Path) -> None:
+        max_bytes = int(self.config.get("presentation_audit_max_bytes", 64 * 1024 * 1024))
+        try:
+            if not path.is_file() or path.stat().st_size < max_bytes:
+                return
+            stamp = datetime.now().strftime("%H%M%S")
+            rotated = path.with_name(f"{path.stem}_{stamp}.jsonl.gz")
+            with path.open("rb") as source, gzip.open(rotated, "wb", compresslevel=6) as target:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    target.write(chunk)
+            path.unlink()
+        except OSError as exc:
+            self.log_system(f"⚠️ AI 判讀稽核輪替失敗: {exc}")
+
+    def _append_presentation_audit(self, event: dict) -> None:
+        audit_dir = self._presentation_audit_dir()
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        path = audit_dir / f"presentation_{datetime.now().strftime('%Y%m%d')}.jsonl"
+        self._rotate_presentation_audit(path)
+        durable = {
+            key: value for key, value in event.items()
+            if key not in {"thumb_b64", "image_b64", "base64"}
+        }
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(durable, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.flush()
+
+    def queue_presentation_event(
+        self,
+        *,
+        result: dict,
+        attempt: int,
+        started_at: str,
+        completed_at: str,
+        previous_results: list[dict],
+        retry_reasons: list[str],
+        decision: str,
+        narration: str,
+        thumbnail: str = "",
+    ) -> dict:
+        """Queue and persist exactly one immutable event for every OCR pass."""
+        structured = {
+            key: value for key, value in dict(result or {}).items()
+            if key not in {"thumb_b64", "image_b64", "base64"}
+        }
+        source_path = str(result.get("source_path") or "")
+        source_item_id = self._source_item_id(source_path or result.get("file_name"))
+        pass_index, pass_label = self._pass_metadata(attempt)
+        with self._state_lock:
+            self.presentation_sequence += 1
+            sequence = self.presentation_sequence
+            identity_seed = f"{source_item_id}|{result.get('run_id', '')}|{attempt}|{started_at}|{sequence}"
+            presentation_id = "p-" + hashlib.sha256(identity_seed.encode("utf-8")).hexdigest()[:24]
+            event = {
+                "presentation_id": presentation_id,
+                "presentation_sequence": sequence,
+                "source_item_id": source_item_id,
+                "file_name": result.get("file_name", ""),
+                "source_path": source_path,
+                "thumb_b64": thumbnail or result.get("thumb_b64", ""),
+                "pass_index": pass_index,
+                "pass_label": pass_label,
+                "ocr_attempt": max(1, int(attempt or 1)),
+                "retry_reason": list(dict.fromkeys(str(x) for x in retry_reasons if str(x).strip())),
+                "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "previous_result_summary": self._previous_result_summary(previous_results),
+                "full_ai_narration": str(narration or ""),
+                "narration": str(narration or ""),
+                "stream_buffer": str(narration or ""),
+                "structured_result": structured,
+                "decision": str(decision or ""),
+                "result": {
+                    key: result.get(key)
+                    for key in (
+                        "view_type", "screen_status", "quality_issue", "model", "price",
+                        "category", "price_symbol", "price_status", "official_price",
+                        "price_diff_percent", "auto_review_required", "review_status",
+                    )
+                },
+            }
+            self.display_queue.append(event)
+            if len(self.display_queue) > 200:
+                self.display_queue.pop(0)
+            self._append_presentation_audit(event)
+        return event
+
+    def get_presentation_history(self, source_item_id: str, limit: int = 12) -> list[dict]:
+        """Read one photo's pass history on demand without retaining all jobs in RAM."""
+        wanted = str(source_item_id or "").strip()
+        if not wanted:
+            return []
+        limit = max(1, min(50, int(limit or 12)))
+        found: dict[str, dict] = {}
+        for item in reversed(self.display_queue):
+            if item.get("source_item_id") == wanted:
+                found[str(item.get("presentation_id"))] = dict(item)
+        audit_dir = self._presentation_audit_dir()
+        if audit_dir.is_dir() and len(found) < limit:
+            paths = sorted(audit_dir.glob("presentation_*.jsonl*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for path in paths:
+                try:
+                    opener = gzip.open if path.suffix.lower() == ".gz" else open
+                    with opener(path, "rt", encoding="utf-8") as handle:
+                        for line in handle:
+                            if wanted not in line:
+                                continue
+                            item = json.loads(line)
+                            if item.get("source_item_id") == wanted:
+                                found[str(item.get("presentation_id"))] = item
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                if len(found) >= limit:
+                    break
+        return sorted(
+            found.values(),
+            key=lambda item: (int(item.get("presentation_sequence") or 0), str(item.get("started_at") or "")),
+        )[-limit:]
 
     def get_all_records(self):
         """
@@ -674,14 +975,46 @@ class BatchOrchestrator:
         else:
             self.log_system(f"⚠️ 警告: 找不到可刪除的舊紀錄，可能檔名不匹配？")
 
-    def start_batch(self, limit: int = None, restart: bool = False, reprocess_last_n: int = 0):
-        if self.is_running:
-            log.warning("Batch already running.")
-            return
-        
-        self.stop_event.clear()
-        self.is_running = True
-        self.stats['is_running'] = True
+    def start_batch(
+        self,
+        limit: int = None,
+        restart: bool = False,
+        reprocess_last_n: int = 0,
+        image_dir: str = None,
+    ):
+        with self._state_lock:
+            worker_alive = bool(self._worker_thread and self._worker_thread.is_alive())
+            if self.is_running or worker_alive:
+                log.warning("Batch already running or stopping.")
+                return False
+
+            if image_dir:
+                target_dir = str(Path(image_dir).resolve())
+                previous_dir = str(Path(self.image_dir).resolve()) if self.image_dir else ""
+                if previous_dir != target_dir:
+                    self.priority_queue = []
+                    self.retry_queue = []
+                    self.auto_attempts = {}
+                    self.auto_result_history = {}
+                    self.session_processed = set()
+                self.image_dir = target_dir
+                self.config['image_dir'] = target_dir
+
+            batch_image_dir = str(Path(self.image_dir).resolve())
+            self.active_image_dir = batch_image_dir
+            self.stop_event.clear()
+            self.is_running = True
+            self.stats['is_running'] = True
+            self.session_processed = set()
+            self._restore_retry_state()
+
+        # Presentation data belongs to one batch only.  Keeping rows from a
+        # staging rerun makes the dashboard replay deleted files in the next
+        # folder and is the root cause of photo/AI/card desynchronization.
+        self.display_queue = []
+        self.stream_buffer = ""
+        self.stream_file = None
+        self.latest_result_file = None
         
         # [v11.2] Initialize Session Files
         # Generate Session ID: yyyymmdd-hhmm
@@ -689,8 +1022,8 @@ class BatchOrchestrator:
         
         # Output paths inside the image directory
         # e.g., d:/.../商化照片-202512/20260124-1900-OCR成功.json
-        self.current_success_file = os.path.join(self.image_dir, f"{session_id}-OCR成功.json")
-        self.current_failed_file = os.path.join(self.image_dir, f"{session_id}-OCR失敗.json")
+        self.current_success_file = os.path.join(batch_image_dir, f"{session_id}-OCR成功.json")
+        self.current_failed_file = os.path.join(batch_image_dir, f"{session_id}-OCR失敗.json")
         
         # Reset Session Data (User requested "New Folder = New Files")
         # Unless 'restart' is True? User said "開啟新資料匣，都要重新產生檔案". 
@@ -713,16 +1046,25 @@ class BatchOrchestrator:
         self.log_system(f"📁 失敗紀錄: {os.path.basename(self.current_failed_file)}")
 
         # Run in separate thread
-        t = Thread(target=self._safe_run_loop, args=(limit, restart, reprocess_last_n))
+        t = Thread(target=self._safe_run_loop, args=(limit, restart, reprocess_last_n, batch_image_dir))
         t.daemon = True
+        with self._state_lock:
+            self._worker_thread = t
         t.start()
+        return True
 
     def stop_batch(self):
-        self.stop_event.set()
-        self.is_running = False
-        self.stats['is_running'] = False
-        self.log_system("🛑 收到停止指令，正在中斷處理...")
-        log.info("Batch stopped by user.")
+        with self._state_lock:
+            worker_alive = bool(self._worker_thread and self._worker_thread.is_alive())
+            self.stop_event.set()
+            if not worker_alive and not self.is_running:
+                self.is_running = False
+                self.stats['is_running'] = False
+                self.active_image_dir = None
+            self.stream_buffer = ""
+            self.stream_file = None
+            self.log_system("🛑 收到停止指令，正在中斷處理...")
+            log.info("Batch stop requested.")
 
     def get_status(self):
         """Returns current runtime status and metrics."""
@@ -749,23 +1091,29 @@ class BatchOrchestrator:
         except Exception as e:
             log.error(f"Failed to save failed files: {e}")
 
-    def _safe_run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0):
+    def _safe_run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None):
         """Wrapper to catch thread crashes."""
         print(f"DEBUG: _safe_run_loop started. Limit={limit}, Restart={restart}, ReprocessLast={reprocess_last_n}")
         try:
-            self._run_loop(limit, restart, reprocess_last_n)
+            self._run_loop(limit, restart, reprocess_last_n, batch_image_dir=batch_image_dir)
         except Exception as e:
             import traceback
             traceback.print_exc()
             log.error(f"Batch Thread Halted: {e}")
             self.log_system(f"FATAL: Batch Thread Halted: {e}")
-            self.is_running = False
-            self.stats['is_running'] = False
+        finally:
+            with self._state_lock:
+                self.is_running = False
+                self.stats['is_running'] = False
+                self.active_image_dir = None
+                if self._worker_thread is current_thread():
+                    self._worker_thread = None
 
-    def get_pending_files(self):
+    def get_pending_files(self, image_dir: str = None):
         """[v15.0] Discovers all files and filters by history to find pending ones."""
+        image_dir = image_dir or self.image_dir
         all_files = sorted([
-            f for f in os.listdir(self.image_dir) 
+            f for f in os.listdir(image_dir)
             if f.lower().endswith(('.jpg', '.jpeg', '.png'))
         ])
         
@@ -773,10 +1121,10 @@ class BatchOrchestrator:
         processed_failed = set()
         
         # Scan for all *OCR成功.json files
-        for existing_log in os.listdir(self.image_dir):
+        for existing_log in os.listdir(image_dir):
             if existing_log.endswith("OCR成功.json"):
                 try:
-                    full_log_path = os.path.join(self.image_dir, existing_log)
+                    full_log_path = os.path.join(image_dir, existing_log)
                     with open(full_log_path, 'r', encoding='utf-8') as f:
                         data_json = json.load(f)
                         for item in data_json:
@@ -787,10 +1135,10 @@ class BatchOrchestrator:
                 except: pass
         
         # Scan for *OCR失敗.json
-        for existing_log in os.listdir(self.image_dir):
+        for existing_log in os.listdir(image_dir):
             if existing_log.endswith("OCR失敗.json"):
                 try:
-                    full_log_path = os.path.join(self.image_dir, existing_log)
+                    full_log_path = os.path.join(image_dir, existing_log)
                     with open(full_log_path, 'r', encoding='utf-8') as f:
                         data_json = json.load(f)
                         for item in data_json:
@@ -800,7 +1148,7 @@ class BatchOrchestrator:
                 except: pass
 
         # Legacy Support (Scoped to current dir ONLY)
-        for lp in [os.path.join(self.image_dir, "project-output.json")]:
+        for lp in [os.path.join(image_dir, "project-output.json")]:
             if os.path.exists(lp):
                 try:
                     with open(lp, 'r', encoding='utf-8') as f:
@@ -847,12 +1195,13 @@ class BatchOrchestrator:
             "processed_all": processed_all
         }
 
-    def _run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0):
+    def _run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None):
+        batch_image_dir = batch_image_dir or str(Path(self.image_dir).resolve())
         # Sanitize path for console logging to prevent cp950 errors
-        safe_dir_name = self.image_dir.encode('ascii', 'replace').decode('ascii')
+        safe_dir_name = batch_image_dir.encode('ascii', 'replace').decode('ascii')
         mode_str = "RESTART" if restart else "CONTINUE"
         log.info(f"Starting batch ({mode_str}) in {safe_dir_name}")
-        self.log_system(f"Batch thread started ({mode_str}). Dir: {self.image_dir}") 
+        self.log_system(f"Batch thread started ({mode_str}). Dir: {batch_image_dir}")
         
         # [v17.08] Physical Cleanup on Restart
         # This MUST happen before get_pending_files() so the scan is clean.
@@ -860,7 +1209,7 @@ class BatchOrchestrator:
             self._purge_records_for_restart()
 
         # 1. Discover & Filter
-        scan_res = self.get_pending_files()
+        scan_res = self.get_pending_files(batch_image_dir)
         all_files = scan_res['all_files']
         pending_files = scan_res['pending_files']
         processed_success = scan_res['processed_success']
@@ -890,7 +1239,7 @@ class BatchOrchestrator:
                 # Sort by modification time to get the "last" ones
                 all_files_sorted = sorted(
                     all_files, 
-                    key=lambda x: os.path.getmtime(os.path.join(self.image_dir, x))
+                    key=lambda x: os.path.getmtime(os.path.join(batch_image_dir, x))
                 )
                 targets = all_files_sorted[-reprocess_last_n:] if len(all_files_sorted) >= reprocess_last_n else all_files_sorted
                 
@@ -1004,24 +1353,35 @@ class BatchOrchestrator:
                     work_queue.remove(fname)
                 except ValueError:
                     pass
-                
+
+            attempt_number = int(self.auto_attempts.get(fname, 0)) + 1
+            self.auto_attempts[fname] = attempt_number
+            previous_results = list(self.auto_result_history.get(fname, []))
+
             self.current_file = fname
             self.stream_buffer = "" # Reset buffer for new file
             self.stream_file = fname
             self.log_system("━━━━━━━━━━━━━━━")
             self.log_system(f"▶️ 載入圖片: {fname}")
-            
+            pass_started_at = datetime.now().isoformat()
+            img_path = os.path.join(batch_image_dir, fname)
+
             try:
                 # A. Preprocess
                 # [v16.7 Fix] Removed invalid self.VERSION check
-                img_path = os.path.join(self.image_dir, fname)
-                if os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}:
-                    fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1280"))
-                    self.img_proc.config["max_size"] = fast_max_size
-                    self.img_proc.config["max_dimensions"] = None
-                    self.img_proc.config["detect_label_card"] = False
-                    self.img_proc.config["bottom_label_strip"] = False
-                    self.img_proc.config["bottom_center_zoom"] = False
+                if not os.path.isfile(img_path):
+                    raise FileNotFoundError(f"Source image disappeared during batch: {img_path}")
+                # Accuracy-first invariant: production OCR never downscales to
+                # the legacy 1280px profile or disables label assistance.
+                self.img_proc.config["max_size"] = None
+                self.img_proc.config["max_dimensions"] = self.config.get("max_dimensions", (2560, 1440))
+                self.img_proc.config["detect_label_card"] = True
+                self.img_proc.config["bottom_label_strip"] = bool(
+                    self.config.get("bottom_label_strip", False) or attempt_number >= 2
+                )
+                self.img_proc.config["bottom_center_zoom"] = bool(
+                    self.config.get("bottom_center_zoom", False) or attempt_number >= 3
+                )
                 proc_res = self.img_proc.process(img_path)
                 if not proc_res:
                     raise Exception("Image preprocessing failed")
@@ -1037,6 +1397,8 @@ class BatchOrchestrator:
                     prompt_mgr=self.prompt_mgr,
                     image_processor=self.img_proc,
                     processed_image=proc_res,
+                    ocr_attempt=attempt_number,
+                    previous_results=previous_results,
                 )
                 duration = time.time() - start_t
                 
@@ -1051,14 +1413,15 @@ class BatchOrchestrator:
                 # Model Match (Strict Mode)
                 if norm_result.get('view_type') == '單機':
                     raw_model = norm_result.get('model', '')
-                    if raw_model:
-                        matched = self.model_matcher.match(raw_model)
+                    if raw_model and not str(raw_model).upper().startswith("FOLLOWME"):
+                        matched = strict_known_model(raw_model, self.model_matcher.valid_models)
                         if matched:
-                             norm_result['model'] = matched
+                            norm_result['model'] = matched
                         else:
-                             self.log_system(f"⚠️ 型號未在標準表中匹配，保留原始值: '{raw_model}'")
-                             # Keep original raw_model, don't clear!
-                             norm_result['model'] = raw_model                             
+                            self.log_system(f"⚠️ 型號未通過標準表精確驗證，已清除並列入複核: '{raw_model}'")
+                            norm_result['model'] = None
+                            norm_result['model_validation_failed'] = True
+                            norm_result['rejected_model'] = str(raw_model)
                 norm_result = self._standardize_followme_result(norm_result)
                 # Add Metadata
 
@@ -1068,10 +1431,72 @@ class BatchOrchestrator:
                 norm_result['timestamp'] = datetime.now().isoformat()
                 norm_result['duration'] = round(duration, 2)
                 norm_result['run_id'] = run_id
+                norm_result['model_id'] = str(self.config.get("model_id") or getattr(self, "last_model_name", "") or "")
+                norm_result['started_at'] = pass_started_at
                 norm_result = enrich_result_for_review(norm_result)
-                
-                # Generate thumbnail for frontend display
+                norm_result['ocr_attempt'] = attempt_number
+
+                review_decision = {"retry": False, "reasons": [], "unresolved": False}
+                if self.result_review_fn:
+                    review_decision = self.result_review_fn(
+                        norm_result,
+                        attempt_number,
+                        previous_results,
+                        self.max_auto_attempts,
+                    ) or review_decision
+                retry_reasons = [str(x) for x in review_decision.get("reasons", []) if str(x).strip()]
+                _append_v1945_trace(self.output_dir, norm_result, review_decision, retry_reasons)
+                norm_result['auto_retry_reasons'] = "；".join(dict.fromkeys(retry_reasons))
+                norm_result['auto_verified'] = bool(review_decision.get("verified"))
+                pass_completed_at = datetime.now().isoformat()
+                norm_result['completed_at'] = pass_completed_at
                 norm_result['thumb_b64'] = self.img_proc.create_thumbnail(img_path, max_size=400)
+                thinking_text = str(norm_result.get("thinking") or "")
+                display_text = thinking_text if thinking_text else str(self.stream_buffer or "")
+                if not display_text.strip():
+                    display_text = (
+                        f"這張已完成辨識：{norm_result.get('view_type') or '單機'}，"
+                        f"{norm_result.get('model') or '無型號'}，"
+                        f"{norm_result.get('price') or '無價格'}。"
+                    )
+
+                if review_decision.get("retry") and attempt_number < self.max_auto_attempts:
+                    self.queue_presentation_event(
+                        result=norm_result,
+                        attempt=attempt_number,
+                        started_at=pass_started_at,
+                        completed_at=pass_completed_at,
+                        previous_results=previous_results,
+                        retry_reasons=retry_reasons,
+                        decision="retry_scheduled",
+                        narration=display_text,
+                        thumbnail=norm_result.get("thumb_b64", ""),
+                    )
+                    history = self.auto_result_history.setdefault(fname, [])
+                    history.append(self._history_snapshot(norm_result, retry_reasons))
+                    if fname not in self.retry_queue:
+                        # The questionable photo occupies the very next queue
+                        # slot; ordinary later photos cannot overtake it.
+                        self.retry_queue.insert(0, fname)
+                    self._persist_retry_state()
+                    self.stream_buffer = (
+                        f"第 {attempt_number} 輪仍有疑慮，已立即進入第 {attempt_number + 1} 輪獨立複核。"
+                    )
+                    self.log_system(
+                        f"🔁 [Accuracy Gate] {fname} 立即插入下一格做第 {attempt_number + 1} 輪："
+                        f"{'；'.join(retry_reasons) or '結果需再次確認'}"
+                    )
+                    # Intermediate guesses must never enter statistics, disk
+                    # success files, the UI result cards, or upload manifests.
+                    continue
+
+                if review_decision.get("unresolved"):
+                    norm_result['auto_review_required'] = True
+                    norm_result['review_status'] = "需慢模型或人工校正"
+                    norm_result['rerun_priority'] = "P1"
+                    norm_result['rerun_reason'] = norm_result['auto_retry_reasons'] or "三輪後仍有疑慮"
+                else:
+                    norm_result['auto_review_required'] = False
 
                 # D. Update Stats (v16.24 Robust)
                 is_success = norm_result.get('view_type') != '失敗' and norm_result.get('category') != '失敗'
@@ -1096,6 +1521,8 @@ class BatchOrchestrator:
                         self.stats['failed'] = len(processed_failed)
                     
                     consecutive_failures += 1
+
+                self.session_processed.add(fname)
                 
                 # Total processed is strictly the sum of unique outcomes
                 self.stats['processed'] = len(processed_success) + len(processed_failed)
@@ -1147,39 +1574,22 @@ class BatchOrchestrator:
                     except Exception as e:
                         self.log_system(f"⚠️ 儲存思考日誌失敗: {e}")
 
-                # [v19.8 UX] Queue completed result for delayed display.
-                # Backend keeps processing; UI drains this queue at typewriter speed.
-                thinking_text = str(norm_result.get("thinking") or "")
-                # Prefer the final corrected narration over the live raw stream.
-                # Some images are rescued after model output, e.g. false distant
-                # FollowMe cases; replaying the raw stream makes the dashboard
-                # contradict the saved filename and audit result.
-                display_text = thinking_text[:800] if thinking_text else str(self.stream_buffer or "")
-                if not display_text.strip():
-                    display_text = (
-                        f"這張已完成辨識：{norm_result.get('view_type') or '單機'}，"
-                        f"{norm_result.get('model') or '無型號'}，"
-                        f"{norm_result.get('price') or '無價格'}。"
-                    )
                 try:
-                    self.display_queue.append({
-                        "file_name": fname,
-                        "source_path": norm_result.get("source_path", ""),
-                        "thumb_b64": norm_result.get("thumb_b64", ""),
-                        "stream_buffer": display_text,
-                        "result": {
-                            "view_type": norm_result.get("view_type", ""),
-                            "screen_status": norm_result.get("screen_status", ""),
-                            "quality_issue": norm_result.get("quality_issue", ""),
-                            "model": norm_result.get("model", ""),
-                            "price": norm_result.get("price", ""),
-                            "category": norm_result.get("category", ""),
-                        },
-                        "completed_at": datetime.now().isoformat(),
-                    })
-                    # Cap queue to prevent memory bloat
-                    if len(self.display_queue) > 50:
-                        self.display_queue.pop(0)
+                    final_decision = "review_required" if review_decision.get("unresolved") else "accepted"
+                    self.queue_presentation_event(
+                        result=norm_result,
+                        attempt=attempt_number,
+                        started_at=pass_started_at,
+                        completed_at=pass_completed_at,
+                        previous_results=previous_results,
+                        retry_reasons=retry_reasons,
+                        decision=final_decision,
+                        narration=display_text,
+                        thumbnail=norm_result.get("thumb_b64", ""),
+                    )
+                    self.auto_attempts.pop(fname, None)
+                    self.auto_result_history.pop(fname, None)
+                    self._persist_retry_state()
                 except Exception as e:
                     self.log_system(f"⚠️ 佇列完成結果失敗: {e}")
 
@@ -1189,8 +1599,64 @@ class BatchOrchestrator:
                 error_msg = str(e)
                 
                 # [v10.9] Distinguish permanent failures from retryable errors
-                is_permanent_failure = "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg
-                
+                is_missing_runtime = isinstance(e, FileNotFoundError)
+                is_permanent_failure = not is_missing_runtime and (
+                    "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg
+                )
+
+                if not is_permanent_failure and not is_missing_runtime and attempt_number < self.max_auto_attempts:
+                    error_completed_at = datetime.now().isoformat()
+                    error_result = {
+                        "file_name": fname,
+                        "source_path": str(Path(img_path).resolve()),
+                        "run_id": run_id,
+                        "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
+                        "ocr_attempt": attempt_number,
+                        "view_type": "失敗",
+                        "category": "失敗",
+                        "model": None,
+                        "price": None,
+                        "quality_issue": "AI 呼叫或解析暫時失敗",
+                        "thinking": error_msg[:12000],
+                        "started_at": pass_started_at,
+                        "completed_at": error_completed_at,
+                    }
+                    error_thumb = ""
+                    if os.path.isfile(img_path):
+                        try:
+                            error_thumb = self.img_proc.create_thumbnail(img_path, max_size=400)
+                        except Exception:
+                            error_thumb = ""
+                    self.queue_presentation_event(
+                        result=error_result,
+                        attempt=attempt_number,
+                        started_at=pass_started_at,
+                        completed_at=error_completed_at,
+                        previous_results=previous_results,
+                        retry_reasons=["AI 呼叫或解析暫時失敗"],
+                        decision="retry_scheduled",
+                        narration=error_msg[:12000],
+                        thumbnail=error_thumb,
+                    )
+                    history = self.auto_result_history.setdefault(fname, [])
+                    history.append({
+                        "view_type": "失敗",
+                        "category": "失敗",
+                        "model": None,
+                        "price": None,
+                        "quality_issue": "系統或模型暫時錯誤",
+                        "thinking": error_msg[:500],
+                        "reasons": ["系統或模型暫時錯誤"],
+                    })
+                    if fname not in self.retry_queue:
+                        self.retry_queue.insert(0, fname)
+                    self._persist_retry_state()
+                    self.log_system(
+                        f"🔁 [Accuracy Gate] {fname} 發生暫時錯誤，立即插入下一格做第 {attempt_number + 1} 輪"
+                    )
+                    time.sleep(0.2)
+                    continue
+
                 # [v11.0] Record failed file
                 failed_record = {
                     "filename": fname,
@@ -1211,6 +1677,11 @@ class BatchOrchestrator:
                     failed_record["reason"] = "圖片損壞 - 無法識別圖片格式"
                     failed_record["error_type"] = "corrupted_image"
                     consecutive_failures = 0
+                elif is_missing_runtime:
+                    self.log_system(f"❌ 來源照片在批次執行中消失，停止本批次: {fname}")
+                    failed_record["reason"] = error_msg[:300]
+                    failed_record["error_type"] = "source_missing_runtime"
+                    consecutive_failures = MAX_FAILURES
                 else:
                     # System error - might be retryable, so we log this
                     # traceback.print_exc() # Disable traceback to keep terminal clean
@@ -1221,6 +1692,40 @@ class BatchOrchestrator:
                     consecutive_failures += 1
                 
                 self.failed_files.append(failed_record)
+                failure_completed_at = datetime.now().isoformat()
+                failure_result = {
+                    "file_name": fname,
+                    "source_path": str(Path(img_path).resolve()),
+                    "run_id": run_id,
+                    "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
+                    "ocr_attempt": attempt_number,
+                    "view_type": "失敗",
+                    "category": "失敗",
+                    "model": None,
+                    "price": None,
+                    "quality_issue": failed_record.get("reason") or error_msg[:300],
+                    "thinking": error_msg[:12000],
+                    "started_at": pass_started_at,
+                    "completed_at": failure_completed_at,
+                }
+                failure_thumb = ""
+                if os.path.isfile(img_path):
+                    try:
+                        failure_thumb = self.img_proc.create_thumbnail(img_path, max_size=400)
+                    except Exception:
+                        failure_thumb = ""
+                self.queue_presentation_event(
+                    result=failure_result,
+                    attempt=attempt_number,
+                    started_at=pass_started_at,
+                    completed_at=failure_completed_at,
+                    previous_results=previous_results,
+                    retry_reasons=[failed_record.get("reason") or "辨識失敗"],
+                    decision="failed",
+                    narration=error_msg[:12000],
+                    thumbnail=failure_thumb,
+                )
+                self.session_processed.add(fname)
                 self._save_failed_files()  # Save immediately
                 
                 self.stats['failed'] += 1

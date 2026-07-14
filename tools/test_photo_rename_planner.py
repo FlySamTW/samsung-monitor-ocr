@@ -119,10 +119,24 @@ def test_other_brand_model_is_kept_in_filename():
     )
 
 
+def test_unresolved_three_pass_result_is_blocked():
+    with tempfile.TemporaryDirectory() as tmp:
+        image_dir = Path(tmp)
+        image_path = image_dir / "M-台南市-安平區-TK3C-永華二-744.jpg"
+        image_path.write_bytes(b"fake")
+        row = sample_row()
+        row["auto_review_required"] = "true"
+        plan = make_plan(image_dir, {image_path.name: row}, "202605", "＄", current_year=2026)
+    assert_equal(plan[0]["status"], "review_required", "三輪未決不得進改名/上傳")
+    if "三輪後" not in plan[0]["reason"]:
+        raise AssertionError(plan[0])
+
+
 if __name__ == "__main__":
     test_price_symbol_by_period()
     test_make_plan_uses_period_for_price_symbol()
     test_discontinued_legacy_symbol_becomes_unknown()
     test_distant_view_filename_omits_model_and_price()
     test_other_brand_model_is_kept_in_filename()
+    test_unresolved_three_pass_result_is_blocked()
     print("photo_rename_planner historical price-symbol tests passed")

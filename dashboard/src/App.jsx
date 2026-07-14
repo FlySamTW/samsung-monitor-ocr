@@ -46,6 +46,17 @@ const getResultImageSrc = (res) => {
   return null;
 };
 
+const getLoadedAssetFingerprint = async () => {
+  const assets = [...document.querySelectorAll('script[src], link[rel="stylesheet"][href]')]
+    .map((node) => node.src || node.href)
+    .filter((url) => /\.(js|css)(\?|$)/i.test(url))
+    .map((url) => new URL(url, window.location.href).pathname + (new URL(url, window.location.href).search || ''))
+    .sort();
+  const bytes = new TextEncoder().encode(assets.join('\n'));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('').slice(0, 16);
+};
+
 const ResultThumbnail = ({ res, onClick }) => {
   const [failed, setFailed] = useState(false);
   const src = failed ? null : getResultThumbSrc(res);
@@ -83,7 +94,7 @@ const ResultThumbnail = ({ res, onClick }) => {
   );
 };
 
-const UI_VERSION = "v19.33 (原圖1:1可拖曳)";
+const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const isReadableLmLogLine = (line) => {
@@ -209,10 +220,25 @@ const App = () => {
     }
   };
 
+  useEffect(() => {
+    const serverFingerprint = String(data.frontend_asset_fingerprint || '');
+    if (!serverFingerprint) return;
+    let cancelled = false;
+    getLoadedAssetFingerprint().then((loadedFingerprint) => {
+      if (cancelled || !loadedFingerprint || loadedFingerprint === serverFingerprint) return;
+      const key = 'samsung_ocr_asset_reload_at';
+      const last = Number(sessionStorage.getItem(key) || 0);
+      if (Date.now() - last < 30000) return;
+      sessionStorage.setItem(key, String(Date.now()));
+      window.location.replace(`/?ui=${encodeURIComponent(serverFingerprint)}`);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [data.frontend_asset_fingerprint]);
+
   // [v19.15 UX] Frontend-owned presentation queue. The backend may run ahead,
   // but the viewer only sees: photo -> typed AI narration -> right-side result.
   const MAX_PENDING_PRESENTATIONS = 400;
-  const MAX_REVEALED_RESULTS = 180;
+  const MAX_REVEALED_RESULTS = 200;
   const MAX_LIVE_BACKLOG = 14;
   const MAX_DISPLAY_NARRATION_CHARS = 360;
   const LIVE_TYPEWRITER_INTERVAL_MS = 32;
@@ -277,16 +303,12 @@ const App = () => {
   const displayWatchdogRef = useRef({ key: "", length: 0, updatedAt: Date.now() });
   const [displayTargetKey, setDisplayTargetKey] = useState("");
   const [typewriterReady, setTypewriterReady] = useState(false);
+  const [presentationInvariantError, setPresentationInvariantError] = useState("");
+  const [expandedHistoryKeys, setExpandedHistoryKeys] = useState({});
 
   const getQueueKey = (item) => {
     if (!item) return "";
-    const result = item.result || {};
-    const completedFile = item.file_name || result.file_name || "";
-    if (item.presentation_id || result.presentation_id) return item.presentation_id || result.presentation_id;
-    if (item.completed_at && completedFile) return `${item.completed_at}|${completedFile}`;
-    if (item.source_path || result.source_path) return item.source_path || result.source_path;
-    if (completedFile) return completedFile;
-    return "";
+    return String(item.presentation_id || "");
   };
 
   const normalizePresentationItem = (item) => {
@@ -301,10 +323,30 @@ const App = () => {
       source_path: item.source_path || result.source_path,
       thumb_b64: item.thumb_b64 || result.thumb_b64,
       stream_buffer: item.stream_buffer || result.stream_buffer || result.thinking || "",
+      narration: item.narration || result.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
+      source_item_id: item.source_item_id || result.source_item_id || "",
+      pass_index: item.pass_index ?? result.pass_index,
+      pass_label: item.pass_label || result.pass_label || "",
+      retry_reason: item.retry_reason || result.retry_reason || "",
+      previous_result_summary: item.previous_result_summary || result.previous_result_summary || "",
+      model_id: item.model_id || result.model_id || item.model || result.model || "",
+      started_at: item.started_at || result.started_at || "",
+      completed_at: item.completed_at || result.completed_at || "",
+      decision: item.decision || result.decision || "",
       _queueKey: key,
       _isCurrent: false
     };
   };
+
+  const getPassLabel = (item) => item?.pass_label || ({
+    1: "初次辨識",
+    2: "第二輪複核",
+    3: "第三輪獨立判讀",
+    4: "慢模型仲裁"
+  }[Number(item?.pass_index)] || "未提供");
+
+  const formatMetaValue = (value) => value === null || value === undefined || value === "" ? "未提供" : String(value);
+  const getNarrationFullText = (item) => String(item?.narration || item?.stream_buffer || "").trim();
 
   const trimDisplayNarration = (text) => {
     const value = String(text || "").trim();
@@ -319,9 +361,7 @@ const App = () => {
     return trimDisplayNarration(`這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`);
   };
 
-  const getNarrationFileName = () => (
-    activePresentation?.file_name || data.stream_file || data.current_file || ""
-  );
+  const getNarrationFileName = () => activePresentation?.file_name || "";
 
   const prepareNarrationHandoff = (nextKey = "", nextFileName = "") => {
     setNarrationDisplay((prev) => {
@@ -358,7 +398,7 @@ const App = () => {
       text: displayedBuffer,
       key: displayTargetKey,
       phase,
-      fileName: activePresentation?.file_name || data.stream_file || data.current_file || ""
+      fileName: activePresentation?.file_name || ""
     });
   }, [displayedBuffer, displayTargetKey, activePresentation?.file_name, data.stream_file, data.current_file]);
 
@@ -368,7 +408,7 @@ const App = () => {
       latestDisplayQueueKeysRef.current = new Set();
       return;
     }
-    const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
+    const incomingQueue = Array.isArray(data.presentation_queue) ? data.presentation_queue : [];
     latestDisplayQueueKeysRef.current = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
     if (incomingQueue.length === 0) return;
 
@@ -395,35 +435,31 @@ const App = () => {
           existing.add(item._queueKey);
         }
       });
-      if (incomingQueue.length >= 45 && next.length > MAX_LIVE_BACKLOG) {
-        return next
-          .filter((item) => incomingKeys.has(item._queueKey))
-          .slice(-MAX_LIVE_BACKLOG);
-      }
-      return next.length > MAX_PENDING_PRESENTATIONS
-        ? next.slice(next.length - MAX_PENDING_PRESENTATIONS)
-        : next;
+      // Never discard an unrevealed item because the backend window rolled.
+      // The active snapshot and pending order are the sole presentation state.
+      return next
+        .sort((left, right) => Number(left.presentation_sequence || 0) - Number(right.presentation_sequence || 0))
+        .slice(0, MAX_PENDING_PRESENTATIONS);
     });
-  }, [data.display_queue, isRunning]);
+  }, [data.presentation_queue]);
 
-  // If the backend has already rolled past the visible item, fast-forward the
-  // presentation layer instead of letting the boss-facing preview look frozen.
+  // Never let a stale async update pair narration with another snapshot.
   useEffect(() => {
-    if (!isRunning) return;
-    const incomingQueue = Array.isArray(data.display_queue) ? data.display_queue : [];
-    if (!activePresentation || incomingQueue.length < 45) return;
-    const incomingKeys = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
-    if (incomingKeys.has(activePresentation._queueKey)) return;
-
-    prepareNarrationHandoff("", data.current_file || "");
-    setActivePresentation(null);
-    setDisplayedBuffer("");
-    setDisplayTargetKey("");
-    setTypewriterReady(false);
-    setPendingQueue((prev) => prev
-      .filter((item) => incomingKeys.has(item._queueKey))
-      .slice(-MAX_LIVE_BACKLOG));
-  }, [data.display_queue, activePresentation?._queueKey, isRunning]);
+    const activeKey = activePresentation?._queueKey || "";
+    const narrationKey = displayTargetKey || narrationDisplay.key || "";
+    const narrationIsCommitted = narrationDisplay.phase === "typing" || narrationDisplay.phase === "revealed";
+    if (activeKey && narrationKey && narrationIsCommitted && activeKey !== narrationKey) {
+      setPresentationInvariantError(`presentation key divergence: ${activeKey} != ${narrationKey}`);
+      setDisplayedBuffer("");
+      setDisplayTargetKey("");
+      setTypewriterReady(false);
+      setActivePresentation(null);
+      return;
+    }
+    if (!activeKey || !narrationKey || activeKey === narrationKey) {
+      setPresentationInvariantError("");
+    }
+  }, [activePresentation?._queueKey, displayTargetKey, narrationDisplay.key]);
 
   useEffect(() => {
     displayWatchdogRef.current = {
@@ -440,17 +476,7 @@ const App = () => {
       const stalledMs = Date.now() - displayWatchdogRef.current.updatedAt;
       if (stalledMs < 8000) return;
       const latestKeys = latestDisplayQueueKeysRef.current;
-      prepareNarrationHandoff("", data.current_file || "");
-      setActivePresentation(null);
-      setDisplayedBuffer("");
-      setDisplayTargetKey("");
-      setTypewriterReady(false);
-      setPendingQueue((prev) => {
-        const trimmed = latestKeys.size
-          ? prev.filter((item) => latestKeys.has(item._queueKey))
-          : prev;
-        return trimmed.slice(-MAX_LIVE_BACKLOG);
-      });
+      setPresentationInvariantError(`presentation stalled: ${active._queueKey}`);
     }, 2000);
     return () => clearInterval(watchdog);
   }, []);
@@ -463,28 +489,6 @@ const App = () => {
     setActivePresentation(next);
   }, [activePresentation, pendingQueue]);
 
-  // Never show stale live state after a batch stops. The backend intentionally
-  // keeps the last current_file/current folder for audit visibility, but the
-  // boss-facing presentation must not mix that stale photo with old narration
-  // or right-side results.
-  useEffect(() => {
-    if (isRunning) return;
-    setPendingQueue([]);
-    setActivePresentation(null);
-    setDisplayedBuffer("");
-    setDisplayTargetKey("");
-    setTypewriterReady(false);
-    setImagePreparing(false);
-    setImageFailed(false);
-    setNarrationDisplay({
-      text: "",
-      key: "",
-      phase: "idle",
-      fileName: "",
-      nextFileName: ""
-    });
-  }, [isRunning]);
-
   const getDisplayTarget = () => {
     if (activePresentation) {
       return {
@@ -493,11 +497,7 @@ const App = () => {
         key: activePresentation._queueKey
       };
     }
-    return {
-      target: isRunning ? (data.stream_buffer || "") : "",
-      isQueue: false,
-      key: isRunning ? `live|${data.stream_file || data.current_file || ""}` : ""
-    };
+    return { target: "", isQueue: false, key: "" };
   };
 
   const imageReadyForDisplay = !currentImage || imageLoaded || imageFailed;
@@ -593,19 +593,8 @@ const App = () => {
       setImageFailed(false);
       setCurrentThumb(activePresentation.thumb_b64 || null);
       setCurrentImage(getResultImageSrc(activePresentation));
-    } else {
-      const activeFile = isRunning && data.current_file && data.current_file !== 'None' ? data.current_file : null;
-      if (activeFile) {
-        setImageLoaded(false);
-        setImageFailed(false);
-        setCurrentImage(`/api/image/${encodeURIComponent(activeFile)}`);
-        setCurrentThumb(data.current_thumb || null);
-      } else {
-        setCurrentThumb(null);
-        setImageFailed(false);
-      }
     }
-  }, [activePresentation, data.current_file, data.current_thumb, isRunning]);
+  }, [activePresentation]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
@@ -852,48 +841,18 @@ const App = () => {
   const overallPercent = overallTotal ? Math.min(100, Math.max(0, (overallProcessed / overallTotal) * 100)) : 0;
   const folderTotal = Number(overallProgress.total_folders || 0);
   const folderDone = Number(overallProgress.completed_folders || 0);
-  const historicalPanelItems = (data.recent_results || []).map((res, i) => ({
-    ...res,
-    _queueKey: getQueueKey(res) || `recent|${i}|${res.file_name || ""}`,
-    _isCurrent: i === 0
-  }));
-  const displayQueueHistoryItems = (Array.isArray(data.display_queue) ? data.display_queue : [])
-    .slice(-80)
-    .map((raw) => {
-      const item = normalizePresentationItem(raw);
-      return item;
-    })
-    .filter(Boolean)
-    .reverse()
-    .map((item, i) => ({ ...item, _isCurrent: i === 0 }));
   const showPendingResult = activePresentation && !revealedKeysRef.current.has(activePresentation._queueKey);
   const activePendingResult = showPendingResult
     ? {
         ...activePresentation,
-        _queueKey: `${activePresentation._queueKey}|pending`,
+        _queueKey: activePresentation._queueKey,
         _isCurrent: true,
         _pendingReveal: true
       }
     : null;
-  const livePendingFile = !activePendingResult && !activePresentation && isRunning && data.current_file && data.current_file !== 'None'
-    ? data.current_file
-    : "";
-  const livePendingResult = livePendingFile
-    ? {
-        file_name: livePendingFile,
-        thumb_b64: data.current_thumb || null,
-        _queueKey: `live-pending|${livePendingFile}`,
-        _isCurrent: true,
-        _pendingReveal: true
-      }
-    : null;
-  const pendingPanelResult = activePendingResult || livePendingResult;
-  const liveRightPanelBackfill = [];
-  const rightPanelItems = (isRunning || revealedResults.length > 0)
-    ? [...revealedResults]
-        .slice(0, MAX_REVEALED_RESULTS)
-    : (historicalPanelItems.length > 0 ? historicalPanelItems : displayQueueHistoryItems);
-  const displayedFileName = activePresentation?.file_name || (isRunning ? (data.stream_file || data.current_file || "-") : (visibleImage ? "上一張畫面保留" : "-"));
+  const pendingPanelResult = activePendingResult;
+  const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
+  const displayedFileName = activePresentation?.file_name || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
   const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
   const currentFileLabel = data.current_file && data.current_file !== "None"
@@ -912,7 +871,7 @@ const App = () => {
         ? "照片已切換 · 等待 AI 開始輸出"
         : "上一張摘要保留中 · 下一張判讀中";
   const cleanLmLogLines = (data.lm_logs || []).filter(isReadableLmLogLine);
-  const queueHistoryLines = (Array.isArray(data.display_queue) ? data.display_queue : [])
+  const queueHistoryLines = (Array.isArray(data.presentation_queue) ? data.presentation_queue : [])
     .slice(-36)
     .map((raw) => normalizePresentationItem(raw))
     .filter(Boolean)
@@ -922,6 +881,22 @@ const App = () => {
       return summary ? [`▶️ ${item.file_name}`, verdict, `[THINK] ${summary}`] : [`▶️ ${item.file_name}`, verdict];
     });
   const visibleLogLines = cleanLmLogLines.length >= 3 ? cleanLmLogLines : queueHistoryLines;
+  const historyItems = [...revealedResults, ...(Array.isArray(data.presentation_queue) ? data.presentation_queue.map(normalizePresentationItem).filter(Boolean) : [])]
+    .reduce((items, item) => items.some((entry) => entry._queueKey === item._queueKey) ? items : [...items, item], []);
+  const historyBySourceId = historyItems.reduce((groups, item) => {
+    if (!item.source_item_id) return groups;
+    const key = String(item.source_item_id);
+    groups[key] = groups[key] || [];
+    groups[key].push(item);
+    return groups;
+  }, {});
+  const getHistoryFor = (item) => item?.source_item_id ? (historyBySourceId[String(item.source_item_id)] || [])
+    .sort((a, b) => Number(a.pass_index || 0) - Number(b.pass_index || 0) || Number(a.presentation_sequence || 0) - Number(b.presentation_sequence || 0)) : [];
+  const toggleHistory = (item) => {
+    if (!item?.source_item_id) return;
+    const key = String(item.source_item_id);
+    setExpandedHistoryKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
   const reviewReasonCounts = reviewQueue.summary?.reason_counts || {};
   const reviewYearCounts = reviewQueue.summary?.year_counts || {};
   console.log("App: Ready to render", { stats, dataExists: !!data });
@@ -1048,7 +1023,7 @@ const App = () => {
            </div>
 
             <div className="monitor-workspace" style={{ flex: 1, display: 'flex', gap: '10px', overflow: 'hidden' }}>
-              <div className="main-monitor-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
+              <div className="main-monitor-panel" data-presentation-invariant={presentationInvariantError || "ok"} style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ flex: '0 0 50%', position: 'relative', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
                       <div style={{ padding: '4px 8px', background: '#111', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid #333' }}>
                           <span style={{display:'flex', alignItems:'center', gap:'4px', color: '#888'}}>
@@ -1059,7 +1034,7 @@ const App = () => {
                             {displayedFileName}
                           </span>
                       </div>
-                      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
+                      <div data-testid="active-photo" data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
                           {(visibleImage || currentImage || currentThumb) ? (
                               <>
                                   {!visibleImage && imagePreparing && !imageFailed && (
@@ -1089,7 +1064,7 @@ const App = () => {
 
                   <div className="log-wall" style={{ flex: 1, padding: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0a0a0f', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem', position: 'relative' }}>
                       {/* 1. Top Pane: Active Stream Only */}
-                       <div ref={streamBufferRef} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
+                       <div ref={streamBufferRef} data-testid="narration-container" data-presentation-id={activePresentation?.presentation_id || ""} data-presentation-sequence={activePresentation?.presentation_sequence ?? ""} style={{ flex: '0 0 150px', borderBottom: '1px solid #333', overflowY: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
                             {visibleNarration ? (
                                <div style={{
                                    wordBreak: 'break-all',
@@ -1126,6 +1101,9 @@ const App = () => {
                                           上一張摘要保留中 · 下一張判讀中
                                       </div>
                                    )}
+                                   <div style={{ color: '#67e8f9', fontSize: '0.72rem', marginBottom: '5px' }}>
+                                     第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)} · {formatMetaValue(activePresentation?.model_id)}
+                                   </div>
                                    {visibleNarration}
                                    {!isHeldNarration && <span className="typing-dots"></span>}
                                </div>
@@ -1230,12 +1208,28 @@ const App = () => {
                       </div>
                       <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }} data-testid="result-rail">
                           {/* [v19.10] Right panel follows the presentation queue, not the faster backend. */}
+                          {pendingPanelResult && (
+                            <div data-testid="active-placeholder" data-presentation-id={pendingPanelResult.presentation_id || ""} data-presentation-sequence={pendingPanelResult.presentation_sequence ?? ""} style={{ background: '#1e293b', border: '1px solid #00f5ff', borderRadius: '5px', padding: '8px', marginBottom: '8px' }}>
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <ResultThumbnail res={pendingPanelResult} onClick={() => {}} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div data-testid="active-placeholder-file" title={pendingPanelResult.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingPanelResult.file_name}</div>
+                                  <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center' }}>
+                                    <span data-testid="active-placeholder-badge" style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>處理中</span>
+                                    <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>AI 即時判讀中</span>
+                                  </div>
+                                  <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>第 {formatMetaValue(pendingPanelResult.pass_index)} 輪 · {getPassLabel(pendingPanelResult)}</div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                           {rightPanelItems.map((res, i) => (
-                             <div data-testid="result-card" key={res._queueKey || `${res.file_name}-${i}`} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                   <div style={{ display: 'flex', gap: '8px' }}>
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
-                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
+                                         <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
+                                         <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>第 {formatMetaValue(res.pass_index)} 輪 · {getPassLabel(res)}</div>
                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
@@ -1271,47 +1265,6 @@ const App = () => {
                                             </div>
                                          )}
                                           <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                             {!res._pendingReveal && <button
-                                                  title="再辨識"
-                                                 onClick={(e) => {
-                                                     e.stopPropagation();
-                                                     setRerunQueue(prev => ({...prev, [res.file_name]: true}));
-                                                     fetch('/api/rerun', {
-                                                         method: 'POST',
-                                                         headers: {'Content-Type': 'application/json'},
-                                                         body: JSON.stringify({filename: res.file_name})
-                                                     }).then(r=>r.json()).then(d=>{
-                                                         console.log(d.message);
-                                                         // Clear queue indicator after backend has had time to process
-                                                         setTimeout(() => {
-                                                             setRerunQueue(prev => {
-                                                                 const next = {...prev};
-                                                                 delete next[res.file_name];
-                                                                 return next;
-                                                             });
-                                                         }, 8000);
-                                                     }).catch(err=>{
-                                                         console.error(err);
-                                                         setRerunQueue(prev => {
-                                                             const next = {...prev};
-                                                             delete next[res.file_name];
-                                                             return next;
-                                                         });
-                                                     });
-                                                 }}
-                                                 disabled={rerunQueue[res.file_name]}
-                                                 style={{
-                                                     background: rerunQueue[res.file_name] ? '#374151' : '#1f2937',
-                                                     border: '1px solid #4b5563',
-                                                     borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer',
-                                                      height: '22px',
-                                                      padding: '0 7px',
-                                                      color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
-                                                      fontSize: '0.66rem', lineHeight: '20px', display: 'inline-flex', alignItems: 'center'
-                                                  }}
-                                              >
-                                                  {rerunQueue[res.file_name] ? '已排隊' : '再辨識'}
-                                              </button>}
                                             {!res._pendingReveal && res.view_type && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.view_type}</span>}
                                             {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#ec4899', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.screen_status}</span>}
                                             {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#f97316', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.quality_issue.replace('不合格-', '')}</span>}
@@ -1341,7 +1294,64 @@ const App = () => {
                                                     {res.price_symbol === '-' ? '？' : (res.price_symbol || '？')}
                                                 </span>
                                              )}
-                                         </div>
+                                             {!res._pendingReveal && <button
+                                                 title="再辨識"
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     setRerunQueue(prev => ({...prev, [res.file_name]: true}));
+                                                     fetch('/api/rerun', {
+                                                         method: 'POST',
+                                                         headers: {'Content-Type': 'application/json'},
+                                                         body: JSON.stringify({filename: res.file_name})
+                                                     }).then(r=>r.json()).then(d=>{
+                                                         console.log(d.message);
+                                                         // Clear queue indicator after backend has had time to process
+                                                         setTimeout(() => {
+                                                             setRerunQueue(prev => {
+                                                                 const next = {...prev};
+                                                                 delete next[res.file_name];
+                                                                 return next;
+                                                             });
+                                                         }, 8000);
+                                                     }).catch(err=>{
+                                                         console.error(err);
+                                                         setRerunQueue(prev => {
+                                                             const next = {...prev};
+                                                             delete next[res.file_name];
+                                                             return next;
+                                                         });
+                                                     });
+                                                 }}
+                                                 disabled={rerunQueue[res.file_name]}
+                                                 style={{
+                                                     marginLeft: 'auto',
+                                                     flexShrink: 0,
+                                                     background: rerunQueue[res.file_name] ? '#374151' : '#1f2937',
+                                                     border: '1px solid #4b5563',
+                                                     borderRadius: '3px', cursor: rerunQueue[res.file_name] ? 'not-allowed' : 'pointer',
+                                                     height: '22px',
+                                                     padding: '0 7px',
+                                                     color: rerunQueue[res.file_name] ? '#fbbf24' : '#e5e7eb',
+                                                     fontSize: '0.66rem', lineHeight: '20px', display: 'inline-flex', alignItems: 'center'
+                                                 }}
+                                             >
+                                                 {rerunQueue[res.file_name] ? '已排隊' : '再辨識'}
+                                             </button>}
+                                          </div>
+                                          <div style={{ marginTop: '6px', fontSize: '0.62rem', color: '#cbd5e1', lineHeight: 1.5 }}>
+                                            <div>retry_reason: {formatMetaValue(res.retry_reason)} · decision: {formatMetaValue(res.decision)}</div>
+                                            <div>model_id: {formatMetaValue(res.model_id)}</div>
+                                            <div>started_at: {formatMetaValue(res.started_at)} · completed_at: {formatMetaValue(res.completed_at)}</div>
+                                            <div>previous_result_summary: {formatMetaValue(res.previous_result_summary)}</div>
+                                          </div>
+                                          {res.source_item_id && <button type="button" onClick={() => toggleHistory(res)} style={{ marginTop: '6px', background: 'transparent', color: '#7dd3fc', border: '1px solid #155e75', borderRadius: '3px', padding: '3px 6px', fontSize: '0.62rem', cursor: 'pointer' }}>本張判讀歷程 ({getHistoryFor(res).length})</button>}
+                                          {res.source_item_id && expandedHistoryKeys[String(res.source_item_id)] && <div style={{ marginTop: '5px', borderLeft: '2px solid #155e75', paddingLeft: '7px' }}>
+                                            {getHistoryFor(res).map((pass) => <div key={pass._queueKey} style={{ marginBottom: '6px' }}>
+                                              <div style={{ color: '#bae6fd', fontWeight: 800 }}>第 {formatMetaValue(pass.pass_index)} 輪 · {getPassLabel(pass)} · {formatMetaValue(pass.decision)}</div>
+                                              <div style={{ color: '#94a3b8' }}>retry_reason: {formatMetaValue(pass.retry_reason)} · model_id: {formatMetaValue(pass.model_id)}</div>
+                                              <div style={{ color: '#e5e7eb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{getNarrationFullText(pass) || '未提供'}</div>
+                                            </div>)}
+                                          </div>}
                                      </div>
                                  </div>
                              </div>
@@ -1500,7 +1510,7 @@ const App = () => {
                                                  onClick={() => updateReviewDraft(item, {
                                                      view_type: '單機',
                                                      model: 'S55BG970NC',
-                                                     learn_rule: true,
+                                                     learn_rule: false,
                                                      rule_hint: 'Odyssey Ark / Ark Mini LED / 55吋大型直立或曲面桌上機 -> S55BG970NC',
                                                      note: draft.note || 'Odyssey Ark 55吋大型直立或曲面桌上機'
                                                  })}
@@ -1557,7 +1567,7 @@ const App = () => {
 
          {/* Image Inspection Modal [v18.16 Metadata UI] */}
          {inspectImage && (
-             <div
+             <div data-testid="inspection-modal" data-presentation-id={inspectImage.presentation_id || ""} data-presentation-sequence={inspectImage.presentation_sequence ?? ""}
                 style={{
                     position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
                     background: 'rgba(0,0,0,0.95)', zIndex: 10000,
@@ -1697,6 +1707,16 @@ const App = () => {
                        color: '#ddd', fontFamily: 'JetBrains Mono', fontSize: '0.9rem', zIndex: 10005,
                        boxShadow: '0 -5px 25px rgba(0,0,0,0.8)'
                    }}>
+                      <div style={{ position: 'absolute', left: '12px', bottom: '76px', right: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px 14px', padding: '7px 10px', background: 'rgba(17,17,17,0.96)', border: '1px solid #333', borderRadius: '4px', fontSize: '0.68rem', color: '#cbd5e1' }}>
+                        <span>第 {formatMetaValue(inspectImage.pass_index)} 輪 · {getPassLabel(inspectImage)}</span>
+                        <span>retry_reason: {formatMetaValue(inspectImage.retry_reason)}</span>
+                        <span>model_id: {formatMetaValue(inspectImage.model_id)}</span>
+                        <span>started_at: {formatMetaValue(inspectImage.started_at)}</span>
+                        <span>completed_at: {formatMetaValue(inspectImage.completed_at)}</span>
+                        <span>decision: {formatMetaValue(inspectImage.decision)}</span>
+                        <span>previous_result_summary: {formatMetaValue(inspectImage.previous_result_summary)}</span>
+                        {inspectImage.source_item_id && <button type="button" onClick={() => toggleHistory(inspectImage)} style={{ background: 'transparent', color: '#7dd3fc', border: '1px solid #155e75', borderRadius: '3px', padding: '2px 6px', fontSize: '0.68rem', cursor: 'pointer' }}>本張判讀歷程</button>}
+                      </div>
                       <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
                            <span style={{ fontSize:'0.7rem', color:'#888' }}>檔名</span>
                            <span style={{ color:'#00f5ff', fontWeight:'bold' }}>{inspectImage.file_name}</span>

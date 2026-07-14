@@ -2,6 +2,14 @@
 
 本專案目標是用 LM Studio 本機視覺模型辨識 Samsung 通路陳列照片，輸出類別、型號、價格，再用結果輔助人工審核與歷年照片檔名整理。
 
+## v19.37 關鍵執行規則
+
+1. OCR 請求必須符合 LM Studio 實際設定的 context。`samsung_ocr_prompt.txt` 是維護來源，不保證全文都能放進 8K 模型；送出請求時一律走 `build_runtime_system_prompt()`。
+2. 當年度不確定照片寧可維持「單機待複核」，不可只因為描述出現展示區、貨架或多台螢幕就轉成遠景。錯誤遠景會清掉後續複核最需要的型號與價格線索。
+3. 已確認有 FollowMe 產品或支架線索的結果，後段遠景備援不得覆蓋。
+4. Dashboard 的展示佇列只屬於一個 live batch。啟動新批次要清空，idle API 也不可回傳舊 staging 紀錄；任何修改都要驗證「照片 -> AI 判讀 -> 同一張右側卡片」。
+5. 修改 OCR 守門或展示流程後，至少跑 `tools/test_runtime_safety_guards.py` 與 dashboard production build。
+
 ## 重要原則
 
 1. `samsung_ocr_prompt.txt` 是 Qwen 正式提示詞，已經多輪調整，不可大幅簡化。
@@ -345,6 +353,10 @@ npm.cmd --prefix dashboard run build
 
 ## Current-Year Priority Gate
 
+### 背景視窗與瀏覽器
+
+正式入口 `START_OCR.bat` 與 `START_FULL_AUTO_OCR.bat` 透過 `tools/windows_user_launcher.ps1` 啟動 backend。backend 使用 hidden window，recursive 流程沿用同一個隱藏 backend；使用者只會看到瀏覽器 dashboard，不會累積 PowerShell 視窗。只有明確的互動式瀏覽器啟動保持可見。
+
 - The production order is current/future year first, then older years.
 - `tools/prepare_drive_upload_manifest.py` keeps current-year questionable rows out of Drive, including current-year distant-view rows until they have been safely rerun or corrected.
 - `tools/recursive_ocr_flat_export.py` must not continue into older folders while `_drive_upload\drive_upload_review_required.csv` still contains current/future-year review rows. It now exits cleanly with `paused_reason=current_year_review_gate` before starting an older folder. Do not remove this gate unless the user explicitly accepts older-year-first processing.
@@ -426,4 +438,76 @@ Important: visual spot-check CSV files are only for estimating rule quality. The
   4. rebuild upload manifests and upload only `ready` rows.
 - `tools\rerun_staged_candidates.py` must restore the backend work directory to the original source folder before deleting `_ocr_staging`. Otherwise the dashboard can keep polling a deleted staging path and repeatedly report "Failed to list actual files".
 - The backend must log/display only final corrected AI narration after post-processing. Raw model narration may temporarily stream while processing, but durable history/result cards must use `build_final_display_thinking()` so a corrected FollowMe result never remains beside text saying it is not FollowMe or is distant view.
+
+## Presentation synchronization non-regression contract
+
+The status API also exposes `frontend_asset_fingerprint`, calculated from the
+built dashboard script/css asset names. The frontend calculates the fingerprint
+of its loaded document assets and performs at most one `/?ui=<fingerprint>`
+replace when they differ, with a 30-second `sessionStorage` cooldown. Matching
+assets do not reload. This is UI-only and safe while OCR is running; it never
+restarts or changes the backend.
+
+The frontend orders `presentation_queue` by backend `presentation_sequence`
+before applying its 200-item cap. If an asynchronous update ever commits a
+different active/narration key, it exposes `data-presentation-invariant`,
+clears the active item, and waits for a complete immutable snapshot rather
+than pairing fields from different photos.
+
+The results rail has one independent active slot above the read-only revealed
+results. It is the active immutable snapshot itself, with the same
+`presentation_id` and sequence, thumbnail, and filename; it shows only
+`處理中` and `AI 即時判讀中`, never model/price/category. After narration and
+the reveal hold complete, that slot disappears and the same snapshot becomes
+the top final card. It must never duplicate a final card. With no active item,
+there is no active slot.
+
+- Backend `presentation_id` is the only identity truth. It is unique and
+  travels with the complete immutable presentation snapshot.
+- Photo, AI text, revealed card, and modal must use that same immutable
+  snapshot and the same presentation id/sequence.
+- The right rail reads only revealed results. Never join state by filename,
+  array index, or `source_path`. While OCR is running, never fall back to
+  `recent_results` or `current_file`.
+- Keep the previous photo visible until the next photo is fully loaded; normal
+  transitions must not show a black screen.
+- Visible copy says `AI`; never expose `LLM` or `自言自語`.
+- Any dashboard/backend presentation change must pass the 500-item soak, a
+  production build, and a live browser check of at least 3 transitions. Check
+  photo id == AI id, reveal ordering, card id == completed active id, modal id
+  == card id, and nonzero image dimensions.
+
+Run the local gate with:
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_critical_regressions.py
+npm.cmd --prefix dashboard run build
+```
 - 2026-07-09 live run: `logs\current_year_distant_staged_rerun_20260709_103552.out.log`, candidates `D:\00_商化\00_已OCR照片\_ocr_audit\current_year_distant_staged_rerun_candidates_20260709_103552.csv`, summary `D:\00_商化\00_已OCR照片\_ocr_audit\current_year_distant_staged_rerun_summary_20260709_103552.csv`.
+### 本機 VLM benchmark sidecar
+
+`tools/model_benchmark_sidecar.py` 是獨立、受限的 accuracy-first 模型比較工具，目標資料固定為 `samples/ocr_demo_50`。預設只 dry-run；只有明確加入 `--execute` 才會對 LM Studio 做 load/inference。它會 fail closed：OCR API 必須 idle，且不得有 rerun、recursive、watcher 或 uploader 程序；endpoint 只能是本機 LM Studio，照片與 raw output 不會上傳或呼叫外部服務。
+
+Interlock: the sidecar and four-hour watcher share `00_已OCR照片\_ocr_audit\model_benchmark.lock`. It is created atomically and records PID, timestamp, and model list. The watcher waits and logs before every backend, staged, recursive, or uploader launch. The sidecar claims the lock, rechecks idle state, and removes its own lock in `finally`; a stale lock requires explicit `--recover-stale-lock`, an absent owner PID, and the age threshold.
+
+The stalled InternVL artifact has a separate download-only helper: `tools\resume_internvl35_range.ps1`. It uses the proven Hugging Face byte range and `curl --continue-at -` against the preserved `.part`; it never loads a model or touches OCR. The helper is single-owner, refuses shrink/duplicate downloaders, requires exact byte count and SHA256 before atomic rename, and preserves the partial plus failure status on every error.
+
+Continuity supervisor: `tools\ocr_continuity_supervisor.ps1` is the no-token local recovery entrypoint. The existing `SamsungOCR_PipelineWatchdog` task runs it at startup, logon, and every five minutes with an atomic single-instance lock. Healthy work is a no-op; hung backend, unavailable LM Studio with a different loaded model, or ambiguous staging is alert-only and fail-closed. It preserves `_ocr_audit`/staging/history, never uses `--no-resume`, and starts uploads only from ready-pending rows.
+
+When Task Scheduler registration requires administrator rights, use the user-level fallback `tools\install_ocr_continuity_daemon.ps1 -Action install`. It registers one hidden `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry (or the user Startup folder), runs the supervisor immediately and every five minutes with a bounded child timeout, and writes structured daemon/shutdown logs. Use `-Action status` or `-Action uninstall` for user-level registration; the protected four-hour task remains the backstop.
+
+The installer also creates the current-user LIMITED task `SamsungOCR_UserContinuityEnsure` with `schtasks.exe` every five minutes. It invokes `-Action ensure`, which detects the exact RepoRoot daemon and no-ops when it is already alive; stale locks require an absent owner and age proof. A denied task creation is fail-closed and leaves the HKCU Run setup intact.
+
+Drive correction reconciliation is local-only by default: `tools\reconcile_drive_corrections.py --output-dir ...` writes an idempotent `_drive_upload\drive_correction_reconciliation.jsonl`. It records source identity, old/new names and Drive IDs, local/remote hash evidence, gate evidence, and disposal receipt. `--execute` requires an explicit phase and currently remains fail-closed; no ordinary uploader run may trash or replace stale rows.
+
+執行前會確認每個指定模型已完整存在於本機 LM Studio，記錄原本載入模型/context，對所有候選使用同一 production prompt、全景與 deterministic evidence crops、固定 inference settings，逐模型順序測試。raw 結果寫入 `runs/model_benchmark_sidecar/raw.jsonl`，可重入且不覆蓋已完成 `(model, case)`；結果包含原始輸出、延遲、解析錯誤、context 與危險錯誤分類。無論中途成功或失敗，finally 都會恢復 `qwen/qwen3-vl-8b` 與指定 context。
+
+模型決策 gate 以整體 field/exact accuracy 為第一順位，遠景誤判、FollowMe 誤判、型號幻覺等危險分類不得退步；只有 accuracy 不退步時才用 latency 作次順位。benchmark 不會改 production prompt、OCR 權重或 runtime 設定；不要在 OCR 執行中使用 `--execute`。
+## v19.45 Evidence Contract
+
+Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate.
+
+Each pass is recorded in a bounded, idempotent `v1945_evidence_trace.jsonl` without image bytes or secrets. Boundary upgrades must finish the current folder, verify idle, then start v19.45 with the existing staging/history preserved. Do not restart mid-folder.
+# Presentation Synchronization Iron Rule
+
+The backend `presentation_id` is the sole identity key. The active photo, AI live interpretation, active right-side placeholder, revealed card, and inspection modal must all use one immutable presentation snapshot and the same `presentation_id` and sequence. Running UI state must never join by filename, index, source path, `current_file`, `stream_file`, or `recent_results`. Reveal a right-side card only after that snapshot's narration completes; never discard the active item through watchdog or backpressure, and preserve the previous image until the next image is ready so transitions do not flash black. Any dashboard presentation change requires the deterministic 500-item soak and a rebuilt dashboard.

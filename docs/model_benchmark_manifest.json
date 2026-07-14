@@ -1,0 +1,726 @@
+{
+  "schema": "samsung-model-benchmark/v1",
+  "source": "samples/ocr_demo_50/labels.json",
+  "blind_protocol": "Send image plus the production OCR prompt; do not expose expected fields.",
+  "cases": [
+    {
+      "id": "demo_01",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-184.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_02",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-185.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_03",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-186.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "✓＄2390"
+      }
+    },
+    {
+      "id": "demo_04",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-187.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_05",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-188.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "✓＄4990"
+      }
+    },
+    {
+      "id": "demo_06",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-189.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_07",
+      "image": "photos/202605/M-台中市-大甲區-SF-大甲-190.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "＄3090"
+      }
+    },
+    {
+      "id": "demo_08",
+      "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-879.jpg",
+      "tags": [
+        "single_unit",
+        "followme_pro",
+        "price_uncertain_or_missing",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "FollowMe Pro M7 43\"",
+        "price": "？＄17990"
+      }
+    },
+    {
+      "id": "demo_09",
+      "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-880.jpg",
+      "tags": [
+        "single_unit",
+        "followme_pro",
+        "price_uncertain_or_missing",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "FollowMe Pro M7 43\"",
+        "price": "？＄14990"
+      }
+    },
+    {
+      "id": "demo_10",
+      "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-881.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_11",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-423.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_12",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-424.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_13",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-425.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_14",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-426.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_15",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-427.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_16",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-428.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "＄7490"
+      }
+    },
+    {
+      "id": "demo_17",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-429.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_18",
+      "image": "photos/202604/M-台中市-大甲區-SF-大甲-430.jpg",
+      "tags": [
+        "single_unit",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_19",
+      "image": "photos/202604/M-台中市-大甲區-TK3C-大甲-749.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_20",
+      "image": "photos/202604/M-台中市-大甲區-TK3C-大甲-750.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27F612EAC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_21",
+      "image": "photos/202603/M-台中市-大甲區-SF-大甲-1232.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_22",
+      "image": "photos/202603/M-台中市-大甲區-SF-大甲-1233.jpg",
+      "tags": [
+        "single_unit",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_23",
+      "image": "photos/202603/M-台中市-大甲區-SF-大甲-1234.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_24",
+      "image": "photos/202603/M-台中市-大甲區-SF-大甲-1235.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S32FM500EC",
+        "price": "＄7490"
+      }
+    },
+    {
+      "id": "demo_25",
+      "image": "photos/202603/M-台中市-大甲區-SF-大甲-1236.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_26",
+      "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-838.jpg",
+      "tags": [
+        "single_unit",
+        "followme_pro",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "FollowMe Pro M7 43\"",
+        "price": "＄12990"
+      }
+    },
+    {
+      "id": "demo_27",
+      "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-839.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27F612EAC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_28",
+      "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-840.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27D300GAC",
+        "price": "＄3290"
+      }
+    },
+    {
+      "id": "demo_29",
+      "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-841.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄7990"
+      }
+    },
+    {
+      "id": "demo_30",
+      "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-842.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27FG532EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_31",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-911.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_32",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-912.jpg",
+      "tags": [
+        "single_unit",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_33",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-913.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4790"
+      }
+    },
+    {
+      "id": "demo_34",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-914.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_35",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-915.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S32FG502EC",
+        "price": "＄7490"
+      }
+    },
+    {
+      "id": "demo_36",
+      "image": "photos/202602/M-台中市-大甲區-SF-大甲-916.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_37",
+      "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1518.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_38",
+      "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1519.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_39",
+      "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1520.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_40",
+      "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1521.jpg",
+      "tags": [
+        "single_unit",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_41",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-626.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_42",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-627.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_43",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-628.jpg",
+      "tags": [
+        "single_unit",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S24F332EAC",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_44",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-629.jpg",
+      "tags": [
+        "single_unit",
+        "promo_or_unreadable_label",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "型號未辨識",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_45",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-630.jpg",
+      "tags": [
+        "single_unit",
+        "followme",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "FollowMe M7 32\"",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_46",
+      "image": "photos/202601/M-台中市-大甲區-SF-大甲-631.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_47",
+      "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1091.jpg",
+      "tags": [
+        "distant_view",
+        "three_or_more_monitors",
+        "hallucination_guard",
+        "price_uncertain_or_missing"
+      ],
+      "expected": {
+        "view_type": "遠景",
+        "model": "型號未辨識",
+        "price": "無價格"
+      }
+    },
+    {
+      "id": "demo_48",
+      "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1092.jpg",
+      "tags": [
+        "single_unit",
+        "followme_pro",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "FollowMe Pro M7 43\"",
+        "price": "＄12990"
+      }
+    },
+    {
+      "id": "demo_49",
+      "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1093.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27CG552EC",
+        "price": "＄4990"
+      }
+    },
+    {
+      "id": "demo_50",
+      "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1094.jpg",
+      "tags": [
+        "single_unit",
+        "price_present"
+      ],
+      "expected": {
+        "view_type": "單機",
+        "model": "S27D300GAC",
+        "price": "＄3290"
+      }
+    }
+  ],
+  "candidates": [
+    "qwen/qwen3-vl-8b",
+    "qwen3.5-9b-vlm",
+    "gemma-4-12b-it-qat",
+    "qwen/qwen2.5-vl-7b",
+    "minicpm-v-4.6"
+  ],
+  "coverage": {
+    "distant_view": 16,
+    "three_or_more_monitors": 16,
+    "hallucination_guard": 16,
+    "price_uncertain_or_missing": 26,
+    "single_unit": 34,
+    "price_present": 26,
+    "promo_or_unreadable_label": 7,
+    "followme_pro": 4,
+    "followme": 1
+  },
+  "known_limitations": [
+    "The portable 50-photo set has no explicit human tag separating a promotional board from a FollowMe product card.",
+    "It has no dedicated non-Samsung/other-brand row; add an independently reviewed fixture before using that metric.",
+    "Price clarity is represented conservatively by present/uncertain-or-missing labels; visual blur is not inferred from filenames."
+  ]
+}

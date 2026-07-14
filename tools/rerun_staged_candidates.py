@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import math
+import os
 import shutil
 import sys
 import time
@@ -29,9 +30,10 @@ from photo_rename_planner import (  # noqa: E402
     MISSING_SOURCE_STATUS,
     NO_CHANGE_STATUS,
     READY_STATUS,
-    copy_plan_to_flat_output,
+    copy_image_for_flat_output,
     make_plan,
     summarize,
+    unique_target_path,
     write_csv,
 )
 from rerun_questionable_records import (  # noqa: E402
@@ -602,12 +604,8 @@ def rebuild_outputs(
     audit_folder: Path,
     period: str,
     merged_rows: list[dict[str, str]],
+    candidate_names: set[str],
 ) -> dict[str, object]:
-    backup_dir, backup_count, backup_action = clear_existing_outputs(
-        audit_folder,
-        args.dry_run,
-        getattr(args, "keep_flat_output_backup", False),
-    )
     success_path = audit_folder / "success_records.csv"
     if success_path.exists() and not args.dry_run:
         backup_success = audit_folder / f"success_records.csv.before_staged_rerun_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -617,15 +615,84 @@ def rebuild_outputs(
     plan = make_plan(source_folder, results_map, period, args.price_symbol)
     counts = summarize(plan)
     safe_plan, blocked_plan = split_plan(plan)
+    replacement_plan = [
+        item for item in safe_plan if item.get("original_name", "") in candidate_names
+    ]
     blocked_path = audit_folder / "blocked_after_staged_rerun.csv"
 
-    copied = []
+    copied = read_dict_csv(audit_folder / "copied.csv")
+    replaced = 0
+    failed_replacements: list[str] = []
     if not args.dry_run:
+        # Publish each replacement independently.  The old flat file stays in
+        # place until its new sibling has been written and verified.
+        existing_by_name = {
+            str(row.get("original_name") or ""): row
+            for row in copied
+            if row.get("original_name")
+        }
+        published: list[dict[str, str]] = []
+        output_root = Path(args.output_dir).resolve()
+        for item in replacement_plan:
+            source = Path(item["original_path"])
+            if not source.exists() or not source.is_file():
+                failed_replacements.append(item.get("original_name", ""))
+                continue
+            old_row = existing_by_name.get(item.get("original_name", ""))
+            old_target = (
+                Path(old_row["target_path"]).resolve()
+                if old_row and old_row.get("target_path")
+                else None
+            )
+            desired_name = item["target_name"] or item["original_name"]
+            if old_target and old_target.name == desired_name:
+                target = old_target
+            else:
+                target = unique_target_path(output_root, desired_name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            staged = target.with_name(
+                f".{target.stem}.staged-rerun-{os.getpid()}{target.suffix}"
+            )
+            try:
+                staged.unlink(missing_ok=True)
+                copy_image_for_flat_output(source, staged)
+                if not staged.exists() or staged.stat().st_size == 0:
+                    raise OSError("staged output is empty")
+                # Re-open the generated file before it can replace a deliverable.
+                from PIL import Image
+                with Image.open(staged) as image:
+                    image.verify()
+                os.replace(staged, target)
+                if old_target and old_target != target and old_target.is_file():
+                    try:
+                        old_target.relative_to(output_root)
+                    except ValueError:
+                        raise OSError(f"refusing to remove output outside root: {old_target}")
+                    old_target.unlink()
+            except Exception:
+                staged.unlink(missing_ok=True)
+                failed_replacements.append(item.get("original_name", ""))
+                continue
+            published.append({
+                "status": "copied",
+                "reason": "",
+                "period": item["period"],
+                "original_name": item["original_name"],
+                "target_name": target.name,
+                "category": item["category"],
+                "model": item["model"],
+                "price": item["price"],
+                "original_path": item["original_path"],
+                "target_path": str(target),
+            })
+            replaced += 1
+        published_by_name = {row["original_name"]: row for row in published}
+        copied = [published_by_name.get(row.get("original_name", ""), row) for row in copied]
+        copied.extend(row for name, row in published_by_name.items() if name not in existing_by_name)
         write_dict_csv(success_path, merged_rows, SUCCESS_HEADERS)
         write_csv(audit_folder / "rename_plan.csv", plan)
         write_csv(audit_folder / "conflicts.csv", [item for item in plan if item["status"] == CONFLICT_STATUS])
         write_csv(blocked_path, blocked_plan)
-        copied = copy_plan_to_flat_output(safe_plan, Path(args.output_dir)) if safe_plan else []
         write_csv(audit_folder / "copied.csv", copied)
 
     return {
@@ -637,10 +704,10 @@ def rebuild_outputs(
         "missing_source": counts.get(MISSING_SOURCE_STATUS, 0),
         "conflict": counts.get(CONFLICT_STATUS, 0),
         "blocked_path": str(blocked_path) if blocked_plan else "",
-        "copied": len(copied),
-        "backed_up": backup_count,
-        "backup_action": backup_action,
-        "backup_dir": str(backup_dir) if backup_count and backup_action == "backed_up" else "",
+        "copied": replaced,
+        "failed_replacements": len(failed_replacements),
+        "backup_action": "transactional",
+        "backup_dir": "",
     }
 
 
@@ -712,7 +779,14 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
 
     original_rows = read_success_rows(audit_folder / "success_records.csv")
     merged_rows, updated, appended = merge_records(original_rows, rerun_records, candidate_names)
-    rebuild = rebuild_outputs(args, source_folder, audit_folder, period, merged_rows)
+    rebuild = rebuild_outputs(
+        args,
+        source_folder,
+        audit_folder,
+        period,
+        merged_rows,
+        candidate_names,
+    )
     summary.update(rebuild)
     summary["updated"] = updated
     summary["appended"] = appended
@@ -730,6 +804,84 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     return summary
 
 
+def _status_work_dir(status: dict[str, object]) -> Path:
+    value = status.get("current_relative_dir") or status.get("current_work_dir") or ""
+    if not value:
+        raise RuntimeError("attach refused: API did not report current work directory")
+    return Path(str(value)).resolve()
+
+
+def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tuple[str, str, str], list[dict[str, object]]]) -> dict[str, object]:
+    """Finalize one already-running/already-finished staging group.
+
+    This path deliberately has no staging, set_work_dir, or start_batch calls.
+    """
+    if len(grouped) != 1:
+        raise RuntimeError(f"attach refused: input must resolve to exactly one group, got {len(grouped)}")
+    (source_folder_text, audit_folder_text, period), group_rows = next(iter(grouped.items()))
+    staging_root = Path(args.staging_root).resolve()
+    status = json_request(args.backend_url, "/api/status", timeout=30)
+    current_dir = _status_work_dir(status)
+    try:
+        current_dir.relative_to(staging_root)
+    except ValueError as exc:
+        raise RuntimeError(f"attach refused: current work directory is outside staging root: {current_dir}") from exc
+    expected_prefix = f"{period}_"
+    if not current_dir.name.startswith(expected_prefix):
+        raise RuntimeError(f"attach refused: current staging group does not match period {period}: {current_dir.name}")
+    source_folder = Path(source_folder_text).resolve()
+    expected_digest = hashlib.sha1(str(source_folder).encode("utf-8")).hexdigest()[:8]
+    if not current_dir.name.endswith(f"_{expected_digest}"):
+        raise RuntimeError(f"attach refused: current staging group does not match input folder: {current_dir.name}")
+
+    stats = status.get("stats") or {}
+    if bool(status.get("is_running") or stats.get("is_running")):
+        status = wait_for_folder_done(args.backend_url, current_dir, args.timeout_minutes, args.poll_seconds)
+        stats = status.get("stats") or {}
+    processed = int(stats.get("processed") or 0)
+    total = int(stats.get("total") or 0)
+    if total <= 0 or processed != total:
+        raise RuntimeError(f"attach refused: incomplete staged work processed={processed} total={total}")
+
+    rerun_records = json_request(args.backend_url, "/api/success_records", timeout=120)
+    if not isinstance(rerun_records, list):
+        raise RuntimeError("attach refused: /api/success_records did not return a list")
+    candidate_names = {Path(str(row.get("source_path") or "")).name for row in group_rows}
+    record_names = {str(record.get("file_name") or record.get("filename") or "") for record in rerun_records}
+    if not candidate_names or not record_names.issubset(candidate_names) or record_names != candidate_names:
+        raise RuntimeError("attach refused: success record filenames do not exactly match staged group")
+
+    summary: dict[str, object] = {
+        "folder": str(source_folder), "period": period, "audit_folder": audit_folder_text,
+        "staging_dir": str(current_dir), "queued": len(group_rows), "staged": len(candidate_names),
+        "processed": processed, "aborted": 0, "abort_reason": "",
+    }
+    summary_path = Path(args.run_summary_csv)
+    existing = read_dict_csv(summary_path)
+    for row in existing:
+        if row.get("staging_dir") == str(current_dir) and row.get("aborted") in {"0", "0.0", "False", "false"}:
+            return dict(row)
+
+    logs: list[str] = []
+    rescued = rescue_followme_distant_records(rerun_records, candidate_names)
+    demoted = demote_single_clue_distant_records(rerun_records, candidate_names)
+    if rescued:
+        summary["rescued_followme_distant"] = len(rescued)
+    if demoted:
+        summary["demoted_distant_single_clue"] = len(demoted)
+    abort_reason, details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
+    if abort_reason:
+        raise RuntimeError(f"attach refused by quality guard: {abort_reason} {details}")
+    original_rows = read_success_rows(Path(audit_folder_text) / "success_records.csv")
+    merged_rows, updated, appended = merge_records(original_rows, rerun_records, candidate_names)
+    summary.update(rebuild_outputs(args, source_folder, Path(audit_folder_text), period, merged_rows, candidate_names))
+    summary.update({"updated": updated, "appended": appended})
+    write_dict_csv(summary_path, existing + [summary], list(summary.keys()))
+    if not args.keep_staging:
+        shutil.rmtree(current_dir, ignore_errors=True)
+    return summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rerun only candidate images through staging folders and merge results.")
     parser.add_argument("--source-root", default=str(DEFAULT_SOURCE_ROOT))
@@ -741,6 +893,7 @@ def main() -> int:
     parser.add_argument("--staging-root", default="")
     parser.add_argument("--reason-contains", action="append", default=[])
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--attach-existing", action="store_true", help="Finalize the one API-reported existing staging group without starting or switching work.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-staging", action="store_true")
     parser.add_argument(
@@ -788,6 +941,15 @@ def main() -> int:
     ]
     write_dict_csv(Path(args.output_csv), selected_rows, headers)
     print(f"[scan] selected={len(selected_rows)} groups={len(grouped)} skipped={skipped} csv={args.output_csv}", flush=True)
+    if args.attach_existing:
+        try:
+            summary = attach_existing_group(args, selected_rows, grouped)
+            write_dict_csv(Path(args.run_summary_csv), [summary], list(summary.keys())) if not Path(args.run_summary_csv).exists() else None
+            print(f"[attach] finalized {summary.get('staging_dir')}", flush=True)
+            return 0
+        except Exception as exc:
+            print(f"[attach-refused] {exc}", flush=True)
+            return 2
     if not args.execute:
         print("[scan] scan only; add --execute to rerun.", flush=True)
         return 0

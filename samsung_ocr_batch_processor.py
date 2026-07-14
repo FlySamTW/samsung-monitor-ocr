@@ -3,6 +3,7 @@ import sys
 import importlib
 import argparse
 import csv
+import hashlib
 from pathlib import Path
 import time
 import json
@@ -16,6 +17,8 @@ from flask_cors import CORS
 from rich.console import Console
 from rich.logging import RichHandler
 from openai import OpenAI
+
+REPO_ROOT = Path(__file__).resolve().parent
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -50,8 +53,166 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
+from skills.model_validation import is_placeholder_model, strict_known_model
+from skills.audit_fields import immediate_retry_decision, validate_evidence_contract, EVIDENCE_CONTRACT_VERSION
 
-VERSION = "v19.36 (strict distant quarantine and disk-safe rerun)"
+
+def finalize_evidence_contract(result, raw_output=""):
+    """Attach bounded machine evidence state; prose is never promoted to evidence."""
+    result = dict(result or {})
+    valid, errors, normalized = validate_evidence_contract(result)
+    result["evidence_contract_version"] = EVIDENCE_CONTRACT_VERSION
+    result["normalized_evidence"] = normalized
+    result["evidence_contract_valid"] = bool(valid)
+    result["evidence_contract_errors"] = errors[:20]
+    if raw_output:
+        result["raw_model_output"] = str(raw_output)[:12000]
+    if not valid or result.get("merge_rejected_reason"):
+        result["auto_review_required"] = True
+        result["review_status"] = "review_required"
+        result["evidence_unresolved"] = True
+    return result
+
+
+def attach_spatial_evidence_trace(result, scene_tiles, attempt):
+    """Keep bounded crop provenance without retaining image payloads."""
+    result = dict(result or {})
+    result["spatial_evidence_crops"] = [
+        {"label": str(tile.get("label")), "bbox": tuple(tile.get("bbox")), "size": tuple(tile.get("size")), "attempt": int(tile.get("attempt", attempt))}
+        for tile in (scene_tiles or [])[:3]
+    ]
+    result["spatial_evidence_attempt"] = int(attempt)
+    return result
+
+VERSION = "v19.45 (accuracy-first evidence contract)"
+
+# Accuracy is a production invariant, not a selectable speed profile.  The
+# iterated prompt must never be silently replaced or truncated to fit a model.
+RUNTIME_SYSTEM_PROMPT_MAX_CHARS = int(os.environ.get("OCR_SYSTEM_PROMPT_MAX_CHARS", "24000"))
+ACCURACY_PROFILE = "strict"
+
+_frontend_asset_cache = {"stamp": None, "fingerprint": ""}
+
+
+def get_frontend_asset_fingerprint():
+    """Fingerprint the built dashboard assets without touching OCR state."""
+    index_path = REPO_ROOT / "dashboard" / "dist" / "index.html"
+    try:
+        stat = index_path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if _frontend_asset_cache["stamp"] == stamp:
+            return _frontend_asset_cache["fingerprint"]
+        html = index_path.read_text(encoding="utf-8")
+        assets = sorted(set(re.findall(r'(?:src|href)=["\']([^"\']+\.(?:js|css)(?:\?[^"\']*)?)["\']', html)))
+        digest = hashlib.sha256("\n".join(assets).encode("utf-8")).hexdigest()[:16]
+        _frontend_asset_cache.update({"stamp": stamp, "fingerprint": digest})
+        return digest
+    except (OSError, UnicodeError):
+        return ""
+
+# Presentation identity is separate from OCR identity.  The UI must never
+# reconstruct a card from filenames or rolling result lists.
+_presentation_next_id = 0
+_presentation_by_source = {}
+_presentation_events = []
+
+
+def _presentation_snapshot(raw, source_hint=""):
+    global _presentation_next_id
+    item = dict(raw or {})
+    result = dict(item.get("result") or {})
+    item["result"] = result
+    presentation_id = str(item.get("presentation_id") or "")
+    if not presentation_id:
+        identity = f"backend-{source_hint}-{item.get('completed_at', '')}-{item.get('file_name', '')}"
+        if identity not in _presentation_by_source:
+            _presentation_next_id += 1
+            _presentation_by_source[identity] = f"p-{_presentation_next_id:09d}"
+        presentation_id = _presentation_by_source[identity]
+    item["presentation_id"] = presentation_id
+    sequence = int(item.get("presentation_sequence") or 0)
+    if sequence <= 0:
+        _presentation_next_id += 1
+        sequence = _presentation_next_id
+    else:
+        _presentation_next_id = max(_presentation_next_id, sequence)
+    item["presentation_sequence"] = sequence
+    return item
+
+
+def _presentation_payload(orchestrator):
+    """Return immutable snapshots in backend sequence order, capped at 200."""
+    global _presentation_events
+    live = list(getattr(orchestrator, "display_queue", []) or [])
+    for index, raw in enumerate(live):
+        item = _presentation_snapshot(raw, f"live-{index}")
+        existing = {event["presentation_id"] for event in _presentation_events}
+        if item["presentation_id"] not in existing:
+            _presentation_events.append(item)
+    if not getattr(orchestrator, "is_running", False):
+        for index, raw in enumerate(list(getattr(orchestrator, "recent_results", []) or [])):
+            item = _presentation_snapshot(raw, f"history-{index}")
+            if item["presentation_id"] not in {event["presentation_id"] for event in _presentation_events}:
+                _presentation_events.append(item)
+    _presentation_events = _presentation_events[-200:]
+    return [dict(event, result=dict(event.get("result") or {})) for event in _presentation_events]
+
+
+V1945_OUTPUT_CONTRACT = (
+    "FINAL OUTPUT CONTRACT (v19.45): Return exactly one JSON object and no prose. "
+    "It must contain core keys view_type, screen_status, quality_issue, model, price, category "
+    "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
+    "label_ownership (matched|mismatched|ambiguous|not_visible|not_applicable), "
+    "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
+    "Use [] when no FollowMe physical evidence exists. Keep core and evidence in this same object."
+)
+
+
+def build_runtime_system_prompt(prompt_template, followme_daily_reference):
+    """Return the complete production prompt or fail closed."""
+    full_prompt = f"{prompt_template}{followme_daily_reference}\n\n{V1945_OUTPUT_CONTRACT}"
+    limit = max(16000, RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+    if len(full_prompt) > limit:
+        raise RuntimeError(
+            "完整 OCR 提示詞超過正式上限；請提高模型 context 或整理重複規則，"
+            "不可自動切換短提示詞。"
+        )
+    return full_prompt, False
+
+
+def build_ocr_messages(system_prompt, user_content, ocr_attempt=1, previous_results=None):
+    """Build isolated per-photo messages; only pass 2 receives pass-1 memory."""
+    attempt = max(1, int(ocr_attempt or 1))
+    history = list(previous_results or [])
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    if attempt == 2 and history:
+        previous = history[-1]
+        previous_payload = {
+            key: previous.get(key)
+            for key in ("view_type", "category", "model", "price", "screen_status", "quality_issue",
+                        "complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence")
+        }
+        previous_payload["疑慮"] = previous.get("reasons", [])
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": "第一次暫定結果：" + json.dumps(previous_payload, ensure_ascii=False),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "請不要延續或合理化第一次答案。根據原圖與人工規則逐項找反證，"
+                    "修正後重新輸出完整繁體中文描述與 JSON。"
+                    + "\\n\\n" + V1945_OUTPUT_CONTRACT
+                ),
+            },
+        ])
+    return messages
+
+
 import random, string
 from datetime import datetime
 SESSION_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
@@ -245,11 +406,20 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
     raw_model_text = str(raw_model or "").upper()
     context_upper = str(context_text or "").upper()
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
-    if has_negative_followme_context(text) and not has_positive_followme_physical_clue(context_text) and not has_followme_display_fixture_clue(context_text):
+    if has_negative_followme_context(context_text) and not has_strong_followme_physical_signature(context_text) and not has_followme_display_fixture_clue(context_text):
         return None
-    if "FOLLOWME" not in text and "FOLLOW ME" not in text:
+    raw_model_has_followme = "FOLLOWME" in raw_model_text or "FOLLOW ME" in raw_model_text
+    context_has_followme = has_positive_followme_word(context_text)
+    if not raw_model_has_followme and not context_has_followme:
         return None
     if should_block_followme_due_to_other_brand(text, context_text):
+        return None
+    if not (
+        has_strong_followme_physical_signature(context_text)
+        or has_followme_display_fixture_clue(context_text)
+    ):
+        # FollowMe wording, a promo card, an on-screen advertisement, or a
+        # price band cannot establish that the photographed unit is FollowMe.
         return None
 
     price_int = None
@@ -261,38 +431,33 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
             except ValueError:
                 price_int = None
 
-    if (
-        "FOLLOWME PRO" in text
-        or "S43FM" in text
-        or "PRO" in raw_model_text
-        or (price_int and price_int >= 15000 and ("FOLLOWME" in text or "FOLLOW ME" in text))
-    ):
-        return 'FollowMe Pro M7 43"'
-
     products = get_followme_products()
-    price_name = match_followme_by_price(price_int, products)
     code_name = match_followme_by_code(text, products)
 
     if code_name:
         return code_name
+    pro_label_evidence = bool(
+        re.search(
+            r"(?:標籤|側標|規格牌|型號|牌面|寫著).{0,32}(?:FOLLOW\s*ME\s*PRO|S43FM|43\s*(?:吋|型|\"))"
+            r"|(?:FOLLOW\s*ME\s*PRO|S43FM|43\s*(?:吋|型|\")).{0,32}(?:標籤|側標|規格牌|型號|牌面|寫著)",
+            str(context_text or ""),
+            re.IGNORECASE,
+        )
+    )
+    if pro_label_evidence:
+        return 'FollowMe Pro M7 43"'
     if "M5" in raw_model_text or "S32FM50" in raw_model_text:
         return 'FollowMe M5 32"'
     if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
         return 'FollowMe M7 32"'
     if price_int and 12000 <= price_int <= 14000 and any(token in text for token in ["32", "M7", "S32FM70", "S32DM70", "4K"]):
         return 'FollowMe M7 32"'
-    if "PRO" in context_upper or "43" in context_upper or "S43FM" in context_upper or "PRO" in raw_model_text:
-        return 'FollowMe Pro M7 43"'
     if "M5" in context_upper or "S32FM50" in context_upper:
         return 'FollowMe M5 32"'
     if "M7" in context_upper or "S32FM70" in context_upper or "S32DM70" in context_upper or "4K" in context_upper:
         return 'FollowMe M7 32"'
-    if price_name:
-        return price_name
-    if price_int and price_int >= 15000:
-        return 'FollowMe Pro M7 43"'
-    if price_int and 9900 <= price_int <= 11000:
-        return 'FollowMe M5 32"'
+    # Price is not identity evidence.  Store signs, unrelated promotions and
+    # OCR hallucinations must never turn a 32-inch FollowMe into Pro 43.
     return 'FollowMe M7 32"'
 
 
@@ -300,9 +465,8 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     """Infer FollowMe when the model describes the physical stand/tray but outputs 遠景."""
     raw_text = str(context_text or "")
     text = raw_text.upper()
-    positive_physical_clue = has_positive_followme_physical_clue(raw_text)
     display_fixture_clue = has_followme_display_fixture_clue(raw_text)
-    positive_followme_evidence = positive_physical_clue or display_fixture_clue
+    positive_followme_evidence = display_fixture_clue
     if should_block_followme_due_to_other_brand(text, context_text):
         return None
     if has_negative_followme_context(text) and not positive_followme_evidence:
@@ -310,14 +474,8 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     if re.search(r"(沒有|無|不是|非).{0,24}(白色支架|垂直支架|圓形底座|白色底座|支架|底座)", raw_text) and not positive_followme_evidence:
         return None
 
-    has_followme_word = "FOLLOWME" in text or "FOLLOW ME" in text
-    has_stand = any(token in raw_text for token in [
-        "白色支架", "垂直支架", "白色垂直", "直立支架", "白色立式",
-        "圓形底座", "圓盤底座", "白色圓形底座", "白色底座", "白色圓盤",
-        "落地底座", "直桿", "長直桿", "移動式立架",
-    ])
-    has_tray = any(token in raw_text for token in ["托盤", "展示立牌", "底部價牌", "價牌", "價格"])
-    if not has_followme_word and not positive_followme_evidence and not (has_stand and has_tray):
+    has_followme_word = has_positive_followme_word(raw_text)
+    if not has_followme_word or followme_physical_signature_score(raw_text) < 2:
         return None
 
     digits = "".join(c for c in str(price or "") if c.isdigit())
@@ -325,23 +483,13 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     code_name = match_followme_by_code(text, get_followme_products())
     if code_name:
         return code_name
-    price_name = match_followme_by_price(price_int, get_followme_products())
-    if price_name:
-        return price_name
-    if "PRO" in text or "43" in text or "S43FM" in text:
-        return 'FollowMe Pro M7 43"'
+    normalized = normalize_followme_model("FollowMe", price, raw_text)
+    if normalized:
+        return normalized
     if "M5" in text or "S32FM50" in text:
         return 'FollowMe M5 32"'
     if "M7" in text or "S32FM70" in text or "S32DM70" in text or "4K" in text:
         return 'FollowMe M7 32"'
-    if price_int and price_int >= 15000:
-        return 'FollowMe Pro M7 43"'
-    if price_int and 9900 <= price_int <= 11000:
-        return 'FollowMe M5 32"'
-    if price_int and 12000 <= price_int <= 14000:
-        return 'FollowMe M7 32"'
-    if price_int:
-        return None
     if has_followme_word or positive_followme_evidence:
         return normalize_followme_model(None, price, context_text)
     return None
@@ -351,7 +499,7 @@ def rescue_followme_32_from_side_label(context_text=""):
     """Rescue FollowMe 32 when a side spec label and M7 price are clearly described."""
     raw_text = str(context_text or "")
     text = raw_text.upper()
-    if "FOLLOWME" not in text and "FOLLOW ME" not in text:
+    if not has_positive_followme_word(raw_text) or followme_physical_signature_score(raw_text) < 2:
         return None
     has_product = "4K" in text or "移動式智慧聯網組" in raw_text
     has_32 = bool(re.search(r'(?:32\s*(?:吋|型)|32\s*["”]|[(（]\s*32\s*["”]?\s*[)）])', raw_text, re.IGNORECASE))
@@ -385,7 +533,10 @@ def match_followme_by_code(text, products):
 
 
 def has_negative_followme_context(text):
-    normalized = str(text or "").upper().replace(" ", "")
+    raw_text = str(text or "")
+    normalized = raw_text.upper().replace(" ", "")
+    if any(_is_negated_followme_occurrence(raw_text, match) for match in _followme_mentions(raw_text)):
+        return True
     if re.search(r"(非|不是|不屬於|不符合|均非)FOLLOWME", normalized):
         return True
     if re.search(r"(沒有|無|不是|非|看不到|未看到)(?:任何)?FOLLOWME.*(支架|底座|特徵|結構)", normalized):
@@ -413,8 +564,6 @@ def has_negative_followme_context(text):
 
 
 FOLLOWME_PHYSICAL_CLUE_TEXTS = (
-    "followme",
-    "follow me",
     "white vertical stand",
     "vertical stand",
     "white circular base",
@@ -438,10 +587,6 @@ FOLLOWME_PHYSICAL_CLUE_TEXTS = (
     "移動式智慧聯網",
     "移動式立架",
     "托盤",
-    "FollowMe Pro 4K",
-    "FollowMe 4K",
-    "S32FM",
-    "S43FM",
 )
 
 
@@ -490,33 +635,78 @@ FOLLOWME_PHYSICAL_NEGATIONS = (
 )
 
 
-def has_positive_followme_physical_clue(text):
-    """Return True when strong FollowMe physical/product clues are not negated nearby."""
-    lower_text = str(text or "").lower()
-    for token in FOLLOWME_PHYSICAL_CLUE_TEXTS:
-        token_lower = token.lower()
-        start = 0
-        while True:
-            index = lower_text.find(token_lower, start)
-            if index < 0:
-                break
-            before = lower_text[max(0, index - 28):index]
-            if not any(negation in before for negation in FOLLOWME_PHYSICAL_NEGATIONS):
-                return True
-            start = index + len(token_lower)
+def _followme_mentions(text):
+    return list(re.finditer(r"FOLLOW\s*ME", str(text or ""), flags=re.IGNORECASE))
+
+
+def _is_negated_followme_occurrence(text, match):
+    raw_text = str(text or "")
+    before = raw_text[max(0, match.start() - 42):match.start()].upper()
+    after = raw_text[match.end():match.end() + 42].upper()
+    before_compact = re.sub(r"[\s「」『』()（）,:：、]", "", before)
+    after_compact = re.sub(r"[\s「」『』()（）,:：、]", "", after)
+    if re.search(r"(?:沒有|並無|無|未見|未看到|沒看到|看不到|找不到|不具備|不是|並非|非).{0,30}$", before_compact):
+        return True
+    if re.match(r".{0,12}(?:字樣|標誌|標籤|線索|特徵|支架|底座).{0,12}(?:不存在|不足|沒有|未見|看不到|不清楚)", after_compact):
+        return True
     return False
 
 
+def has_positive_followme_word(text):
+    """Return True only for a non-negated FollowMe mention."""
+    raw_text = str(text or "")
+    mentions = _followme_mentions(raw_text)
+    return any(not _is_negated_followme_occurrence(raw_text, match) for match in mentions)
+
+
+def followme_physical_signature_score(text):
+    raw_text = str(text or "")
+    groups = (
+        ("白色垂直支架", "垂直支架", "白色直立支架", "直立支架", "白色立式", "移動式立架", "移動式智慧聯網", "vertical stand", "mobile stand"),
+        ("白色圓形底座", "圓形底座", "圓盤底座", "白色圓盤", "白色底座", "落地底座", "circular base", "white circular base"),
+        ("托盤", "底部托盤", "置物托盤"),
+    )
+    return sum(any(term.lower() in raw_text.lower() for term in group) for group in groups)
+
+
+def has_positive_samsung_subject(text):
+    raw_text = str(text or "")
+    for match in re.finditer(r"SAMSUNG|三星", raw_text, flags=re.IGNORECASE):
+        before = re.sub(
+            r"[\s「」『』()（）,:：、]",
+            "",
+            raw_text[max(0, match.start() - 18):match.start()],
+        )
+        if not re.search(r"(?:沒有|並無|無|未見|未看到|不是|並非|非).{0,10}$", before):
+            return True
+    return False
+
+
+def has_strong_followme_physical_signature(text):
+    raw_text = str(text or "")
+    has_samsung = has_positive_samsung_subject(raw_text)
+    return has_samsung and followme_physical_signature_score(raw_text) >= 2
+
+
+def has_positive_followme_physical_clue(text):
+    """Return True only for a Samsung unit with two physical signature groups."""
+    return has_strong_followme_physical_signature(text)
+
+
 def has_followme_display_fixture_clue(text):
-    """Return True for Samsung FollowMe signage attached to a visible standing display."""
+    """Require same-unit physical ownership, not nearby FollowMe wording."""
     raw_text = str(text or "")
     upper = raw_text.upper().replace(" ", "")
-    has_followme = "FOLLOWME" in upper or "FOLLOWME" in upper.replace("FOLLOW ME", "FOLLOWME")
+    has_followme = has_positive_followme_word(raw_text)
     if not has_followme:
         return False
-    has_samsung = "SAMSUNG" in upper or "三星" in raw_text
-    has_fixture = any(term in raw_text for term in FOLLOWME_DISPLAY_FIXTURE_TERMS)
-    has_label_context = any(term in raw_text for term in FOLLOWME_DISPLAY_LABEL_TERMS)
+    has_samsung = has_positive_samsung_subject(raw_text)
+    physical_score = followme_physical_signature_score(raw_text)
+    ownership_terms = (
+        "同一台", "主角螢幕", "主角實機", "連著", "連接", "正下方",
+        "屬於主角", "自己的支架", "自己的底座", "實體機",
+    )
+    has_ownership = any(term in raw_text for term in ownership_terms)
     has_negative_product_context = any(
         term in raw_text
         for term in (
@@ -526,9 +716,14 @@ def has_followme_display_fixture_clue(text):
             "不是商品",
             "不是主角",
             "旁邊廣告",
+            "宣傳卡",
+            "活動立牌",
+            "促銷立牌",
+            "螢幕廣告",
+            "只有文字",
         )
     )
-    return has_samsung and (has_fixture or has_label_context) and not has_negative_product_context
+    return has_samsung and physical_score >= 2 and has_ownership and not has_negative_product_context
 
 
 def should_block_followme_due_to_other_brand(text, context_text=""):
@@ -536,11 +731,16 @@ def should_block_followme_due_to_other_brand(text, context_text=""):
     raw_text = str(context_text or "")
     combined = str(text or "")
     upper = combined.upper()
-    if not any(token in upper for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
+    other_brand_tokens = (
+        "它牌(", "ACER", "ASUS", "AOC", "MSI", "LG", "PHILIPS", "BENQ",
+        "VIEWSONIC", "DELL", "HP", "LENOVO", "GIGABYTE", "CHIMEI",
+        "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83",
+    )
+    if not any(token in upper for token in other_brand_tokens):
         return False
 
-    has_followme_word = "FOLLOWME" in upper or "FOLLOW ME" in upper
-    has_samsung = "SAMSUNG" in upper or "三星" in raw_text
+    has_followme_word = has_positive_followme_word(raw_text)
+    has_samsung = has_positive_samsung_subject(raw_text)
     if not has_followme_word or not has_samsung:
         return True
 
@@ -562,8 +762,6 @@ def should_block_followme_due_to_other_brand(text, context_text=""):
     )
     return not (
         has_followme_display_fixture_clue(raw_text)
-        or has_positive_followme_physical_clue(raw_text)
-        or any(term in raw_text for term in standing_display_terms)
     )
 
 
@@ -582,26 +780,59 @@ def has_strong_single_unit_evidence(text):
         "主角螢幕",
         "主體是",
         "主角是",
-        "前景",
+        "前景主角螢幕",
+        "前景的一台螢幕",
         "中央一台",
         "中間一台",
         "中間的螢幕",
         "主要螢幕",
-        "側標",
-        "實體標籤",
-        "實體價牌",
-        "型號標籤",
         "不是遠景",
         "不屬於遠景",
         "不符合遠景",
         "一般單機",
         "單機條件",
     ]
-    return (
-        has_followme_display_fixture_clue(raw_text)
-        or has_positive_followme_physical_clue(raw_text)
-        or any(term in raw_text for term in single_subject_terms)
+    if has_followme_display_fixture_clue(raw_text) or has_positive_followme_physical_clue(raw_text):
+        return True
+
+    # Do not reverse the meaning of sentences such as "沒有單一主角".  The
+    # earlier substring-only implementation treated that as positive proof of
+    # a single unit and weakened all distant-view checks.
+    negations = ("沒有", "未", "無", "看不到", "並非")
+    for term in single_subject_terms:
+        start = 0
+        while True:
+            index = raw_text.find(term, start)
+            if index < 0:
+                break
+            if term in {"不是遠景", "不屬於遠景", "不符合遠景"}:
+                return True
+            before = raw_text[max(0, index - 8):index]
+            if not any(negation in before for negation in negations):
+                return True
+            start = index + len(term)
+
+    # A display wall can contain many side labels and price cards.  Those words
+    # only prove a single subject when the narration explicitly assigns the
+    # label/card to one monitor.  Generic wording such as "整排螢幕下方有實體價牌"
+    # must not overturn an otherwise explicit distant-view conclusion.
+    owned_label_terms = ("側標", "實體標籤", "實體價牌", "型號標籤")
+    owner_terms = (
+        "主角", "主體", "同一台", "這台", "該台", "那台", "一台螢幕",
+        "單一螢幕", "中央螢幕", "中間螢幕", "前景螢幕", "主要螢幕",
+        "可對應", "對應同一台", "自己的",
     )
+    for label_term in owned_label_terms:
+        start = 0
+        while True:
+            index = raw_text.find(label_term, start)
+            if index < 0:
+                break
+            context_window = raw_text[max(0, index - 28):min(len(raw_text), index + len(label_term) + 16)]
+            if any(owner in context_window for owner in owner_terms):
+                return True
+            start = index + len(label_term)
+    return False
 
 
 def should_demote_distant_to_single_review(view_type, context_text=""):
@@ -624,14 +855,44 @@ def should_block_rescue_from_distant_view(view_type, context_text=""):
     return not has_strong_single_unit_evidence(raw_text)
 
 
+def has_explicit_distant_layout_evidence(context_text=""):
+    """Require an explicit display-wall conclusion before overriding a single-unit result.
+
+    Mentioning a store, shelf, or several labels is not enough.  Those terms occur
+    in many valid single-monitor and FollowMe photos, so an uncertain result must
+    stay a reviewable single unit instead of becoming a false distant view.
+    """
+    raw_text = str(context_text or "")
+    if has_strong_single_unit_evidence(raw_text):
+        return False
+    if "整體符合「遠景」條件" not in raw_text:
+        return False
+    layout_terms = ("多台", "整排", "展示牆", "一整排", "螢幕牆", "超過 3", "超過3", "並排")
+    no_unique_subject_terms = (
+        "沒有明確的主角",
+        "沒有明確主角",
+        "沒有單一主角",
+        "無法指定唯一主角",
+        "無法指定主角",
+        "沒有指定主角",
+        "無可唯一對應",
+    )
+    return (
+        sum(term in raw_text for term in layout_terms) >= 2
+        or any(term in raw_text for term in no_unique_subject_terms)
+    )
+
+
+def has_confirmed_followme_evidence(model, context_text=""):
+    """Prevent a successful FollowMe rescue from being overwritten later."""
+    if not is_followme_standard_name(model):
+        return False
+    raw_text = str(context_text or "")
+    return has_followme_display_fixture_clue(raw_text) or has_strong_followme_physical_signature(raw_text)
+
+
 def normalize_followme_price(model, price=None, context_text=""):
-    """Correct the common 17,990 -> 11,990 OCR slip for FollowMe Pro 43 only."""
-    text = " ".join(str(part or "") for part in [model, context_text]).upper()
-    if "FOLLOWME PRO M7 43" not in text and not ("FOLLOWME" in text and "43" in text):
-        return None
-    digits = "".join(c for c in str(price or "") if c.isdigit())
-    if digits == "11990":
-        return "17990"
+    """Never rewrite a photographed price from a presumed product mapping."""
     return None
 
 
@@ -842,29 +1103,7 @@ def extract_main_label_model(context_text=""):
 
 
 def correct_common_model_price_conflict(model, price, context_text=""):
-    """Fix common OCR/model mismatch when a known low-end monitor price is paired with G5."""
-    model_text = str(model or "").upper()
-    cleaned_price = clean_monitor_price(price)
-    text = str(context_text or "").upper()
-    has_g5_series_word = bool(re.search(r"(?<![A-Z0-9])G5(?![A-Z0-9])", text))
-    common_ocr_model_fixes = {
-        "S27CG552": "S27CG552EC",
-        "S27CG552ZK": "S27CG552EC",
-        "S27FQ532EC": "S27FG532EC",
-        "S27D500GAC": "S27D300GAC",
-    }
-    if model_text in common_ocr_model_fixes:
-        return common_ocr_model_fixes[model_text]
-    if model_text == "S32FGS02EC" and (cleaned_price == "26900" or "OLED" in text):
-        return "S32DG802SC"
-    if not model_text and cleaned_price in {"3090", "3290"} and ("SAMSUNG" in text or "三星" in text) and ("27" in text or "27型" in text) and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price == "3090" and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price == "3290" and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price and int(cleaned_price) >= 9000 and not has_g5_series_word and "ODYSSEY" not in text:
-        return None
+    """Compatibility hook: never infer or rewrite a model from its price."""
     return model
 
 
@@ -915,7 +1154,12 @@ def infer_odyssey_ark_model(context_text=""):
     compact = re.sub(r"[^A-Z0-9]", "", text)
     if "S55BG970" in compact or "LS55BG970" in compact:
         return "S55BG970NC"
-    if "ODYSSEY ARK" in text and ("55" in text or "MINI LED" in text or "ARK" in text):
+    ark_subject_evidence = any(
+        term in text
+        for term in ("主角", "這台", "主體", "55 吋", "55吋", "55 型", "55型", "MINI LED", "大型直立", "大型曲面")
+    )
+    ark_size_evidence = bool(re.search(r"55\s*(?:吋|型|\")", text)) or "MINI LED" in text
+    if "ODYSSEY ARK" in text and ark_subject_evidence and ark_size_evidence:
         return "S55BG970NC"
     return None
 
@@ -1013,7 +1257,12 @@ DRIVE_MANIFEST_DIR = OUTPUT_ROOT / "_drive_upload"
 AUDIT_DIR = OUTPUT_ROOT / "_ocr_audit"
 MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
+MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
 OVERALL_PROGRESS_CACHE = {"mtime": None, "data": None}
+
+def should_save_manual_learning_rule(data: dict) -> bool:
+    """Only an explicit checkbox plus a non-empty reusable hint creates a rule."""
+    return bool(data.get("learn_rule")) and bool(str(data.get("rule_hint") or "").strip())
 
 REVIEW_REASON_LABELS = {
     "current_year_missing_compare_symbol": "2026+ 缺少 ↑/↓/✓ 比價符號",
@@ -1062,6 +1311,45 @@ def _read_csv_rows(path: Path) -> list[dict]:
         return []
 
 
+def load_manual_rule_prompt_section(max_rules: int = 12, max_chars: int = 2400) -> tuple[str, int]:
+    """Hot-load human-confirmed reusable rules without pretending to train weights."""
+    try:
+        mtime_ns = MANUAL_RULES_PATH.stat().st_mtime_ns if MANUAL_RULES_PATH.exists() else 0
+    except OSError:
+        mtime_ns = 0
+    if MANUAL_RULES_CACHE.get("mtime_ns") == mtime_ns:
+        return MANUAL_RULES_CACHE.get("section", ""), int(MANUAL_RULES_CACHE.get("count", 0))
+
+    rows = _read_csv_rows(MANUAL_RULES_PATH)
+    selected: list[str] = []
+    seen: set[str] = set()
+    for row in reversed(rows):
+        hint = re.sub(r"\s+", " ", str(row.get("rule_hint") or "")).strip()
+        # A filename or a bare corrected value is an example, not a reusable rule.
+        if len(hint) < 8 or hint.lower() in {"none", "null"}:
+            continue
+        key = hint.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(hint[:320])
+        if len(selected) >= max_rules:
+            break
+    selected.reverse()
+
+    if selected:
+        body = "\n".join(f"- {hint}" for hint in selected)
+        section = (
+            "\n\n## 人工確認的可重用規則（熱載入）\n"
+            "以下只補充通用判斷，不是任何照片的預設答案。每條規則仍須由目前圖片證據支持；"
+            "不得把範例檔名、型號或價格借給其他照片。\n"
+            f"{body}"
+        )[:max_chars]
+    else:
+        section = ""
+
+    MANUAL_RULES_CACHE.update({"mtime_ns": mtime_ns, "section": section, "count": len(selected)})
+    return section, len(selected)
 def _folder_key(value) -> str:
     text = str(value or "").strip()
     if not text:
@@ -1697,7 +1985,7 @@ def _detect_repetition(text: str) -> bool:
 
 # === [v19.10] OpenCode Go (Anthropic Messages API) helper ===
 
-def _convert_to_anthropic_messages(messages, max_image_px=1024):
+def _convert_to_anthropic_messages(messages, max_image_px=2560):
     """Convert OpenAI-format messages to Anthropic Messages format. Optionally resize images."""
     import io as _io
     from PIL import Image as PILImage
@@ -1729,7 +2017,7 @@ def _convert_to_anthropic_messages(messages, max_image_px=1024):
                                     ratio = max_image_px / max(w, h)
                                     img = img.resize((int(w*ratio), int(h*ratio)), PILImage.LANCZOS)
                                 buf = _io.BytesIO()
-                                img.save(buf, format='JPEG', quality=75)
+                                img.save(buf, format='JPEG', quality=92, optimize=True)
                                 b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
                             except Exception:
                                 pass  # If resize fails, use original
@@ -1745,78 +2033,91 @@ def _convert_to_anthropic_messages(messages, max_image_px=1024):
     return anthropic_msgs, system_text
 
 
-def _extract_balanced_json(text):
-    """Extract the largest balanced JSON object from text, handling nested braces."""
+EVIDENCE_KEYS = {"complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence"}
+CORE_JSON_KEYS = {"view_type", "screen_status", "quality_issue", "model", "price", "category"}
+
+
+def _json_pairs_no_duplicates(pairs):
+    result = {}
+    duplicates = []
+    for key, value in pairs:
+        if key in result:
+            duplicates.append(key)
+        result[key] = value
+    if duplicates:
+        raise ValueError("duplicate_json_keys:" + ",".join(sorted(set(duplicates))))
+    return result
+
+
+def _extract_balanced_json_objects(text):
+    """Return every valid balanced JSON object in response order."""
     if not text:
-        return None
-    text_stripped = text.strip()
-    # Try direct parse first (whole text)
-    try:
-        json.loads(text_stripped)
-        return text_stripped
-    except Exception:
-        pass
-    # Try markdown code block
-    code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text_stripped)
-    if code_block_match:
-        candidate = code_block_match.group(1).strip()
-        try:
-            json.loads(candidate)
-            return candidate
-        except Exception:
-            pass
-    # Brace-balanced scan: find first '{' and track depth to find matching '}'
-    start = text_stripped.find('{')
-    if start == -1:
-        return None
-    best_candidate = None
+        return []
+    decoder = json.JSONDecoder(object_pairs_hook=_json_pairs_no_duplicates)
+    objects = []
+    start = None
     depth = 0
     in_string = False
     escape = False
-    for i in range(start, len(text_stripped)):
-        ch = text_stripped[i]
+    for index, ch in enumerate(str(text)):
         if in_string:
             if escape:
                 escape = False
-            elif ch == '\\':
+            elif ch == "\\":
                 escape = True
             elif ch == '"':
                 in_string = False
             continue
         if ch == '"':
             in_string = True
-            continue
-        if ch == '{':
+        elif ch == "{" and depth == 0:
+            start = index
+            depth = 1
+        elif ch == "{" and depth:
             depth += 1
-        elif ch == '}':
+        elif ch == "}" and depth:
             depth -= 1
-            if depth == 0:
-                candidate = text_stripped[start:i+1]
+            if depth == 0 and start is not None:
+                raw = str(text)[start:index + 1]
                 try:
-                    json.loads(candidate)
-                    best_candidate = candidate
-                    # Continue scanning for a later (often better) valid object
-                except Exception:
-                    pass
-    if best_candidate:
-        return best_candidate
-    # Fallback: simple regex, prefer candidate with view_type/model
-    candidates = re.findall(r'(\{[\s\S]*?\})', text_stripped)
-    for candidate in reversed(candidates):
-        if '"view_type"' in candidate or '"model"' in candidate:
-            try:
-                json.loads(candidate)
-                return candidate
-            except Exception:
-                pass
-    if candidates:
-        for candidate in reversed(candidates):
-            try:
-                json.loads(candidate)
-                return candidate
-            except Exception:
-                pass
-    return None
+                    objects.append({"raw": raw, "value": decoder.decode(raw)})
+                except Exception as exc:
+                    objects.append({"raw": raw, "value": None, "error": str(exc)[:200]})
+                start = None
+    return objects
+
+
+def _merge_v1945_json_objects(text):
+    objects = _extract_balanced_json_objects(text)
+    valid = [item for item in objects if isinstance(item.get("value"), dict)]
+    if not valid:
+        return None, objects, "none", "no_valid_json_object"
+    if len(valid) == 1:
+        value = valid[0]["value"]
+        unknown = set(value) - CORE_JSON_KEYS - EVIDENCE_KEYS
+        if unknown:
+            return None, objects, "rejected", "unknown_keys:" + ",".join(sorted(unknown))
+        return value, objects, "single_object", ""
+    core = [item for item in valid if set(item["value"]) & CORE_JSON_KEYS]
+    evidence_only = [item for item in valid if set(item["value"]) and not (set(item["value"]) & CORE_JSON_KEYS)]
+    if len(core) != 1 or len(evidence_only) > 1 or len(core) + len(evidence_only) != len(valid):
+        return None, objects, "rejected", "multiple_core_or_unknown_object"
+    merged = dict(core[0]["value"])
+    evidence = evidence_only[0]["value"] if evidence_only else {}
+    if set(evidence) - EVIDENCE_KEYS:
+        return None, objects, "rejected", "evidence_object_has_unknown_keys"
+    if set(merged) & set(evidence):
+        return None, objects, "rejected", "duplicate_core_evidence_keys"
+    merged.update(evidence)
+    return merged, objects, "disjoint_core_evidence", ""
+
+
+def _extract_balanced_json(text):
+    """Backward-compatible single-object accessor."""
+    parsed, objects, _, _ = _merge_v1945_json_objects(text)
+    if parsed is None:
+        return None
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 def _fallback_extract_fields(text, valid_models=None):
@@ -1910,6 +2211,16 @@ def _fallback_extract_fields(text, valid_models=None):
         cnt = Counter(price_candidates)
         result["price"] = cnt.most_common(1)[0][0]
 
+    # Free-text fallback cannot prove that a model and a price belong to the
+    # same physical label. Preserve scene/quality clues, but force a structured
+    # retry instead of manufacturing a cross-label pair.
+    if result.get("model") or result.get("price"):
+        result["fallback_untrusted_model"] = result.get("model")
+        result["fallback_untrusted_price"] = result.get("price")
+        result["model"] = None
+        result["price"] = None
+    result["requires_structured_retry"] = True
+
     # 4. 螢幕狀態
     if "黑屏" in text_tc or "黑畫面" in text_tc or "沒亮" in text_tc:
         result["screen_status"] = "黑屏"
@@ -1989,10 +2300,10 @@ def _rescue_model_conservative(text, valid_models):
         reason = f"型號 {vm} 在型號表中,所在句子明確可讀({', '.join(clear_found[:3])})且無模糊詞"
         return vm, reason
 
-    return None, "自言自語中的型號皆不符合保守補抓條件(需同時:在型號表+同句明確可讀+同句無模糊詞)"
+    return None, "AI 判讀文字中的型號皆不符合保守補抓條件（需同時在型號表、同句明確可讀且無模糊詞）"
 
 
-def _call_opencode_go_api(api_base, api_key, model, messages, max_tokens=800, timeout=180, max_image_px=1024):
+def _call_opencode_go_api(api_base, api_key, model, messages, max_tokens=900, timeout=180, max_image_px=2560):
     """Call OpenCode Go Anthropic Messages API. Returns (status_code, response_text, response_json, thinking_text)."""
     import requests as _requests
 
@@ -2033,7 +2344,15 @@ def _call_opencode_go_api(api_base, api_key, model, messages, max_tokens=800, ti
     return resp.status_code, full_text, resp_data, thinking_text
 
 
-def process_single_image(fname, image_b64, prompt_mgr, image_processor, processed_image=None):
+def process_single_image(
+    fname,
+    image_b64,
+    prompt_mgr,
+    image_processor,
+    processed_image=None,
+    ocr_attempt=1,
+    previous_results=None,
+):
     """
     Two-Stage Pipeline with Dual Resolution Strategy (Currently Single Stage):
     1. Low-Res (1024px) for fast & stable locating (Stage 1).
@@ -2071,18 +2390,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     start_time = time.time()
     thinking_text = "" # [v17.18 Fix] Initialize early to prevent UnboundLocalError
 
-    # RESTORE ORIGINAL RESOLUTION (No Constraint)
-    # [IRON RULE] User said: "Do NOT crop images for bulk processing."
-    # For overnight bulk runs, keep one full image per request so a single hard photo cannot
-    # stall LM Studio with multiple vision payloads.
-    fast_batch_mode = os.environ.get("OCR_FAST_BATCH", "").lower() in {"1", "true", "yes", "on"}
-    fast_max_size = int(os.environ.get("OCR_FAST_MAX_SIZE", "1920" if fast_batch_mode else "2560"))
-    if fast_batch_mode:
-        image_processor.config["max_size"] = fast_max_size
-        image_processor.config["max_dimensions"] = None
-    else:
-        image_processor.config["max_size"] = None
-        image_processor.config["max_dimensions"] = (2560, 1440)
+    # Accuracy-first invariant: legacy fast flags are deliberately ignored.
+    # The full scene preserves ownership/layout evidence; supplementary crops
+    # help read small model and price labels without replacing that context.
+    image_processor.config["max_size"] = None
+    image_processor.config["max_dimensions"] = (2560, 1440)
 
     # [v16.3 DEBUG] Force Print to see if we enter
     print(f"[DEBUG] process_single_image called for: {fname}")
@@ -2091,11 +2403,16 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     label_b64 = None
     bottom_label_b64 = None
     bottom_center_b64 = None
+    scene_tiles = []
     if processed_image:
+        source_path = (processed_image.get("metadata") or {}).get("source_path")
+        if int(ocr_attempt or 1) >= 2 and source_path and os.path.isfile(source_path):
+            processed_image = image_processor.process(source_path, evidence_attempt=int(ocr_attempt))
         full_image_b64 = processed_image['base64']
         label_b64 = processed_image.get('label_base64')
         bottom_label_b64 = processed_image.get('bottom_label_base64')
         bottom_center_b64 = processed_image.get('bottom_center_base64')
+        scene_tiles = list(processed_image.get("scene_tiles") or [])
     elif image_b64:
         full_image_b64 = image_b64
         # print(f"[DEBUG] Using provided image_b64, len={len(image_b64)}")
@@ -2109,10 +2426,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         label_b64 = result.get('label_base64') # [v18.25] Dual Vision: Get High-Res Crop
         bottom_label_b64 = result.get('bottom_label_base64')
         bottom_center_b64 = result.get('bottom_center_base64')
-    if fast_batch_mode:
-        label_b64 = None
-        bottom_label_b64 = None
-        bottom_center_b64 = None
+        scene_tiles = list(result.get("scene_tiles") or [])
     if orchestrator:
         msg = f"▶️ 正在分析圖片: {fname} (Model: {model_name_global})..."
         if label_b64: msg += " (偵測到價牌，啟用雙重視野放大 🔍)"
@@ -2144,10 +2458,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
     try:
         # 🔥 強制每次都從檔案讀取，不使用快取
-        if is_opencode_go:
-            prompt_file = 'samsung_ocr_prompt_opencode_go.txt'
-        else:
-            prompt_file = 'samsung_ocr_prompt.txt'
+        # One production prompt is the source of truth for every provider.
+        prompt_file = 'samsung_ocr_prompt.txt'
         with open(prompt_file, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
         # 可選：記錄檔案修改時間，方便 debug
@@ -2164,24 +2476,23 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
     #                                .replace("{examples_section}", "")
     followme_daily_reference = build_followme_prompt_section()
-    if (not is_opencode_go) and fast_batch_mode and os.environ.get("OCR_FAST_PROMPT", "1").lower() in {"1", "true", "yes", "on"}:
-        prompt_template = (
-            "你是三星商化照片 OCR 助理。每張照片都是全新任務，只看目前圖片。\n"
-            "任務：判斷 view_type，讀取主角三星螢幕的型號與店內價格。\n"
-            "分類規則：\n"
-            "1. 遠景：必須同時符合「多台/整排/展示牆」且「沒有單一主角可對應型號與店內價」。不能只因背景很多台就判遠景；只要畫面有前景/中央/中間一台主螢幕、主角自己的價牌、側標、型號標籤、或可疑似對應同一台商品，就先判單機並盡量讀取，讀不到才留空。遠景不填 model/price。\n"
-            "2. FollowMe：只要主角商品標籤/畫面/型號/文字出現 FollowMe、Samsung FollowMe、S32FM50/S32FM70/S43FM70、M5/M7/Pro，或可見移動式直立支架、圓形底座、托盤任一線索，就優先判定 FollowMe；FollowMe 標牌若貼在直立展示螢幕/立式展示/獨立展示螢幕上，即使不是白色圓形底座也不能判遠景；前景白色落地圓形底座、直桿、直立螢幕或上方 FollowMe Pro 4K 牌面，不可因背景有 QLED/TV 展示牆而判遠景。只用下方參考表輔助，不可把 LG、StanbyME、MyView 或其他品牌當三星。\n"
-            "3. 單機：一般三星螢幕、它牌主角螢幕、FollowMe、或可看到主角價牌/側標/實體標籤都屬於單機。若讀不到型號或價格，仍輸出單機並留空，不要改成遠景。\n"
-            "4. 它牌單機：若主角明確是非三星螢幕，只在 model 填「它牌(品牌)」，例如 它牌(ACER)、它牌(ASUS)、它牌(LG)，不要填它牌的實際型號。\n"
-            "價格規則：只讀主角自己的實體商品價牌；活動告示、電信方案、分期月付、配件不可當螢幕價格。若有清楚 Samsung 螢幕型號與實體價牌，2000 元以上價格可保留；它牌主角若有清楚店內價也可保留，但不做 Samsung 官網比價；若實體價牌明確寫促銷價、展示出清、出清、展示機、福利品、清倉或特賣，手寫 4 位數如 1999 也要當有效店內出清價。\n"
-            "輸出規則：先用 1 句繁體中文描述你看到的重點，下一行只輸出 JSON。\n"
-            "JSON 格式固定為："
-            "{\"view_type\":\"遠景或單機\",\"category\":\"遠景或單機或FollowMe\","
-            "\"model\":null,\"price\":null,\"screen_status\":\"\",\"quality_issue\":\"\","
-            "\"black_screen\":false,\"thinking\":\"\"}\n"
-            "model 可讀才填字串，price 可讀才填整數；不確定就用 null，不要猜。"
+    manual_rule_section, manual_rule_count = load_manual_rule_prompt_section()
+    if manual_rule_section:
+        followme_daily_reference = f"{followme_daily_reference}{manual_rule_section}"
+        if orchestrator:
+            orchestrator.manual_rule_count = manual_rule_count
+    system_prompt, used_compact_prompt = build_runtime_system_prompt(
+        prompt_template,
+        followme_daily_reference,
+    )
+    if used_compact_prompt:
+        prompt_notice = (
+            f"提示詞原長度 {len(prompt_template) + len(followme_daily_reference)} 字元，"
+            f"已切換為 {len(system_prompt)} 字元的完整規則精簡版，以相容 8K 本機模型。"
         )
-    system_prompt = prompt_template + followme_daily_reference
+        console.print(f"[yellow]⚠️ {prompt_notice}[/yellow]")
+        if orchestrator:
+            orchestrator.log_system(f"ℹ️ {prompt_notice}")
 
 
     # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
@@ -2192,6 +2503,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
     # 1. 強化無狀態提示 (Engineering Strategy)
     # 2. 恢復雙重視野 (Engineering Strategy)
     # 3. 確保每次都建立全新 messages
+
+    ocr_attempt = max(1, int(ocr_attempt or 1))
+    previous_results = list(previous_results or [])
 
     # Construct User Context
     user_images = []
@@ -2229,6 +2543,27 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_center_b64}"}})
 
+        # Retry-only spatial evidence: full-height overlapping tiles preserve
+        # object ownership while staying within a deterministic image budget.
+        for tile in scene_tiles[:3]:
+            user_images.append({"type": "text", "text": f"補充圖：{tile['label']}，原圖全高空間證據，bbox={tile['bbox']}。只能用於定位，不可單獨證明分類。"})
+            user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
+
+    if ocr_attempt == 2:
+        user_prompt += (
+            "\n\n【第 2 輪立即複核】這仍是同一張照片。先重新觀察原圖，再審核第一次答案；"
+            "第一次答案只是待推翻的假設，不是事實。請特別重新計算完整入鏡螢幕台數、確認 FollowMe 文字是否只是"
+            "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
+            + "\\n\\n" + V1945_OUTPUT_CONTRACT
+        )
+    elif ocr_attempt >= 3:
+        user_prompt += (
+            "\n\n【第 3 輪獨立覆核】請把這張當全新照片，不採信前兩輪答案。逐項獨立判斷："
+            "完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、型號清單有效性、價牌空間歸屬。"
+            "不確定就留空，不可為了和舊答案一致而猜測。"
+            + "\\n\\n" + V1945_OUTPUT_CONTRACT
+        )
+
 
     # [Phase 2] Dynamic Mistake Book Injection
     if orchestrator and orchestrator.image_dir:
@@ -2248,10 +2583,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
     user_content = [{"type": "text", "text": user_prompt}] + user_images
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
-    ]
+    messages = build_ocr_messages(system_prompt, user_content, ocr_attempt, previous_results)
 
     full_response_text = ""
     # [v17.30 Full Schema] Initialize with all required fields to avoid omission
@@ -2275,7 +2607,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         orchestrator.stream_buffer = "" # Clean start
         orchestrator._stream_active = True # [v9.69 Fix] Reset stream latch for new image!
         console.print(f"[bold yellow]☁️  正在將圖片傳送到 LLM (Model: {model_name_global})...[/bold yellow]")
-        orchestrator.log_system(f"🚀 初始化 Local LLM 引擎 ({model_name_global}) - 準備就緒")
+        orchestrator.log_system(f"🚀 本機 AI 引擎已準備就緒 ({model_name_global})")
         # Simplified
         pass
 
@@ -2292,13 +2624,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         if use_opencode_go:
             try:
                 api_key_raw = api_client.api_key if hasattr(api_client, 'api_key') else ""
-                # qwen3.7-plus needs fewer tokens than mimo; 1536px keeps bezel logo readable
+                # Provider routing must not silently shrink the prepared image.
                 if model_name_global == "qwen3.7-plus":
-                    ocg_max_tokens = 600
-                    ocg_max_image_px = 1536
+                    ocg_max_tokens = 900
+                    ocg_max_image_px = 2560
                 else:
                     ocg_max_tokens = 2000
-                    ocg_max_image_px = 1024
+                    ocg_max_image_px = 2560
                 status_code, full_response_text, resp_data, reasoning_text = _call_opencode_go_api(
                     str(api_client.base_url), str(api_key_raw),
                     model_name_global, messages,
@@ -2324,11 +2656,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                         display_buffer = to_tc(extracted) if extracted else ""
                     # [繁中檢查] 顯示前確保為台灣繁體,攔截模型誤用簡體
                     display_buffer, zh_violations = ensure_traditional_chinese(
-                        display_buffer, source_label=f"{fname} 自言自語"
+                        display_buffer, source_label=f"{fname} AI 判讀文字"
                     )
                     if zh_violations:
                         orchestrator.log_system(
-                            f"⚠️ [繁中檢查] {fname} 自言自語偵測到簡體字元已自動轉換: {' '.join(sorted(set(zh_violations)))}"
+                            f"⚠️ [繁中檢查] {fname} AI 判讀文字偵測到簡體字元已自動轉換: {' '.join(sorted(set(zh_violations)))}"
                         )
                     simulate_streaming_buffer(display_buffer, orchestrator, char_delay=0.04)
 
@@ -2357,17 +2689,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     pass
 
                 # Robust JSON extraction
-                args_str = _extract_balanced_json(full_response_text)
-                if args_str:
-                    try:
-                        parsed = json.loads(sanitize_json(args_str))
-                    except Exception:
-                        parsed = None
-                else:
-                    parsed = None
+                parsed, raw_objects, merge_mode, merge_rejected_reason = _merge_v1945_json_objects(full_response_text)
+                args_str = raw_objects[0].get("raw") if raw_objects else None
+                if parsed is not None:
+                    parsed = json.loads(sanitize_json(json.dumps(parsed, ensure_ascii=False)))
 
                 # [OCG-v2.4] JSON 解析失敗時,啟用 fallback 從 Markdown/文字搶救欄位
-                if not parsed:
+                if not parsed and not merge_rejected_reason:
                     try:
                         valid_models = []
                         if orchestrator and orchestrator.model_matcher:
@@ -2400,7 +2728,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                             parsed["model_rescued"] = True  # 標記供人工審核
                             if orchestrator:
                                 orchestrator.log_system(
-                                    f"🔬 [型號補抓] {fname} 模型填 null,從自言自語保守補抓: {rescued_model} ({rescue_reason})"
+                                    f"🔬 [型號補抓] {fname} 模型填 null，從 AI 判讀文字保守補抓: {rescued_model} ({rescue_reason})"
                                 )
                             console.print(f"[cyan]🔬 [型號補抓] {fname}: {rescued_model}[/cyan]")
                     # Capture reasoning BEFORE update() overwrites thinking with model's empty string
@@ -2415,8 +2743,13 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                         combined_thinking, source_label=f"{fname} thinking"
                     )
                     result_json.update(parsed)
+                    result_json["raw_objects"] = [str(item.get("raw") or "")[:12000] for item in raw_objects[:3]]
+                    result_json["merge_mode"] = merge_mode
+                    result_json["merge_rejected_reason"] = merge_rejected_reason
                     # Restore reasoning as thinking/self-talk
                     result_json["thinking"] = combined_thinking
+                    result_json = finalize_evidence_contract(result_json, full_response_text)
+                    result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
                     # Set module-level thinking_text so final persistence (line ~1838) keeps it
                     thinking_text = combined_thinking
                     console.print(f"[green]✅ OpenCode Go: {parsed.get('view_type')}/{parsed.get('model')}/{parsed.get('price')}[/green]")
@@ -2445,7 +2778,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
         # [v18.90] Price Consistency Retry Loop
         # 包裝 LLM 呼叫與解析，當價格/型號矛盾時給予二次機會
-        max_retries = int(os.environ.get("OCR_MAX_RETRIES", "0" if fast_batch_mode else "1"))
+        max_retries = max(1, int(os.environ.get("OCR_MAX_RETRIES", "1")))
         final_result = None
 
         for attempt in range(max_retries + 1):
@@ -2465,11 +2798,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 "temperature": 0,
                 "stream_options": {"include_usage": True},
             }
-            fast_max_tokens = os.environ.get("OCR_FAST_MAX_TOKENS")
-            if fast_batch_mode:
-                request_kwargs["max_tokens"] = int(fast_max_tokens or "500")
-            else:
-                request_kwargs["max_tokens"] = int(os.environ.get("OCR_MAX_TOKENS", "900"))
+            request_kwargs["max_tokens"] = int(os.environ.get("OCR_MAX_TOKENS", "900"))
 
             stream = api_client.chat.completions.create(
                 **request_kwargs
@@ -2524,7 +2853,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                         loop_detected = True
                         if orchestrator:
                             orchestrator.stream_buffer = (current_display[:600] + "\n\n(模型輸出重複，正在重試...)").strip()
-                            orchestrator.log_system("⚠️ [Auto-Retry] LLM output repeated; closing stream and retrying.")
+                            orchestrator.log_system("⚠️ [自動重試] AI 輸出重複，正在結束本次回應並重試。")
                         try:
                             stream.close()
                         except Exception:
@@ -2538,54 +2867,25 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     messages.append({"role": "user", "content": "你剛剛的回應陷入無限迴圈，請重試並只輸出 JSON。"})
                     continue
                 else:
-                    return {"error": "LLM Repetitive Loop Detected"}
+                    return {"error": "AI repetitive loop detected"}
 
             # Parse Result
             args_str = None
             thinking_text = full_response_text
 
-            # ... (Parsing Logic) ...
-            lines = full_response_text.strip().split('\n')
-            json_line = None
-            monologue_lines = []
-            for line in lines:
-                line_stripped = line.strip()
-                if line_stripped.startswith('{') and ('"view_type"' in line_stripped or '"model"' in line_stripped):
-                    json_line = line_stripped
-                elif line_stripped and not line_stripped.startswith('{'):
-                    monologue_lines.append(line_stripped)
-
-            if json_line:
-                args_str = json_line
-                thinking_text = ' '.join(monologue_lines) if monologue_lines else "..."
-            else:
-                # Fallback Regex
-                import re
-                json_candidates = re.findall(r'(\{[\s\S]*?\})', full_response_text)
-                if json_candidates:
-                    for candidate in reversed(json_candidates):
-                        if '"view_type"' in candidate or '"model"' in candidate:
-                            args_str = candidate
-                            break
-                    if not args_str: args_str = json_candidates[-1]
-                    parts = full_response_text.split(args_str)
-                    if parts[0].strip(): thinking_text = parts[0].strip()
-                elif full_response_text.strip().startswith('{'):
-                    args_str = full_response_text
-                    thinking_text = "..."
-
-            parsed = None
+            parsed, raw_objects, merge_mode, merge_rejected_reason = _merge_v1945_json_objects(full_response_text)
+            args_str = raw_objects[0].get("raw") if raw_objects else None
             if args_str:
-                try:
-                    args_str = sanitize_json(args_str)
-                    parsed = json.loads(args_str)
-                except:
-                    pass
+                prefix = full_response_text.split(args_str, 1)[0].strip()
+                if prefix:
+                    thinking_text = prefix
+            if parsed is not None:
+                parsed = json.loads(sanitize_json(json.dumps(parsed, ensure_ascii=False)))
 
             # [v18.99 Fix] Retry if JSON is completely missing
             if not parsed and attempt < max_retries:
                 console.print(f"[bold red]⚠️ 未偵測到有效 JSON，要求 LLM 補完...[/bold red]")
-                orchestrator.log_system(f"⚠️ [Auto-Retry] LLM 未輸出 JSON，觸發重試...")
+                orchestrator.log_system("⚠️ [自動重試] AI 未輸出有效結果，正在重試...")
                 # Append the previous incomplete response as assistant output
                 messages.append({"role": "assistant", "content": full_response_text})
                 # Prompt user to force JSON
@@ -2598,7 +2898,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 model_check = parsed.get("model")
                 price_check = parsed.get("price")
 
-                if should_compare_official_price(fname) and model_check and price_check:
+                if should_compare_official_price(fname) and is_samsung_model_like(model_check) and model_check and price_check:
                     # Get Official Price
                     from skills.official_price import get_price_manager
                     pm = get_price_manager()
@@ -2703,10 +3003,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # 即使 clean_model 被洗掉，只要 raw_model 或 thinking_text 有跡象，就啟動救援
             followme_hints = ["FOLLOWME", "FOLLOW ME"]  # [v18.99] 移除 M7/M5/SMART MONITOR，避免誤判
             is_followme_candidate = False
-            negative_followme_context = has_negative_followme_context(" ".join(str(part or "") for part in [raw_model, thinking_text]))
+            negative_followme_context = has_negative_followme_context(thinking_text)
             positive_followme_physical_context = (
-                has_positive_followme_physical_clue(thinking_text)
-                or has_followme_display_fixture_clue(thinking_text)
+                has_followme_display_fixture_clue(thinking_text)
             )
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
 
@@ -2718,7 +3017,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             elif not has_valid_s_model and (not negative_followme_context or positive_followme_physical_context) and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
                 if raw_model and any(h in raw_model.upper() for h in followme_hints):
                     is_followme_candidate = True
-                elif thinking_text and any(h in thinking_text.upper() for h in followme_hints):
+                elif thinking_text and has_positive_followme_word(thinking_text):
                     is_followme_candidate = True
                 elif positive_followme_physical_context:
                     is_followme_candidate = True
@@ -2726,45 +3025,31 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             if is_followme_candidate:
                  p_val = data_obj.get("price")
                  mapped_model = normalize_followme_model(raw_model or clean_model, p_val, thinking_text)
-                 if not mapped_model:
-                     mapped_model = 'FollowMe M7 32"'
-
-                 clean_model = mapped_model
-                 is_followme_bypass = True # [v18.44] Enable Bypass
-                 # [v18.63] Silent log, no UI output
-                 console.print(f"[dim]⚠️ [FollowMe Logic] '{raw_model}' -> '{clean_model}' (Price: {p_val})[/dim]")
+                 if mapped_model:
+                     clean_model = mapped_model
+                     is_followme_bypass = True # [v18.44] Enable Bypass
+                     # [v18.63] Silent log, no UI output
+                     console.print(f"[dim]⚠️ [FollowMe Logic] '{raw_model}' -> '{clean_model}' (Price: {p_val})[/dim]")
 
             # [v18.44 Fix] Added bypass flag so FollowMe isn't killed by hallucination check
-            if valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
-                 # Try Fuzzy Match (Aggressive Recovery)
-                 # [v18.28] Cutoff 0.7: Lowered to catch 412.jpg typos (S24F532 vs S24F332)
-                 matches = difflib.get_close_matches(clean_model, valid_models_list, n=1, cutoff=0.7)
-                 if matches:
-                     corrected_model = matches[0]
-                     # [v18.58] Silent fuzzy match, no log message
-                     data_obj["model"] = corrected_model
-                 else:
-                    # [v18.92] 最後一道防線：嘗試官網即時驗證 (Auto-Discover)
-                    # 這是為了回答 User "以後怎麼避免" 的終極方案。即使型號表忘了更，官網有就算數。
-                    if should_compare_official_price(fname) and try_discover_model(clean_model):
-                         console.print(f"[bold green]✨ [Auto-Discover] 官網驗證成功！型號 {clean_model} 已自動加入型號表。[/bold green]")
-                         data_obj["model"] = clean_model
-                         # 更新記憶體中的 valid_models_list 以防本次 Batch 後續又遇到
-                         if valid_models_list is not None:
-                             valid_models_list.append(clean_model)
-                    else:
-                        # [v18.56] Silently set to None if strictly invalid
-
-                        # [v18.96] Safety Net for Discontinued Models (停產型號救星)
-                        # 如果官網查不到 (404/停產)，但格式明明就是 S 型號 (S+8~15碼)，強制保留！
-                        import re
-                        is_valid_format = re.match(r'^S[A-Z0-9]{7,14}$', clean_model)
-
-                        if is_valid_format:
-                             console.print(f"[yellow]⚠️ [Auto-Discover Failed] 官網查無 {clean_model} (可能已停產)，但格式正確，強制信任！[/yellow]")
-                             data_obj["model"] = clean_model
-                        else:
-                             data_obj["model"] = None
+            if is_placeholder_model(clean_model):
+                console.print(f"[yellow]⚠️ [Model Guard] 拒絕提示詞占位／測試型號: {clean_model}[/yellow]")
+                data_obj["model"] = None
+            elif valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
+                exact_model = strict_known_model(clean_model, valid_models_list)
+                if exact_model:
+                    data_obj["model"] = exact_model
+                elif should_compare_official_price(fname) and is_samsung_model_like(clean_model) and try_discover_model(clean_model):
+                    console.print(f"[bold green]✨ [Auto-Discover] 官網驗證成功：{clean_model}[/bold green]")
+                    data_obj["model"] = clean_model
+                    if valid_models_list is not None and clean_model not in valid_models_list:
+                        valid_models_list.append(clean_model)
+                else:
+                    # A Samsung-looking string is not evidence.  Unknown or
+                    # discontinued models must be re-read/reviewed, never
+                    # trusted merely because their format looks plausible.
+                    console.print(f"[yellow]⚠️ [Model Guard] 型號未經清單或官網驗證，清除並排入複核: {clean_model}[/yellow]")
+                    data_obj["model"] = None
             else:
                  data_obj["model"] = clean_model
 
@@ -2795,16 +3080,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 if model_size_match:
                     model_size = model_size_match.group(1)
                     if desc_size != model_size:
-                        # 尺寸不符！嘗試從 valid_models 中找正確尺寸的型號
-                        console.print(f"[yellow]⚠️ [尺寸交叉驗證] 描述={desc_size}型 但型號={final_model} → 嘗試修正[/yellow]")
-                        # 找同系列但正確尺寸的型號
-                        correct_size_candidates = [m for m in valid_models_list if f"S{desc_size}" in m.upper()]
-                        if correct_size_candidates:
-                            # 用 fuzzy match 在正確尺寸的候選中找最接近的
-                            best_match = difflib.get_close_matches(clean_model.replace(model_size, desc_size), correct_size_candidates, n=1, cutoff=0.6)
-                            if best_match:
-                                data_obj["model"] = best_match[0]
-                                console.print(f"[green]✅ [尺寸交叉驗證] 修正為: {best_match[0]}[/green]")
+                        console.print(f"[yellow]⚠️ [尺寸交叉驗證] 描述={desc_size}型、型號={final_model}，清除後交由下一輪重讀[/yellow]")
+                        data_obj["rejected_model"] = final_model
+                        data_obj["model"] = None
+                        data_obj["model_validation_failed"] = True
 
         ark_model = infer_odyssey_ark_model(thinking_text)
         if ark_model and not data_obj.get("model"):
@@ -2913,9 +3192,14 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                     current_model = normalized_followme
             main_label_model = extract_main_label_model(thinking_text)
             if not current_model and main_label_model and not rescue_blocked_by_distant_view:
-                console.print(f"[green]✅ [主角標籤救援] 從描述補回型號: {main_label_model}[/green]")
-                data_obj["model"] = main_label_model
-                current_model = main_label_model
+                verified_main_label = strict_known_model(main_label_model, valid_models_list)
+                if verified_main_label:
+                    console.print(f"[green]✅ [主角標籤救援] 從描述補回已驗證型號: {verified_main_label}[/green]")
+                    data_obj["model"] = verified_main_label
+                    current_model = verified_main_label
+                else:
+                    data_obj["model_validation_failed"] = True
+                    data_obj["rejected_model"] = main_label_model
             if not current_model and desc_model and desc_model in valid_models_list and not desc_model_is_speculative and not model_rescue_blocked and not rescue_blocked_by_distant_view:
                 console.print(f"[green]✅ [獨白救援] 從描述補回型號: {desc_model}[/green]")
                 data_obj["model"] = desc_model
@@ -2925,8 +3209,10 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                 c_curr = current_model.replace('-', '').strip().upper()
                 c_desc = desc_model.replace('-', '').strip().upper()
                 if c_curr != c_desc and c_desc in valid_models_list:
-                    console.print(f"[yellow]⚠️ [獨白驗證] JSON型號({c_curr}) 與 獨白型號({c_desc}) 不符! 採用獨白型號。[/yellow]")
-                    data_obj["model"] = c_desc
+                    console.print(f"[yellow]⚠️ [獨白驗證] JSON型號({c_curr}) 與描述型號({c_desc}) 衝突，清除後重讀[/yellow]")
+                    data_obj["rejected_model"] = f"{c_curr}|{c_desc}"
+                    data_obj["model"] = None
+                    data_obj["model_validation_failed"] = True
 
             # 驗證價格一致性
             current_price = data_obj.get("price")
@@ -2940,8 +3226,9 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
                         console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
                         data_obj["price"] = rescued_price
                     elif current_digits and rescued_digits and current_digits != rescued_digits and followme_price_context:
-                        console.print(f"[yellow]⚠️ [FollowMe 價格校正] JSON價格({current_digits}) 與獨白價牌({rescued_digits}) 不符，採用獨白價牌[/yellow]")
-                        data_obj["price"] = rescued_price
+                        console.print(f"[yellow]⚠️ [價格衝突] JSON={current_digits}、描述={rescued_digits}，清除後重讀[/yellow]")
+                        data_obj["price"] = None
+                        data_obj["price_conflict_detected"] = True
                 else:
                     console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
 
@@ -3021,14 +3308,26 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             )
 
             # [v19.8] Strong guard: no model + no price + distant-view clue => 遠景
-            if not has_model and not has_price and has_dv_clue and not has_single_clue:
+            if (
+                not has_model
+                and not has_price
+                and has_dv_clue
+                and not has_single_clue
+                and has_explicit_distant_layout_evidence(thinking_text)
+            ):
                 console.print("[yellow]⚠️ [遠景守衛] 無型號+無價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
                 data_obj["view_type"] = "遠景"
                 data_obj["category"] = "遠景"
                 data_obj["model"] = None
                 data_obj["price"] = None
                 data_obj["screen_status"] = ""
-            elif not has_model and has_price and has_dv_clue and not has_single_clue:
+            elif (
+                not has_model
+                and has_price
+                and has_dv_clue
+                and not has_single_clue
+                and has_explicit_distant_layout_evidence(thinking_text)
+            ):
                 console.print("[yellow]⚠️ [遠景守衛] 無型號+有價格+獨白含遠景線索 → 改遠景、清 model/price[/yellow]")
                 data_obj["view_type"] = "遠景"
                 data_obj["category"] = "遠景"
@@ -3062,8 +3361,11 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         # Update final result
         if isinstance(result_json, dict):
             for k, v in data_obj.items():
-                if k in result_json:
+                if k in result_json or k in EVIDENCE_KEYS or k in {"raw_objects", "merge_mode", "merge_rejected_reason"}:
                     result_json[k] = v
+            result_json["raw_objects"] = [str(item.get("raw") or "")[:12000] for item in locals().get("raw_objects", [])[:3]]
+            result_json["merge_mode"] = locals().get("merge_mode", "none")
+            result_json["merge_rejected_reason"] = locals().get("merge_rejected_reason", "")
 
             # [Safety] Check for weird keys containing newlines (The specific user error)
             # If we find them, try to fix them by stripping whitespace
@@ -3133,12 +3435,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # ... (Model matching remains same) ...
             valid_models_list = orchestrator.model_matcher.valid_models if orchestrator and orchestrator.model_matcher else []
             if parsed_model and parsed_model not in valid_models_list:
-                # [v9.72 Fix] Use orchestrator's matcher instead of undefined function
-                best_match = orchestrator.model_matcher.match(parsed_model) if orchestrator and orchestrator.model_matcher else None
-                if best_match:
-                    result_json["model"] = best_match
-                else:
-                    result_json["model"] = parsed_model
+                exact_model = strict_known_model(parsed_model, valid_models_list)
+                result_json["model"] = exact_model
 
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
@@ -3200,15 +3498,24 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
             # [v18.99 Backup] 獨白關鍵字備援檢測：若 JSON 沒說遠景，但獨白明確說了，則強制修正
             if thinking_text and '整體符合「遠景」條件' in thinking_text:
                 has_single_unit_evidence = has_strong_single_unit_evidence(thinking_text)
-                if view_type != '遠景' and not has_single_unit_evidence:
+                confirmed_followme = has_confirmed_followme_evidence(
+                    result_json.get("model"),
+                    thinking_text,
+                )
+                if (
+                    view_type != '遠景'
+                    and not has_single_unit_evidence
+                    and not confirmed_followme
+                    and has_explicit_distant_layout_evidence(thinking_text)
+                ):
                     console.print(f"[yellow]⚠️ [獨白備援] JSON 寫 {view_type} 但獨白說遠景 → 強制修正為遠景[/yellow]")
                     view_type = '遠景'
                     result_json['view_type'] = '遠景'
                     result_json['model'] = None
                     result_json['price'] = None
                     result_json['quality_issue'] = ''
-                elif has_single_unit_evidence:
-                    console.print("[yellow]⚠️ [獨白備援] 偵測到單機線索（台數/標籤/價格牌），略過遠景強制修正[/yellow]")
+                elif has_single_unit_evidence or confirmed_followme:
+                    console.print("[yellow]⚠️ [獨白備援] 單機或 FollowMe 線索已確認，略過遠景強制修正[/yellow]")
 
             if view_type == '遠景':
                 result_json['category'] = '遠景'
@@ -3248,6 +3555,19 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
         except Exception as e:
             log.error(f"Validation Error: {e}")
             if orchestrator: orchestrator.log_system(f"⚠️ 解析異常: {str(e)}")
+
+        # Final fail-closed validation after every rescue/correction path.
+        final_guard_model = result_json.get("model")
+        if final_guard_model and not is_followme_standard_name(final_guard_model) and not is_other_brand_model(final_guard_model):
+            known_final_model = strict_known_model(final_guard_model, valid_models_list)
+            if known_final_model:
+                result_json["model"] = known_final_model
+            elif should_compare_official_price(fname) and is_samsung_model_like(final_guard_model) and try_discover_model(final_guard_model):
+                result_json["model"] = final_guard_model
+            else:
+                result_json["rejected_model"] = str(final_guard_model)
+                result_json["model"] = None
+                result_json["model_validation_failed"] = True
 
         # [v18.67] 官方價格驗證
         try:
@@ -3323,7 +3643,7 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
         # [v18.99] 友善錯誤訊息：針對 LM Studio 常見錯誤
         if "failed to process image" in error_str:
-            friendly_msg = "❌ LLM 回應「無法處理圖片」- 可能是圖片格式不支援或 LM Studio 模型問題"
+            friendly_msg = "❌ AI 回應無法處理圖片，可能是圖片格式不支援或本機模型異常"
             log.error(f"LM Studio 圖片處理失敗: {e}")
             if orchestrator:
                 orchestrator.log_system(friendly_msg)
@@ -3338,6 +3658,8 @@ def process_single_image(fname, image_b64, prompt_mgr, image_processor, processe
 
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
+    result_json = finalize_evidence_contract(result_json, locals().get("full_response_text", ""))
+    result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
     final_think = thinking_text if 'thinking_text' in locals() else ""
     result_json['thinking'] = build_final_display_thinking(result_json, final_think)
     if orchestrator:
@@ -3398,6 +3720,17 @@ def get_status():
             "total": orchestrator.stats.get('total', 0)
         }
 
+        overall_progress = build_overall_progress(
+            current_folder=getattr(orchestrator, 'image_dir', None),
+            current_stats=stats,
+        )
+        # A backend restart intentionally starts with an empty in-memory batch
+        # total.  Preserve the audited folder denominator while idle so the UI
+        # never renders a misleading "1,504 / 0" progress label.
+        if not orchestrator.is_running and not stats["total"]:
+            current_folder = overall_progress.get("current_folder") or {}
+            stats["total"] = int(current_folder.get("image_count") or stats["processed"] or 0)
+
         # Keep live self-talk tied to the active image. Showing the previous
         # result here makes the dashboard appear one image out of sync.
         current_file = getattr(orchestrator, 'current_file', None)
@@ -3411,8 +3744,16 @@ def get_status():
         if current_model in {"qwen/qwen3-vl-8b", "qwen3vl8b-ocr"} or "lm-studio" in str(current_model).lower():
             last_image_cost = 0.0
 
+        # A completed staging rerun can leave its last 50 display entries in
+        # memory.  They are useful only while a batch is live; returning them
+        # while idle makes the dashboard request deleted staging paths.
+        presentation_queue = _presentation_payload(orchestrator)
+
         status_obj = {
             "version": VERSION,
+            "frontend_asset_fingerprint": get_frontend_asset_fingerprint(),
+            "accuracy_profile": ACCURACY_PROFILE,
+            "manual_rule_count": int(getattr(orchestrator, "manual_rule_count", 0) or 0),
             "current_file": current_file or 'None',
             "stream_file": stream_file,
             "latest_result_file": getattr(orchestrator, 'latest_result_file', None),
@@ -3420,13 +3761,11 @@ def get_status():
             "last_token_usage": last_token_usage,
             "last_image_cost": last_image_cost,
             "stats": stats,
-            "overall_progress": build_overall_progress(
-                current_folder=getattr(orchestrator, 'image_dir', None),
-                current_stats=stats,
-            ),
+            "overall_progress": overall_progress,
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
-            "display_queue": getattr(orchestrator, 'display_queue', []), # [v19.8 UX] Completed results queued for UI
+            "presentation_queue": presentation_queue,
+            "presentation_sequence": presentation_queue[-1].get("presentation_sequence") if presentation_queue else 0,
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             "recent_results": orchestrator.recent_results,
             # "failed_files": getattr(orchestrator, 'failed_files', []), # [v11.9 Fix] REMOVED! Too huge, causes API timeout.
@@ -3620,7 +3959,7 @@ def save_review_correction():
         ]
         _append_csv_row(MANUAL_CORRECTIONS_PATH, correction_fields, row)
 
-        if data.get("learn_rule"):
+        if should_save_manual_learning_rule(data):
             rule_fields = [
                 "timestamp", "rule_hint", "match_text", "view_type", "model", "price",
                 "note", "example_file", "source_path",
@@ -3721,14 +4060,12 @@ def start_batch():
         reprocess_last_n = req_data.get('reprocess_last_n', 0)
         confirmed = req_data.get('confirmed', False)
 
-        if target_dir:
-            if os.path.exists(target_dir):
-                orchestrator.image_dir = target_dir
-                orchestrator.config['image_dir'] = target_dir # [v16.7 Fix] Update detailed config too
-            else:
-                return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
+        if target_dir and not os.path.exists(target_dir):
+            return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
 
-        if should_compare_official_price(orchestrator.image_dir):
+        selected_dir = target_dir or orchestrator.image_dir
+
+        if should_compare_official_price(selected_dir):
             # [v18.67] 每次啟動當年度批次時重置價格查詢快取，確保重新從官網抓最新價格
             try:
                 from skills.official_price import get_price_manager
@@ -3763,9 +4100,14 @@ def start_batch():
 
         # 開始批次處理
         # [v19.1] Save Config on Start
+        started = orchestrator.start_batch(
+            restart=restart,
+            reprocess_last_n=reprocess_last_n,
+            image_dir=selected_dir,
+        )
+        if not started:
+            return jsonify({"error": "批次仍在執行或停止中，請稍候再試"}), 409
         save_last_config(orchestrator.image_dir, model_name_global)
-
-        orchestrator.start_batch(restart=restart, reprocess_last_n=reprocess_last_n)
         mode_text = "重新啟動" if restart else "繼續執行"
         return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
 
@@ -3786,8 +4128,9 @@ def set_work_dir():
             return jsonify({"error": "Missing dir parameter"}), 400
 
         if os.path.exists(target_dir):
-            orchestrator.image_dir = target_dir
-            orchestrator.config['image_dir'] = target_dir
+            switched, reason = orchestrator.set_work_dir(target_dir)
+            if not switched:
+                return jsonify({"error": reason}), 409
             # [v19.1] Save Config on Switch
             save_last_config(target_dir, model_name_global)
 
@@ -3834,7 +4177,7 @@ def set_llm_config():
                          api_base=new_api_base, api_key=new_api_key)
 
         orchestrator.log_system(
-            f"🔄 LLM 引擎已切換: {old_model} → {new_model} (API: {new_api_base})",
+            f"🔄 AI 引擎已切換: {old_model} → {new_model} (API: {new_api_base})",
             with_timestamp=True
         )
         console.print(f"[bold green]🔄 LLM 引擎已切換: {old_model} → {new_model}[/bold green]")
@@ -4148,6 +4491,7 @@ def main():
 
     orchestrator = BatchOrchestrator(config)
     orchestrator.set_processor_function(process_single_image)
+    orchestrator.set_result_review_function(immediate_retry_decision)
     orchestrator.log_system(f"[{SESSION_ID}] 系統初始化完成... 後端已連線。", with_timestamp=True) # Immediate feedback
 
     # [v18.70] 設定價格查詢日誌回調，讓儀錶板也能看到聯網狀態

@@ -15,7 +15,9 @@ SUCCESS_HEADERS = [
     "timestamp", "file_name", "category", "view_type", "screen_status",
     "quality_issue", "model", "price", "price_status", "price_symbol",
     "official_price", "price_diff_percent", "duration", "run_id",
-    "review_status", "human_category", "human_model", "human_price", "human_notes", "thinking",
+    "review_status", "human_category", "human_model", "human_price", "human_notes",
+    "ocr_attempt", "auto_retry_reasons", "auto_verified", "auto_review_required",
+    "model_validation_failed", "rejected_model", "price_conflict_detected", "thinking",
 ]
 
 

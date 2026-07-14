@@ -54,6 +54,24 @@ function Get-StagedRerunProcesses {
 function Get-CurrentYearReviewCount {
     $reviewCsv = Join-Path $OutputDir "_drive_upload\drive_upload_review_required.csv"
     if (-not (Test-Path -LiteralPath $reviewCsv)) { return 0 }
+    $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
+    if (Test-Path -LiteralPath $markerPath) {
+        $currentYearText = (Get-Date).Year.ToString()
+        $newestAuditWrite = [datetime]::MinValue
+        $auditDir = Join-Path $OutputDir "_ocr_audit"
+        foreach ($folder in @(Get-ChildItem -LiteralPath $auditDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $currentYearText })) {
+            foreach ($name in @("success_records.csv", "rename_plan.csv")) {
+                $path = Join-Path $folder.FullName $name
+                if (Test-Path -LiteralPath $path) {
+                    $writeTime = (Get-Item -LiteralPath $path).LastWriteTime
+                    if ($writeTime -gt $newestAuditWrite) { $newestAuditWrite = $writeTime }
+                }
+            }
+        }
+        if ((Get-Item -LiteralPath $markerPath).LastWriteTime -ge $newestAuditWrite) {
+            return 0
+        }
+    }
     $currentYear = [int](Get-Date).Year
     try {
         $rows = @(Import-Csv -LiteralPath $reviewCsv)
@@ -70,7 +88,15 @@ function Get-CurrentYearReviewCount {
         } elseif ($periodText -match "^(20\d{2})") {
             $rowYear = [int]$Matches[1]
         }
-        if ($rowYear -ge $currentYear) {
+        $reasons = [string]$row.reasons
+        $needsOcrRerun = (
+            $reasons -match "current_year_distant_view_needs_rerun" -or
+            $reasons -match "current_year_followme_or_distant_risk_needs_rerun" -or
+            $reasons -match "current_year_risk_audit_missing_or_stale" -or
+            $reasons -match "current_year_missing_price" -or
+            $reasons -match "name_contains_"
+        )
+        if ($rowYear -ge $currentYear -and $needsOcrRerun) {
             $count++
         }
     }
@@ -231,6 +257,14 @@ function Start-RecursiveIfNeeded {
 
     $currentYearReview = Get-CurrentYearReviewCount
     if ($currentYearReview -gt 0) {
+        $recursive = Get-MatchingProcess "recursive_ocr_flat_export.py"
+        $status = Get-BackendStatus
+        if ($recursive.Count -gt 0 -and $status -and -not [bool]$status.is_running) {
+            foreach ($proc in @($recursive | Where-Object { $_.CommandLine -match "--watch" })) {
+                Write-RunLog "stopping idle recursive watch pid=$($proc.ProcessId); current-year rerun has priority"
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
         Write-RunLog "current-year review gate active rows=$currentYearReview; not starting recursive"
         return
     }
@@ -289,10 +323,6 @@ function Start-AutoRerunWatcherIfNeeded {
     }
 
     $currentYearReview = Get-CurrentYearReviewCount
-    if ($currentYearReview -gt 0) {
-        Write-RunLog "current-year review gate active rows=$currentYearReview; not starting questionable watcher"
-        return
-    }
 
     $watcher = @(Get-MatchingProcess "auto_rerun_questionable_after_recursive\.ps1" | Sort-Object CreationDate)
     if ($watcher.Count -gt 1) {
@@ -311,22 +341,31 @@ function Start-AutoRerunWatcherIfNeeded {
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $outLog = Join-Path $LogDir "watchdog_auto_rerun_$stamp.out.log"
     $errLog = Join-Path $LogDir "watchdog_auto_rerun_$stamp.err.log"
-    Write-RunLog "starting questionable watcher"
+    if ($currentYearReview -gt 0) {
+        Write-RunLog "starting current-year priority questionable watcher rows=$currentYearReview"
+    } else {
+        Write-RunLog "starting post-recursive questionable watcher"
+    }
+    $watcherArgs = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "tools\auto_rerun_questionable_after_recursive.ps1",
+        "-RepoRoot", $RepoRoot,
+        "-SourceRoot", $SourceRoot,
+        "-OutputDir", $OutputDir,
+        "-BackendUrl", $BackendUrl,
+        "-PollSeconds", "300",
+        "-PrimaryPasses", "2"
+    )
+    if ($currentYearReview -gt 0) {
+        $watcherArgs += "-CurrentYearOnly"
+    }
     Start-Process -FilePath "powershell.exe" `
         -WorkingDirectory $RepoRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $outLog `
         -RedirectStandardError $errLog `
-        -ArgumentList @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", "tools\auto_rerun_questionable_after_recursive.ps1",
-            "-RepoRoot", $RepoRoot,
-            "-SourceRoot", $SourceRoot,
-            "-OutputDir", $OutputDir,
-            "-BackendUrl", $BackendUrl,
-            "-PollSeconds", "300"
-        ) | Out-Null
+        -ArgumentList $watcherArgs | Out-Null
 }
 
 function Remove-StaleUploadLockIfNeeded {

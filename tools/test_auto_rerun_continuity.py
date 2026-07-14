@@ -1,0 +1,32 @@
+"""Static continuity contracts for the independent handoff script."""
+from pathlib import Path
+import unittest
+
+SCRIPT = (Path(__file__).parent / "auto_rerun_questionable_after_recursive.ps1").read_text(encoding="utf-8")
+
+class AutoRerunContinuityTests(unittest.TestCase):
+    def test_current_year_phases_precede_older_years(self):
+        phases = ["current_year_first_pass", "current_year_immediate_pass_2", "current_year_immediate_pass_3", "current_year_distant_followme_review", "all-year questionable rerun starts"]
+        positions = [SCRIPT.index(item) for item in phases]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_owned_process_guard_and_single_worker_contract(self):
+        self.assertIn("Get-OwnedMatchingProcess", SCRIPT)
+        self.assertIn('Stop-ExtraOwnedProcesses "rclone_drive_upload.py|rclone.exe" "uploader"', SCRIPT)
+        self.assertIn('Stop-ExtraOwnedProcesses "recursive_ocr_flat_export.py" "runner"', SCRIPT)
+        self.assertNotIn('Stop-Process -Name', SCRIPT)
+
+    def test_no_history_clear_or_restart_resume_flags(self):
+        self.assertNotIn("--restart", SCRIPT)
+        self.assertNotIn("Remove-Item -Recurse", SCRIPT)
+        self.assertIn("Start-Recursive-IfNeeded", SCRIPT)
+
+    def test_v1944_single_pass_is_not_explicitly_requeued(self):
+        self.assertNotIn("v19.44", SCRIPT)
+        self.assertNotIn("reprocess_last_n", SCRIPT)
+
+    def test_lock_is_rechecked_before_main_loop_decisions(self):
+        self.assertIn('Wait-ForBenchmarkLock "main loop"', SCRIPT)
+
+if __name__ == "__main__":
+    unittest.main()
