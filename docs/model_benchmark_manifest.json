@@ -1,11 +1,14 @@
 {
-  "schema": "samsung-model-benchmark/v1",
+  "schema": "samsung-model-benchmark/v2",
   "source": "samples/ocr_demo_50/labels.json",
+  "labels_sha256": "a4c39d94b71be590545b710cccaf829f14eeee8bf814208775829df983afe734",
+  "case_set_sha256": "36dc027ac3b7b5c6c7d4ee05962b6f7780e330bc508f8b6fdea5d63ce6d89b71",
   "blind_protocol": "Send image plus the production OCR prompt; do not expose expected fields.",
   "cases": [
     {
       "id": "demo_01",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-184.jpg",
+      "image_sha256": "523dd411053f61ab7130629e7cfaa6afbe4434637f3a45e6703f343bc8a321bf",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -21,6 +24,7 @@
     {
       "id": "demo_02",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-185.jpg",
+      "image_sha256": "ed4856c01d2fa7bf4161f654b1a28718168b2bb21e21d7bc608e12a7f2f5ab6e",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -36,6 +40,7 @@
     {
       "id": "demo_03",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-186.jpg",
+      "image_sha256": "6da2351f1a02fa4907c9d5bd49992565420e6b8a3614d248f157ee4d4d9fb0c9",
       "tags": [
         "single_unit",
         "price_present"
@@ -49,6 +54,7 @@
     {
       "id": "demo_04",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-187.jpg",
+      "image_sha256": "5c867260477003195fe17e6b8778b0e3d632911c3f230c9ae10769b8adf0a1b4",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -63,6 +69,7 @@
     {
       "id": "demo_05",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-188.jpg",
+      "image_sha256": "c4fb68498ef682e85cee328d28e806689016c880b6e96a5fbb67768b77306cf0",
       "tags": [
         "single_unit",
         "price_present"
@@ -76,6 +83,7 @@
     {
       "id": "demo_06",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-189.jpg",
+      "image_sha256": "1dbd6562041cb3b1dd1a2cc18dcafaed863b05ae718a098d9a4defa8ddca57f2",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -90,6 +98,7 @@
     {
       "id": "demo_07",
       "image": "photos/202605/M-台中市-大甲區-SF-大甲-190.jpg",
+      "image_sha256": "7d9f4b5e6e81a14d08cddced7fda53807f4d06d7df8d07664719bfadd399e430",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -104,6 +113,7 @@
     {
       "id": "demo_08",
       "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-879.jpg",
+      "image_sha256": "1a08a07f85229888b4ed4dd55a4c708b573808eee754600d7a0df06df7a80367",
       "tags": [
         "single_unit",
         "followme_pro",
@@ -119,6 +129,7 @@
     {
       "id": "demo_09",
       "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-880.jpg",
+      "image_sha256": "23d8f9b9f759d79af461436c7eb9166975e5ca543fefbf956f75679863fb830d",
       "tags": [
         "single_unit",
         "followme_pro",
@@ -134,6 +145,7 @@
     {
       "id": "demo_10",
       "image": "photos/202605/M-台中市-大甲區-TK3C-大甲-881.jpg",
+      "image_sha256": "b32e862471fa6d661d36d279c8ec8bb0fb4067b58ba156b0f332ac1a1654d378",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -149,6 +161,7 @@
     {
       "id": "demo_11",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-423.jpg",
+      "image_sha256": "75e194cefa7d61fe1855c489f95dcab575be63f76a4122ab716306bb6e59969e",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -164,6 +177,7 @@
     {
       "id": "demo_12",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-424.jpg",
+      "image_sha256": "ffe86688c639dd50e44c484f58ebd25c9cc48e05abdb945e795fe13777600e0b",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -179,6 +193,7 @@
     {
       "id": "demo_13",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-425.jpg",
+      "image_sha256": "174b8ca243deff7d78c1fe305aa1a7847f16eccc20c4c7ab682da0cdbbaf9d70",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -194,6 +209,7 @@
     {
       "id": "demo_14",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-426.jpg",
+      "image_sha256": "2adaddecb3f33a516d46b58a735a73493fe020a5c87d805a5ec5bdbf1dd8884d",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -209,6 +225,7 @@
     {
       "id": "demo_15",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-427.jpg",
+      "image_sha256": "357e52238d71f3d3d467cf212ce3d4cb8c078248020d5744679a53621dd03ec3",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -223,6 +240,7 @@
     {
       "id": "demo_16",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-428.jpg",
+      "image_sha256": "2a57e46e432f41354884d1009b6c1a162a60377f154a37fff3dbc7e87416a18c",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -237,6 +255,7 @@
     {
       "id": "demo_17",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-429.jpg",
+      "image_sha256": "eb38fea6358bf05d171d89896875c774df598f4eeda64a73374f6889e845416e",
       "tags": [
         "single_unit",
         "price_present"
@@ -250,6 +269,7 @@
     {
       "id": "demo_18",
       "image": "photos/202604/M-台中市-大甲區-SF-大甲-430.jpg",
+      "image_sha256": "1a7894494eaaedbfc3d6149745388c948ff247308e7e3a1a44fa821a1df23e95",
       "tags": [
         "single_unit",
         "price_uncertain_or_missing"
@@ -263,6 +283,7 @@
     {
       "id": "demo_19",
       "image": "photos/202604/M-台中市-大甲區-TK3C-大甲-749.jpg",
+      "image_sha256": "74add489d64cca4445480ddb432b623ade9f6a3c37ad2d14b666fd0cb4d53404",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -278,6 +299,7 @@
     {
       "id": "demo_20",
       "image": "photos/202604/M-台中市-大甲區-TK3C-大甲-750.jpg",
+      "image_sha256": "9e7e627bb6e299e7a1bd3ed7022af1b1498d22627d7d39de0bce75b6e43d1b86",
       "tags": [
         "single_unit",
         "price_present"
@@ -291,6 +313,7 @@
     {
       "id": "demo_21",
       "image": "photos/202603/M-台中市-大甲區-SF-大甲-1232.jpg",
+      "image_sha256": "991be42cecd59050f0ab35a4e745b5cecb9caa4e55f3e3bd55cb63dfd1593c1b",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -306,6 +329,7 @@
     {
       "id": "demo_22",
       "image": "photos/202603/M-台中市-大甲區-SF-大甲-1233.jpg",
+      "image_sha256": "f513e512adb0d2298bbdf244326b87abdd08c31c00473a747172dc470683d620",
       "tags": [
         "single_unit",
         "price_uncertain_or_missing"
@@ -319,6 +343,7 @@
     {
       "id": "demo_23",
       "image": "photos/202603/M-台中市-大甲區-SF-大甲-1234.jpg",
+      "image_sha256": "693f944ccd701ab3a540375ad3ef1dc4b7b2a9ea7207d340cdbd3fe1c00cc0dc",
       "tags": [
         "single_unit",
         "price_present"
@@ -332,6 +357,7 @@
     {
       "id": "demo_24",
       "image": "photos/202603/M-台中市-大甲區-SF-大甲-1235.jpg",
+      "image_sha256": "28ec72ea69f315f34981bc9e6a75877e3c4c1d8a254ad9925ba544f5d98fe474",
       "tags": [
         "single_unit",
         "price_present"
@@ -345,6 +371,7 @@
     {
       "id": "demo_25",
       "image": "photos/202603/M-台中市-大甲區-SF-大甲-1236.jpg",
+      "image_sha256": "f354bf2ecff4d36cce175213c006e5e533150b46f3c1e5f1c9fc788195ab0825",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -360,6 +387,7 @@
     {
       "id": "demo_26",
       "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-838.jpg",
+      "image_sha256": "efd49a61ae813b33a6fa8afd337405ffd603a773f2d37ec4f31f457860402f6d",
       "tags": [
         "single_unit",
         "followme_pro",
@@ -374,6 +402,7 @@
     {
       "id": "demo_27",
       "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-839.jpg",
+      "image_sha256": "0dee72f3c07791f443b587da45c06e59d94f7eddb79ee631be2206ebef140038",
       "tags": [
         "single_unit",
         "price_present"
@@ -387,6 +416,7 @@
     {
       "id": "demo_28",
       "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-840.jpg",
+      "image_sha256": "9f2d7c0a68b69896743d13683b029960b02eb44fa27f3878bd3ce0361ac574f6",
       "tags": [
         "single_unit",
         "price_present"
@@ -400,6 +430,7 @@
     {
       "id": "demo_29",
       "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-841.jpg",
+      "image_sha256": "ca01f5da467bc4a82c1e790145976cbb0244d6c06a645f99f8a20d5a9950ed9b",
       "tags": [
         "single_unit",
         "price_present"
@@ -413,6 +444,7 @@
     {
       "id": "demo_30",
       "image": "photos/202603/M-台中市-大甲區-TK3C-大甲-842.jpg",
+      "image_sha256": "f5ca976d99356c5d66cab95374380a0a0ecd6ca88295ea0153bf8773a6e4987a",
       "tags": [
         "single_unit",
         "price_present"
@@ -426,6 +458,7 @@
     {
       "id": "demo_31",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-911.jpg",
+      "image_sha256": "bb9ee7a267b96b26a46a37d1c7a3ce02978e5fdf7a0eab27336973603fdf9b1f",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -441,6 +474,7 @@
     {
       "id": "demo_32",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-912.jpg",
+      "image_sha256": "2f5725125ee8a7dca5833c34dd23dacf83d8de564566518b0565dc76de0a0ad2",
       "tags": [
         "single_unit",
         "price_uncertain_or_missing"
@@ -454,6 +488,7 @@
     {
       "id": "demo_33",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-913.jpg",
+      "image_sha256": "5b379fec7b6490cc8410298b0b4d3476df5c720e21c05784a052c61ed7d34261",
       "tags": [
         "single_unit",
         "price_present"
@@ -467,6 +502,7 @@
     {
       "id": "demo_34",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-914.jpg",
+      "image_sha256": "7328c46723b6d4917932a742afd920f4fcac60e80503dc2614bc2913ee80eb7a",
       "tags": [
         "single_unit",
         "price_present"
@@ -480,6 +516,7 @@
     {
       "id": "demo_35",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-915.jpg",
+      "image_sha256": "d51b007794d62eacdd45b4806915756cd1832eb87c76f313e6e3284947388a89",
       "tags": [
         "single_unit",
         "price_present"
@@ -493,6 +530,7 @@
     {
       "id": "demo_36",
       "image": "photos/202602/M-台中市-大甲區-SF-大甲-916.jpg",
+      "image_sha256": "ffdcdf16613405fc2b3dcb9dd3fb0041966c0d7f79fb5d04b121566d3fd7e40e",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -508,6 +546,7 @@
     {
       "id": "demo_37",
       "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1518.jpg",
+      "image_sha256": "82f55ee51055986fe2fbf8dd541be32234ac41da6707314c82070baf841ebdab",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -523,6 +562,7 @@
     {
       "id": "demo_38",
       "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1519.jpg",
+      "image_sha256": "d3a83362bd90911229a4ca54b82a42878117620bb3433a5edcd7b6a88309d285",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -538,6 +578,7 @@
     {
       "id": "demo_39",
       "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1520.jpg",
+      "image_sha256": "3ef87eae93ce2b0e7f1e60bc7a59abc58a06013e388d71339f567aafb032086a",
       "tags": [
         "single_unit",
         "price_present"
@@ -551,6 +592,7 @@
     {
       "id": "demo_40",
       "image": "photos/202602/M-台中市-大甲區-TK3C-大甲-1521.jpg",
+      "image_sha256": "94887e151720041f981359930e7e82adc9937af6bc63c5836f8ce59b26645fd1",
       "tags": [
         "single_unit",
         "price_uncertain_or_missing"
@@ -564,6 +606,7 @@
     {
       "id": "demo_41",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-626.jpg",
+      "image_sha256": "e0bdfe46fc2efd3543ad37ef3593807f5d2a366fb3f65c9a326387cb88fdee58",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -579,6 +622,7 @@
     {
       "id": "demo_42",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-627.jpg",
+      "image_sha256": "336cbcf24559714ab16d0fe5a7e96959d09f98e2bc33aeecce877511401c5130",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -593,6 +637,7 @@
     {
       "id": "demo_43",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-628.jpg",
+      "image_sha256": "b4c5519715981d2faec82c4d03cfc91b2e4a65fc5ae8fb39e0a0036f53834e7e",
       "tags": [
         "single_unit",
         "price_uncertain_or_missing"
@@ -606,6 +651,7 @@
     {
       "id": "demo_44",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-629.jpg",
+      "image_sha256": "2789d0a9b1f51dfb70ad25cd0b76d77d7198cec629599bc74714825c7f6c8621",
       "tags": [
         "single_unit",
         "promo_or_unreadable_label",
@@ -620,6 +666,7 @@
     {
       "id": "demo_45",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-630.jpg",
+      "image_sha256": "01cd94d68782d39c7301c952080d6f6856bbb7e1fa90c1bcb1d6b8f43c4cf8d4",
       "tags": [
         "single_unit",
         "followme",
@@ -634,6 +681,7 @@
     {
       "id": "demo_46",
       "image": "photos/202601/M-台中市-大甲區-SF-大甲-631.jpg",
+      "image_sha256": "17a3f67198a3d1bec823f21850f23edfdeb1f5b31600b48b259055c03458459a",
       "tags": [
         "single_unit",
         "price_present"
@@ -647,6 +695,7 @@
     {
       "id": "demo_47",
       "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1091.jpg",
+      "image_sha256": "19b2b1d3b492e203473eca23de1f1094c9b2753363793c84a1f8ae3121e8150d",
       "tags": [
         "distant_view",
         "three_or_more_monitors",
@@ -662,6 +711,7 @@
     {
       "id": "demo_48",
       "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1092.jpg",
+      "image_sha256": "3a6acfa35f0a05702b834fd53036e796d53d5d2279ead61ad63f3458c207e0ab",
       "tags": [
         "single_unit",
         "followme_pro",
@@ -676,6 +726,7 @@
     {
       "id": "demo_49",
       "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1093.jpg",
+      "image_sha256": "c9ff44789c402ed933a46b49a5c41355c4673f5d066c9a63fdafab4be56776e0",
       "tags": [
         "single_unit",
         "price_present"
@@ -689,6 +740,7 @@
     {
       "id": "demo_50",
       "image": "photos/202601/M-台中市-大甲區-TK3C-大甲-1094.jpg",
+      "image_sha256": "c941c14a033454103fcb7985f4473336104f5031c96baacef5a2b5dc54311d57",
       "tags": [
         "single_unit",
         "price_present"

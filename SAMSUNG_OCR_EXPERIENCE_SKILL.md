@@ -446,6 +446,7 @@ The pre-v19.45 correction ledger is not authoritative because it contains stale 
 sidecar 的硬守門是：API `is_running=false`、沒有任何 rerun/recursive/watcher/uploader、所有指定模型已完整下載、endpoint 為 localhost、raw JSONL 可重入保存。任何模型切換後都必須在 finally 還原 `qwen/qwen3-vl-8b` 與 context；不得停止或重啟正常 OCR，也不得上傳照片。
 Windows 程序清單必須由 UTF-8 JSON 安全解析，列舉失敗或空白解析錯誤一律拒絕 benchmark；不能把錯誤當作「沒有 runner」。取得 lock 前後都要重查 API 與程序，以關閉競態。FollowMe 被判成中文 `遠景` 或英文 `distant_view` 都屬危險誤判。
 Benchmark raw JSONL 必須用 `candidate_model` 保存候選 VLM，`model` 只代表預測出的 Samsung 產品型號。評分前依候選隔離；缺少、重複、未知、混模、解析錯誤或 inference error 都留在固定 50 張分母並令 `benchmark_gate_pass=false`。未通過 protocol gate 不得比較速度或升級主線。
+Benchmark manifest 必須是 v2：它固定 labels、每張原圖、case ID/tag/expected 的 SHA-256 契約。sidecar 必須為每個 case 只準備一次全圖與 deterministic crops，將 production prompt 與解碼後 evidence 組成 `input_fingerprint`，並寫入每筆 raw row。續跑時任一 manifest/prompt/image/crop 指紋不符、指紋缺失、重複 candidate/case 或 candidate/key 不一致都要拒絕，不可將不同輸入混在同一 output directory。已完成的候選不得再觸發 unload/load，最後必須恢復執行前捕捉的 baseline context。
 
 採用候選模型前，先要求整體 exact/field accuracy 改善或至少不退步；遠景、FollowMe、型號幻覺等危險錯誤率全部不得退步。latency 只作 accuracy 通過後的次順位，不得用速度掩蓋辨識退化。InternVL 只有在本機下載完成並通過完整性檢查後才列入執行候選。
 ## v19.45 Evidence Contract

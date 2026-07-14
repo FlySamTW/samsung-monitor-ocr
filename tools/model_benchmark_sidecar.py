@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -182,6 +183,43 @@ def encode_image(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def manifest_case_contract(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": case.get("id"),
+            "image": case.get("image"),
+            "image_sha256": case.get("image_sha256"),
+            "tags": case.get("tags"),
+            "expected": case.get("expected"),
+        }
+        for case in cases
+    ]
+
+
+def verify_manifest_contract(manifest: dict[str, Any]) -> str:
+    if manifest.get("schema") != "samsung-model-benchmark/v2":
+        raise SafetyError("benchmark manifest must use immutable schema v2")
+    cases = manifest.get("cases")
+    expected_hash = str(manifest.get("case_set_sha256") or "").lower()
+    if not isinstance(cases, list) or not cases or not expected_hash:
+        raise SafetyError("benchmark manifest is missing cases or case-set hash")
+    actual_hash = sha256_bytes(
+        json.dumps(
+            manifest_case_contract(cases),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    if actual_hash != expected_hash:
+        raise SafetyError("benchmark manifest case-set hash mismatch")
+    return actual_hash
+
+
 def crop_bytes(path: Path) -> list[str]:
     """Build deterministic evidence crops from the original sample image."""
     try:
@@ -199,6 +237,68 @@ def crop_bytes(path: Path) -> list[str]:
             return result
     except Exception as exc:
         raise SafetyError(f"cannot create deterministic image evidence: {exc}") from exc
+
+
+def prepare_case_evidence(case: dict[str, Any], prompt: str, sample_root: Path) -> dict[str, Any]:
+    root = sample_root.resolve()
+    image = (root / str(case.get("image") or "")).resolve()
+    try:
+        image.relative_to(root)
+    except ValueError as exc:
+        raise SafetyError(f"benchmark image escapes fixed sample root: {image}") from exc
+    if not image.is_file():
+        raise SafetyError(f"benchmark image missing: {image}")
+    image_bytes = image.read_bytes()
+    expected_hash = str(case.get("image_sha256") or "").lower()
+    actual_hash = sha256_bytes(image_bytes)
+    if not expected_hash or actual_hash != expected_hash:
+        raise SafetyError(f"benchmark image hash mismatch: {case.get('id')}")
+    images = [base64.b64encode(image_bytes).decode("ascii"), *crop_bytes(image)]
+    fingerprint = hashlib.sha256()
+    fingerprint.update(prompt.encode("utf-8"))
+    for encoded in images:
+        fingerprint.update(b"\x00")
+        fingerprint.update(base64.b64decode(encoded))
+    return {
+        "image": image,
+        "images": images,
+        "image_sha256": actual_hash,
+        "input_fingerprint": fingerprint.hexdigest(),
+    }
+
+
+def validate_resume_fingerprints(
+    existing_rows: list[dict[str, Any]],
+    prepared: dict[str, dict[str, Any]],
+    *,
+    manifest_sha256: str = "",
+    case_set_sha256: str = "",
+    prompt_sha256: str = "",
+) -> set[str]:
+    done: set[str] = set()
+    for row in existing_rows:
+        key = str(row.get("key") or "")
+        case_id = str(row.get("case_id") or row.get("id") or "")
+        candidate = str(row.get("candidate_model") or "")
+        expected = prepared.get(case_id, {}).get("input_fingerprint")
+        fingerprints_match = (
+            (not manifest_sha256 or row.get("manifest_sha256") == manifest_sha256)
+            and (not case_set_sha256 or row.get("case_set_sha256") == case_set_sha256)
+            and (not prompt_sha256 or row.get("prompt_sha256") == prompt_sha256)
+        )
+        if (
+            not key
+            or not candidate
+            or key != f"{candidate}:{case_id}"
+            or not expected
+            or row.get("input_fingerprint") != expected
+            or not fingerprints_match
+        ):
+            raise SafetyError("existing benchmark raw row has missing/stale input fingerprint; use a new output directory")
+        if key in done:
+            raise SafetyError("existing benchmark raw rows contain a duplicate candidate/case key; use a new output directory")
+        done.add(key)
+    return done
 
 
 def parse_prediction(text: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -242,7 +342,8 @@ def score(case: dict[str, Any], prediction: dict[str, Any] | None, latency: floa
 
 def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]] | None = None,
         process_getter: Callable[[], list[str]] | None = None, lms: str | None = None,
-        completion: Callable[[str, str, list[str], int], str] | None = None) -> dict[str, Any]:
+        completion: Callable[[str, str, list[str], int], str] | None = None,
+        sample_root: Path | None = None) -> dict[str, Any]:
     local_url(args.api_base)
     status_getter = status_getter or (lambda: get_json(args.backend_url.rstrip("/") + "/api/status"))
     status = assert_idle(
@@ -250,7 +351,9 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
         process_getter() if process_getter else None,
         status_getter=status_getter,
     )
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
+    manifest_bytes = args.manifest.read_bytes()
+    manifest = json.loads(manifest_bytes.decode("utf-8-sig"))
+    case_set_sha256 = verify_manifest_contract(manifest)
     requested = bool(args.models)
     lms = lms or lms_path()
     available = visible_models(lms)
@@ -259,14 +362,49 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
     missing = [m for m in selected if m not in available]
     if missing:
         raise SafetyError("requested model(s) are not fully downloaded/visible: " + ", ".join(missing))
+    if not selected:
+        raise SafetyError("no benchmark candidates are fully downloaded/visible")
     snapshot = loaded_snapshot(lms)
+    baseline_context = snapshot.get(DEFAULT_MODEL, {}).get("context_length", args.context_length)
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
-    raw = output / "raw.jsonl"
-    done = {json.loads(x)["key"] for x in raw.read_text(encoding="utf-8").splitlines() if x.strip()} if raw.exists() else set()
     prompt = args.prompt.read_text(encoding="utf-8")
     cases = manifest["cases"]
+    manifest_sha256 = sha256_bytes(manifest_bytes)
+    prompt_sha256 = sha256_bytes(prompt.encode("utf-8"))
+    sample_root = sample_root or (ROOT / "samples" / "ocr_demo_50")
+    prepared = {str(case["id"]): prepare_case_evidence(case, prompt, sample_root) for case in cases}
+    raw = output / "raw.jsonl"
+    existing_rows = [json.loads(line) for line in raw.read_text(encoding="utf-8").splitlines() if line.strip()] if raw.exists() else []
+    done = validate_resume_fingerprints(
+        existing_rows,
+        prepared,
+        manifest_sha256=manifest_sha256,
+        case_set_sha256=case_set_sha256,
+        prompt_sha256=prompt_sha256,
+    )
+    pending_by_model = {
+        model: [case for case in cases if f"{model}:{case['id']}" not in done]
+        for model in selected
+    }
     results: list[dict[str, Any]] = []
+    if not any(pending_by_model.values()):
+        summary = {
+            "schema": "samsung-model-benchmark-sidecar/v2",
+            "status_snapshot": status,
+            "loaded_models_before": snapshot,
+            "baseline_model": DEFAULT_MODEL,
+            "baseline_context_length": baseline_context,
+            "models": selected,
+            "raw_jsonl": str(raw),
+            "new_records": 0,
+            "manifest_sha256": manifest_sha256,
+            "case_set_sha256": case_set_sha256,
+            "prompt_sha256": prompt_sha256,
+            "dangerous_errors": 0,
+        }
+        (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return summary
     lock = benchmark_lock_path(args.runtime_output_dir)
     lock_owner = acquire_benchmark_lock(lock, selected, recover_stale=args.recover_stale_lock,
                                         stale_age_seconds=args.stale_lock_age_seconds)
@@ -278,25 +416,30 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
             status_getter=status_getter,
         )
         for model in selected:
+            model_cases = pending_by_model[model]
+            if not model_cases:
+                continue
             for identifier in list(loaded_snapshot(lms)):
                 run_lms(lms, ["unload", identifier], 120)
             run_lms(lms, ["load", model, "--context-length", str(args.context_length), "--gpu", "max", "--identifier", model, "--parallel", "1", "--yes"], 600)
             actual_context = loaded_snapshot(lms).get(model, {}).get("context_length", args.context_length)
-            for case in cases:
+            for case in model_cases:
                 key = f"{model}:{case['id']}"
-                if key in done:
-                    continue
-                image = ROOT / "samples" / "ocr_demo_50" / case["image"]
                 started = time.perf_counter()
                 error = None
                 prediction = None
                 try:
-                    text = (completion or post_completion)(args.api_base, model, prompt, [encode_image(image), *crop_bytes(image)], args.timeout)
+                    evidence = prepared[str(case["id"])]
+                    text = (completion or post_completion)(args.api_base, model, prompt, evidence["images"], args.timeout)
                     prediction, error = parse_prediction(text)
                 except Exception as exc:
                     error = f"inference_error: {exc}"
                     text = ""
+                evidence = prepared[str(case["id"])]
                 row = {"key": key, "candidate_model": model, "case_id": case["id"], "context_length": actual_context,
+                       "manifest_sha256": manifest_sha256, "case_set_sha256": case_set_sha256,
+                       "prompt_sha256": prompt_sha256, "image_sha256": evidence["image_sha256"],
+                       "input_fingerprint": evidence["input_fingerprint"],
                        "raw_text": text, "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        **score(case, prediction, time.perf_counter() - started, error)}
                 with raw.open("a", encoding="utf-8") as fh:
@@ -306,13 +449,15 @@ def run(args: argparse.Namespace, *, status_getter: Callable[[], dict[str, Any]]
         try:
             for identifier in list(loaded_snapshot(lms)):
                 run_lms(lms, ["unload", identifier], 120)
-            run_lms(lms, ["load", DEFAULT_MODEL, "--context-length", str(args.context_length), "--gpu", "max", "--identifier", DEFAULT_MODEL, "--parallel", "1", "--yes"], 600)
+            run_lms(lms, ["load", DEFAULT_MODEL, "--context-length", str(baseline_context), "--gpu", "max", "--identifier", DEFAULT_MODEL, "--parallel", "1", "--yes"], 600)
         finally:
             release_benchmark_lock(lock, int(lock_owner["pid"]))
-    summary = {"schema": "samsung-model-benchmark-sidecar/v1", "status_snapshot": status,
+    summary = {"schema": "samsung-model-benchmark-sidecar/v2", "status_snapshot": status,
                "loaded_models_before": snapshot,
-               "baseline_model": DEFAULT_MODEL, "baseline_context_length": snapshot.get(DEFAULT_MODEL, {}).get("context_length", args.context_length),
+               "baseline_model": DEFAULT_MODEL, "baseline_context_length": baseline_context,
                "models": selected, "raw_jsonl": str(raw), "new_records": len(results),
+               "manifest_sha256": manifest_sha256, "case_set_sha256": case_set_sha256,
+               "prompt_sha256": prompt_sha256,
                "dangerous_errors": sum(len(x["dangerous_categories"]) for x in results)}
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return summary

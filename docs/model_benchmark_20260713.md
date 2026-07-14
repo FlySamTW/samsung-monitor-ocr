@@ -2,7 +2,7 @@
 
 ## 固定集與範圍
 
-固定集是 `samples/ocr_demo_50/labels.json` 的 50 張 portable demo set。manifest 由 `tools/model_benchmark_manifest.py` 產生，預設包含 34 張單機、16 張遠景、FollowMe Pro/FollowMe、價格存在與缺漏/不確定案例，以及遠景型號幻覺風險標記。預期欄位不應送進模型 prompt。
+固定集是 `samples/ocr_demo_50/labels.json` 的 50 張 portable demo set。manifest 由 `tools/model_benchmark_manifest.py` 產生，預設包含 34 張單機、16 張遠景、FollowMe Pro/FollowMe、價格存在與缺漏/不確定案例，以及遠景型號幻覺風險標記。v2 manifest 記錄 labels SHA-256、每張原圖 SHA-256 與整批 case-set SHA-256；任一 ID、圖片、tag 或 expected 被改寫都會 fail closed。預期欄位不應送進模型 prompt。
 
 這批資料沒有獨立人工標註「宣傳牌但非 FollowMe」、它牌或純視覺模糊價牌，因此這三項不能冒充已測指標；應先補 fixture，再宣告完整覆蓋。
 
@@ -17,6 +17,8 @@
 只有在候選已由操作者另行載入、且主線 OCR 已停止或有獨立 LM Studio instance 時，才可把同一批盲測輸出交給評分器。這個 benchmark 工具本身不會 load/unload、啟停 server 或切換模型。
 
 `model_benchmark_sidecar.py` 的實際執行會用 UTF-8 JSON 列舉 Windows 專案程序；列舉失敗即拒絕 benchmark。它在取得獨占 lock 前後各確認一次 API idle 且沒有 watcher、staged/recursive runner 或 uploader，避免在檢查與切模之間發生競態。中文 `遠景` 與英文 `distant_view` 都會計入 FollowMe 危險誤判。
+
+執行前會一次建立每個 case 的全圖與 deterministic crops，對 production prompt 及實際解碼後影像內容計算 `input_fingerprint`，並將 manifest、case set、prompt、image 指紋寫入每筆 raw row。所有候選共用同一批已準備的 evidence；舊 raw row 若缺少指紋、候選/key 不一致，或 prompt/圖片/crop/manifest 曾變動，不得續跑，必須使用新 output directory。
 
 ```powershell
 .\.venv\Scripts\python.exe tools\model_benchmark_manifest.py build

@@ -6,6 +6,7 @@ unloads, or switches a model; ``preflight`` only reports the server and loaded I
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +23,10 @@ CANDIDATES = [
     "qwen/qwen2.5-vl-7b",
     "minicpm-v-4.6",
 ]
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def tags(row: dict) -> list[str]:
@@ -44,12 +49,17 @@ def tags(row: dict) -> list[str]:
 
 
 def build(out: Path) -> None:
-    data = json.loads(LABELS.read_text(encoding="utf-8-sig"))
+    labels_bytes = LABELS.read_bytes()
+    data = json.loads(labels_bytes.decode("utf-8-sig"))
     cases = []
     for row in data["labels"]:
+        image_path = ROOT / "samples" / "ocr_demo_50" / row["sample_photo"]
+        if not image_path.is_file():
+            raise FileNotFoundError(f"benchmark image missing: {image_path}")
         cases.append({
             "id": row["id"],
             "image": row["sample_photo"],
+            "image_sha256": sha256_bytes(image_path.read_bytes()),
             "tags": tags(row),
             "expected": {
                 "view_type": row.get("category"),
@@ -57,9 +67,21 @@ def build(out: Path) -> None:
                 "price": row.get("price"),
             },
         })
+    case_contract = [
+        {
+            "id": case["id"],
+            "image": case["image"],
+            "image_sha256": case["image_sha256"],
+            "tags": case["tags"],
+            "expected": case["expected"],
+        }
+        for case in cases
+    ]
     manifest = {
-        "schema": "samsung-model-benchmark/v1",
+        "schema": "samsung-model-benchmark/v2",
         "source": "samples/ocr_demo_50/labels.json",
+        "labels_sha256": sha256_bytes(labels_bytes),
+        "case_set_sha256": sha256_bytes(json.dumps(case_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")),
         "blind_protocol": "Send image plus the production OCR prompt; do not expose expected fields.",
         "cases": cases,
         "candidates": CANDIDATES,
