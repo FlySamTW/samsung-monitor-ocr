@@ -22,6 +22,10 @@ file, recent results, index, or filename joins.
   immutable and carry a monotonic sequence.
 - Photo, AI narration, revealed card, and modal must reference the same
   snapshot. Never join them with filename, index, or `source_path`.
+- The visible `目前檔案` header is part of that same snapshot. During a handoff,
+  it must keep the still-visible presentation filename until the next live
+  presentation owns both photo and narration; raw backend `current_file` may
+  be used only as a fallback when no visible presentation identity exists.
 - The right rail reads only revealed results. During OCR, neither
   `recent_results` nor `current_file` may enter presentation as fallback.
 - Keep the previous image until the next image is loaded; never blank the main

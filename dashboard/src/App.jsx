@@ -1279,9 +1279,15 @@ const App = () => {
     || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
   const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
-  const currentFileLabel = data.current_file && data.current_file !== "None"
-    ? data.current_file
-    : (data.latest_result_file || "-");
+  // The header is part of the same visible presentation contract as the
+  // photo and narration.  The backend may advance current_file before the
+  // next presentation exists, so never let that early pointer rename the
+  // still-visible prior photo during the handoff window.
+  const currentFileLabel = displayedFileName && displayedFileName !== "-" && displayedFileName !== "上一張畫面保留"
+    ? displayedFileName
+    : (data.current_file && data.current_file !== "None"
+      ? data.current_file
+      : (data.latest_result_file || "-"));
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;

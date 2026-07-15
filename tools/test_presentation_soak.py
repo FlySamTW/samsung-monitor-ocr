@@ -299,6 +299,15 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("為避免照片與判讀錯配", app)
         self.assertNotIn("{visibleImage && <img", app)
 
+    def test_header_filename_uses_the_visible_presentation_identity(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        label_start = app.index("const currentFileLabel =")
+        label_end = app.index("const narrationPhase", label_start)
+        label = app[label_start:label_end]
+        self.assertIn("displayedFileName", label)
+        self.assertIn("data.current_file", label)
+        self.assertLess(label.index("displayedFileName"), label.index("data.current_file"))
+
     def test_running_handoff_never_bypasses_queue_with_latest_result(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot", app)
