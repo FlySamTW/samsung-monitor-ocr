@@ -997,6 +997,27 @@ def enforce_explicit_structured_authority(result, explicit_fields):
     return list(dict.fromkeys(blocked))
 
 
+def apply_narration_identity_rescue(result, explicit_fields, field, value):
+    """Fill a legacy missing identity field without overriding structured output.
+
+    Current v19.45 responses explicitly carry ``model`` and ``price`` even when
+    the correct answer is null.  In that case narration may describe a nearby
+    label as evidence, but it must not refill the structured null.  The rescue
+    remains available only for legacy/unstructured responses where the field is
+    absent altogether.
+    """
+    if (
+        not isinstance(result, dict)
+        or field not in {"model", "price"}
+        or not value
+        or (isinstance(explicit_fields, dict) and field in explicit_fields)
+        or result.get(field) not in (None, "")
+    ):
+        return False
+    result[field] = value
+    return True
+
+
 def has_explicit_distant_layout_evidence(context_text=""):
     """Require an explicit display-wall conclusion before overriding a single-unit result.
 
@@ -2936,7 +2957,13 @@ def process_single_image(
                 if parsed and isinstance(parsed, dict):
                     # [OCG-v2.5] JSON 成功但 model=null 時,保守補抓型號(低風險)
                     parsed_model = parsed.get("model")
-                    if (parsed_model is None or parsed_model == "") and parsed.get("view_type") == "單機":
+                    parsed_structured = parsed.get("data", parsed)
+                    if (
+                        (parsed_model is None or parsed_model == "")
+                        and parsed.get("view_type") == "單機"
+                        and isinstance(parsed_structured, dict)
+                        and "model" not in parsed_structured
+                    ):
                         try:
                             valid_models = []
                             if orchestrator and orchestrator.model_matcher:
@@ -3210,6 +3237,8 @@ def process_single_image(
             for key in ("view_type", "category", "model", "price")
             if key in data_obj
         }
+        narration_model_fill_allowed = "model" not in explicit_structured_fields
+        narration_price_fill_allowed = "price" not in explicit_structured_fields
         # These fields are pipeline-owned evidence markers.  Never trust a
         # similarly named key supplied by model output.
         for internal_key in (
@@ -3230,10 +3259,12 @@ def process_single_image(
             # silently overwrite an explicit Samsung SKU.
             data_obj["brand_evidence_conflict"] = True
             data_obj["rejected_other_brand_model"] = raw_other_brand_model
-        elif raw_other_brand_model and data_obj.get("view_type") != "遠景":
-            console.print(f"[dim]🔎 [Other Brand] '{raw_model}' -> '{raw_other_brand_model}'[/dim]")
-            data_obj["model"] = raw_other_brand_model
-            raw_model = None
+        elif raw_other_brand_model and data_obj.get("view_type") != "遠景" and narration_model_fill_allowed:
+            if apply_narration_identity_rescue(
+                data_obj, explicit_structured_fields, "model", raw_other_brand_model
+            ):
+                console.print(f"[dim]🔎 [Other Brand] '{raw_model}' -> '{raw_other_brand_model}'[/dim]")
+                raw_model = None
 
         # [v18.81] 移除 FollowMe 自動偵測邏輯
         # 原因：AI 幻覺說「圓形底座」時會誤觸發，導致錯誤的型號自動填入
@@ -3361,9 +3392,11 @@ def process_single_image(
                         data_obj["model_validation_failed"] = True
 
         ark_model = infer_odyssey_ark_model(thinking_text)
-        if ark_model and not data_obj.get("model"):
-            console.print(f"[green]✅ [Odyssey Ark 固定規則] 主角 Ark 55 吋 → {ark_model}[/green]")
-            data_obj["model"] = ark_model
+        if ark_model and not data_obj.get("model") and narration_model_fill_allowed:
+            if apply_narration_identity_rescue(
+                data_obj, explicit_structured_fields, "model", ark_model
+            ):
+                console.print(f"[green]✅ [Odyssey Ark 固定規則] 主角 Ark 55 吋 → {ark_model}[/green]")
 
         # 3. Strict Price Check (4-5 digits only)
         raw_price = data_obj.get("price")
@@ -3466,19 +3499,23 @@ def process_single_image(
                     data_obj["model"] = normalized_followme
                     current_model = normalized_followme
             main_label_model = extract_main_label_model(thinking_text)
-            if not current_model and main_label_model and not rescue_blocked_by_distant_view:
+            if not current_model and main_label_model and not rescue_blocked_by_distant_view and narration_model_fill_allowed:
                 verified_main_label = strict_known_model(main_label_model, valid_models_list)
                 if verified_main_label:
-                    console.print(f"[green]✅ [主角標籤救援] 從描述補回已驗證型號: {verified_main_label}[/green]")
-                    data_obj["model"] = verified_main_label
-                    current_model = verified_main_label
+                    if apply_narration_identity_rescue(
+                        data_obj, explicit_structured_fields, "model", verified_main_label
+                    ):
+                        console.print(f"[green]✅ [主角標籤救援] 從描述補回已驗證型號: {verified_main_label}[/green]")
+                        current_model = verified_main_label
                 else:
                     data_obj["model_validation_failed"] = True
                     data_obj["rejected_model"] = main_label_model
-            if not current_model and desc_model and desc_model in valid_models_list and not desc_model_is_speculative and not model_rescue_blocked and not rescue_blocked_by_distant_view:
-                console.print(f"[green]✅ [獨白救援] 從描述補回型號: {desc_model}[/green]")
-                data_obj["model"] = desc_model
-                current_model = desc_model
+            if not current_model and desc_model and desc_model in valid_models_list and not desc_model_is_speculative and not model_rescue_blocked and not rescue_blocked_by_distant_view and narration_model_fill_allowed:
+                if apply_narration_identity_rescue(
+                    data_obj, explicit_structured_fields, "model", desc_model
+                ):
+                    console.print(f"[green]✅ [獨白救援] 從描述補回型號: {desc_model}[/green]")
+                    current_model = desc_model
             elif current_model and desc_model:
                 # 簡單清理
                 c_curr = current_model.replace('-', '').strip().upper()
@@ -3497,9 +3534,11 @@ def process_single_image(
                     current_digits = "".join(c for c in str(current_price or "") if c.isdigit())
                     rescued_digits = "".join(c for c in str(rescued_price or "") if c.isdigit())
                     followme_price_context = "FOLLOWME" in str(data_obj.get("model") or "").upper() or "FOLLOWME" in thinking_text.upper()
-                    if not current_price:
-                        console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
-                        data_obj["price"] = rescued_price
+                    if not current_price and narration_price_fill_allowed:
+                        if apply_narration_identity_rescue(
+                            data_obj, explicit_structured_fields, "price", rescued_price
+                        ):
+                            console.print(f"[green]✅ [獨白救援] 從思考過程中補回價格: {rescued_price}[/green]")
                     elif current_digits and rescued_digits and current_digits != rescued_digits and followme_price_context:
                         console.print(f"[yellow]⚠️ [價格衝突] JSON={current_digits}、描述={rescued_digits}，清除後重讀[/yellow]")
                         data_obj["price"] = None
@@ -3517,8 +3556,10 @@ def process_single_image(
         if should_block_rescue_from_distant_view(data_obj.get("view_type"), thinking_text):
             if data_obj.get("model") or data_obj.get("price"):
                 console.print("[dim]⚠️ [遠景保護] 遠景描述中的零散型號/價格不補入正式答案[/dim]")
-            data_obj["model"] = None
-            data_obj["price"] = None
+            if narration_model_fill_allowed:
+                data_obj["model"] = None
+            if narration_price_fill_allowed:
+                data_obj["price"] = None
         elif should_demote_distant_to_single_review(data_obj.get("view_type"), thinking_text):
             console.print("[yellow]⚠️ [遠景降級] 遠景答案含單一主角/側標/價牌/FollowMe 線索 → 改單機待補，不當遠景放行[/yellow]")
             data_obj["view_type"] = "單機"
@@ -3526,7 +3567,12 @@ def process_single_image(
             data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
 
         side_label_followme = rescue_followme_32_from_side_label(thinking_text)
-        if side_label_followme and data_obj.get("view_type") == "遠景":
+        if (
+            side_label_followme
+            and data_obj.get("view_type") == "遠景"
+            and narration_model_fill_allowed
+            and narration_price_fill_allowed
+        ):
             console.print("[yellow]⚠️ [FollowMe 側標救援] 讀到 FollowMe 4K/32 側標與 12,900-13,990 價牌，覆蓋遠景誤判[/yellow]")
             data_obj["view_type"] = "單機"
             data_obj["category"] = "單機"
@@ -3541,7 +3587,12 @@ def process_single_image(
             data_obj["model"] = corrected_model
 
         other_brand_model = infer_other_brand_model(thinking_text, data_obj.get("model"))
-        if other_brand_model and data_obj.get("view_type") != "遠景" and not is_samsung_model_like(data_obj.get("model")):
+        if (
+            other_brand_model
+            and data_obj.get("view_type") != "遠景"
+            and not is_samsung_model_like(data_obj.get("model"))
+            and (data_obj.get("model") or narration_model_fill_allowed)
+        ):
             data_obj["model"] = other_brand_model
 
         if should_clear_non_samsung_price(data_obj.get("model"), thinking_text):
@@ -3555,14 +3606,16 @@ def process_single_image(
                 data_obj["view_type"] = "遠景"
 
         inferred_followme = None if should_block_borrowed_model_rescue(thinking_text) else infer_followme_from_physical_clues(data_obj.get("price"), thinking_text)
-        if inferred_followme and data_obj.get("view_type") == "遠景":
+        if inferred_followme and data_obj.get("view_type") == "遠景" and narration_model_fill_allowed:
             console.print(f"[yellow]⚠️ [FollowMe 遠景救援] 獨白描述支架/托盤/價牌，遠景改為單機: {inferred_followme}[/yellow]")
             data_obj["view_type"] = "單機"
             data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
             data_obj["model"] = inferred_followme
-        elif inferred_followme and not data_obj.get("model"):
-            console.print(f"[green]✅ [FollowMe 實體線索救援] 補回型號: {inferred_followme}[/green]")
-            data_obj["model"] = inferred_followme
+        elif inferred_followme and not data_obj.get("model") and narration_model_fill_allowed:
+            if apply_narration_identity_rescue(
+                data_obj, explicit_structured_fields, "model", inferred_followme
+            ):
+                console.print(f"[green]✅ [FollowMe 實體線索救援] 補回型號: {inferred_followme}[/green]")
 
         if data_obj.get("view_type") != "遠景":
             current_model = data_obj.get("model")

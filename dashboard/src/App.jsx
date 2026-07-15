@@ -152,7 +152,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.13";
+const CURRENT_GUARD_REVISION = "20260716.14";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -548,7 +548,16 @@ const App = () => {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [resultRailBatchKey, currentResultRailBatchKey]);
+  // A whole photo can finish between two status polls. The compact live queue
+  // may already be empty on the first idle response, so rehydrate durable
+  // history whenever the completed-photo counter advances, not only when the
+  // batch key changes. This is event-paced (once per photo), not extra polling.
+  }, [
+    resultRailBatchKey,
+    currentResultRailBatchKey,
+    data.review_progress?.processed,
+    data.stats?.processed
+  ]);
 
   const getPassLabel = (item) => item?.pass_label || ({
     1: "初次辨識",

@@ -231,6 +231,43 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIsNone(postprocessed["model"])
         self.assertIsNone(postprocessed["price"])
 
+    def test_neighbor_label_narration_cannot_refill_explicit_null_identity(self):
+        structured = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": None,
+        }
+        postprocessed = dict(structured)
+        narration = (
+            "我讀到鄰近價牌 S24F332EAC／2,390 元，但它屬於另一項商品，"
+            "與主角螢幕不匹配，因此本張型號與價格都不能填入。"
+        )
+        self.assertIn("S24F332EAC", narration)
+        self.assertFalse(
+            batch.apply_narration_identity_rescue(
+                postprocessed, structured, "model", "S24F332EAC"
+            )
+        )
+        self.assertFalse(
+            batch.apply_narration_identity_rescue(
+                postprocessed, structured, "price", "2390"
+            )
+        )
+        blocked = batch.enforce_explicit_structured_authority(postprocessed, structured)
+        self.assertIsNone(postprocessed["model"])
+        self.assertIsNone(postprocessed["price"])
+        self.assertEqual(blocked, [])
+
+    def test_legacy_missing_identity_field_keeps_conservative_rescue_available(self):
+        legacy = {"view_type": "單機", "category": "單機"}
+        self.assertTrue(
+            batch.apply_narration_identity_rescue(
+                legacy, {"view_type": "單機", "category": "單機"}, "model", "S24F332EAC"
+            )
+        )
+        self.assertEqual(legacy["model"], "S24F332EAC")
+
     def test_non_null_structured_identity_cannot_be_silently_changed(self):
         postprocessed = {
             "view_type": "單機",
