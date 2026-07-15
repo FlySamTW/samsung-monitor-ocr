@@ -218,7 +218,7 @@ function Start-EvidenceBackfill {
         "--run-summary-csv",$summaryCsv,
         "--execute",
         "--poll-seconds","10",
-        "--timeout-minutes","360"
+        "--timeout-minutes","10080"
     )
     $process = Start-Process -FilePath $python -WorkingDirectory $RepoRoot -WindowStyle Hidden `
         -ArgumentList $args -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru

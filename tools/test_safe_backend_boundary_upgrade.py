@@ -52,6 +52,10 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         sequence = self.script.index('    Start-And-Verify\n    Start-EvidenceBackfill\n    Remove-Item')
         self.assertGreater(sequence, self.script.index('    Invoke-LegacyTraceMigration\n'))
 
+    def test_evidence_backfill_allows_multiday_accuracy_first_run(self):
+        self.assertIn('"--timeout-minutes","10080"', self.script)
+        self.assertNotIn('"--timeout-minutes","360"', self.script)
+
     def test_supervisor_interlock_is_fail_closed(self):
         self.assertIn('planned_backend_upgrade_interlock', self.supervisor)
         self.assertIn('if ($planned.purpose -eq "backend_upgrade_v1945")', self.supervisor)

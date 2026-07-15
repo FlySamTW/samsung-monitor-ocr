@@ -43,5 +43,9 @@ class AutoRerunContinuityTests(unittest.TestCase):
         main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]
         self.assertLess(main_tail.index("Rebuild-DriveCorrectionLedgerIfSafe"), main_tail.index("Start-Uploader-IfNeeded"))
 
+    def test_accuracy_first_staged_and_recursive_runs_have_multiday_timeout(self):
+        self.assertGreaterEqual(SCRIPT.count('"--timeout-minutes", "10080"'), 2)
+        self.assertNotIn('"--timeout-minutes", "360"', SCRIPT)
+
 if __name__ == "__main__":
     unittest.main()

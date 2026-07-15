@@ -48,6 +48,10 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn('"-SkipRecursiveResume"', self.source)
         self.assertIn('"full_project_pipeline_started"', self.source)
 
+    def test_full_project_folder_timeout_allows_accuracy_first_multiday_runs(self):
+        self.assertIn('"--timeout-minutes","10080"', self.source)
+        self.assertNotIn('"--timeout-minutes","360"', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

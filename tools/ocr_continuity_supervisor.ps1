@@ -155,7 +155,7 @@ try {
             "--api-key","lm-studio",
             "--model",$Model,
             "--poll-seconds","20",
-            "--timeout-minutes","360",
+            "--timeout-minutes","10080",
             "--ignore-current-year-review-gate"
         ) (Join-Path $logDir "supervisor_full_recursive_$stamp.out.log") (Join-Path $logDir "supervisor_full_recursive_$stamp.err.log")
         Start-Sleep -Seconds 1

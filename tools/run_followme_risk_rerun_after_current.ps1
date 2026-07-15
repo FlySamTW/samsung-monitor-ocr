@@ -205,7 +205,7 @@ try {
         --run-summary-csv $summaryCsv `
         --execute `
         --poll-seconds 20 `
-        --timeout-minutes 360 `
+        --timeout-minutes 10080 `
         --min-completion-ratio 0.98 `
         --max-single-missing-ratio 0.65 *>> $LogPath
     $rerunExit = $LASTEXITCODE

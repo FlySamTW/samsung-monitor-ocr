@@ -268,7 +268,7 @@ function Start-Recursive-IfNeeded {
             "--api-key", "lm-studio",
             "--model", $PrimaryModel,
             "--poll-seconds", "20",
-            "--timeout-minutes", "360"
+            "--timeout-minutes", "10080"
         ) `
         -WorkingDirectory $RepoRoot `
         -WindowStyle Hidden `
@@ -334,7 +334,7 @@ function Invoke-QuestionablePass {
         "--run-summary-csv", $summaryCsv,
         "--execute",
         "--poll-seconds", "10",
-        "--timeout-minutes", "360"
+        "--timeout-minutes", "10080"
     )
     Write-RunLog "starting isolated staged rerun label=$Label candidates=$candidateCount"
     & $Python @stagedArgs *>> $LogPath
