@@ -902,6 +902,66 @@ def should_block_rescue_from_distant_view(view_type, context_text=""):
     return not has_strong_single_unit_evidence(raw_text)
 
 
+def enforce_explicit_structured_authority(result, explicit_fields):
+    """Keep machine-readable answers authoritative over prose heuristics.
+
+    Narration is useful for detecting contradictions, but it must never turn an
+    explicit ``遠景`` into ``單機`` or refill a model/price that the model
+    explicitly returned as null.  Those contradictions belong to the evidence
+    gate and an independent retry, not to a silent post-processing rewrite.
+    """
+    if not isinstance(result, dict) or not isinstance(explicit_fields, dict):
+        return []
+
+    blocked = []
+    explicit_view = str(explicit_fields.get("view_type") or "").strip()
+    if explicit_view in {"遠景", "單機", "失敗"}:
+        if result.get("view_type") != explicit_view:
+            blocked.append("view_type")
+        result["view_type"] = explicit_view
+
+        explicit_category = str(explicit_fields.get("category") or "").strip()
+        authoritative_category = (
+            explicit_category
+            if explicit_category in {"遠景", "單機", "失敗"}
+            else explicit_view
+        )
+        if "category" in explicit_fields and result.get("category") != authoritative_category:
+            blocked.append("category")
+        result["category"] = authoritative_category
+
+    for field in ("model", "price"):
+        if field not in explicit_fields:
+            continue
+        explicit_value = explicit_fields.get(field)
+        if explicit_value is None or str(explicit_value).strip().lower() in {"", "null", "none"}:
+            if result.get(field) not in (None, ""):
+                blocked.append(field)
+            result[field] = None
+
+    explicit_model = explicit_fields.get("model")
+    final_model = result.get("model")
+    if explicit_model not in (None, "") and final_model not in (None, ""):
+        canonical_explicit = re.sub(r"[^A-Z0-9]", "", str(explicit_model).upper())
+        canonical_final = re.sub(r"[^A-Z0-9]", "", str(final_model).upper())
+        if canonical_explicit and canonical_final and canonical_explicit != canonical_final:
+            blocked.append("model")
+            result["model"] = None
+            result["structured_identity_conflict"] = True
+
+    explicit_price = explicit_fields.get("price")
+    final_price = result.get("price")
+    if explicit_price not in (None, "") and final_price not in (None, ""):
+        explicit_digits = re.sub(r"\D", "", str(explicit_price))
+        final_digits = re.sub(r"\D", "", str(final_price))
+        if explicit_digits and final_digits and explicit_digits != final_digits:
+            blocked.append("price")
+            result["price"] = None
+            result["structured_identity_conflict"] = True
+
+    return list(dict.fromkeys(blocked))
+
+
 def has_explicit_distant_layout_evidence(context_text=""):
     """Require an explicit display-wall conclusion before overriding a single-unit result.
 
@@ -3077,6 +3137,11 @@ def process_single_image(
              data_obj = parsed.get('data', parsed)
 
         if not isinstance(data_obj, dict): data_obj = {} # Fallback to empty dict to prevent AttributeError
+        explicit_structured_fields = {
+            key: data_obj.get(key)
+            for key in ("view_type", "category", "model", "price")
+            if key in data_obj
+        }
 
         # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
         import difflib # Ensure import available (inline is safe)
@@ -3459,6 +3524,14 @@ def process_single_image(
                 data_obj["price"] = None
                 data_obj["screen_status"] = ""
 
+        # The structured answer is the pass result.  Prose may only raise a
+        # contradiction for the evidence gate; it may not silently rewrite
+        # classification or refill explicitly-null identity fields.
+        structured_authority_blocked_fields = enforce_explicit_structured_authority(
+            data_obj,
+            explicit_structured_fields,
+        )
+
         # 4. Auto-Calculate Quality Issue
         p_val = data_obj.get("price")
         m_val = data_obj.get("model")
@@ -3490,6 +3563,7 @@ def process_single_image(
             result_json["raw_objects"] = [str(item.get("raw") or "")[:12000] for item in locals().get("raw_objects", [])[:3]]
             result_json["merge_mode"] = locals().get("merge_mode", "none")
             result_json["merge_rejected_reason"] = locals().get("merge_rejected_reason", "")
+            result_json["structured_authority_blocked_fields"] = structured_authority_blocked_fields
 
             # [Safety] Check for weird keys containing newlines (The specific user error)
             # If we find them, try to fix them by stripping whitespace
@@ -4819,7 +4893,10 @@ def main():
         except Exception as e:
             console.print(f"[red]⚠️ Browser launch failed: {e}[/red]")
 
-    if os.environ.get("SAMSUNG_OCR_NO_BROWSER") != "1":
+    # Backend restarts are headless by default.  Only an explicit interactive
+    # launcher may request a browser action; continuity/supervisor restarts
+    # must never create duplicate tabs or windows behind the user's back.
+    if os.environ.get("SAMSUNG_OCR_OPEN_BROWSER") == "1":
         Timer(1.5, open_browser).start()
 
     flask_app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)

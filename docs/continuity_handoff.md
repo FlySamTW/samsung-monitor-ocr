@@ -284,3 +284,18 @@
 - 切回正式 staging 時又抓到 15 張 smoke 卡片殘留：source ID 相同且 idle `current_run_id` 為空，舊 recovery 誤選最新非空 smoke run。現加入 work-dir `.ocr_presentation_run.json`、legacy-only fallback、切換時清除跨資料夾 live 指標、前端 source+run 雙重過濾及 session storage v2；需在 idle 邊界載入新版後，先以既有分頁證明正式卡片無 smoke 污染，再重啟回補。
 - 原分頁已用純前端補強驗證正式待機：`829/1,504`、總進度 `65,331/150,321`，smoke 檔名／卡片 0、raw JSON 0。排程在 21:01 自動重啟的 runner 雖已指向正式 staging，但仍長時間滿 CPU；查明 `group_candidates` 忽略候選 CSV 既有 `source_path`，對 5,942 張逐張做全來源樹 `rglob`。現改成先驗證 root/name/period 後直接使用 bound path，只有舊資料缺失才 fallback 搜尋，並有測試保證合法路徑不呼叫 tree scan。
 - 新 runner 已在約 2 秒完成 5,942 筆／5 群組解析，證明速度修正有效；隨後因正式 staging 為 idle 但未完成 `829/1,504` 而正確拒絕。現補上唯一匹配後的正式續跑順序：runner 先以 exact staging 呼叫 `/api/start_batch`（confirmed continue、非 restart），再 attach/wait/finalize 並接後續月份；測試證明不會對模糊、完成或已在跑的資料夾按 Continue。
+
+## 2026-07-15 21:20 正式復跑內容漂移與停止點
+
+- 正式 `202601` 已由接力器正確從 `829/1,504` 接續，既有 Chrome 分頁實測顯示總進度 `65,331/150,321`、目前複核數持續變動、AI 自然語句逐字顯示、右欄只含本場次卡片，沒有 smoke 卡片、裸 JSON 或亂碼。
+- 內容監控在 `836/1,504` 主動停止：原始結構答案是 `遠景 / model=null / price=null`，舊敘述救援卻從同段 narration 的鄰近價牌補回 SKU/價格並把最終結果改成單機。`.5` 守門雖攔住 verified，但這仍是「跑歪」與無效二、三輪來源，不能因進度在增加就繼續。
+- 已加入結構答案權威規則：敘述可用來指出矛盾並觸發獨立重讀，但不得覆寫明示的遠景/單機，也不得補回明示 null 的型號或價格。任何被阻止的欄位會記在 `structured_authority_blocked_fields`。
+- 目前正式 OCR 停止、後端與介面保留、runner 已停止、uploader 未啟動、`model_benchmark.lock` 保留。完成 critical regression、隔離重播與既有分頁核對前不得恢復正式 backfill。
+
+## 2026-07-15 21:45 結構答案權威規則驗證與恢復
+
+- 兩次完整 critical regression 均通過；v19.45 evidence contract 現有 46 項測試通過。新增測試涵蓋：明示遠景/null 不得被敘述補值、不同非空 SKU/價格不得被後處理替換、僅允許大小寫／標點／貨幣格式等外觀正規化。
+- 第一段正式受控驗證在 `839→842/1,504` 共 6 輪，確認遠景改單機 0、null 型號補值 0、null 價格補值 0、記憶暴露 0、prompt contamination 0；另抓到 `S27CG552EC→S32CG552EC` 的非空型號改寫，雖守門已排入 retry，仍再次停機並收緊規則。
+- 載入收緊版後第二段正式驗證在 `842→845/1,504` 共 3 張／6 輪：view rewrite 0、null refill 0、material model/price rewrite 0、independent false 0、prior exposed 0、contamination 0。一張跨輪結構衝突正確保留 unresolved，未冒充成功。
+- 同一既有 Chrome 分頁實測仍只有 1 個 `localhost:5000` tab；顯示總進度 `65,331/150,321`、正式進度、自然語句逐字判讀與本場縮圖卡，裸 JSON 0、亂碼 0。後端已改為預設 headless，只有明示 `SAMSUNG_OCR_OPEN_BROWSER=1` 才可要求瀏覽器動作。
+- continuity supervisor 已恢復正式 `.5` backfill；21:45 狀態為 `202601 846/1,504`、verified 445、review 401、failed 0、單一 runner 父子組、uploader 0、runtime fuse 不存在、`_ocr_audit/model_benchmark.lock` 保留。後續監控必須持續抽查 raw/final 結構漂移，不能只報進度。

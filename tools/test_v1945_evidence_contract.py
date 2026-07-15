@@ -33,6 +33,85 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_explicit_distant_null_fields_cannot_be_rewritten_from_narration(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27D300GAC",
+            "price": "3760",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "遠景",
+                "category": "遠景",
+                "model": None,
+                "price": None,
+            },
+        )
+        self.assertEqual(postprocessed["view_type"], "遠景")
+        self.assertEqual(postprocessed["category"], "遠景")
+        self.assertIsNone(postprocessed["model"])
+        self.assertIsNone(postprocessed["price"])
+        self.assertEqual(set(blocked), {"view_type", "category", "model", "price"})
+
+    def test_explicit_single_null_identity_stays_reviewable_not_rescued(self):
+        postprocessed = {
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": "FollowMe M7 32\"",
+            "price": "12990",
+        }
+        batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {"view_type": "單機", "category": "單機", "model": None, "price": None},
+        )
+        self.assertEqual(postprocessed["view_type"], "單機")
+        self.assertEqual(postprocessed["category"], "單機")
+        self.assertIsNone(postprocessed["model"])
+        self.assertIsNone(postprocessed["price"])
+
+    def test_non_null_structured_identity_cannot_be_silently_changed(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S32CG552EC",
+            "price": "6990",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "單機",
+                "category": "單機",
+                "model": "S27CG552EC",
+                "price": "4990",
+            },
+        )
+        self.assertIsNone(postprocessed["model"])
+        self.assertIsNone(postprocessed["price"])
+        self.assertTrue(postprocessed["structured_identity_conflict"])
+        self.assertEqual(set(blocked), {"model", "price"})
+
+    def test_cosmetic_model_and_price_normalization_remains_allowed(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": 'FollowMe M7 32"',
+            "price": "12990",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "單機",
+                "category": "單機",
+                "model": "FollowMe M7 32",
+                "price": "$12,990",
+            },
+        )
+        self.assertEqual(postprocessed["model"], 'FollowMe M7 32"')
+        self.assertEqual(postprocessed["price"], "12990")
+        self.assertEqual(blocked, [])
+
     def test_negated_unique_subject_wording_remains_distant_evidence(self):
         narration = (
             "畫面中可見多台螢幕並排展示，無法鎖定唯一主角，"

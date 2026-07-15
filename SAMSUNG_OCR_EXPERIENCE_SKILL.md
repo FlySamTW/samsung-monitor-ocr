@@ -465,8 +465,11 @@ While the fuse remains active, `/api/start_batch` has exactly one constrained di
 
 Monitoring means progress plus content quality plus presentation health plus upload isolation. A counter that advances while answers are contaminated is a failure, not progress. The recurring monitor must audit all four dimensions and must never auto-resume a run stopped by the runtime health gate.
 
+At every repair/resume boundary, reread `docs/development_guide.md` and `docs/continuity_handoff.md`, then compare a live sample's raw structured JSON with its final parsed fields. Progress-only monitoring is insufficient. A non-empty `structured_authority_blocked_fields`, raw/final material mismatch, memory exposure, prompt contamination, UI identity mismatch, raw JSON/garbling, duplicate browser tab, uploader activity, or runtime fuse is a stop-and-investigate signal.
+
 Anti-bypass invariants are part of that contract:
 
+- Structured fields from the current independent pass are authoritative over narration heuristics. Narration may expose a contradiction and force retry/review, but it must never change an explicit `遠景`/`單機`, refill an explicitly null model/price, or replace one non-empty SKU/price with a materially different one. Material replacements are cleared and recorded in `structured_authority_blocked_fields`; only cosmetic case, punctuation, and currency formatting normalization is allowed.
 - `view_type` and `category` may not assert different scene types. A structured single-unit result whose narration explicitly concludes `遠景`, or `label_ownership=matched` whose narration assigns the label to a neighboring product, must retry/fail closed.
 - FollowMe friendly names and physical SKUs are equivalent for gating. `S32FM50x`, `S32FM70x`, and `S43FM70x` families require same-subject physical evidence and a current-year second pass; ordinary `S32FM80x/S32FM90x` Smart Monitor SKUs do not.
 - Screen content is not hardware brand evidence. Text such as `螢幕顯示 ASUS Demo 畫面` must never replace a valid Samsung SKU with `它牌(ASUS)`.

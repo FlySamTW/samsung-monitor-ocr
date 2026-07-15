@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 
 SCRIPT = (Path(__file__).parent / "windows_user_launcher.ps1").read_text(encoding="utf-8")
+BACKEND = (Path(__file__).parents[1] / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
 
 class WindowsLauncherWindowStyleTests(unittest.TestCase):
     def test_backend_is_hidden_and_browser_remains_visible(self):
@@ -22,6 +23,10 @@ class WindowsLauncherWindowStyleTests(unittest.TestCase):
         self.assertIn('Dashboard build is present and current.', SCRIPT)
         self.assertIn('dashboard/dist is missing or stale', SCRIPT)
         self.assertLess(SCRIPT.index("Ensure-Dashboard"), SCRIPT.index("Start-Backend"))
+
+    def test_backend_restart_is_headless_by_default(self):
+        self.assertIn('os.environ.get("SAMSUNG_OCR_OPEN_BROWSER") == "1"', BACKEND)
+        self.assertNotIn('os.environ.get("SAMSUNG_OCR_NO_BROWSER") != "1"', BACKEND)
 
 if __name__ == "__main__":
     unittest.main()
