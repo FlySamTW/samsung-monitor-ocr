@@ -225,18 +225,24 @@ V1945_OUTPUT_CONTRACT = (
     "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
     "label_ownership (matched|mismatched|ambiguous|not_visible|not_applicable), "
     "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
-    "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object."
+    "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object. "
+    "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
+    "A screen cut by an image edge is not complete. A dominant centered complete monitor with its readable aligned label or price is single-unit/單機 with unique_main=true and label_ownership=matched, even when one neighboring monitor is partial or visible."
 )
 
 REVIEW_FOCUS_PROMPTS = {
     2: (
         "只根據所附影像逐項計算完整入鏡螢幕台數，確認 FollowMe 文字是否只是"
         "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
+        "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
+        "即使旁邊另有局部螢幕也要判為單機候選。"
         "直接記錄當前影像的可見證據；沒有把握的欄位留空。"
     ),
     3: (
         "只根據所附影像逐項判斷完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、"
         "型號清單有效性與價牌空間歸屬。不確定就留空，不可猜測；"
+        "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
+        "即使旁邊另有局部螢幕也要判為單機候選。"
         "直接記錄當前影像的可見證據。"
     ),
 }

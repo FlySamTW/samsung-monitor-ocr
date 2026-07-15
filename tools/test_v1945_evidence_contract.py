@@ -516,6 +516,15 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("`unique_main` 固定填 `false`", prompt)
         self.assertIn("`complete_screen_count` 填成實際數到的整數且至少為 3", prompt)
         self.assertIn("禁止填 `matched`", prompt)
+        self.assertIn("0、1、2 台完整入鏡時絕對不是遠景", prompt)
+        self.assertIn("中央有一台明顯較完整、較大或構圖居中的主螢幕", prompt)
+
+    def test_retry_prompts_repeat_subthree_and_dominant_single_invariant(self):
+        for attempt in (2, 3):
+            focus = batch.REVIEW_FOCUS_PROMPTS[attempt]
+            self.assertIn("完整台數只有 0、1、2 時絕對不可判遠景", focus)
+            self.assertIn("中央主螢幕與其正下方可讀價牌對齊", focus)
+        self.assertIn("complete_screen_count 0, 1, or 2 can never be", batch.V1945_OUTPUT_CONTRACT)
 
     def test_single_prompt_requires_all_machine_readable_evidence_every_pass(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
