@@ -153,6 +153,7 @@ npm run build
 | 單機結構與明示遠景敘述衝突會拒絕 | `test_single_structure_cannot_ignore_explicit_distant_narration` |
 | `view_type/category` 與價牌歸屬矛盾會拒絕 | `test_view_type_and_category_conflict_fails_closed`、`test_matched_label_cannot_contradict_narration_ownership` |
 | 它牌 Demo 畫面不能覆蓋 Samsung SKU | `test_screen_content_brand_does_not_override_samsung_sku` |
+| 最終它牌與原始 JSON Samsung SKU 衝突必須封閉 | `test_negated_screen_brand_and_raw_samsung_sku_cannot_become_other_brand` |
 | 大幅價差需要獨立同值確認 | `test_large_official_price_difference_requires_independent_confirmation` |
 | 2026 遠景必須三輪一致 | `test_current_year_distant_requires_three_consistent_passes` |
 | 任一核心證據跨輪衝突，第三輪仍須封閉 | `test_third_pass_core_disagreement_is_unresolved` |
