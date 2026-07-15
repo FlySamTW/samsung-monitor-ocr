@@ -914,19 +914,32 @@ def enforce_explicit_structured_authority(result, explicit_fields):
         return []
 
     blocked = []
+
+    def scene_category(value):
+        text = str(value or "").strip()
+        if text == "遠景":
+            return "遠景"
+        if text in {"單機", "一般單機"} or text.startswith("不合格"):
+            return "單機"
+        if text == "失敗":
+            return "失敗"
+        return ""
+
     explicit_view = str(explicit_fields.get("view_type") or "").strip()
     if explicit_view in {"遠景", "單機", "失敗"}:
         if result.get("view_type") != explicit_view:
             blocked.append("view_type")
         result["view_type"] = explicit_view
 
-        explicit_category = str(explicit_fields.get("category") or "").strip()
-        authoritative_category = (
-            explicit_category
-            if explicit_category in {"遠景", "單機", "失敗"}
-            else explicit_view
-        )
-        if "category" in explicit_fields and result.get("category") != authoritative_category:
+        explicit_category = scene_category(explicit_fields.get("category"))
+        result_category = scene_category(result.get("category"))
+        authoritative_category = explicit_category or explicit_view
+        if (
+            "category" in explicit_fields
+            and explicit_category
+            and result_category
+            and result_category != explicit_category
+        ):
             blocked.append("category")
         result["category"] = authoritative_category
 

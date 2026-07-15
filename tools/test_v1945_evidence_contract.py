@@ -112,6 +112,34 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(postprocessed["price"], "12990")
         self.assertEqual(blocked, [])
 
+    def test_general_single_category_normalization_is_not_a_blocked_override(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "一般單機",
+            "model": "S27D300GAC",
+            "price": "3290",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "單機",
+                "category": "一般單機",
+                "model": "S27D300GAC",
+                "price": "3290",
+            },
+        )
+        self.assertEqual(postprocessed["category"], "單機")
+        self.assertEqual(blocked, [])
+
+    def test_material_category_conflict_remains_blocked(self):
+        postprocessed = {"view_type": "單機", "category": "遠景"}
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {"view_type": "單機", "category": "一般單機"},
+        )
+        self.assertEqual(postprocessed["category"], "單機")
+        self.assertEqual(blocked, ["category"])
+
     def test_negated_unique_subject_wording_remains_distant_evidence(self):
         narration = (
             "畫面中可見多台螢幕並排展示，無法鎖定唯一主角，"

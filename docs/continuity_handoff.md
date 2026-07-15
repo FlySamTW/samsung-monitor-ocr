@@ -300,3 +300,4 @@
 - 同一既有 Chrome 分頁實測仍只有 1 個 `localhost:5000` tab；顯示總進度 `65,331/150,321`、正式進度、自然語句逐字判讀與本場縮圖卡，裸 JSON 0、亂碼 0。後端已改為預設 headless，只有明示 `SAMSUNG_OCR_OPEN_BROWSER=1` 才可要求瀏覽器動作。
 - continuity supervisor 已恢復正式 `.5` backfill；21:45 狀態為 `202601 846/1,504`、verified 445、review 401、failed 0、單一 runner 父子組、uploader 0、runtime fuse 不存在、`_ocr_audit/model_benchmark.lock` 保留。後續監控必須持續抽查 raw/final 結構漂移，不能只報進度。
 - 21:52 實際 Chrome open-tab inventory 發現 5 個歷史 Dashboard 分頁；舊檢查只看 automation-bound tabs，曾錯報為 1。已核對最新頁顯示 `858/1,504`、AI 逐字內容與 15 張當前場次卡，無 raw JSON／亂碼／缺輪次後保留，另外 4 個重複 Dashboard 分頁已關閉。新版 backend 已 headless，後續必須用 actual open tabs 證明只剩一頁。
+- 其後低干擾監控在 `863/1,504` 因一筆 `structured_authority_blocked_fields=category` 先行停機。逐欄核對確認該筆只是 raw `category=一般單機` 正規化成 `單機`，view/model/price、結構證據與 verified 決策全部一致，並非內容漂移。現已將等義 category 正規化排除於 blocked override；真正的單機/遠景 category 衝突仍會攔截。歷史 category-only flags 需按正規化場景語意判斷，不得再造成誤停。
