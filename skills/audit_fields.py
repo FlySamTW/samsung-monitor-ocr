@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.8"
+EVIDENCE_GUARD_REVISION = "20260715.9"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -136,15 +136,44 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
     return not errors, list(dict.fromkeys(errors)), normalized
 
 
+def _cross_pass_core_signature(record: Dict[str, Any]) -> tuple:
+    """Compare material meaning across passes without demanding identical counts.
+
+    For a distant view, every exact count from three upward proves the same gate
+    fact: at least three complete displays.  Likewise, the non-matched ownership
+    values all mean that no label belongs to a unique main product.  This
+    normalization is comparison-only; contract validation still rejects a null
+    or sub-three count, a non-false unique_main, a matched label, or strong
+    same-subject FollowMe evidence.
+    """
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    count = record.get("complete_screen_count")
+    unique = record.get("unique_main")
+    ownership = record.get("label_ownership")
+    if view == "遠景":
+        count_band = "3+" if isinstance(count, int) and not isinstance(count, bool) and count >= 3 else count
+        ownership_band = (
+            "unowned"
+            if ownership in {"mismatched", "ambiguous", "not_visible", "not_applicable"}
+            else ownership
+        )
+        return view, count_band, unique, ownership_band
+    return view, count, unique, ownership
+
+
 def evidence_contract_decision(record: Dict[str, Any], previous_results=None) -> Dict[str, Any]:
     valid, errors, normalized = validate_evidence_contract(record)
     reasons = list(errors)
     if previous_results:
-        core = [(r.get("view_type"), r.get("complete_screen_count"), r.get("unique_main"), r.get("label_ownership")) for r in previous_results]
-        current = (record.get("view_type"), record.get("complete_screen_count"), record.get("unique_main"), record.get("label_ownership"))
+        prior_contracts = [validate_evidence_contract(item) for item in previous_results]
+        if any(prior_valid is not True for prior_valid, _, _ in prior_contracts):
+            reasons.append("prior_evidence_contract_invalid")
+        core = [_cross_pass_core_signature(r) for r in previous_results]
+        current = _cross_pass_core_signature(record)
         if any(item != current for item in core):
             reasons.append("core_evidence_disagreement")
-    return {"valid": valid and not any(x == "core_evidence_disagreement" for x in reasons), "reasons": list(dict.fromkeys(reasons)), "normalized_evidence": normalized}
+    reasons = list(dict.fromkeys(reasons))
+    return {"valid": valid and not reasons, "reasons": reasons, "normalized_evidence": normalized}
 
 
 SINGLE_UNIT_CLUES = [

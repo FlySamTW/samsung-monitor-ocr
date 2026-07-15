@@ -484,6 +484,39 @@ class EvidenceContractTests(unittest.TestCase):
         row = {"view_type": "遠景", "model": None, "price": None, **evidence(3, False, "not_visible")}
         self.assertTrue(validate_evidence_contract(row)[0])
 
+    def test_distant_counts_and_unowned_label_states_compare_by_gate_meaning(self):
+        previous = [{
+            "view_type": "遠景", "category": "遠景", "model": None, "price": None,
+            **evidence(3, False, "not_visible"),
+        }]
+        current = {
+            "view_type": "遠景", "category": "遠景", "model": None, "price": None,
+            **evidence(12, False, "ambiguous"),
+        }
+        decision = evidence_contract_decision(current, previous)
+        self.assertTrue(decision["valid"])
+        self.assertNotIn("core_evidence_disagreement", decision["reasons"])
+
+    def test_distant_semantic_comparison_still_rejects_material_changes(self):
+        previous = [{
+            "view_type": "遠景", "category": "遠景", "model": None, "price": None,
+            **evidence(3, False, "not_visible"),
+        }]
+        for current in (
+            {"view_type": "遠景", "category": "遠景", "model": None, "price": None, **evidence(2, False, "not_visible")},
+            {"view_type": "遠景", "category": "遠景", "model": None, "price": None, **evidence(5, True, "not_visible")},
+            {"view_type": "遠景", "category": "遠景", "model": None, "price": None, **evidence(5, False, "matched")},
+        ):
+            decision = evidence_contract_decision(current, previous)
+            self.assertFalse(decision["valid"])
+            self.assertTrue(decision["reasons"])
+
+    def test_distant_prompt_requires_complete_machine_readable_evidence(self):
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("`unique_main` 固定填 `false`", prompt)
+        self.assertIn("`complete_screen_count` 填成實際數到的整數且至少為 3", prompt)
+        self.assertIn("禁止填 `matched`", prompt)
+
     def test_distant_cannot_carry_unresolved_followme_physical_evidence_or_sku(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -703,6 +736,72 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(third["retry"])
         self.assertFalse(third["unresolved"])
         self.assertTrue(third["verified"])
+
+    def test_current_year_distant_accepts_semantically_equal_three_plus_passes(self):
+        def distant_pass(count, ownership):
+            return {
+                "file_name": "M-202605-distant-many.jpg", "view_type": "遠景", "category": "遠景",
+                "model": None, "price": None, "quality_issue": "",
+                "thinking": f"我數到 {count} 台，屬於 3 台以上完整入鏡；沒有唯一主角，也無法對應主角自己的規格與價格。",
+                **evidence(count, False, ownership),
+            }
+
+        first_row = distant_pass(3, "not_visible")
+        second_row = distant_pass(10, "ambiguous")
+        third_row = distant_pass(12, "mismatched")
+        first = immediate_retry_decision(first_row, 1, [], 3)
+        second = immediate_retry_decision(second_row, 2, [first_row], 3)
+        third = immediate_retry_decision(third_row, 3, [first_row, second_row], 3)
+        self.assertTrue(first["retry"])
+        self.assertTrue(second["retry"])
+        self.assertFalse(third["retry"])
+        self.assertFalse(third["unresolved"])
+        self.assertTrue(third["verified"])
+
+    def test_current_year_distant_cannot_wash_unsafe_prior_passes(self):
+        clean = {
+            "file_name": "M-202605-distant-clean.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "",
+            "thinking": "我數到 8 台，屬於 3 台以上完整入鏡；沒有唯一主角，也無法對應主角自己的規格與價格。",
+            **evidence(8, False, "not_visible"),
+        }
+        unsafe_rows = []
+        for count, unique, ownership in ((None, False, "not_visible"), (2, False, "not_visible"), (5, None, "not_visible"), (5, True, "not_visible"), (5, False, "matched")):
+            unsafe_rows.append({**clean, **evidence(count, unique, ownership)})
+        unsafe_rows.append({
+            **clean,
+            "followme_physical_evidence": [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            ],
+        })
+        unsafe_rows.append({
+            **clean,
+            "followme_physical_evidence": [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "invalid"},
+            ],
+        })
+        for unsafe in unsafe_rows:
+            decision = immediate_retry_decision(dict(clean), 3, [unsafe, dict(clean)], 3)
+            self.assertTrue(decision["unresolved"])
+            self.assertFalse(decision["verified"])
+            self.assertIn("prior_evidence_contract_invalid", decision["reasons"])
+
+    def test_current_year_distant_allows_weak_prior_followme_signage(self):
+        def distant_row(count, ownership, physical):
+            return {
+                "file_name": "M-202605-distant-signage.jpg", "view_type": "遠景", "category": "遠景",
+                "model": None, "price": None, "quality_issue": "",
+                "thinking": f"我數到 {count} 台，屬於 3 台以上完整入鏡；沒有唯一主角，也無法對應主角自己的規格與價格。",
+                **evidence(count, False, ownership, physical),
+            }
+        weak = [{"cue": "nearby_signage_only", "same_subject": False, "strength": "weak"}]
+        first = distant_row(3, "not_visible", weak)
+        second = distant_row(10, "ambiguous", [])
+        third = distant_row(8, "not_applicable", weak)
+        decision = immediate_retry_decision(third, 3, [first, second], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
 
     def test_third_pass_core_disagreement_is_unresolved(self):
         distant = {
