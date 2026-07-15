@@ -90,12 +90,16 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("[int]$gate.pending_count -ne 0", self.source)
         self.assertIn("manifest_summary_sha256", self.source)
         self.assertIn("backfill_run_id", self.source)
+        self.assertIn("historical_continuation_gate.py", self.source)
+        self.assertIn("--write-receipt", self.source)
+        self.assertIn("historical_continuation_gate_blocked", self.source)
 
     def test_full_project_starts_recursive_before_all_year_watcher(self):
         recursive = self.source.index('"tools\\recursive_ocr_flat_export.py"')
         watcher = self.source.index('"-SkipCurrentYearPhases"')
         self.assertLess(recursive, watcher)
-        self.assertIn('"--ignore-current-year-review-gate"', self.source)
+        self.assertNotIn('"--ignore-current-year-review-gate"', self.source)
+        self.assertIn('"--historical-continuation-receipt"', self.source)
         self.assertIn('"-SkipRecursiveResume"', self.source)
         self.assertIn('"full_project_pipeline_started"', self.source)
 
@@ -107,6 +111,8 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("function Test-FullProjectCompletionMarker", self.source)
         self.assertIn("folder_discovery_sha256", self.source)
         self.assertIn("folder_summary_sha256", self.source)
+        self.assertIn("source_inventory_csv_sha256", self.source)
+        self.assertIn("source_inventory_summary_sha256", self.source)
         self.assertIn('$_.' + 'status -notin @("copied", "skipped_existing")', self.source)
         self.assertIn("$fullProjectDone = Test-FullProjectCompletionMarker", self.source)
 

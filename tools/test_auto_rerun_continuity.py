@@ -40,6 +40,9 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("Assert-FullProjectRecursiveComplete", SCRIPT)
         self.assertIn("folder_discovery_sha256", SCRIPT)
         self.assertIn("folder_summary_sha256", SCRIPT)
+        self.assertIn("source_inventory_csv_sha256", SCRIPT)
+        self.assertIn("source_inventory_summary_sha256", SCRIPT)
+        self.assertIn("folder_count_contract_failed", SCRIPT)
         self.assertIn("error_count = $recursiveProof.error_count", SCRIPT)
 
     def test_fresh_manifest_precedes_fail_closed_drive_ledger_rebuild(self):

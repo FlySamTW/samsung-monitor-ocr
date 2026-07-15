@@ -18,6 +18,8 @@ $logDir = Join-Path $RepoRoot "logs"
 $lockPath = Join-Path $audit "ocr_continuity_supervisor.lock"
 $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
 $fullProjectRequestPath = Join-Path $audit "full_project_continuation_requested.json"
+$historicalContinuationGate = Join-Path $RepoRoot "tools\historical_continuation_gate.py"
+$historicalContinuationReceipt = Join-Path $audit "historical_continuation_receipt.json"
 $currentYearCompletePath = Join-Path $audit "current_year_rerun_cycle_complete.json"
 $fullProjectCompletePath = Join-Path $audit "full_project_rerun_cycle_complete.json"
 $uploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
@@ -141,10 +143,18 @@ function Full-Project-ContinuationReady {
         [int]$currentYear.pending_count -ne 0
     ) { return $false }
     try {
-        return ([datetime]$currentYear.completed_at) -ge ([datetime]$request.requested_at)
-    } catch {
+        if (([datetime]$currentYear.completed_at) -lt ([datetime]$request.requested_at)) { return $false }
+    } catch { return $false }
+    if (-not (Test-Path -LiteralPath $historicalContinuationGate)) { return $false }
+    $validatorOutput = @(& $python $historicalContinuationGate `
+        --source-root $SourceRoot --output-dir $OutputDir --backend-url $BackendUrl --write-receipt 2>&1)
+    $validatorExit = $LASTEXITCODE
+    try { $validator = ($validatorOutput -join "`n") | ConvertFrom-Json } catch { return $false }
+    if ($validatorExit -ne 0 -or $validator.valid -ne $true) {
+        Log-Event "historical_continuation_gate_blocked" @{errors=($validator.errors -join ";")}
         return $false
     }
+    return (Test-Path -LiteralPath $historicalContinuationReceipt)
 }
 
 function Test-FullProjectCompletionMarker {
@@ -152,9 +162,13 @@ function Test-FullProjectCompletionMarker {
     if (-not $marker -or [int]$marker.error_count -ne 0) { return $false }
     $discovery = Join-Path $audit "folder_discovery.csv"
     $summary = Join-Path $audit "folder_summary.csv"
+    $inventoryCsv = Join-Path $audit "source_inventory_v1.csv"
+    $inventoryJson = Join-Path $audit "source_inventory_v1.json"
     if (
         (Get-FileSha256 $discovery) -ne [string]$marker.folder_discovery_sha256 -or
-        (Get-FileSha256 $summary) -ne [string]$marker.folder_summary_sha256
+        (Get-FileSha256 $summary) -ne [string]$marker.folder_summary_sha256 -or
+        (Get-FileSha256 $inventoryCsv) -ne [string]$marker.source_inventory_csv_sha256 -or
+        (Get-FileSha256 $inventoryJson) -ne [string]$marker.source_inventory_summary_sha256
     ) { return $false }
     $discoveredCount = Get-CsvRowCount $discovery
     if ($discoveredCount -lt 0 -or $discoveredCount -ne [int]$marker.discovered_folder_count) { return $false }
@@ -162,7 +176,8 @@ function Test-FullProjectCompletionMarker {
         $rows = @(Import-Csv -LiteralPath $summary)
         $bad = @($rows | Where-Object { $_.status -notin @("copied", "skipped_existing") })
     } catch { return $false }
-    return $bad.Count -eq 0 -and [int]$marker.completed_folder_count -eq $discoveredCount
+    return $bad.Count -eq 0 -and [int]$marker.completed_folder_count -eq $discoveredCount -and
+        [int]$marker.source_inventory_folder_count -eq $discoveredCount
 }
 
 function Start-EvidenceBackfillIfNeeded {
@@ -342,7 +357,7 @@ try {
             "--model",$Model,
             "--poll-seconds","20",
             "--timeout-minutes","10080",
-            "--ignore-current-year-review-gate"
+            "--historical-continuation-receipt",$historicalContinuationReceipt
         ) -OutFile (Join-Path $logDir "supervisor_full_recursive_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_full_recursive_$stamp.err.log")
         Start-Sleep -Seconds 1
         Start-Hidden -File "powershell.exe" -ProcessArgs @(

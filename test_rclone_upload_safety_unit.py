@@ -87,13 +87,38 @@ def write_historical_authorization(root, shared_proof):
     )
     discovery = audit / "folder_discovery.csv"
     summary = audit / "folder_summary.csv"
-    discovery_rows = [{"folder": "source", "image_count": "1", "latest_mtime": "100"}]
+    inventory_csv = audit / "source_inventory_v1.csv"
+    inventory_summary = audit / "source_inventory_v1.json"
+    inventory_rows = [{
+        "folder_id": "f" * 64, "folder": "source", "period": "2025",
+        "relative_path": "source/a.jpg", "size_bytes": "1", "mtime_ns": "100",
+        "content_sha256": "a" * 64,
+    }]
+    write_csv(inventory_csv, inventory_rows, inventory_rows[0].keys())
+    inventory_payload = {
+        "schema": "samsung-ocr-source-inventory/v1",
+        "inventory_csv_sha256": uploader.sha256_file(inventory_csv),
+        "row_count": 1,
+        "folder_count": 1,
+    }
+    inventory_summary.write_text(json.dumps(inventory_payload), encoding="utf-8")
+    inventory_hash = uploader.sha256_file(inventory_csv)
+    discovery_rows = [{"folder_id": "f" * 64, "folder": "source", "image_count": "1", "latest_mtime": "100", "source_inventory_sha256": inventory_hash}]
     summary_rows = [
         {
             "folder": "source",
             "image_count": "1",
             "source_latest_mtime": "100",
             "status": "copied",
+            "folder_id": "f" * 64,
+            "source_inventory_sha256": inventory_hash,
+            "success_records": "1",
+            "copied_count": "1",
+            "missing_result": "0",
+            "missing_source": "0",
+            "conflict": "0",
+            "failed": "0",
+            "copy_error": "",
         }
     ]
     write_csv(discovery, discovery_rows, discovery_rows[0].keys())
@@ -107,6 +132,12 @@ def write_historical_authorization(root, shared_proof):
         "folder_discovery_sha256": uploader.sha256_file(discovery),
         "folder_summary_path": str(summary.resolve()),
         "folder_summary_sha256": uploader.sha256_file(summary),
+        "source_inventory_csv_path": str(inventory_csv.resolve()),
+        "source_inventory_csv_sha256": uploader.sha256_file(inventory_csv),
+        "source_inventory_summary_path": str(inventory_summary.resolve()),
+        "source_inventory_summary_sha256": uploader.sha256_file(inventory_summary),
+        "source_inventory_row_count": 1,
+        "source_inventory_folder_count": 1,
         "discovered_folder_count": 1,
         "completed_folder_count": 1,
         "error_count": 0,

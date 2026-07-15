@@ -27,6 +27,8 @@ def main() -> int:
         [sys.executable, str(ROOT / "tools" / "test_ocr_continuity_supervisor.py")],
         [sys.executable, str(ROOT / "tools" / "test_auto_rerun_continuity.py")],
         [sys.executable, str(ROOT / "tools" / "test_recursive_completion_contract.py")],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_historical_continuation_gate"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_source_inventory_snapshot"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_build_drive_correction_reconciliation"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_reconcile_drive_corrections"],
     ]

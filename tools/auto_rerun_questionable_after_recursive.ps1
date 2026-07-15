@@ -355,12 +355,30 @@ function Assert-FullProjectRecursiveComplete {
     $auditDir = Join-Path $OutputDir "_ocr_audit"
     $discoveryPath = Join-Path $auditDir "folder_discovery.csv"
     $summaryPath = Join-Path $auditDir "folder_summary.csv"
-    if (-not (Test-Path -LiteralPath $discoveryPath) -or -not (Test-Path -LiteralPath $summaryPath)) {
+    $inventoryCsvPath = Join-Path $auditDir "source_inventory_v1.csv"
+    $inventoryJsonPath = Join-Path $auditDir "source_inventory_v1.json"
+    if (-not (Test-Path -LiteralPath $discoveryPath) -or -not (Test-Path -LiteralPath $summaryPath) -or
+        -not (Test-Path -LiteralPath $inventoryCsvPath) -or -not (Test-Path -LiteralPath $inventoryJsonPath)) {
         throw "full-project inventory or folder summary is missing"
+    }
+    try { $inventory = Get-Content -LiteralPath $inventoryJsonPath -Raw | ConvertFrom-Json } catch {
+        throw "full-project per-photo inventory is unreadable"
+    }
+    $inventoryCsvSha256 = Get-FileSha256 $inventoryCsvPath
+    $inventorySummarySha256 = Get-FileSha256 $inventoryJsonPath
+    $inventoryRows = @(Import-Csv -LiteralPath $inventoryCsvPath)
+    if ([string]$inventory.schema -ne "samsung-ocr-source-inventory/v1" -or
+        [string]$inventory.inventory_csv_sha256 -ne $inventoryCsvSha256 -or
+        [int]$inventory.row_count -ne $inventoryRows.Count) {
+        throw "full-project per-photo inventory hash or count mismatch"
     }
     $discovered = @(Import-Csv -LiteralPath $discoveryPath)
     $summaries = @(Import-Csv -LiteralPath $summaryPath)
     if ($discovered.Count -eq 0) { throw "full-project discovery inventory is empty" }
+    $discoveredImageCount = [int](($discovered | Measure-Object -Property image_count -Sum).Sum)
+    if ([int]$inventory.folder_count -ne $discovered.Count -or [int]$inventory.row_count -ne $discoveredImageCount) {
+        throw "full-project discovery does not cover the exact per-photo inventory"
+    }
     $summaryByFolder = @{}
     foreach ($row in $summaries) { if ($row.folder) { $summaryByFolder[[string]$row.folder] = $row } }
     $errors = @()
@@ -379,8 +397,12 @@ function Assert-FullProjectRecursiveComplete {
         }
         $row = $summaryByFolder[$key]
         if ([string]$row.status -notin @("copied", "skipped_existing")) { $errors += "incomplete_$($row.status):$key" }
+        if (-not [string]$folder.folder_id -or [string]$row.folder_id -ne [string]$folder.folder_id) { $errors += "folder_id_mismatch:$key" }
+        if ([string]$folder.source_inventory_sha256 -ne $inventoryCsvSha256 -or [string]$row.source_inventory_sha256 -ne $inventoryCsvSha256) { $errors += "inventory_hash_mismatch:$key" }
         if ([string]$row.image_count -ne [string]$folder.image_count) { $errors += "image_count_changed:$key" }
         if ([string]$row.source_latest_mtime -ne [string]$folder.latest_mtime) { $errors += "source_changed:$key" }
+        if ([int]$row.image_count -ne [int]$row.success_records -or [int]$row.image_count -ne [int]$row.copied_count) { $errors += "folder_count_contract_failed:$key" }
+        if ([int]$row.missing_result -ne 0 -or [int]$row.missing_source -ne 0 -or [int]$row.conflict -ne 0 -or [int]$row.failed -ne 0 -or -not [string]::IsNullOrWhiteSpace([string]$row.copy_error)) { $errors += "folder_error_contract_failed:$key" }
     }
     if ($errors.Count -gt 0) {
         throw "full-project recursive evidence incomplete: $($errors[0..([math]::Min(9,$errors.Count-1))] -join '; ')"
@@ -391,6 +413,12 @@ function Assert-FullProjectRecursiveComplete {
         error_count = 0
         folder_discovery_sha256 = Get-FileSha256 $discoveryPath
         folder_summary_sha256 = Get-FileSha256 $summaryPath
+        source_inventory_csv_path = $inventoryCsvPath
+        source_inventory_csv_sha256 = $inventoryCsvSha256
+        source_inventory_summary_path = $inventoryJsonPath
+        source_inventory_summary_sha256 = $inventorySummarySha256
+        source_inventory_row_count = [int]$inventory.row_count
+        source_inventory_folder_count = [int]$inventory.folder_count
     }
 }
 
@@ -420,6 +448,12 @@ function Write-HistoricalUploadAuthorization {
         folder_discovery_sha256 = $recursiveProof.folder_discovery_sha256
         folder_summary_path = $summaryPath
         folder_summary_sha256 = $recursiveProof.folder_summary_sha256
+        source_inventory_csv_path = $recursiveProof.source_inventory_csv_path
+        source_inventory_csv_sha256 = $recursiveProof.source_inventory_csv_sha256
+        source_inventory_summary_path = $recursiveProof.source_inventory_summary_path
+        source_inventory_summary_sha256 = $recursiveProof.source_inventory_summary_sha256
+        source_inventory_row_count = $recursiveProof.source_inventory_row_count
+        source_inventory_folder_count = $recursiveProof.source_inventory_folder_count
         discovered_folder_count = $recursiveProof.discovered_folder_count
         completed_folder_count = $recursiveProof.completed_folder_count
         error_count = $recursiveProof.error_count
@@ -617,6 +651,10 @@ try {
             error_count = $recursiveProof.error_count
             folder_discovery_sha256 = $recursiveProof.folder_discovery_sha256
             folder_summary_sha256 = $recursiveProof.folder_summary_sha256
+            source_inventory_csv_sha256 = $recursiveProof.source_inventory_csv_sha256
+            source_inventory_summary_sha256 = $recursiveProof.source_inventory_summary_sha256
+            source_inventory_row_count = $recursiveProof.source_inventory_row_count
+            source_inventory_folder_count = $recursiveProof.source_inventory_folder_count
         } | ConvertTo-Json | Set-Content -LiteralPath $fullMarkerPath -Encoding UTF8
         Write-RunLog "full-project rerun completion marker written path=$fullMarkerPath"
     }

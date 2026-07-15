@@ -373,6 +373,9 @@ npm.cmd --prefix dashboard run build
 ## 2026-07-08 current-year priority gate
 
 - Current/future years are not complete just because first-pass OCR copied files. If Drive review still has current-year rows, older folders must wait.
+- Older-year continuation has no boolean bypass. The supervisor and recursive runner must share a canonical content-bound `historical_continuation_receipt.json`; it requires the root-bound explicit request, current guard revision, exact 2026 pending-zero marker/proof, current-year review zero, no fuse/benchmark lock, and idle canonical backend.
+- Before historical OCR, freeze `source_inventory_v1.csv/json` with stable folder IDs and per-photo relative path, size, `mtime_ns`, and content SHA-256. Bind it into the receipt; verify the next folder locally and the entire tree at completion. Never silently refresh on rename/add/replace/drift.
+- Resume is complete only when photo/success/copy counts are equal, all errors are zero, and every copied target is byte-identical to its current source. Do not trust count + max-mtime alone.
 - `tools/recursive_ocr_flat_export.py` exits at a safe folder boundary with `paused_reason=current_year_review_gate` before starting older folders when current-year review rows exist.
 - `tools/auto_rerun_questionable_after_recursive.ps1` runs current-year questionable reruns first, without `--include-older`, then runs all-year questionable passes.
 - For 2026, distant-view rows are risky because many are false positives. Treat `遠景`, no model, no price, unknown compare symbol, bad/unclear photo, and price-compare failures as blocked until rerun/repair/manual correction clears the Drive manifest.

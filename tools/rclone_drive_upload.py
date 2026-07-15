@@ -428,6 +428,8 @@ def validate_historical_upload_authorization(
     current_marker_path = audit_dir / "current_year_rerun_cycle_complete.json"
     discovery_path = audit_dir / "folder_discovery.csv"
     summary_path = audit_dir / "folder_summary.csv"
+    inventory_csv_path = audit_dir / "source_inventory_v1.csv"
+    inventory_summary_path = audit_dir / "source_inventory_v1.json"
     try:
         authorization = json.loads(authorization_path.read_text(encoding="utf-8-sig"))
         current_marker = json.loads(current_marker_path.read_text(encoding="utf-8-sig"))
@@ -444,11 +446,15 @@ def validate_historical_upload_authorization(
         "current_year_marker_path": current_marker_path,
         "folder_discovery_path": discovery_path,
         "folder_summary_path": summary_path,
+        "source_inventory_csv_path": inventory_csv_path,
+        "source_inventory_summary_path": inventory_summary_path,
     }
     hash_fields = {
         "current_year_marker_path": "current_year_marker_sha256",
         "folder_discovery_path": "folder_discovery_sha256",
         "folder_summary_path": "folder_summary_sha256",
+        "source_inventory_csv_path": "source_inventory_csv_sha256",
+        "source_inventory_summary_path": "source_inventory_summary_sha256",
     }
     for field, canonical in canonical_paths.items():
         if Path(str(authorization.get(field) or "")).resolve() != canonical.resolve():
@@ -465,11 +471,23 @@ def validate_historical_upload_authorization(
     try:
         discovered = read_csv(discovery_path)
         summaries = read_csv(summary_path)
-    except (OSError, UnicodeError, csv.Error) as exc:
+        inventory_rows = read_csv(inventory_csv_path)
+        inventory_summary = json.loads(inventory_summary_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, TypeError, ValueError, csv.Error) as exc:
         raise SystemExit(f"historical inventory cannot be read: {exc}") from exc
     discovered_keys = [str(row.get("folder") or "") for row in discovered]
     summary_keys = [str(row.get("folder") or "") for row in summaries]
     summary_by_folder = {key: row for key, row in zip(summary_keys, summaries) if key}
+    inventory_sha256 = sha256_file(inventory_csv_path)
+    if (
+        not isinstance(inventory_summary, dict)
+        or inventory_summary.get("schema") != "samsung-ocr-source-inventory/v1"
+        or str(inventory_summary.get("inventory_csv_sha256") or "") != inventory_sha256
+        or int(inventory_summary.get("row_count", -1)) != len(inventory_rows)
+        or int(authorization.get("source_inventory_row_count", -1)) != len(inventory_rows)
+        or int(authorization.get("source_inventory_folder_count", -1)) != int(inventory_summary.get("folder_count", -1))
+    ):
+        raise SystemExit("historical per-photo inventory is incomplete or changed")
     if (
         not discovered
         or any(not key for key in discovered_keys + summary_keys)
@@ -478,15 +496,32 @@ def validate_historical_upload_authorization(
         or set(discovered_keys) != set(summary_keys)
     ):
         raise SystemExit("historical inventory is incomplete or duplicated")
+    try:
+        discovered_image_count = sum(int(row.get("image_count") or 0) for row in discovered)
+    except ValueError as exc:
+        raise SystemExit("historical discovery image counts are invalid") from exc
+    if int(inventory_summary.get("folder_count", -1)) != len(discovered) or len(inventory_rows) != discovered_image_count:
+        raise SystemExit("historical discovery does not cover the exact per-photo inventory")
     for folder in discovered:
         key = str(folder.get("folder") or "")
         row = summary_by_folder.get(key)
         if not row or str(row.get("status") or "") not in {"copied", "skipped_existing"}:
             raise SystemExit(f"historical folder is incomplete or blocked: {key}")
+        if not str(folder.get("folder_id") or "") or str(row.get("folder_id") or "") != str(folder.get("folder_id") or ""):
+            raise SystemExit(f"historical folder identity changed: {key}")
+        if str(folder.get("source_inventory_sha256") or "") != inventory_sha256 or str(row.get("source_inventory_sha256") or "") != inventory_sha256:
+            raise SystemExit(f"historical folder inventory hash changed: {key}")
         if str(row.get("image_count") or "") != str(folder.get("image_count") or ""):
             raise SystemExit(f"historical folder image count changed: {key}")
         if str(row.get("source_latest_mtime") or "") != str(folder.get("latest_mtime") or ""):
             raise SystemExit(f"historical folder source identity changed: {key}")
+        try:
+            counts = [int(row.get(field) or 0) for field in ("image_count", "success_records", "copied_count")]
+            errors = [int(row.get(field) or 0) for field in ("missing_result", "missing_source", "conflict", "failed")]
+        except ValueError as exc:
+            raise SystemExit(f"historical folder counts are invalid: {key}") from exc
+        if counts[0] <= 0 or len(set(counts)) != 1 or any(errors) or str(row.get("copy_error") or "").strip():
+            raise SystemExit(f"historical folder completion contract failed: {key}")
     if int(authorization.get("discovered_folder_count", -1)) != len(discovered):
         raise SystemExit("historical authorization discovered-folder count mismatch")
     if int(authorization.get("completed_folder_count", -1)) != len(discovered):

@@ -23,6 +23,14 @@ from photo_rename_planner import (
     summarize,
     write_csv,
 )
+from historical_continuation_gate import RECEIPT_NAME, bind_source_inventory, validate_receipt
+from source_inventory_snapshot import (
+    SourceInventoryError,
+    ensure_frozen_snapshot,
+    folder_rows as inventory_folder_rows,
+    verify_all as verify_full_inventory,
+    verify_folder as verify_inventory_folder,
+)
 
 
 UNSUPPORTED_EXTENSIONS = {".heic", ".heif", ".webp"}
@@ -102,39 +110,68 @@ def validate_source_output_paths(source_root: Path, output_dir: Path) -> None:
         )
 
 
-def copied_manifest_complete(copied_path: Path, expected_count: int) -> bool:
+def copied_manifest_complete(
+    copied_path: Path,
+    expected_count: int,
+    source_hashes: Optional[Dict[str, str]] = None,
+) -> bool:
     rows = read_dict_csv(copied_path)
-    if expected_count and len(rows) != expected_count:
+    if expected_count <= 0 or len(rows) != expected_count:
         return False
     if not rows:
         return False
     for row in rows:
         target_path = row.get("target_path") or ""
-        if not target_path or not Path(target_path).exists():
+        original_path = row.get("original_path") or row.get("source_path") or ""
+        if not target_path or not original_path:
+            return False
+        target = Path(target_path)
+        original = Path(original_path)
+        if not target.is_file() or not original.is_file():
+            return False
+        if target.stat().st_size != original.stat().st_size:
+            return False
+        source_key = os.path.normcase(str(original.resolve()))
+        expected_source_hash = (source_hashes or {}).get(source_key) or file_content_sha256(original)
+        if file_content_sha256(target) != expected_source_hash:
             return False
     return True
 
 
-def build_resume_index(summary_path: Path) -> Dict[str, Dict[str, str]]:
+def file_content_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_resume_index(
+    summary_path: Path,
+    source_hashes: Optional[Dict[str, str]] = None,
+) -> Dict[str, Dict[str, str]]:
     resume: Dict[str, Dict[str, str]] = {}
     for row in read_dict_csv(summary_path):
         folder = row.get("folder") or ""
         if not folder:
             continue
         status = row.get("status")
-        if status in {"blocked", "skipped_blocked"}:
-            resume[folder] = row
-            continue
         if status not in {"copied", "skipped_existing"}:
             continue
-        if any(int_value(row.get(key)) for key in ["missing_result", "missing_source", "conflict"]):
+        if any(int_value(row.get(key)) for key in ["missing_result", "missing_source", "conflict", "failed"]):
+            continue
+        if str(row.get("copy_error") or "").strip():
             continue
         copied_path_text = row.get("copied_path") or ""
         if not copied_path_text:
             continue
         copied_path = Path(copied_path_text)
+        image_count = int_value(row.get("image_count"), default=-1)
+        success_records = int_value(row.get("success_records"), default=-1)
         copied_count = int_value(row.get("copied_count"))
-        if not copied_path or not copied_manifest_complete(copied_path, copied_count):
+        if image_count <= 0 or not (image_count == success_records == copied_count):
+            continue
+        if not copied_path or not copied_manifest_complete(copied_path, copied_count, source_hashes):
             continue
         resume[folder] = row
     return resume
@@ -142,16 +179,17 @@ def build_resume_index(summary_path: Path) -> Dict[str, Dict[str, str]]:
 
 def summary_from_resume(row: Dict[str, str], current: dict) -> Dict[str, object]:
     summary = dict(row)
-    previous_status = row.get("status") or "skipped_existing"
     summary.update(
         {
+            "folder_id": current.get("folder_id", ""),
             "folder": str(current["folder"]),
             "period": current["period"],
             "image_count": current["image_count"],
             "source_latest_mtime": iso_from_mtime(current["latest_mtime"]),
-            "status": "skipped_blocked" if previous_status == "blocked" else "skipped_existing",
-            "copy_error": row.get("copy_error", "") if previous_status == "blocked" else "",
-            "start_response": "resume_skip_blocked" if previous_status == "blocked" else "resume_skip_existing",
+            "source_inventory_sha256": current.get("source_inventory_sha256", ""),
+            "status": "skipped_existing",
+            "copy_error": "",
+            "start_response": "resume_skip_existing",
         }
     )
     return summary
@@ -162,6 +200,10 @@ def resume_row_matches_current(row: Dict[str, str], current: dict) -> bool:
         return False
     previous_mtime = row.get("source_latest_mtime") or ""
     if previous_mtime and previous_mtime != iso_from_mtime(current["latest_mtime"]):
+        return False
+    if row.get("folder_id") and row.get("folder_id") != current.get("folder_id"):
+        return False
+    if row.get("source_inventory_sha256") and row.get("source_inventory_sha256") != current.get("source_inventory_sha256"):
         return False
     return True
 
@@ -193,8 +235,8 @@ def folder_token(index: int, source_root: Path, folder: Path, period: str) -> st
     except ValueError:
         rel = folder.name
     text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "_", rel).strip("_") or folder.name
-    digest = hashlib.sha1(str(folder).encode("utf-8", errors="ignore")).hexdigest()[:8]
-    return f"{index:04d}_{period}_{text[:80]}_{digest}"
+    digest = hashlib.sha256(rel.casefold().encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return f"{period}_{digest}_{text[:80]}"
 
 
 def discover_folders(source_root: Path):
@@ -540,6 +582,9 @@ def watch_loop(args) -> int:
         cycles += 1
         print(f"[接力] watch cycle={cycles} start {datetime.now().isoformat()}", flush=True)
         completed = subprocess.run([sys.executable, str(Path(__file__).resolve()), *child_argv])
+        receipt_path = Path(args.output_dir).resolve() / "_ocr_audit" / RECEIPT_NAME
+        if receipt_path.is_file():
+            return completed.returncode
         if completed.returncode != 0:
             print(f"[接力] watch cycle={cycles} exit={completed.returncode}; sleep and retry", flush=True)
         if args.watch_cycles and cycles >= args.watch_cycles:
@@ -567,9 +612,9 @@ def main() -> int:
     parser.add_argument("--no-resume", action="store_true", help="不使用既有 _ocr_audit 續跑狀態，重新處理所有資料匣")
     parser.add_argument("--ensure-llm", action="store_true", help="開始前先用 LM Studio CLI 確認本機模型已載入")
     parser.add_argument(
-        "--ignore-current-year-review-gate",
-        action="store_true",
-        help="Allow older folders even when current/future-year Drive review rows still need rerun.",
+        "--historical-continuation-receipt",
+        default="",
+        help="Canonical content-bound receipt required before the first historical folder.",
     )
     parser.add_argument("--watch", action="store_true", help="keep traversing source-root; new or changed folders are picked up in later cycles")
     parser.add_argument("--watch-sleep-seconds", type=int, default=300, help="seconds to sleep between watch traversal cycles")
@@ -588,8 +633,50 @@ def main() -> int:
     audit_dir = output_dir / "_ocr_audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
 
+    receipt_path = (
+        Path(args.historical_continuation_receipt).resolve()
+        if args.historical_continuation_receipt
+        else audit_dir / RECEIPT_NAME
+    )
+    frozen_inventory = False
+    source_inventory_rows: List[dict] = []
+    source_inventory_summary: dict = {}
+    frozen_unsupported: List[dict] = []
+    if not args.dry_run:
+        core_receipt, _core_errors = validate_receipt(
+            receipt_path,
+            source_root,
+            output_dir,
+            current_year=datetime.now().year,
+            backend_url=args.backend_url,
+        )
+        if core_receipt is not None:
+            try:
+                source_inventory_summary, source_inventory_rows, frozen_unsupported = ensure_frozen_snapshot(
+                    audit_dir, source_root
+                )
+            except SourceInventoryError as exc:
+                raise SystemExit(f"historical source inventory blocked: {exc}") from exc
+            bound = bind_source_inventory(
+                receipt_path,
+                source_root,
+                output_dir,
+                current_year=datetime.now().year,
+                backend_url=args.backend_url,
+            )
+            if not bound.get("valid"):
+                raise SystemExit(f"historical source inventory receipt binding failed: {bound.get('errors')}")
+            frozen_inventory = True
+
     def refresh_discovery() -> tuple[List[dict], List[dict]]:
-        refreshed_folders, refreshed_unsupported = discover_folders(source_root)
+        if frozen_inventory:
+            refreshed_folders = inventory_folder_rows(source_inventory_rows)
+            refreshed_unsupported = list(frozen_unsupported)
+            inventory_sha256 = str(source_inventory_summary.get("inventory_csv_sha256") or "")
+            for item in refreshed_folders:
+                item["source_inventory_sha256"] = inventory_sha256
+        else:
+            refreshed_folders, refreshed_unsupported = discover_folders(source_root)
         if args.limit_folders and args.limit_folders > 0:
             refreshed_folders = refreshed_folders[: args.limit_folders]
 
@@ -601,17 +688,19 @@ def main() -> int:
         discovery_rows = [
             {
                 "order": index,
+                "folder_id": item.get("folder_id", ""),
                 "folder": str(item["folder"]),
                 "period": item["period"],
                 "image_count": item["image_count"],
                 "latest_mtime": iso_from_mtime(item["latest_mtime"]),
+                "source_inventory_sha256": item.get("source_inventory_sha256", ""),
             }
             for index, item in enumerate(refreshed_folders, start=1)
         ]
         write_dict_csv(
             audit_dir / "folder_discovery.csv",
             discovery_rows,
-            ["order", "folder", "period", "image_count", "latest_mtime"],
+            ["order", "folder_id", "folder", "period", "image_count", "latest_mtime", "source_inventory_sha256"],
         )
         return refreshed_folders, refreshed_unsupported
 
@@ -620,10 +709,12 @@ def main() -> int:
     state_path = audit_dir / "_recursive_ocr_state.json"
     summary_path = audit_dir / "folder_summary.csv"
     summary_headers = [
+        "folder_id",
         "folder",
         "period",
         "image_count",
         "source_latest_mtime",
+        "source_inventory_sha256",
         "success_records",
         "status",
         "copied_count",
@@ -662,7 +753,11 @@ def main() -> int:
         return 0
 
     resume_enabled = not args.no_resume and not args.restart and not args.no_copy
-    resume_index = build_resume_index(summary_path) if resume_enabled else {}
+    resume_source_hashes = {
+        os.path.normcase(str((source_root / row["relative_path"]).resolve())): row["content_sha256"]
+        for row in source_inventory_rows
+    } if frozen_inventory else {}
+    resume_index = build_resume_index(summary_path, resume_source_hashes) if resume_enabled else {}
     backend_configured = False
 
     existing_summaries: List[Dict[str, object]] = []
@@ -691,6 +786,9 @@ def main() -> int:
 
     def refresh_runtime_discovery() -> None:
         nonlocal folders, unsupported, discovered_folder_keys, resume_index
+        if frozen_inventory:
+            state["updated_at"] = datetime.now().isoformat()
+            return
         previous_keys = discovered_folder_keys
         folders, unsupported = refresh_discovery()
         discovered_folder_keys = [str(row["folder"]) for row in folders]
@@ -698,7 +796,7 @@ def main() -> int:
         state["unsupported_total"] = len(unsupported)
         state["updated_at"] = datetime.now().isoformat()
         if resume_enabled:
-            resume_index = build_resume_index(summary_path)
+            resume_index = build_resume_index(summary_path, resume_source_hashes)
         if discovered_folder_keys != previous_keys:
             print(
                 f"[recursive] source discovery refreshed folders={len(folders)} unsupported={len(unsupported)}",
@@ -706,6 +804,7 @@ def main() -> int:
             )
 
     handled_this_run = set()
+    verified_inventory_folders = set()
     processed_counter = 0
     while True:
         refresh_runtime_discovery()
@@ -721,6 +820,18 @@ def main() -> int:
                     f"[recursive] rediscovered changed folder; re-queueing {folder_row['folder']}",
                     flush=True,
                 )
+            folder_id = str(folder_row.get("folder_id") or "")
+            if frozen_inventory and folder_id not in verified_inventory_folders:
+                inventory_errors = verify_inventory_folder(source_root, source_inventory_rows, folder_id)
+                if inventory_errors:
+                    state["failed_at"] = datetime.now().isoformat()
+                    state["paused_reason"] = "source_inventory_drift"
+                    state["source_inventory_errors"] = inventory_errors[:20]
+                    state["paused_before_folder"] = folder_key
+                    write_state(state_path, state)
+                    print(f"[recursive] source inventory drift: {inventory_errors[:3]}", flush=True)
+                    return 2
+                verified_inventory_folders.add(folder_id)
             resume_row = resume_index.get(folder_key) if resume_enabled else None
             if resume_row and resume_row_matches_current(resume_row, folder_row):
                 summary = summary_from_resume(resume_row, folder_row)
@@ -731,18 +842,32 @@ def main() -> int:
                 write_merged_summaries()
                 write_state(state_path, state)
                 continue
-            if not args.ignore_current_year_review_gate and is_older_than_current_year(str(folder_row.get("period") or "")):
-                gate_count, gate_path = current_year_review_gate_count(output_dir)
-                if gate_count > 0:
-                    state["paused_reason"] = "current_year_review_gate"
+            if is_older_than_current_year(str(folder_row.get("period") or "")):
+                receipt_path = (
+                    Path(args.historical_continuation_receipt).resolve()
+                    if args.historical_continuation_receipt
+                    else audit_dir / RECEIPT_NAME
+                )
+                receipt, receipt_errors = validate_receipt(
+                    receipt_path,
+                    source_root,
+                    output_dir,
+                    current_year=datetime.now().year,
+                    backend_url=args.backend_url,
+                    require_source_inventory=True,
+                )
+                if receipt is None:
+                    gate_count, gate_path = current_year_review_gate_count(output_dir)
+                    state["paused_reason"] = "historical_continuation_gate"
+                    state["historical_continuation_errors"] = receipt_errors
                     state["current_year_review_required"] = gate_count
                     state["current_year_review_path"] = str(gate_path)
                     state["paused_before_folder"] = str(folder_row["folder"])
                     state["updated_at"] = datetime.now().isoformat()
                     write_state(state_path, state)
                     print(
-                        "[recursive] paused before older folder; "
-                        f"current_year_review_required={gate_count} path={gate_path}",
+                        "[recursive] paused before historical folder; "
+                        f"authorization_errors={receipt_errors}",
                         flush=True,
                     )
                     next_item = None
@@ -766,13 +891,17 @@ def main() -> int:
             summary = process_folder(args, source_root, output_dir, audit_dir, folder_row, index)
         except Exception as exc:
             summary = {
+                "folder_id": folder_row.get("folder_id", ""),
                 "folder": folder_key,
                 "period": folder_row["period"],
                 "image_count": folder_row["image_count"],
                 "source_latest_mtime": iso_from_mtime(folder_row["latest_mtime"]),
+                "source_inventory_sha256": folder_row.get("source_inventory_sha256", ""),
                 "status": "error",
                 "copy_error": str(exc),
             }
+        summary["folder_id"] = folder_row.get("folder_id", "")
+        summary["source_inventory_sha256"] = folder_row.get("source_inventory_sha256", "")
         summary_by_folder[folder_key] = summary
         handled_this_run.add(folder_key)
         write_merged_summaries()
@@ -810,6 +939,14 @@ def main() -> int:
 
     refresh_runtime_discovery()
     incomplete_folders: list[dict[str, str]] = []
+    final_inventory_errors: List[str] = []
+    if frozen_inventory:
+        final_inventory_errors = verify_full_inventory(source_root, source_inventory_rows)
+        if final_inventory_errors:
+            incomplete_folders.append({
+                "folder": "<source_root>",
+                "reason": "source_inventory_changed:" + ";".join(final_inventory_errors[:5]),
+            })
     for folder_row in folders:
         folder_key = str(folder_row["folder"])
         summary = summary_by_folder.get(folder_key)
