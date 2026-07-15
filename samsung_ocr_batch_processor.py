@@ -2213,6 +2213,28 @@ def _convert_to_anthropic_messages(messages, max_image_px=2560):
 EVIDENCE_KEYS = {"complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence"}
 CORE_JSON_KEYS = {"view_type", "screen_status", "quality_issue", "model", "price", "category"}
 PRESENTATION_JSON_KEYS = {"narration", "desc"}
+PIPELINE_INTERNAL_RESULT_KEYS = {
+    "unlisted_model_candidate",
+    "unlisted_model_photo_consensus",
+    "official_model_unverified",
+    "model_prefix_completed",
+    "model_prefix_completion_from",
+}
+
+
+def merge_postprocessed_result_fields(target, source):
+    """Copy validated post-process fields, including pipeline-owned evidence markers."""
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return target
+    allowed = EVIDENCE_KEYS | PRESENTATION_JSON_KEYS | PIPELINE_INTERNAL_RESULT_KEYS | {
+        "raw_objects",
+        "merge_mode",
+        "merge_rejected_reason",
+    }
+    for key, value in source.items():
+        if key in target or key in allowed:
+            target[key] = value
+    return target
 
 
 def _json_pairs_no_duplicates(pairs):
@@ -3615,9 +3637,7 @@ def process_single_image(
 
         # Update final result
         if isinstance(result_json, dict):
-            for k, v in data_obj.items():
-                if k in result_json or k in EVIDENCE_KEYS or k in PRESENTATION_JSON_KEYS or k in {"raw_objects", "merge_mode", "merge_rejected_reason"}:
-                    result_json[k] = v
+            merge_postprocessed_result_fields(result_json, data_obj)
             result_json["raw_objects"] = [str(item.get("raw") or "")[:12000] for item in locals().get("raw_objects", [])[:3]]
             result_json["merge_mode"] = locals().get("merge_mode", "none")
             result_json["merge_rejected_reason"] = locals().get("merge_rejected_reason", "")

@@ -34,6 +34,32 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_pipeline_owned_model_markers_survive_postprocess_merge(self):
+        target = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": None,
+        }
+        batch.merge_postprocessed_result_fields(
+            target,
+            {
+                "model": "S27CG552EC",
+                "price": "4990",
+                "model_prefix_completed": True,
+                "model_prefix_completion_from": "S27CG552",
+                "unlisted_model_candidate": True,
+                "official_model_unverified": True,
+                "model_supplied_unknown_key": "must not leak",
+            },
+        )
+        self.assertEqual(target["model"], "S27CG552EC")
+        self.assertTrue(target["model_prefix_completed"])
+        self.assertEqual(target["model_prefix_completion_from"], "S27CG552")
+        self.assertTrue(target["unlisted_model_candidate"])
+        self.assertTrue(target["official_model_unverified"])
+        self.assertNotIn("model_supplied_unknown_key", target)
+
     def test_unique_trailing_model_completion_is_bounded(self):
         self.assertEqual(
             unique_known_model_completion("S27CG552", ["S27CG552EC", "S32CG552EC"]),

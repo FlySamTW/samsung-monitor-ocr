@@ -299,7 +299,7 @@ class PresentationSoakTests(unittest.TestCase):
 
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('const CURRENT_GUARD_REVISION = "20260715.7"', app)
+        self.assertIn('const CURRENT_GUARD_REVISION = "20260715.8"', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
 
     def test_backend_narration_snapshot_cannot_be_hidden_by_animation_state(self):
