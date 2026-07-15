@@ -149,7 +149,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('Never discard an unrevealed item', app)
         self.assertIn('incomingQueue.slice(-1)', app)
         self.assertIn('const visibleNarrationSnapshot = liveStreamSnapshot', app)
-        self.assertIn('|| (!isRunning ? latestBackendNarration : null);', app)
+        self.assertIn('|| (!isRunning ? latestBackendNarration : heldNarrationSnapshot)', app)
         self.assertIn('currentFileThinking', app)
         self.assertIn('!value.startsWith("這張已完成辨識：")', app)
 
@@ -182,7 +182,7 @@ class PresentationSoakTests(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn('const getLivePhotoIdentityKey = (key)', app)
         self.assertIn('.replace(/\\|pass:\\d+$/, "")', app)
-        self.assertIn('data.review_progress?.current_pass]);', app)
+        self.assertIn('data.review_progress?.current_pass, isRunning, revealedResults[0]?._queueKey]);', app)
         self.assertIn('getLivePhotoIdentityKey(prev.key) === getLivePhotoIdentityKey(live.key)', app)
         self.assertIn('return samePhoto ? { ...prev, key: live.key, fileName: live.fileName } : prev;', app)
         self.assertIn('const effectiveVisibleImagePresentationKey = isSameLivePhotoPassHandoff', app)
@@ -310,7 +310,27 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('displayTargetKey === visibleNarrationKey', app)
         self.assertIn('displayedBuffer || "正在接收本張照片的 AI 判讀文字..."', app)
         self.assertIn('data-narration-source={visibleNarrationKey}', app)
-        self.assertIn("LLM 判讀內容 · {narrationStatusLabel}", app)
+        self.assertIn("AI 判讀內容 · {narrationStatusLabel}", app)
+        self.assertIn("!isRunning && visibleNarrationSnapshot?.text", app)
+
+    def test_idle_dashboard_uses_latest_completed_history_without_fake_live_state(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("normalizePresentationItem(queue[queue.length - 1]) || revealedResults[0] || null", app)
+        self.assertIn("if (!isRunning && revealedResults[0])", app)
+        self.assertIn("key: `latest:${latest._queueKey}`", app)
+        self.assertIn('!isRunning && visibleNarration\n    ? "最新完成判讀"', app)
+
+    def test_verified_result_cannot_be_downgraded_by_legacy_review_placeholder(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        normalize_start = app.index("const normalizePresentationItem =")
+        normalize_end = app.index("const getResultRailIdentity", normalize_start)
+        self.assertIn("auto_verified: item.auto_verified ?? result.auto_verified", app[normalize_start:normalize_end])
+        unresolved_start = app.index("const isExplicitlyUnresolved =")
+        unresolved_end = app.index("const hasPassMetadata", unresolved_start)
+        unresolved = app[unresolved_start:unresolved_end]
+        self.assertIn("if (item.auto_review_required === true) return true", unresolved)
+        self.assertIn("if (item.auto_verified === true) return false", unresolved)
+        self.assertLess(unresolved.index("if (item.auto_verified === true) return false"), unresolved.index("const reviewStatus"))
 
     def test_photo_and_narration_share_one_presentation_identity(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
@@ -336,7 +356,7 @@ class PresentationSoakTests(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot", app)
         self.assertIn("|| heldNarrationSnapshot", app)
-        self.assertIn("|| (!isRunning ? latestBackendNarration : null)", app)
+        self.assertIn("|| (!isRunning ? latestBackendNarration : heldNarrationSnapshot)", app)
         target_start = app.index("const getDisplayTarget = () =>")
         target_end = app.index("const activeVisualKey", target_start)
         target = app[target_start:target_end]
@@ -352,6 +372,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("Date.parse(item?.completed_at || item?.started_at || \"\")", app)
         self.assertIn("setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]))", app)
         self.assertIn("samsung_ocr_result_rail_v1", app)
+        self.assertIn('/api/presentation_history?limit=200&scope=current_batch', app)
+        self.assertIn('allowed.has(String(item.source_item_id || ""))', app)
         self.assertIn("saved?.batchKey === currentResultRailBatchKey", app)
         self.assertIn("items: revealedResults", app)
         rail_start = app.index("// The live LLM stream must never block completed photos")

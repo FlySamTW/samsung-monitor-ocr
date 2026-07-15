@@ -448,6 +448,7 @@ const App = () => {
       evidence_unresolved: item.evidence_unresolved ?? result.evidence_unresolved,
       accepted: item.accepted ?? result.accepted,
       auto_review_required: item.auto_review_required ?? result.auto_review_required,
+      auto_verified: item.auto_verified ?? result.auto_verified,
       _queueKey: key,
       _isCurrent: false
     };
@@ -516,12 +517,16 @@ const App = () => {
   useEffect(() => {
     if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
     let cancelled = false;
-    fetch("/api/presentation_history?limit=200")
+    fetch("/api/presentation_history?limit=200&scope=current_batch")
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => {
         if (cancelled || !Array.isArray(payload?.items)) return;
         const restored = payload.items.map(normalizePresentationItem).filter(Boolean);
-        setRevealedResults((prev) => mergeResultRailItems([...restored, ...prev]));
+        const allowed = new Set(Array.isArray(payload.source_item_ids) ? payload.source_item_ids.map(String) : []);
+        setRevealedResults((prev) => mergeResultRailItems([
+          ...restored,
+          ...prev.filter((item) => allowed.has(String(item.source_item_id || "")))
+        ]));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -554,9 +559,11 @@ const App = () => {
     // trail, but may not look like accepted results under the new guard.
     if ((item.pass_index || item.pass_label)
       && String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION) return true;
+    if (item.auto_review_required === true) return true;
     const decision = String(item.decision || "").trim().toLowerCase();
     if (["retry_scheduled", "review_required", "failed"].includes(decision)) return true;
     if (decision === "accepted") return false;
+    if (item.auto_verified === true) return false;
     const reviewStatus = String(item.review_status || "").trim().toLowerCase();
     if (["review_required", "待審核", "需慢模型或人工校正"].includes(reviewStatus)) return true;
     return item.evidence_unresolved === true
@@ -645,7 +652,7 @@ const App = () => {
 
   const getLatestBackendNarration = () => {
     const queue = Array.isArray(data.presentation_queue) ? data.presentation_queue : [];
-    const latest = normalizePresentationItem(queue[queue.length - 1]);
+    const latest = normalizePresentationItem(queue[queue.length - 1]) || revealedResults[0] || null;
     if (!latest) return null;
     const text = getQueueDisplayText(latest);
     return text ? { fileName: latest.file_name || "", text, key: `latest:${latest._queueKey}` } : null;
@@ -960,7 +967,18 @@ const App = () => {
       });
       return;
     }
-  }, [activePresentation, data.current_file, data.current_relative_dir, data.review_progress?.current_pass]);
+    if (!isRunning && revealedResults[0]) {
+      const latest = revealedResults[0];
+      setImageLoaded(false);
+      setImageFailed(false);
+      setCurrentThumb(latest.thumb_b64 || null);
+      setCurrentImageTarget({
+        src: getResultImageSrc(latest),
+        key: `latest:${latest._queueKey}`,
+        fileName: latest.file_name || ""
+      });
+    }
+  }, [activePresentation, data.current_file, data.current_relative_dir, data.review_progress?.current_pass, isRunning, revealedResults[0]?._queueKey]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
@@ -1293,11 +1311,11 @@ const App = () => {
   // backend stream belongs to the next photo and must wait for handoff.
   const visibleNarrationSnapshot = liveStreamSnapshot
     || activeNarrationSnapshot
-    || heldNarrationSnapshot
-    || (!isRunning ? latestBackendNarration : null);
+    || (!isRunning ? latestBackendNarration : heldNarrationSnapshot)
+    || heldNarrationSnapshot;
   const displayedFileName = liveStreamSnapshot?.fileName
     || activePresentation?.file_name
-    || heldNarrationSnapshot?.fileName
+    || visibleNarrationSnapshot?.fileName
     || (!isRunning ? latestBackendNarration?.fileName : "")
     || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
@@ -1320,13 +1338,15 @@ const App = () => {
     && displayTargetKey === visibleNarrationKey
     && (typewriterReady || displayedBuffer)
   );
-  const visibleNarration = narrationAnimationOwnsDisplay
+  const visibleNarration = !isRunning && visibleNarrationSnapshot?.text
+    ? visibleNarrationSnapshot.text
+    : narrationAnimationOwnsDisplay
     ? (displayedBuffer || "正在接收本張照片的 AI 判讀文字...")
     : (visibleNarrationSnapshot?.text
       || narrationDisplay.text
       || displayedBuffer
       || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : ""));
-  const isHeldNarration = !visibleNarrationKey.startsWith("live:") && narrationPhase !== "typing";
+  const isHeldNarration = !isRunning || (!visibleNarrationKey.startsWith("live:") && narrationPhase !== "typing");
   const matchingVisibleImage = effectiveVisibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
     ? visibleImage
     : null;
@@ -1338,7 +1358,9 @@ const App = () => {
     ? visibleNarrationKey
     : (visiblePresentation?.presentation_id || "");
   const visiblePresentationSequence = visiblePresentation?.presentation_sequence ?? "";
-  const narrationStatusLabel = visibleNarrationKey.startsWith("live:")
+  const narrationStatusLabel = !isRunning && visibleNarration
+    ? "最新完成判讀"
+    : visibleNarrationKey.startsWith("live:")
     ? "AI 即時判讀中"
     : visibleNarrationKey.startsWith("latest:")
       ? "最新完成判讀"
@@ -1603,7 +1625,7 @@ const App = () => {
                                         background: isHeldNarration ? '#64748b' : '#22d3ee',
                                         boxShadow: isHeldNarration ? 'none' : '0 0 8px #22d3ee'
                                       }} />
-                                      LLM 判讀內容 · {narrationStatusLabel}
+                                      AI 判讀內容 · {narrationStatusLabel}
                                    </div>
                                    {false && isHeldNarration && (
                                       <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>

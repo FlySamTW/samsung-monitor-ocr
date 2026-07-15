@@ -260,3 +260,13 @@
 新版內容健康門不只設定記憶體 stop event，還會原子寫入 `_ocr_audit/runtime_health_fuse.json`。後端續跑 API、五分鐘 continuity supervisor、upload watchdog、manifest／proof builder 與 rclone uploader 都必須在此標記存在時失敗封閉。排程不得自動刪除；只能在缺陷修正、critical regressions 與隔離五張試跑全部通過後手動解除。
 
 本專案尚未完成。接手者的核心責任不是追求表面跑得快，而是讓每張照片的分類、型號、價格、檔名、UI 展示與雲端檔案保持同一份可追溯的正確結果。
+
+## 2026-07-15 20:15 接手狀態補充
+
+- 正式 OCR 仍維持 fail-closed；`runtime_health_fuse.json` 與 `model_benchmark.lock` 都未解除，沒有啟動 uploader。
+- 隔離 5 張 runtime-health smoke v6 已完成 5/5：3 張自動驗證、2 張因結構證據不一致保留待複核、失敗 0。這證明守門會把衝突留給人工，而不是冒充成功；它仍只是 5 張 smoke，尚未授權正式續跑。
+- Prompt 已改成單一 JSON 物件內含自然語句 `narration`，刪除可照抄完整答案模板；第二／第三輪與同輪 retry 都不再帶前輪答案。Parser、nested evidence 正規化、repetition watchdog、explicit verification 狀態及其測試已同步。
+- Dashboard 待機狀態已實際在既有 Chrome 分頁驗證：總進度 `65,331/150,321`、目前批次 `5/5`、最新照片 `中華-1065`、`AI 判讀內容 · 最新完成判讀`、右側 5 張卡片與 2 張待複核一致，50% 主畫面配置未改。
+- 原右欄會從全域 `/api/presentation_history` 混入舊批次卡片；現改為 `scope=current_batch` 並用 `.ocr_source_map.json` 的 5 個穩定 `source_item_id` 清除跨批次 session/history 污染。瀏覽器驗證舊卡片數由 100+ 降為精確 5，舊 `SF-員林-562` 不再出現。
+- 後端目前是單一隱藏 port-5000 進程，工作目錄仍指向 `D:\00_商化\00_已OCR照片\_ocr_staging\20260715_runtime_health_smoke5_v6\202601_health_smoke5_v6`，狀態 idle。第一次替換誤用不含 `psutil` 的通用 Python，30 秒 fail-closed 後查明；現已改用專案 `.venv`，未形成循環重啟或可見終端機。
+- 已通過 77 項針對性測試、完整 critical regressions 與 production Vite build。下一步不是立刻解除熔斷器，而是建立 15 張分層 smoke、全量稽核其獨立輪次／內容／UI，再決定是否恢復正式 202601 工作目錄與 `.5` backfill。

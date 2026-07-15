@@ -19,6 +19,7 @@ from tools.prepare_drive_upload_manifest import (
 )
 from tools.rerun_questionable_records import is_complete_auto_verified
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace
+from skills.runtime_health_gate import review_prompt_leak_reasons
 from samsung_ocr_batch_processor import _merge_v1945_json_objects
 
 
@@ -40,14 +41,10 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(batch.has_strong_single_unit_evidence(narration))
         self.assertTrue(batch.has_explicit_distant_layout_evidence(narration))
 
-    def test_prompt_examples_all_have_core_and_evidence(self):
+    def test_prompt_has_no_copyable_json_answer_templates(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         objects = batch._extract_balanced_json_objects(prompt)
-        required = {"view_type", "screen_status", "quality_issue", "model", "price", "complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence"}
-        self.assertEqual(len(objects), 14)
-        for raw in objects:
-            value = raw.get("value", raw) if isinstance(raw, dict) else json.loads(raw)
-            self.assertTrue(required.issubset(value), value)
+        self.assertEqual(objects, [])
 
     def test_contract_is_last_and_prompt_is_bounded(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
@@ -56,6 +53,77 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+
+    def test_structured_narration_is_an_allowed_single_object_field(self):
+        raw = json.dumps({
+            "narration": "我看到唯一主角、自己的規格牌與價格牌位在同一商品上。",
+            "view_type": "單機",
+            "screen_status": "正常",
+            "quality_issue": "無",
+            "model": None,
+            "price": None,
+            "category": "單機",
+            "complete_screen_count": 1,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "followme_physical_evidence": [],
+        }, ensure_ascii=False)
+        parsed, _, mode, reason = _merge_v1945_json_objects(raw)
+        self.assertEqual(reason, "")
+        self.assertEqual(mode, "single_object")
+        self.assertEqual(parsed["narration"], "我看到唯一主角、自己的規格牌與價格牌位在同一商品上。")
+
+    def test_exact_nested_evidence_container_is_safely_flattened(self):
+        raw = json.dumps({
+            "narration": "我看到主角螢幕連著白色長直立支架與圓形底座。",
+            "view_type": "單機",
+            "model": "FollowMe M7 32\"",
+            "price": "12990",
+            "evidence": evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            ]),
+        }, ensure_ascii=False)
+        parsed, _, mode, reason = _merge_v1945_json_objects(raw)
+        self.assertEqual((mode, reason), ("single_object", ""))
+        self.assertEqual(parsed["complete_screen_count"], 1)
+        self.assertEqual(len(parsed["followme_physical_evidence"]), 2)
+        self.assertNotIn("evidence", parsed)
+
+    def test_nested_evidence_with_extra_or_duplicate_fields_fails_closed(self):
+        cases = [
+            {"view_type": "單機", "evidence": {"unexpected": True}},
+            {"view_type": "單機", "unique_main": True, "evidence": {"unique_main": False}},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                parsed, _, mode, reason = _merge_v1945_json_objects(json.dumps(payload))
+                self.assertIsNone(parsed)
+                self.assertEqual(mode, "rejected")
+                self.assertTrue(reason)
+
+    def test_repetition_watchdog_ignores_repeated_structural_evidence_keys(self):
+        raw = json.dumps({
+            "narration": "我看到主角螢幕連著白色長直立支架、圓形底座、托盤與自己的商品卡。",
+            "view_type": "單機",
+            "followme_physical_evidence": [
+                {"cue": cue, "same_subject": True, "strength": "strong"}
+                for cue in ("white_vertical_stand", "round_base", "attached_price_tray", "attached_followme_product_card")
+            ],
+        }, ensure_ascii=False, indent=2)
+        self.assertFalse(batch._detect_repetition(raw))
+
+    def test_repetition_watchdog_still_rejects_looping_structured_narration(self):
+        repeated = "我看到同一段敘述不停重複。" * 20
+        raw = json.dumps({"narration": repeated, "view_type": "單機"}, ensure_ascii=False)
+        self.assertTrue(batch._detect_repetition(raw))
+
+    def test_prompt_has_no_legacy_two_part_output_contract(self):
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        self.assertNotIn("第 1 行：自然語言描述", prompt)
+        self.assertNotIn("第 2 行：純 JSON", prompt)
+        self.assertNotIn("自然語言 + JSON", prompt)
+        self.assertIn("只輸出一個完整 JSON 物件", prompt)
 
     def test_second_pass_is_independent_of_prior_evidence(self):
         previous = [{"view_type": "遠景", "complete_screen_count": 3, "unique_main": False,
@@ -79,6 +147,40 @@ class EvidenceContractTests(unittest.TestCase):
             {"role": "user", "content": "third-pass-user"},
         ])
         self.assertNotIn("WRONG-FIRST", json.dumps(messages, ensure_ascii=False))
+
+    def test_production_review_focus_prompts_are_neutral_and_stateless(self):
+        prior = [{"view_type": "單機", "model": "WRONG-FIRST", "price": "9999"}]
+        for attempt in (2, 3):
+            messages = batch.build_ocr_messages(
+                "system",
+                batch.REVIEW_FOCUS_PROMPTS[attempt],
+                attempt,
+                prior,
+            )
+            self.assertEqual(
+                review_prompt_leak_reasons(
+                    attempt,
+                    messages,
+                    injected_prior_results=[],
+                    prior_results_for_leak_check=prior,
+                ),
+                [],
+            )
+            self.assertNotIn("WRONG-FIRST", json.dumps(messages, ensure_ascii=False))
+
+    def test_explicit_verified_state_overrides_legacy_pending_placeholder(self):
+        verified = {
+            "auto_verified": True,
+            "auto_review_required": False,
+            "review_status": "待審核",
+        }
+        unresolved = {
+            "auto_verified": False,
+            "auto_review_required": True,
+            "review_status": "需慢模型或人工校正",
+        }
+        self.assertFalse(batch._status_needs_review(verified))
+        self.assertTrue(batch._status_needs_review(unresolved))
 
     def test_captured_nine_response_shapes(self):
         core = '{"view_type":"遠景","screen_status":null,"quality_issue":null,"model":null,"price":null}'

@@ -641,15 +641,41 @@ class BatchOrchestrator:
             key=lambda item: (int(item.get("presentation_sequence") or 0), str(item.get("started_at") or "")),
         )[-limit:]
 
-    def get_recent_presentation_history(self, limit: int = 200) -> list[dict]:
-        """Return newest durable presentation events for result-rail recovery."""
+    def get_current_source_item_ids(self) -> set[str]:
+        """Return stable source identities belonging to the selected work directory."""
+        image_dir = str(self.image_dir or "")
+        if not image_dir or not os.path.isdir(image_dir):
+            return set()
+        source_map = self._load_source_metadata_map(image_dir)
+        identities: set[str] = set()
+        for name in os.listdir(image_dir):
+            if not name.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+            mapped = dict(source_map.get(name, {}) or {})
+            original = mapped.get("original_source_path") or mapped.get("source_path") or os.path.join(image_dir, name)
+            identities.add(str(mapped.get("source_item_id") or self._source_item_id(original)))
+        return identities
+
+    def get_recent_presentation_history(
+        self,
+        limit: int = 200,
+        source_item_ids: set[str] | None = None,
+    ) -> list[dict]:
+        """Return newest durable presentation events, optionally scoped to one work directory."""
         limit = max(1, min(200, int(limit or 200)))
+        allowed = None if source_item_ids is None else {str(value) for value in source_item_ids if value}
+        if allowed == set():
+            return []
+
+        def belongs_to_scope(item: dict) -> bool:
+            return allowed is None or str(item.get("source_item_id") or "") in allowed
+
         found: dict[str, dict] = {}
         with self._state_lock:
             live_items = list(self.display_queue)
         for item in reversed(live_items):
             presentation_id = str(item.get("presentation_id") or "")
-            if presentation_id:
+            if presentation_id and belongs_to_scope(item):
                 found[presentation_id] = self._public_presentation_event(item)
 
         audit_dir = self._presentation_audit_dir()
@@ -673,7 +699,7 @@ class BatchOrchestrator:
                         except (TypeError, json.JSONDecodeError):
                             continue
                         presentation_id = str(item.get("presentation_id") or "")
-                        if presentation_id and presentation_id not in found:
+                        if presentation_id and presentation_id not in found and belongs_to_scope(item):
                             found[presentation_id] = self._public_presentation_event(item)
                         if len(found) >= limit:
                             break

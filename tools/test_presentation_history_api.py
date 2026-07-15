@@ -261,6 +261,9 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertNotIn("MUST_NOT_LEAK", json.dumps(items, ensure_ascii=False))
             self.assertEqual(items[0]["source_path"], "D:/photos/new.jpg")
 
+            scoped = orchestrator.get_recent_presentation_history(limit=10, source_item_ids={"b" * 64})
+            self.assertEqual([item["presentation_id"] for item in scoped], ["p-new-process"])
+
     def test_history_api_validates_id_and_limit(self):
         class FakeOrchestrator:
             def get_presentation_history(self, source_item_id, limit=12):
@@ -302,6 +305,30 @@ class PresentationHistoryTests(unittest.TestCase):
             payload = response.get_json()
             self.assertEqual(payload["count"], 1)
             self.assertEqual(payload["items"][0]["presentation_id"], "p-1")
+        finally:
+            backend.orchestrator = previous
+
+    def test_recent_history_api_scopes_result_rail_to_current_batch(self):
+        class FakeOrchestrator:
+            def get_current_source_item_ids(self):
+                return {"b" * 64}
+
+            def get_recent_presentation_history(self, limit=200, source_item_ids=None):
+                self.received_scope = source_item_ids
+                return [{"presentation_id": "p-current", "source_item_id": "b" * 64}]
+
+        previous = backend.orchestrator
+        fake = FakeOrchestrator()
+        backend.orchestrator = fake
+        try:
+            client = backend.flask_app.test_client()
+            invalid = client.get("/api/presentation_history?scope=wrong")
+            self.assertEqual(invalid.status_code, 400)
+            response = client.get("/api/presentation_history?limit=200&scope=current_batch")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["scope"], "current_batch")
+            self.assertEqual(response.get_json()["source_item_ids"], ["b" * 64])
+            self.assertEqual(fake.received_scope, {"b" * 64})
         finally:
             backend.orchestrator = previous
 

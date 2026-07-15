@@ -197,6 +197,20 @@ def _presentation_payload(orchestrator):
     return [_compact_status_presentation(event) for event in _presentation_events[-STATUS_PRESENTATION_WINDOW:]]
 
 
+def _status_flag_true(value):
+    return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _status_needs_review(record):
+    """Let explicit verification state override legacy placeholder wording."""
+    if _status_flag_true(record.get("auto_review_required")):
+        return True
+    if _status_flag_true(record.get("auto_verified")):
+        return False
+    status = str(record.get("review_status") or "").strip().lower()
+    return status in {"review_required", "待審核", "需慢模型或人工校正"}
+
+
 V1945_OUTPUT_CONTRACT = (
     "FINAL OUTPUT CONTRACT (v19.45): Return exactly one JSON object and no prose. "
     "It must contain narration: a 60-300 character Traditional Chinese first-person observation of only the current image; "
@@ -207,6 +221,19 @@ V1945_OUTPUT_CONTRACT = (
     "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
     "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object."
 )
+
+REVIEW_FOCUS_PROMPTS = {
+    2: (
+        "只根據所附影像逐項計算完整入鏡螢幕台數，確認 FollowMe 文字是否只是"
+        "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
+        "直接記錄當前影像的可見證據；沒有把握的欄位留空。"
+    ),
+    3: (
+        "只根據所附影像逐項判斷完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、"
+        "型號清單有效性與價牌空間歸屬。不確定就留空，不可猜測；"
+        "直接記錄當前影像的可見證據。"
+    ),
+}
 
 
 def build_runtime_system_prompt(prompt_template, followme_daily_reference):
@@ -1973,10 +2000,27 @@ def _detect_repetition(text: str) -> bool:
     if not text:
         return False
 
+    # Structured evidence legitimately repeats keys such as same_subject,
+    # cue, and strength once per observed physical cue.  The watchdog exists
+    # to catch looping natural language, so inspect only narration (or legacy
+    # prose before the JSON object), never the machine-readable structure.
+    source_text = str(text)
+    watch_text = source_text
+    try:
+        decoded = json.loads(source_text.strip().replace("```json", "").replace("```", ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        decoded = None
+    if isinstance(decoded, dict):
+        watch_text = str(decoded.get("narration") or decoded.get("desc") or "")
+    elif "{" in source_text:
+        watch_text = source_text.split("{", 1)[0].strip()
+    if not watch_text:
+        return False
+
     # Catch single-line degeneration such as "1000000:1" repeated hundreds of
     # times. The old line-based watchdog missed this because there were no
     # newlines.
-    token_matches = re.findall(r"[A-Za-z0-9]+(?::[A-Za-z0-9]+)?|[\u4e00-\u9fff]{2,}", text)
+    token_matches = re.findall(r"[A-Za-z0-9]+(?::[A-Za-z0-9]+)?|[\u4e00-\u9fff]{2,}", watch_text)
     if token_matches:
         from collections import Counter
         recent_tokens = [tok for tok in token_matches[-120:] if len(tok) >= 4]
@@ -1986,7 +2030,7 @@ def _detect_repetition(text: str) -> bool:
                 print(f"[Watchdog] repetitive token detected: {token[:24]}... (x{count})")
                 return True
 
-    compact_tail = re.sub(r"\s+", "", text)[-1600:]
+    compact_tail = re.sub(r"\s+", "", watch_text)[-1600:]
     for window_size in (4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40):
         if len(compact_tail) >= window_size * 8:
             chunk = compact_tail[-window_size:]
@@ -1995,7 +2039,7 @@ def _detect_repetition(text: str) -> bool:
                 return True
 
     # 1. 簡單的逐行檢查
-    lines = [L.strip() for L in text.split('\n') if len(L.strip()) > 15] # 忽略太短的行
+    lines = [L.strip() for L in watch_text.split('\n') if len(L.strip()) > 15] # 忽略太短的行
     if len(lines) < 2: return False # [Modified] 至少要有2行才可能重複
 
     # 檢查最後 15 行是否有重複
@@ -2013,14 +2057,14 @@ def _detect_repetition(text: str) -> bool:
 
     # 2. 暴力 N-gram 檢查 (針對没換行的長段落)
     # 檢查長度為 30 的 substring 是否重複出現 3 次以上 [Modified]
-    if len(text) > 200:
+    if len(watch_text) > 200:
         window_size = 30
         threshold = 3
         # 簡易採樣檢查
-        for i in range(0, len(text) - window_size, 50): # 步長 50
-            sub = text[i : i+window_size]
-            if text.count(sub) >= threshold:
-                print(f"[Watchdog] 偵測到段落重複: {sub[:20]}... (x{text.count(sub)})")
+        for i in range(0, len(watch_text) - window_size, 50): # 步長 50
+            sub = watch_text[i : i+window_size]
+            if watch_text.count(sub) >= threshold:
+                print(f"[Watchdog] 偵測到段落重複: {sub[:20]}... (x{watch_text.count(sub)})")
                 return True
 
     return False
@@ -2078,6 +2122,7 @@ def _convert_to_anthropic_messages(messages, max_image_px=2560):
 
 EVIDENCE_KEYS = {"complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence"}
 CORE_JSON_KEYS = {"view_type", "screen_status", "quality_issue", "model", "price", "category"}
+PRESENTATION_JSON_KEYS = {"narration", "desc"}
 
 
 def _json_pairs_no_duplicates(pairs):
@@ -2136,8 +2181,19 @@ def _merge_v1945_json_objects(text):
     if not valid:
         return None, objects, "none", "no_valid_json_object"
     if len(valid) == 1:
-        value = valid[0]["value"]
-        unknown = set(value) - CORE_JSON_KEYS - EVIDENCE_KEYS
+        value = dict(valid[0]["value"])
+        if "evidence" in value:
+            nested_evidence = value.pop("evidence")
+            if not isinstance(nested_evidence, dict):
+                return None, objects, "rejected", "evidence_container_not_object"
+            nested_unknown = set(nested_evidence) - EVIDENCE_KEYS
+            if nested_unknown:
+                return None, objects, "rejected", "evidence_container_unknown_keys:" + ",".join(sorted(nested_unknown))
+            duplicate_evidence = set(value) & set(nested_evidence)
+            if duplicate_evidence:
+                return None, objects, "rejected", "duplicate_nested_evidence_keys:" + ",".join(sorted(duplicate_evidence))
+            value.update(nested_evidence)
+        unknown = set(value) - CORE_JSON_KEYS - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS
         if unknown:
             return None, objects, "rejected", "unknown_keys:" + ",".join(sorted(unknown))
         return value, objects, "single_object", ""
@@ -2147,7 +2203,7 @@ def _merge_v1945_json_objects(text):
         return None, objects, "rejected", "multiple_core_or_unknown_object"
     merged = dict(core[0]["value"])
     evidence = evidence_only[0]["value"] if evidence_only else {}
-    if set(evidence) - EVIDENCE_KEYS:
+    if set(evidence) - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS:
         return None, objects, "rejected", "evidence_object_has_unknown_keys"
     if set(merged) & set(evidence):
         return None, objects, "rejected", "duplicate_core_evidence_keys"
@@ -2593,20 +2649,9 @@ def process_single_image(
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
 
     if ocr_attempt == 2:
-        user_prompt += (
-            "\n\n【第 2 輪獨立重讀】請把這張當全新照片。"
-            "只根據本次提供的原圖重新計算完整入鏡螢幕台數、確認 FollowMe 文字是否只是"
-            "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
-            "請直接描述可見證據，不使用任何對話式更正或承接語。"
-            + "\\n\\n" + V1945_OUTPUT_CONTRACT
-        )
+        user_prompt += "\n\n" + REVIEW_FOCUS_PROMPTS[2]
     elif ocr_attempt >= 3:
-        user_prompt += (
-            "\n\n【第 3 輪獨立覆核】請把這張當全新照片。逐項獨立判斷："
-            "完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、型號清單有效性、價牌空間歸屬。"
-            "不確定就留空，不可猜測。請直接描述可見證據，不使用任何對話式更正或承接語。"
-            + "\\n\\n" + V1945_OUTPUT_CONTRACT
-        )
+        user_prompt += "\n\n" + REVIEW_FOCUS_PROMPTS[3]
 
 
     # Per-photo OCR must remain stateless.  Historical wrong/correct answers
@@ -2840,7 +2885,7 @@ def process_single_image(
             if attempt > 0:
                 messages.append({
                     "role": "user",
-                    "content": "本次回應格式無效。請重新獨立觀察原圖，只輸出規定的 JSON；不要引用或修正任何先前回答。",
+                    "content": "只根據所附原圖產生一個完整 JSON 物件，所有必要欄位都要填入；無法確認的值使用 null。",
                 })
             start_llm_t = time.time()
             full_response_text = ""
@@ -3439,7 +3484,7 @@ def process_single_image(
         # Update final result
         if isinstance(result_json, dict):
             for k, v in data_obj.items():
-                if k in result_json or k in EVIDENCE_KEYS or k in {"raw_objects", "merge_mode", "merge_rejected_reason"}:
+                if k in result_json or k in EVIDENCE_KEYS or k in PRESENTATION_JSON_KEYS or k in {"raw_objects", "merge_mode", "merge_rejected_reason"}:
                     result_json[k] = v
             result_json["raw_objects"] = [str(item.get("raw") or "")[:12000] for item in locals().get("raw_objects", [])[:3]]
             result_json["merge_mode"] = locals().get("merge_mode", "none")
@@ -3798,20 +3843,10 @@ def get_status():
         total_success = len(total_success_list)
         total_failed = len(total_failed_list)
 
-        def _flag_true(value):
-            return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "y"}
-
-        def _needs_review(record):
-            status = str(record.get("review_status") or "").strip().lower()
-            return (
-                _flag_true(record.get("auto_review_required"))
-                or status in {"review_required", "待審核", "需慢模型或人工校正"}
-            )
-
-        review_required = sum(1 for record in total_success_list if _needs_review(record))
+        review_required = sum(1 for record in total_success_list if _status_needs_review(record))
         verified = sum(
             1 for record in total_success_list
-            if _flag_true(record.get("auto_verified")) and not _needs_review(record)
+            if _status_flag_true(record.get("auto_verified")) and not _status_needs_review(record)
         )
         verification_unknown = max(0, total_success - verified - review_required)
 
@@ -3944,9 +3979,22 @@ def get_recent_presentation_history():
     except (TypeError, ValueError):
         return jsonify({"error": "limit 必須是整數"}), 400
     limit = max(1, min(200, limit))
+    scope = str(request.args.get("scope") or "").strip().lower()
+    if scope not in {"", "current_batch"}:
+        return jsonify({"error": "scope 必須是 current_batch"}), 400
     try:
-        items = orchestrator.get_recent_presentation_history(limit=limit)
-        return jsonify({"count": len(items), "items": items})
+        if scope == "current_batch":
+            source_item_ids = orchestrator.get_current_source_item_ids()
+            items = orchestrator.get_recent_presentation_history(limit=limit, source_item_ids=source_item_ids)
+        else:
+            source_item_ids = None
+            items = orchestrator.get_recent_presentation_history(limit=limit)
+        return jsonify({
+            "count": len(items),
+            "items": items,
+            "scope": scope or "global",
+            "source_item_ids": sorted(source_item_ids) if source_item_ids is not None else [],
+        })
     except Exception as exc:
         log.error(f"Recent presentation history API error: {exc}")
         return jsonify({"error": "最近辨識紀錄暫時無法載入"}), 500
