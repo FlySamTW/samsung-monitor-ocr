@@ -120,7 +120,7 @@ class BatchOrchestrator:
         self.stream_file = None
         self.latest_result_file = None
         self.display_queue = [] # [v19.8 UX] Completed results waiting to be displayed
-        self.current_run_id = ""
+        self.current_run_id = self._load_presentation_run_id(self.image_dir)
         # Keep the operator's cumulative pass counter monotonic across safe
         # backend restarts. The durable audit is authoritative; an in-memory
         # reset would make "cumulative interpretations" silently lie.
@@ -153,6 +153,30 @@ class BatchOrchestrator:
         
         # [v16.12] Force Rerun Queue
         self.priority_queue = [] 
+
+    @staticmethod
+    def _presentation_run_marker_path(image_dir: str | Path) -> Path:
+        return Path(image_dir).resolve() / ".ocr_presentation_run.json"
+
+    def _load_presentation_run_id(self, image_dir: str | Path) -> str:
+        try:
+            marker = json.loads(self._presentation_run_marker_path(image_dir).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return ""
+        if marker.get("schema") != "samsung-ocr-presentation-run/v1":
+            return ""
+        return str(marker.get("run_id") or "").strip()
+
+    def _persist_presentation_run_id(self, image_dir: str | Path, run_id: str) -> None:
+        path = self._presentation_run_marker_path(image_dir)
+        payload = {
+            "schema": "samsung-ocr-presentation-run/v1",
+            "run_id": str(run_id or "").strip(),
+            "started_at": datetime.now().astimezone().isoformat(),
+        }
+        temp = path.with_name(path.name + f".tmp.{os.getpid()}")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, path)
 
     def _persist_runtime_health_fuse(self, reasons, source_file="", attempt=0, run_id=""):
         """Persist content failure before releasing the running state."""
@@ -258,7 +282,16 @@ class BatchOrchestrator:
                 self.priority_queue = []
                 self.retry_queue = []
                 self.session_processed = set()
-                self.current_run_id = ""
+                self.current_run_id = self._load_presentation_run_id(target_dir)
+                self.current_file = None
+                self.stream_file = None
+                self.latest_result_file = None
+                self.stream_buffer = ""
+                self.display_queue = []
+                self.recent_results = []
+                self.session_results = []
+                self.auto_attempts = {}
+                self.auto_result_history = {}
 
             self.image_dir = target_dir
             self.config['image_dir'] = target_dir
@@ -666,6 +699,7 @@ class BatchOrchestrator:
         source_item_ids: set[str] | None = None,
         run_id: str = "",
         latest_run_only: bool = False,
+        legacy_run_only: bool = False,
     ) -> list[dict]:
         """Return newest durable presentation events, optionally scoped to one work directory."""
         limit = max(1, min(200, int(limit or 200)))
@@ -676,7 +710,8 @@ class BatchOrchestrator:
 
         def belongs_to_scope(item: dict) -> bool:
             source_allowed = allowed is None or str(item.get("source_item_id") or "") in allowed
-            run_allowed = not wanted_run_id or str(item.get("run_id") or "") == wanted_run_id
+            item_run_id = str(item.get("run_id") or "")
+            run_allowed = (not item_run_id) if legacy_run_only else (not wanted_run_id or item_run_id == wanted_run_id)
             return source_allowed and run_allowed
 
         found: dict[str, dict] = {}
@@ -1265,13 +1300,14 @@ class BatchOrchestrator:
             batch_image_dir = str(Path(self.image_dir).resolve())
             self.active_image_dir = batch_image_dir
             self.source_metadata_map = self._load_source_metadata_map(batch_image_dir)
+            batch_run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            self._persist_presentation_run_id(batch_image_dir, batch_run_id)
+            self.current_run_id = batch_run_id
             self.stop_event.clear()
             self.is_running = True
             self.stats['is_running'] = True
             self.session_processed = set()
             self._restore_retry_state()
-            batch_run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            self.current_run_id = batch_run_id
 
         # Presentation data belongs to one batch only.  Keeping rows from a
         # staging rerun makes the dashboard replay deleted files in the next

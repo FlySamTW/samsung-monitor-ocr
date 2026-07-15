@@ -488,7 +488,7 @@ const App = () => {
   };
 
   const currentResultRailBatchKey = `${String(data.current_relative_dir || data.image_dir || "")}|run:${String(data.presentation_run_id || "legacy")}`;
-  const resultRailStorageKey = "samsung_ocr_result_rail_v1";
+  const resultRailStorageKey = "samsung_ocr_result_rail_v2";
 
   // Preserve the current batch's completed cards across an asset refresh.
   useEffect(() => {
@@ -523,9 +523,13 @@ const App = () => {
         if (cancelled || !Array.isArray(payload?.items)) return;
         const restored = payload.items.map(normalizePresentationItem).filter(Boolean);
         const allowed = new Set(Array.isArray(payload.source_item_ids) ? payload.source_item_ids.map(String) : []);
+        const expectedRunId = String(payload.run_id || "");
         setRevealedResults((prev) => mergeResultRailItems([
           ...restored,
-          ...prev.filter((item) => allowed.has(String(item.source_item_id || "")))
+          ...prev.filter((item) => (
+            allowed.has(String(item.source_item_id || ""))
+            && String(item.run_id || "") === expectedRunId
+          ))
         ]));
       })
       .catch(() => {});

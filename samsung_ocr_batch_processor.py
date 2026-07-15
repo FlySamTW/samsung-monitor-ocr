@@ -3992,7 +3992,8 @@ def get_recent_presentation_history():
                 limit=limit,
                 source_item_ids=source_item_ids,
                 run_id=current_run_id,
-                latest_run_only=True,
+                latest_run_only=bool(current_run_id),
+                legacy_run_only=not bool(current_run_id),
             )
         else:
             source_item_ids = None

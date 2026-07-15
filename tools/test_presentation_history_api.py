@@ -282,6 +282,85 @@ class PresentationHistoryTests(unittest.TestCase):
                 latest_run_only=True,
             )
             self.assertEqual([item["presentation_id"] for item in run_scoped], ["p-new-process"])
+            orchestrator.display_queue.append({
+                "presentation_id": "p-legacy",
+                "presentation_sequence": 0,
+                "source_item_id": "a" * 64,
+                "file_name": "legacy.jpg",
+                "source_path": "D:/photos/legacy.jpg",
+                "completed_at": "2026-07-13T00:00:00",
+                "result": {"view_type": "遠景"},
+            })
+            legacy_scoped = orchestrator.get_recent_presentation_history(
+                limit=10,
+                source_item_ids={"a" * 64, "b" * 64},
+                legacy_run_only=True,
+            )
+            self.assertEqual([item["presentation_id"] for item in legacy_scoped], ["p-legacy"])
+
+    def test_work_dir_switch_clears_cross_folder_state_and_recovers_run_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_dir = root / "old"
+            new_dir = root / "new"
+            old_dir.mkdir()
+            new_dir.mkdir()
+            orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+            orchestrator.image_dir = str(old_dir)
+            orchestrator.config = {"image_dir": str(old_dir)}
+            orchestrator._state_lock = RLock()
+            orchestrator._worker_thread = None
+            orchestrator.is_running = False
+            orchestrator.priority_queue = ["old.jpg"]
+            orchestrator.retry_queue = ["old.jpg"]
+            orchestrator.session_processed = {"old.jpg"}
+            orchestrator.current_file = "old.jpg"
+            orchestrator.stream_file = "old.jpg"
+            orchestrator.latest_result_file = "old.jpg"
+            orchestrator.stream_buffer = "old narration"
+            orchestrator.display_queue = [{"file_name": "old.jpg"}]
+            orchestrator.recent_results = [{"file_name": "old.jpg"}]
+            orchestrator.session_results = [{"file_name": "old.jpg"}]
+            orchestrator.auto_attempts = {"old.jpg": 3}
+            orchestrator.auto_result_history = {"old.jpg": [{}]}
+
+            orchestrator._persist_presentation_run_id(new_dir, "run-new-folder")
+            changed, error = orchestrator.set_work_dir(str(new_dir))
+
+            self.assertTrue(changed, error)
+            self.assertEqual(orchestrator.current_run_id, "run-new-folder")
+            self.assertIsNone(orchestrator.current_file)
+            self.assertIsNone(orchestrator.stream_file)
+            self.assertIsNone(orchestrator.latest_result_file)
+            self.assertEqual(orchestrator.stream_buffer, "")
+            self.assertEqual(orchestrator.display_queue, [])
+            self.assertEqual(orchestrator.recent_results, [])
+            self.assertEqual(orchestrator.priority_queue, [])
+
+    def test_current_batch_without_marker_requests_legacy_history_only(self):
+        class FakeOrchestrator:
+            current_run_id = ""
+
+            def get_current_source_item_ids(self):
+                return {"c" * 64}
+
+            def get_recent_presentation_history(self, **kwargs):
+                self.kwargs = kwargs
+                return []
+
+        previous = backend.orchestrator
+        fake = FakeOrchestrator()
+        backend.orchestrator = fake
+        try:
+            response = backend.flask_app.test_client().get(
+                "/api/presentation_history?limit=200&scope=current_batch"
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["run_id"], "")
+            self.assertFalse(fake.kwargs["latest_run_only"])
+            self.assertTrue(fake.kwargs["legacy_run_only"])
+        finally:
+            backend.orchestrator = previous
 
     def test_history_api_validates_id_and_limit(self):
         class FakeOrchestrator:
@@ -334,10 +413,11 @@ class PresentationHistoryTests(unittest.TestCase):
             def get_current_source_item_ids(self):
                 return {"b" * 64}
 
-            def get_recent_presentation_history(self, limit=200, source_item_ids=None, run_id="", latest_run_only=False):
+            def get_recent_presentation_history(self, limit=200, source_item_ids=None, run_id="", latest_run_only=False, legacy_run_only=False):
                 self.received_scope = source_item_ids
                 self.received_run_id = run_id
                 self.received_latest_run_only = latest_run_only
+                self.received_legacy_run_only = legacy_run_only
                 return [{"presentation_id": "p-current", "source_item_id": "b" * 64}]
 
         previous = backend.orchestrator
@@ -355,6 +435,7 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertEqual(fake.received_scope, {"b" * 64})
             self.assertEqual(fake.received_run_id, "run-current")
             self.assertTrue(fake.received_latest_run_only)
+            self.assertFalse(fake.received_legacy_run_only)
         finally:
             backend.orchestrator = previous
 
