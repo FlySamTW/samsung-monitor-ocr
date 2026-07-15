@@ -63,7 +63,7 @@ class PresentationHistoryTests(unittest.TestCase):
                     "file_name": f"photo-{index}.jpg",
                     "source_path": f"D:/photos/photo-{index}.jpg",
                     "run_id": "run-live",
-                    "evidence_guard_revision": "20260715.10",
+                    "evidence_guard_revision": "20260715.11",
                     "narration": "判讀摘要" * 40,
                     "thumb_b64": "MUST_NOT_LEAK" * 10000,
                     "raw_model_output": "MUST_NOT_LEAK",
@@ -99,7 +99,7 @@ class PresentationHistoryTests(unittest.TestCase):
         self.assertNotIn("MUST_NOT_LEAK", encoded)
         self.assertEqual(items[-1]["presentation_id"], "p-000000039")
         self.assertEqual(items[-1]["run_id"], "run-live")
-        self.assertEqual(items[-1]["evidence_guard_revision"], "20260715.10")
+        self.assertEqual(items[-1]["evidence_guard_revision"], "20260715.11")
         self.assertTrue(items[-1]["result"]["auto_verified"])
         self.assertFalse(items[-1]["result"]["auto_review_required"])
 

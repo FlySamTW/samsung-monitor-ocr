@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.10"
+EVIDENCE_GUARD_REVISION = "20260715.11"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -512,7 +512,11 @@ def immediate_retry_decision(
             "FOLLOWME" in compact_thinking
             or bool(re.search(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", compact_thinking))
         )
-        negative_followme = bool(re.search(r"(?:不是|非|沒有|未見|看不到).{0,10}FOLLOW\s*ME", thinking, re.IGNORECASE))
+        negative_followme = bool(re.search(
+            r"(?:不是|非|沒有看到|未看到|沒有|未見|看不到|無).{0,10}FOLLOW\s*ME",
+            thinking,
+            re.IGNORECASE,
+        ))
         if positive_followme and not negative_followme:
             reasons.append("遠景仍含未排除的 FollowMe 線索")
         if quality and quality not in {"無", "正常", "None", "null"}:

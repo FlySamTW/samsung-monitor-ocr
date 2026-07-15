@@ -535,6 +535,18 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["unresolved"])
         self.assertIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
 
+    def test_distant_explicitly_negated_followme_word_is_not_a_positive_cue(self):
+        row = {
+            "file_name": "M-202605-distant-no-followme.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "",
+            "thinking": "整排螢幕完整入鏡，無法鎖定唯一主角及其自己的規格與價格；畫面中無 FollowMe 白色支架或圓形底座，也沒有看到 FollowMe 實機。",
+            **evidence(7, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+        self.assertNotIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
+
     def test_valid_single_is_auto_verified_without_forcing_extra_passes(self):
         row = {
             "file_name": "M-202605-test.jpg", "view_type": "單機", "category": "單機",
