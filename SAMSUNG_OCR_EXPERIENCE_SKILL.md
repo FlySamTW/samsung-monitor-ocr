@@ -453,6 +453,18 @@ Benchmark manifest 必須是 v2：它固定 labels、每張原圖、case ID/tag/
 
 The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Missing, contradictory, or cross-pass disagreement is `review_required`; prose keywords never rescue a result. Current-year upload readiness requires the v19.45 trace, while historical rows remain governed by their existing gates.
 
+## v19.45 Three-Layer Accuracy Gate
+
+`docs/three_layer_accuracy_gate.md` is the authoritative design and verification specification. The mechanism is conditional escalation, not three-pass voting:
+
+- Pass 1 establishes the baseline structured evidence. A complete ordinary single-unit photo may be accepted immediately.
+- Pass 2 receives pass 1 only as a falsifiable hypothesis and must actively seek counter-evidence with the lower label strip. Current-year FollowMe requires at least this pass; a poster or screen content alone is never physical proof.
+- Pass 3 receives no prior answer in model messages, uses the stronger lower-center crop, and produces an independent observation before the guard compares all passes. A newer answer cannot overwrite a prior unresolved core conflict.
+- Current-year distant view requires three consistent passes proving at least three complete displays, no unique main subject, no owned main-subject model/price, and no unresolved FollowMe physical evidence.
+- `verified`, `retry`, and `unresolved` are guard decisions, not model opinions. Intermediate guesses never enter formal success output; `review_required` never enters the ready upload manifest.
+
+Any change to `build_ocr_messages()`, `immediate_retry_decision()`, the retry queue, v19.45 trace, presentation history, or upload manifest must preserve the validation matrix in the authoritative document and run `tools/test_v1945_evidence_contract.py`, `tools/test_immediate_retry_queue.py`, and `tools/run_critical_regressions.py`.
+
 ## Presentation Synchronization Iron Rule
 
 `presentation_id` and `presentation_sequence` are the only UI identity truth. Photo, AI live interpretation, active placeholder, revealed card, and inspection modal must render from the same immutable snapshot. Running presentation state must not use filename/index/source-path joins or `current_file`, `stream_file`, or `recent_results` fallbacks. The right card appears only after the same snapshot's narration finishes. Active items are never dropped by watchdog or backpressure; a previous image remains visible until the next image is ready, so continuity never produces a black frame. Every dashboard presentation change requires the 500-item duplicate/out-of-order/overflow/remount soak and a fresh build.

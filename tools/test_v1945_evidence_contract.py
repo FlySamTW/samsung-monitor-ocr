@@ -57,6 +57,19 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn(batch.V1945_OUTPUT_CONTRACT, messages[-1]["content"])
         self.assertIn("complete_screen_count", messages[-2]["content"])
         self.assertIn("followme_physical_evidence", messages[-2]["content"])
+
+    def test_third_pass_messages_are_independent_of_prior_answers(self):
+        previous = [
+            {"view_type": "單機", "model": "WRONG-FIRST", "price": "9999"},
+            {"view_type": "遠景", "model": None, "price": None},
+        ]
+        messages = batch.build_ocr_messages("system", "third-pass-user", 3, previous)
+        self.assertEqual(messages, [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "third-pass-user"},
+        ])
+        self.assertNotIn("WRONG-FIRST", json.dumps(messages, ensure_ascii=False))
+
     def test_captured_nine_response_shapes(self):
         core = '{"view_type":"遠景","screen_status":null,"quality_issue":null,"model":null,"price":null}'
         evidence = '{"complete_screen_count":3,"unique_main":false,"label_ownership":"not_visible","followme_physical_evidence":[]}'
@@ -129,6 +142,38 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
         self.assertTrue(decision["unresolved"])
         self.assertIn("evidence_thinking_conflict", decision["reasons"])
+
+    def test_current_year_distant_requires_three_consistent_passes(self):
+        row = {
+            "file_name": "M-202605-distant.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "",
+            "thinking": "三台完整入鏡，沒有唯一主角，也無法對應主角自己的規格與價格。",
+            **evidence(3, False, "not_visible"),
+        }
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertTrue(first["retry"])
+        self.assertTrue(second["retry"])
+        self.assertFalse(third["retry"])
+        self.assertFalse(third["unresolved"])
+        self.assertTrue(third["verified"])
+
+    def test_third_pass_core_disagreement_is_unresolved(self):
+        distant = {
+            "view_type": "遠景", "category": "遠景", "model": None, "price": None,
+            "quality_issue": "",
+            "thinking": "三台完整入鏡，沒有唯一主角，也無法對應主角自己的規格與價格。",
+            **evidence(3, False, "not_visible"),
+        }
+        prior_single = {
+            "view_type": "單機", "category": "單機", "model": "S24F332EAC", "price": "2390",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(distant, 3, [prior_single, dict(distant)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("core_evidence_disagreement", decision["reasons"])
 
     def test_three_visible_one_complete_is_single_only_with_matched_label(self):
         row = {"view_type": "單機", "model": "S32ABC123", "price": "12900", **evidence(3, True, "matched")}

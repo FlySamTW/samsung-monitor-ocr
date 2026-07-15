@@ -2,6 +2,34 @@
 
 本文是 2026 照片複核的權威設計說明。核心目標是：明確的照片不浪費額外輪次；有疑慮的照片立即複核；三輪後仍不一致時寧可待人工處理，不可冒充成功。
 
+## 設計原理：有條件升級，不是三輪投票
+
+三層守門是同一張照片最多三次、但角色不同的判讀鏈：
+
+1. **第一層是基準辨識與證據契約**：從原圖建立單機／遠景、唯一主角、價牌歸屬、型號、價格與 FollowMe 實體線索。證據完整且沒有疑點的一般單機可以立即定案。
+2. **第二層是帶反證任務的交叉複核**：只在第一層有疑點，或照片屬於規定必須複核的高風險類別時啟動。它會收到第一輪結果與疑點，但第一輪只是「待推翻的假設」；同時強制補看下方價牌帶，專門查漏讀、錯綁價牌、FollowMe／遠景誤判。
+3. **第三層是去偏誤的獨立裁決**：第二層仍有疑點時才啟動。模型訊息不帶入前兩輪答案，並強制加入更集中的下方價牌裁切，先獨立產生第三份證據；守門器再把三輪結構化證據交叉比對。任何核心衝突仍存在就失敗封閉為 `review_required`。
+
+因此它不是以下三種機制：
+
+- 不是每張照片都固定耗費三輪；完整的一般單機第一輪即可通過。
+- 不是「三輪取多數」；兩輪同意也不能掩蓋缺失證據、價牌歸屬不明或核心衝突。
+- 不是「最新答案覆蓋舊答案」；第三輪較新不代表較正確，未解衝突必須保留。
+
+這個分工同時控制兩種風險：第二輪利用舊答案精準找錯，第三輪則切斷舊答案造成的自我合理化。最後的接受權永遠在結構化守門器，不在自然語言敘述或任何單一輪模型輸出。
+
+## 各類照片的最低通過門檻
+
+| 類型 | 最早可通過輪次 | 必要條件 | 未達條件 |
+|---|---:|---|---|
+| 一般單機 | 第 1 輪 | 唯一主角、自己的型號／價格與價牌歸屬一致，品質與結構證據無疑點 | 下一格立即第 2 輪 |
+| 2026 單機缺型號或缺價格 | 第 2 輪 | 新一輪補齊欄位，且沒有與先前核心證據衝突 | 仍缺或衝突就第 3 輪 |
+| 2026 FollowMe | 第 2 輪 | 至少兩輪，且 FollowMe 字樣／型號必須綁定同一實機的直接品牌證據，或至少兩項獨立強實體線索 | 宣傳畫面或附近立牌不能單獨通過；仍有疑點就第 3 輪 |
+| 2026 遠景 | 第 3 輪 | 三輪都支持至少三台完整入鏡、無唯一主角、無可歸屬的主角型號／價格，並排除 FollowMe 實體線索 | 任一輪核心證據不同就 `review_required` |
+| 呼叫、解析或證據契約失敗 | 不得直接通過 | 必須在輪次上限內取得完整有效結果 | 第 3 輪仍失敗就留下失敗／人工複核，不得上傳 |
+
+「遠景」的判準不是背景中出現多台螢幕，而是無法鎖定唯一主角及其自己的價牌。相反地，FollowMe 的螢幕內容、海報或附近立牌都只是弱線索；必須看到線索與同一台實機的物理歸屬，才能避免把賣場宣傳物借給錯的主角。
+
 ## 計數單位
 
 - `複核 490/1,504` 是已走完守門流程的「照片數」。
@@ -61,6 +89,16 @@
 4. `/api/presentation_history/<source_item_id>`：單張照片所有輪次的可點查歷程。
 5. `_drive_upload/drive_upload_review_required.csv`：所有 `unresolved`、高風險遠景、FollowMe 疑慮、缺型號或缺價格者必須留在這裡，不可進 ready manifest。
 
+## 程式中的責任邊界
+
+- `samsung_ocr_batch_processor.py::build_ocr_messages()`：第二輪注入第一輪待推翻假設；第三輪不注入任何舊答案。
+- `skills/batch_orchestrator.py::BatchOrchestrator`：疑慮照片放入 `retry_queue` 的第一格，使呼叫順序成為 `A1 → A2 →（必要時 A3）→ B1`；中間猜測不得寫入正式成功檔或完成卡片。
+- `skills/audit_fields.py::validate_evidence_contract()`：只認結構化螢幕數、唯一主角、價牌歸屬與 FollowMe 同主體實體線索。
+- `skills/audit_fields.py::immediate_retry_decision()`：決定 `verified`、`retry` 或 `unresolved`，並執行一般單機、FollowMe、遠景各自的最低輪次。
+- `tools/prepare_drive_upload_manifest.py`：上傳端再次失敗封閉；即時介面顯示完成不等於具備上傳資格。
+
+模型負責提出觀察，守門器負責接受或拒絕，manifest 再負責最後的上傳隔離。三者不可合併成「模型說成功就上傳」。
+
 ## 必跑驗證
 
 ```powershell
@@ -83,6 +121,22 @@ npm run build
 - Dashboard 必須顯示同一 `presentation_id` 的照片、AI 判讀、處理中卡片，右側完成卡片只能在該輪結束後顯示。
 - 右側縮圖與單張判讀歷程必須依實際完成時間排序，不能只依輪號排序；服務恢復造成輪號重設時，新結果仍須顯示在最上方。
 - 累計判讀數必須從持久化歷程恢復；若歷程中出現服務重啟後從 1 開始的新區段，必須把各區段判讀數累加，不能倒退或漏算。
+
+### 驗證矩陣
+
+| 要證明的原理 | 自動驗證 |
+|---|---|
+| 第三輪不繼承第一、二輪答案 | `test_third_pass_messages_are_independent_of_prior_answers` |
+| 一般單機證據完整可第一輪通過 | `test_valid_single_is_auto_verified_without_forcing_extra_passes` |
+| FollowMe 第一輪不能定案、第二輪一致才通過 | `test_current_year_followme_requires_second_consistent_pass` |
+| FollowMe 弱宣傳線索不能建立型號 | `test_followme_cue_codes_are_atomic_and_weak_cues_cannot_establish_model` |
+| 2026 遠景必須三輪一致 | `test_current_year_distant_requires_three_consistent_passes` |
+| 任一核心證據跨輪衝突，第三輪仍須封閉 | `test_third_pass_core_disagreement_is_unresolved` |
+| 疑慮照片立即插到下一格，不被 B 照片超車 | `tools/test_immediate_retry_queue.py`，呼叫順序必須為 `A1, A2, B1` |
+| 缺少結構化證據不得冒充完成 | `test_confirmed_cases_fail_closed_without_structured_evidence` |
+| 未通過者不能進上傳名單 | `test_trace_persistence_shape_and_upload_exclusion` 與 manifest 守門測試 |
+
+測試通過只證明程式規則沒有被改壞；正式執行還必須抽查 `_ocr_audit/v1945_evidence_trace.jsonl` 的真實三輪紀錄，並確認 Dashboard 同一 `presentation_id` 的照片、逐字判讀與右側卡片一致。單看程序仍在跑、成功數增加或介面看起來正常，都不能代替這項資料驗證。
 
 ## 不可放寬的鐵律
 
