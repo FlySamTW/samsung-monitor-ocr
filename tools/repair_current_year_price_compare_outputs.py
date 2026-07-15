@@ -45,6 +45,10 @@ SUCCESS_HEADERS = [
     "price_diff_percent",
     "duration",
     "run_id",
+    "evidence_contract_version",
+    "evidence_guard_revision",
+    "evidence_contract_valid",
+    "evidence_contract_errors",
     "review_status",
     "human_category",
     "human_model",
@@ -57,6 +61,11 @@ SUCCESS_HEADERS = [
     "model_validation_failed",
     "rejected_model",
     "price_conflict_detected",
+    "complete_screen_count",
+    "unique_main",
+    "label_ownership",
+    "followme_physical_evidence",
+    "normalized_evidence",
     "thinking",
 ]
 

@@ -1,7 +1,7 @@
 """Build a resumable current-year v19.45 evidence backfill candidate CSV.
 
 The durable copied.csv files are the authority for original source identity.
-Only sources without a verified v19.45 trace are emitted.  The build is
+Only sources without a trace verified by the current guard revision are emitted.  The build is
 fail-closed: missing source files or conflicting source metadata prevent the
 candidate CSV from being replaced.
 """
@@ -12,7 +12,14 @@ import csv
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from skills.audit_fields import EVIDENCE_GUARD_REVISION
 
 
 FIELDS = ("source_path", "file_name", "period", "audit_folder", "reason", "source_item_id")
@@ -38,7 +45,11 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                         continue
                     item = json.loads(line)
                     decision = item.get("guard_decision") or {}
-                    if item.get("trace_version") != "v19.45" or decision.get("verified") is not True:
+                    if (
+                        item.get("trace_version") != "v19.45"
+                        or item.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION
+                        or decision.get("verified") is not True
+                    ):
                         continue
                     source_id = str(item.get("source_item_id") or item.get("source_identity") or "").strip()
                     original = str(item.get("original_source_path") or item.get("source_path") or "").strip()

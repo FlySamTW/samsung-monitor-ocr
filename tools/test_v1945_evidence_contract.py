@@ -6,7 +6,12 @@ from pathlib import Path
 
 import samsung_ocr_batch_processor as batch
 
-from skills.audit_fields import evidence_contract_decision, immediate_retry_decision, validate_evidence_contract
+from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
+    evidence_contract_decision,
+    immediate_retry_decision,
+    validate_evidence_contract,
+)
 from tools.prepare_drive_upload_manifest import (
     classify_file,
     load_complete_auto_verified_names,
@@ -322,11 +327,12 @@ class EvidenceContractTests(unittest.TestCase):
                 writer.writeheader()
                 writer.writerow({"original_name": "source-test.jpg", "target_name": target_name})
             trace.write_text(json.dumps({
-                "trace_version": "v19.45", "file_name": "source-test.jpg", "period": "202601",
+                "trace_version": "v19.45", "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                "file_name": "source-test.jpg", "period": "202601",
                 "guard_decision": {"verified": True},
             }) + "\n", encoding="utf-8")
             self.assertEqual(load_v1945_trace_names(root), {target_name})
-            row = {"auto_verified": "true", "auto_review_required": "false", "ocr_attempt": "1", "evidence_contract_version": "v19.45", "evidence_contract_valid": "true", "file_name": "source-test.jpg", "period": "202601", "view_type": "單機", "model": "S24F332EAC", "thinking": "ok", "run_id": "r"}
+            row = {"auto_verified": "true", "auto_review_required": "false", "ocr_attempt": "1", "evidence_contract_version": "v19.45", "evidence_guard_revision": EVIDENCE_GUARD_REVISION, "evidence_contract_valid": "true", "file_name": "source-test.jpg", "period": "202601", "view_type": "單機", "model": "S24F332EAC", "thinking": "ok", "run_id": "r"}
             self.assertTrue(is_complete_auto_verified(row))
             with (audit / "success_records.csv").open("w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=list(row))
@@ -341,12 +347,42 @@ class EvidenceContractTests(unittest.TestCase):
     def test_trace_append_is_idempotent_and_excludes_image_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = {"source_path": "D:/source/202601/a.jpg", "file_name": "a.jpg", "run_id": "r", "ocr_attempt": 1, "raw_model_output": "{}", "thumb_b64": "SECRET"}
-            decision = {"retry": True, "unresolved": False, "verified": False}
+            decision = {"retry": True, "unresolved": False, "verified": False, "evidence_guard_revision": EVIDENCE_GUARD_REVISION}
             _append_v1945_trace(tmp, result, decision, ["missing evidence"])
             _append_v1945_trace(tmp, result, decision, ["missing evidence"])
             lines = (Path(tmp) / "v1945_evidence_trace.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
             self.assertNotIn("SECRET", lines[0])
+            self.assertEqual(json.loads(lines[0])["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+
+    def test_upload_loaders_reject_old_v1945_evidence_without_guard_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audit = root / "_ocr_audit" / "sample"
+            audit.mkdir(parents=True)
+            target_name = "M-202601-test-單機-S24F332EAC-✓＄2390-old.jpg"
+            with (audit / "copied.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["period", "original_name", "target_name"])
+                writer.writeheader()
+                writer.writerow({"period": "202601", "original_name": "old.jpg", "target_name": target_name})
+            (audit / "v1945_evidence_trace.jsonl").write_text(json.dumps({
+                "trace_version": "v19.45",
+                "file_name": "old.jpg",
+                "period": "202601",
+                "guard_decision": {"verified": True},
+            }) + "\n", encoding="utf-8")
+            row = {
+                "auto_verified": "true", "auto_review_required": "false", "ocr_attempt": "1",
+                "evidence_contract_version": "v19.45", "evidence_contract_valid": "true",
+                "file_name": "old.jpg", "period": "202601", "view_type": "單機",
+                "model": "S24F332EAC", "thinking": "ok", "run_id": "old",
+            }
+            with (audit / "success_records.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerow(row)
+            self.assertEqual(load_v1945_trace_names(root), set())
+            self.assertEqual(load_complete_auto_verified_names(root), set())
 
     def test_persisted_records_keep_verification_state_for_dashboard_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -360,6 +396,7 @@ class EvidenceContractTests(unittest.TestCase):
                         "auto_review_required": True,
                         "review_status": "review_required",
                         "evidence_contract_version": "v19.45",
+                        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
                         "evidence_contract_valid": False,
                     },
                 },
@@ -373,6 +410,7 @@ class EvidenceContractTests(unittest.TestCase):
             self.assertTrue(row["auto_review_required"])
             self.assertEqual(row["review_status"], "review_required")
             self.assertEqual(row["evidence_contract_version"], "v19.45")
+            self.assertEqual(row["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
 
 if __name__ == "__main__":

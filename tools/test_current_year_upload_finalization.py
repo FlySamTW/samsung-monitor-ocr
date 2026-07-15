@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.audit_distant_followme_risk import (
     file_sha256,
     finalization_input_sha256,
@@ -51,6 +52,7 @@ class CurrentYearUploadFinalizationTests(unittest.TestCase):
             "auto_verified": "true",
             "auto_review_required": "false",
             "evidence_contract_version": "v19.45",
+            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
             "evidence_contract_valid": "true",
             "view_type": "單機",
             "model": "S24F332EAC",
@@ -62,6 +64,7 @@ class CurrentYearUploadFinalizationTests(unittest.TestCase):
         write_csv(audit / "rename_plan.csv", [{"original_name": source.name}], ["original_name"])
         (audit / "v1945_evidence_trace.jsonl").write_text(json.dumps({
             "trace_version": "v19.45",
+            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
             "file_name": source.name,
             "period": "202601",
             "source_path": str(source.resolve()),

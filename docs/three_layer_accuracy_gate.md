@@ -95,6 +95,15 @@ FollowMe 守門同時辨識友善名稱與正式 SKU。`S32FM50x`、`S32FM70x`�
 4. `/api/presentation_history/<source_item_id>`：單張照片所有輪次的可點查歷程。
 5. `_drive_upload/drive_upload_review_required.csv`：所有 `unresolved`、高風險遠景、FollowMe 疑慮、缺型號或缺價格者必須留在這裡，不可進 ready manifest。
 
+### 守門規則修訂碼
+
+`v19.45` 只代表證據欄位契約，不能單獨證明當時已執行目前完整的三層守門。每筆新結果與 trace 必須同時帶有 `evidence_guard_revision=20260715.2`。
+
+- 缺少這個修訂碼的舊 `v19.45 verified` 紀錄，仍視為未通過新規則，必須重新複核。
+- backfill 候選器只會跳過「契約版本、守門修訂碼、`verified=true`」三者同時正確的原圖。
+- 成功 CSV、Label Studio 中繼資料、每輪 trace、重跑完成判定與 Drive manifest 都必須傳遞並重新核對該修訂碼。
+- 舊 trace 遷移工具不得自動補上新修訂碼；沒有新規則實際判讀，就不能偽造新驗證身分。
+
 ## 程式中的責任邊界
 
 - `samsung_ocr_batch_processor.py::build_ocr_messages()`：第二輪注入第一輪待推翻假設；第三輪不注入任何舊答案。
@@ -150,6 +159,8 @@ npm run build
 | 疑慮照片立即插到下一格，不被 B 照片超車 | `tools/test_immediate_retry_queue.py`，呼叫順序必須為 `A1, A2, B1` |
 | 缺少結構化證據不得冒充完成 | `test_confirmed_cases_fail_closed_without_structured_evidence` |
 | 未通過者不能進上傳名單 | `test_trace_persistence_shape_and_upload_exclusion` 與 manifest 守門測試 |
+| 舊 `v19.45 verified` 缺守門修訂碼時必須重跑 | `test_old_v1945_verified_trace_without_guard_revision_is_reprocessed` |
+| 舊成功列缺守門修訂碼時不得完成或上傳 | `test_old_v1945_success_without_guard_revision_is_not_complete` 與 manifest 守門測試 |
 
 測試通過只證明程式規則沒有被改壞；正式執行還必須抽查 `_ocr_audit/v1945_evidence_trace.jsonl` 的真實三輪紀錄，並確認 Dashboard 同一 `presentation_id` 的照片、逐字判讀與右側卡片一致。單看程序仍在跑、成功數增加或介面看起來正常，都不能代替這項資料驗證。
 

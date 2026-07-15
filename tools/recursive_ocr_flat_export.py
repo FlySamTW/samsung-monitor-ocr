@@ -335,6 +335,7 @@ def write_results_snapshot(path: Path, records: List[dict]) -> None:
         "run_id",
         "model_id",
         "evidence_contract_version",
+        "evidence_guard_revision",
         "evidence_contract_valid",
         "evidence_contract_errors",
         "complete_screen_count",

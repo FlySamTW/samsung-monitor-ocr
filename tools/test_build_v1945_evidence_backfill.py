@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.build_v1945_evidence_backfill import run, stable_source_id
 
 
@@ -32,6 +33,7 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             trace = audit / "v1945_evidence_trace.jsonl"
             trace.write_text(json.dumps({
                 "trace_version": "v19.45",
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
                 "source_item_id": stable_source_id(first),
                 "guard_decision": {"verified": True},
             }) + "\n", encoding="utf-8")
@@ -43,6 +45,24 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual(summary["already_verified_year_sources"], 1)
             self.assertEqual([row["file_name"] for row in rows], ["two.jpg"])
             self.assertEqual(rows[0]["reason"], "v1945_evidence_backfill")
+
+    def test_old_v1945_verified_trace_without_guard_revision_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "old-rule.jpg"
+            source.write_bytes(b"old")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(json.dumps({
+                "trace_version": "v19.45",
+                "source_item_id": stable_source_id(source),
+                "guard_decision": {"verified": True},
+            }) + "\n", encoding="utf-8")
+            output = audit / "backfill.csv"
+            summary = run(audit, "2026", output, execute=True)
+            with output.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
 
     def test_missing_source_fails_closed_without_replacing_output(self):
         with tempfile.TemporaryDirectory() as tmp:

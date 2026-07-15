@@ -453,6 +453,8 @@ Benchmark manifest 必須是 v2：它固定 labels、每張原圖、case ID/tag/
 
 The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Missing, contradictory, or cross-pass disagreement is `review_required`; prose keywords never rescue a result. Current-year upload readiness requires the v19.45 trace, while historical rows remain governed by their existing gates.
 
+The contract version and guard implementation identity are separate authorities. Every result and trace produced by the complete three-layer rules must carry `evidence_guard_revision=20260715.2`. A legacy `v19.45 verified` trace without that revision is unverified under the current rules and must be emitted by the backfill builder; success CSV, rerun completion, Label Studio metadata, and Drive manifests must all preserve and check the revision. Migration must never invent the revision for evidence that was not actually evaluated by it.
+
 Anti-bypass invariants are part of that contract:
 
 - `view_type` and `category` may not assert different scene types. A structured single-unit result whose narration explicitly concludes `遠景`, or `label_ownership=matched` whose narration assigns the label to a neighboring product, must retry/fail closed.

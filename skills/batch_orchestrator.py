@@ -43,6 +43,11 @@ def _append_v1945_trace(output_dir, result, review_decision, retry_reasons):
     entry = {
         "trace_id": key,
         "trace_version": "v19.45",
+        "evidence_guard_revision": str(
+            review_decision.get("evidence_guard_revision")
+            or result.get("evidence_guard_revision")
+            or ""
+        ),
         "timestamp": datetime.now().isoformat(),
         "source_identity": source_item_id,
         "source_item_id": source_item_id,
@@ -505,7 +510,8 @@ class BatchOrchestrator:
             "price_status", "price_symbol", "official_price", "price_diff_percent",
             "complete_screen_count", "unique_main", "label_ownership",
             "followme_physical_evidence", "normalized_evidence",
-            "evidence_contract_version", "evidence_contract_valid", "evidence_contract_errors",
+            "evidence_contract_version", "evidence_guard_revision",
+            "evidence_contract_valid", "evidence_contract_errors",
             "auto_verified", "auto_review_required", "review_status",
         )
         structured = {key: result.get(key) for key in structured_keys if key in result}
@@ -535,6 +541,7 @@ class BatchOrchestrator:
                 "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
                 "accuracy_profile": str(self.config.get("accuracy_profile") or "strict"),
                 "evidence_contract_version": str(result.get("evidence_contract_version") or ""),
+                "evidence_guard_revision": str(result.get("evidence_guard_revision") or ""),
                 "started_at": started_at,
                 "completed_at": completed_at,
                 "previous_result_summary": self._previous_result_summary(previous_results),
@@ -826,6 +833,7 @@ class BatchOrchestrator:
                             "auto_review_required": meta.get("auto_review_required", False),
                             "review_status": meta.get("review_status") or "",
                             "evidence_contract_version": meta.get("evidence_contract_version") or "",
+                            "evidence_guard_revision": meta.get("evidence_guard_revision") or "",
                             "evidence_contract_valid": meta.get("evidence_contract_valid", False),
                             "timestamp": item.get('annotations', [{}])[0].get('created_at', ''),
                             "thumb_b64": None
@@ -1629,6 +1637,9 @@ class BatchOrchestrator:
                         previous_results,
                         self.max_auto_attempts,
                     ) or review_decision
+                norm_result['evidence_guard_revision'] = str(
+                    review_decision.get('evidence_guard_revision') or ''
+                )
                 retry_reasons = [str(x) for x in review_decision.get("reasons", []) if str(x).strip()]
                 _append_v1945_trace(
                     self.config.get("evidence_trace_path") or self.output_dir,

@@ -14,9 +14,16 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from skills.audit_fields import EVIDENCE_GUARD_REVISION, is_followme_model
 
 try:
     from tools.audit_distant_followme_risk import (
@@ -301,8 +308,8 @@ def load_complete_auto_verified_names(output_root: Path) -> set[str]:
                 if str(row.get("auto_review_required") or "").strip().lower() in truthy:
                     continue
                 view = " ".join(str(row.get(key) or "") for key in ("view_type", "category"))
-                model = str(row.get("model") or "").upper().replace(" ", "")
-                required_attempts = 3 if "遠景" in view or "DISTANT" in view.upper() else (2 if "FOLLOWME" in model else 1)
+                model = str(row.get("model") or "")
+                required_attempts = 3 if "遠景" in view or "DISTANT" in view.upper() else (2 if is_followme_model(model) else 1)
                 try:
                     if int(str(row.get("ocr_attempt") or "0")) < required_attempts:
                         continue
@@ -320,6 +327,8 @@ def load_complete_auto_verified_names(output_root: Path) -> set[str]:
                 period = infer_period(original) or infer_period_from_text(
                     row.get("period"), row.get("original_source_path"), row.get("source_path"), path.parent.name
                 )
+                if period.startswith("2026") and str(row.get("evidence_guard_revision") or "").strip() != EVIDENCE_GUARD_REVISION:
+                    continue
                 if evidence and trace and strict_distant and original:
                     targets = copied_index.get((period, original), set())
                     if targets:
@@ -338,7 +347,11 @@ def load_v1945_trace_names(output_root: Path) -> set[str]:
                 for line in handle:
                     item = json.loads(line)
                     decision = item.get("guard_decision") or {}
-                    if item.get("trace_version") != "v19.45" or decision.get("verified") is not True:
+                    if (
+                        item.get("trace_version") != "v19.45"
+                        or item.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION
+                        or decision.get("verified") is not True
+                    ):
                         continue
                     original = str(item.get("file_name") or "").strip()
                     period = str(item.get("period") or "") or infer_period_from_text(

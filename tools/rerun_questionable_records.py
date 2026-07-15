@@ -25,6 +25,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from skills.audit_fields import EVIDENCE_GUARD_REVISION, is_followme_model  # noqa: E402
 
 from photo_rename_planner import (  # noqa: E402
     CONFLICT_STATUS,
@@ -84,6 +88,7 @@ SUCCESS_HEADERS = [
     "run_id",
     "model_id",
     "evidence_contract_version",
+    "evidence_guard_revision",
     "evidence_contract_valid",
     "evidence_contract_errors",
     "complete_screen_count",
@@ -166,7 +171,7 @@ def is_complete_auto_verified(row: dict[str, str]) -> bool:
         return False
     if norm(row.get("auto_verified")).lower() not in TRUTHY:
         return False
-    required_attempts = 3 if is_distant(row) else (2 if "FOLLOWME" in norm(row.get("model")).upper().replace(" ", "") else 1)
+    required_attempts = 3 if is_distant(row) else (2 if is_followme_model(row.get("model")) else 1)
     try:
         if int(norm(row.get("ocr_attempt")) or "0") < required_attempts:
             return False
@@ -174,6 +179,8 @@ def is_complete_auto_verified(row: dict[str, str]) -> bool:
         return False
     period = norm(row.get("period") or row.get("file_name") or row.get("source_path"))
     if "2026" in period and norm(row.get("evidence_contract_version")) != "v19.45":
+        return False
+    if "2026" in period and norm(row.get("evidence_guard_revision")) != EVIDENCE_GUARD_REVISION:
         return False
     if "2026" in period and norm(row.get("evidence_contract_valid")).lower() not in TRUTHY:
         return False

@@ -6,6 +6,10 @@ from skills.model_validation import is_placeholder_model
 
 
 EVIDENCE_CONTRACT_VERSION = "v19.45"
+# Immutable identity for the complete three-layer guard implementation.
+# The contract version describes the evidence schema; this revision proves
+# which guard logic actually evaluated that evidence.
+EVIDENCE_GUARD_REVISION = "20260715.2"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -404,5 +408,6 @@ def immediate_retry_decision(
         "year": year,
         "recommended_model": "qwen3.5-9b-vlm" if unresolved else "",
         "evidence_contract_version": EVIDENCE_CONTRACT_VERSION,
+        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
         "normalized_evidence": contract["normalized_evidence"],
     }

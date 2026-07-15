@@ -195,6 +195,8 @@
 - 2026-07-15 16:40 真實資料抽查確認：當時 639 筆完成判讀中，325 筆為 `auto_verified=true`、314 筆為 `auto_review_required=true`；舊 API/UI 把兩者合稱「成功」會誤導。磁碟版已新增 `verified/review_required/verification_unknown`，UI 不改 50/50 版面，只改稱「完成判讀」並在既有統計格顯示「待複核」。Label-Studio JSON reload 現會保留驗證旗標。
 - 同次抽查找到一個已漏網案例：`M-台南市-南　區-TK3C-灣裡-1566.jpg` 的 Samsung `S27D392GAC/4290` 因敘述含「螢幕顯示 ASUS Demo 畫面」被覆蓋為 `它牌(ASUS)` 並自動通過。磁碟版已禁止用畫面內容覆蓋硬體 SKU；若真正的主體品牌敘述與 Samsung SKU 衝突則 fail closed。
 - 三層守門另補齊四條可重現漏洞：單機結構／明示遠景敘述衝突、`view_type/category` 衝突、`label_ownership=matched`／鄰機價牌敘述衝突、FollowMe 正式 SKU 繞過實體證據。遠景若仍帶同主體 FollowMe 強實體線索或 `S32FM50x/S32FM70x/S43FM70x` 文字也不得通過。官方參考價差達 20% 以上需獨立重讀一次，但兩輪同型號、同照片價格且價牌歸屬一致時保留實際店價，不用官網價覆蓋照片。
+- 新三層守門的實際規則身分為 `evidence_guard_revision=20260715.2`。單有 `v19.45 verified` 但缺少這個修訂碼的舊 live trace 不具新版驗證效力；安全邊界的 backfill builder 會將這些原圖全部重新列入候選，Drive manifest 也會失敗封閉。舊 trace 遷移不得偽造新修訂碼。
+- 2026-07-15 新修訂碼 dry-run 已用正式 `_ocr_audit` 驗證：5,951/5,951 個唯一原圖身分全數列入新守門 backfill，舊規則已驗證數 0，缺檔 0、衝突 0、無效列 0。這是舊 live `v19.45` 結果沒有被誤算為新規則完成的實際證明。
 - 上述磁碟變更尚未載入目前 active OCR；不曾重啟後端、建置 live `dashboard/dist` 或刷新使用者頁面。`tools/windows_user_launcher.ps1` 現會在既有安全邊界重啟時偵測 `dashboard/src` 比 `dist` 新並自動建置，因此新版後端計數與前端標示會一起套用，不會在 OCR 執行中途出現新舊契約不一致。完整 critical regression、PowerShell parser、Python compile 與不碰 live dist 的暫存 Vite build 均已通過。
 
 ## 9. 已知未解決與重大風險
