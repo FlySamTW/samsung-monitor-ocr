@@ -64,6 +64,34 @@ const buildLivePendingNarration = ({ fileName, passIndex, reviewMode }) => {
   return `正在針對 ${safeFileName} 進行${passLabel}。本輪會${task}；AI 正在整理這張照片的可見證據，判讀文字將接續顯示。`;
 };
 
+const isStructuredModelOutput = (text) => {
+  const value = String(text || "").trim().replace(/^```(?:json)?\s*/i, "");
+  return value.startsWith("{") || /"(?:view_type|screen_status|quality_issue|model|price)"\s*:/.test(value);
+};
+
+const humanizeStructuredModelOutput = (text, fallback) => {
+  const value = String(text || "").trim();
+  if (!isStructuredModelOutput(value)) return value;
+  const field = (name) => {
+    const match = value.match(new RegExp(`"${name}"\\s*:\\s*"([^"\\r\\n]*)"`, "i"));
+    return match ? match[1].trim() : "";
+  };
+  const viewType = field("view_type") || field("category");
+  const model = field("model");
+  const price = field("price");
+  const screenStatus = field("screen_status");
+  const qualityIssue = field("quality_issue");
+  const facts = [];
+  if (viewType) facts.push(`目前辨識為${viewType}`);
+  if (model && !/^(?:無|無型號|型號未辨識)$/i.test(model)) facts.push(`正在核對型號 ${model}`);
+  if (price && !/^(?:無|無價格)$/i.test(price)) facts.push(`正在核對價格 ${formatDisplayPrice(price)}`);
+  if (screenStatus) facts.push(`畫面狀態為${screenStatus}`);
+  if (qualityIssue && qualityIssue !== "無") facts.push(`仍需檢查${qualityIssue}`);
+  return facts.length
+    ? `AI 正在逐項核對本張照片；${facts.join("，")}。完整判讀尚未完成。`
+    : fallback;
+};
+
 const getLivePhotoIdentityKey = (key) => String(key || "").replace(/\|pass:\d+$/, "");
 
 const getLoadedAssetFingerprint = async () => {
@@ -524,7 +552,9 @@ const App = () => {
 
   const getQueueDisplayText = (item) => {
     if (!item) return "";
-    if (item.stream_buffer && item.stream_buffer.trim()) return trimDisplayNarration(item.stream_buffer);
+    if (item.stream_buffer && item.stream_buffer.trim() && !isStructuredModelOutput(item.stream_buffer)) {
+      return trimDisplayNarration(item.stream_buffer);
+    }
     const result = item.result || item;
     return trimDisplayNarration(`這張已完成辨識：${result.view_type || '單機'}，${result.model || '無型號'}，${result.price || '無價格'}。`);
   };
@@ -559,25 +589,27 @@ const App = () => {
         && !value.startsWith("這張已完成辨識：")
         && !value.includes("AI 本輪未回傳完整判讀文字")
       ));
-    const sameFileStream = liveFile === currentFile
+    const rawSameFileStream = liveFile === currentFile
       && !text.includes("AI 本輪未回傳完整判讀文字")
       ? text
       : "";
     const liveDir = String(data.current_relative_dir || data.image_dir || "").trim();
     const livePassIndex = Math.max(1, Number(data.review_progress?.current_pass || 1));
+    const pendingNarration = buildLivePendingNarration({
+      fileName: currentFile,
+      passIndex: livePassIndex,
+      reviewMode: String(data.review_progress?.mode || "")
+    });
+    const sameFileStream = humanizeStructuredModelOutput(rawSameFileStream, pendingNarration);
     const liveText = sameFileStream
       || detailedThinking
-      || buildLivePendingNarration({
-        fileName: currentFile,
-        passIndex: livePassIndex,
-        reviewMode: String(data.review_progress?.mode || "")
-      });
+      || pendingNarration;
     return {
       fileName: currentFile,
       text: trimDisplayNarration(liveText),
       key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`,
       passIndex: livePassIndex,
-      hasModelText: Boolean(sameFileStream || detailedThinking)
+      hasModelText: Boolean(rawSameFileStream || detailedThinking)
     };
   };
 
@@ -1347,7 +1379,7 @@ const App = () => {
                <span style={{ fontSize: '0.75rem', color: '#ffffff', fontWeight: 'bold', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
                  {UI_VERSION}
                </span>
-                <div style={{ width: '330px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ width: '360px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
                     <span style={{ fontWeight: '800', color: '#ffffff' }}>初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
                     <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
@@ -1355,12 +1387,14 @@ const App = () => {
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', fontSize: '0.58rem', color: '#888' }}>
                     <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
-                    <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>資料匣 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
+                    <span aria-hidden="true">·</span>
                     <span data-testid="review-pass-progress">
                       {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
-                      {isReviewRun && completedPassCount ? ` · 輪次 ${formatCount(completedPassCount)}` : ''}
+                      {isReviewRun && completedPassCount ? ` · 輪 ${formatCount(completedPassCount)}` : ''}
                       {isReviewRun && reviewProgress.current_pass ? ` · 本張 ${reviewProgress.current_pass}/3` : ''}
                     </span>
                   </div>
