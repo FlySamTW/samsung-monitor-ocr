@@ -14,6 +14,18 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn('"healthy_noop"', self.source)
         self.assertIn("finally", self.source)
 
+    def test_dead_planned_upgrade_owner_resumes_backfill_fail_closed(self):
+        self.assertIn("planned_backend_upgrade_recovery_active", self.source)
+        self.assertIn("planned_backend_upgrade_recovery_contract_failed", self.source)
+        self.assertIn("planned_backend_upgrade_recovery_started", self.source)
+        self.assertIn("planned_backend_upgrade_recovery_completed", self.source)
+        self.assertIn("$backfillStarted = Start-EvidenceBackfillIfNeeded", self.source)
+        self.assertIn("Get-Process -Id ([int]$planned.pid) -ErrorAction SilentlyContinue", self.source)
+        self.assertIn("evidence backfill zero-candidate proof is incomplete", self.source)
+        recovery = self.source.index("$backfillStarted = Start-EvidenceBackfillIfNeeded")
+        release = self.source.index("Remove-Item -LiteralPath $BenchmarkLockPath -Force", recovery)
+        self.assertGreater(release, recovery)
+
     def test_exact_repo_owned_processes_and_fail_closed_hung(self):
         self.assertIn("[regex]::Escape($RepoRoot)", self.source)
         self.assertIn('"backend_process_exists_but_api_unhealthy"', self.source)

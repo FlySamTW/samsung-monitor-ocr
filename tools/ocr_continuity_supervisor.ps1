@@ -168,6 +168,15 @@ function Start-EvidenceBackfillIfNeeded {
     }
     if ($proof.executed -ne $true) { throw "evidence backfill builder did not atomically write candidates" }
     if ([int]$proof.candidate_rows -eq 0) {
+        if (
+            [int]$proof.missing_sources -ne 0 -or
+            [int]$proof.conflicting_sources -ne 0 -or
+            [int]$proof.invalid_rows -ne 0 -or
+            [int]$proof.unique_year_sources -le 0 -or
+            [int]$proof.already_verified_year_sources -ne [int]$proof.unique_year_sources
+        ) {
+            throw "evidence backfill zero-candidate proof is incomplete"
+        }
         Log-Event "evidence_backfill_complete" @{sources=[int]$proof.unique_year_sources;verified=[int]$proof.already_verified_year_sources}
         return $false
     }
@@ -202,15 +211,46 @@ try {
         try {
             $planned = Get-Content -LiteralPath $BenchmarkLockPath -Raw | ConvertFrom-Json
             if ($planned.purpose -eq "backend_upgrade_v1945") {
-                Log-Event "planned_backend_upgrade_interlock" @{ lock=$BenchmarkLockPath; owner=$planned.pid }
-                exit 0
+                $plannedOwner = Get-Process -Id ([int]$planned.pid) -ErrorAction SilentlyContinue
+                if ($plannedOwner) {
+                    Log-Event "planned_backend_upgrade_interlock" @{ lock=$BenchmarkLockPath; owner=$planned.pid }
+                    exit 0
+                }
+                $activeBackfill = @(Owned "rerun_staged_candidates\.py")
+                if ($activeBackfill.Count -gt 0 -or ($status -and [bool]$status.is_running)) {
+                    Log-Event "planned_backend_upgrade_recovery_active" @{
+                        lock=$BenchmarkLockPath
+                        owner=$planned.pid
+                        runners=$activeBackfill.Count
+                        backend_running=if($status){[bool]$status.is_running}else{$false}
+                    }
+                    exit 0
+                }
+                if (
+                    -not $status -or
+                    [string]$status.version -notlike "v19.45*" -or
+                    [string]$status.status_contract_version -ne "compact-v2" -or
+                    [string]$status.accuracy_profile -ne "strict"
+                ) {
+                    Alert "planned_backend_upgrade_recovery_contract_failed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
+                    exit 10
+                }
+                $backfillStarted = Start-EvidenceBackfillIfNeeded
+                if ($backfillStarted) {
+                    Log-Event "planned_backend_upgrade_recovery_started" @{lock=$BenchmarkLockPath;owner=$planned.pid}
+                    exit 0
+                }
+                Remove-Item -LiteralPath $BenchmarkLockPath -Force
+                Log-Event "planned_backend_upgrade_recovery_completed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
             }
         } catch {
             Log-Event "benchmark_lock_unreadable" @{ lock=$BenchmarkLockPath }
             exit 0
         }
-        Log-Event "model_benchmark_interlock" @{lock=$BenchmarkLockPath;purpose=$planned.purpose;owner=$planned.pid}
-        exit 0
+        if (Test-Path -LiteralPath $BenchmarkLockPath) {
+            Log-Event "model_benchmark_interlock" @{lock=$BenchmarkLockPath;purpose=$planned.purpose;owner=$planned.pid}
+            exit 0
+        }
     }
     $backend = @(Owned "samsung_ocr_batch_processor\.py")
     $watcher = @(Owned "auto_rerun_questionable_after_recursive\.ps1")
