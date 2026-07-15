@@ -20,7 +20,7 @@ from tools.prepare_drive_upload_manifest import (
 from tools.rerun_questionable_records import is_complete_auto_verified
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace
 from skills.runtime_health_gate import review_prompt_leak_reasons
-from skills.model_validation import has_photo_label_model_evidence
+from skills.model_validation import has_photo_label_model_evidence, unique_known_model_completion
 from samsung_ocr_batch_processor import _merge_v1945_json_objects
 
 
@@ -34,6 +34,55 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_unique_trailing_model_completion_is_bounded(self):
+        self.assertEqual(
+            unique_known_model_completion("S27CG552", ["S27CG552EC", "S32CG552EC"]),
+            "S27CG552EC",
+        )
+        self.assertIsNone(
+            unique_known_model_completion("S27CG552", ["S27CG552EC", "S27CG552EUC"])
+        )
+        self.assertIsNone(unique_known_model_completion("S27CG552", ["S32CG552EC"]))
+
+    def test_flagged_unique_prefix_completion_is_not_a_structured_identity_conflict(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27CG552EC",
+            "price": "4990",
+            "model_prefix_completed": True,
+            "model_prefix_completion_from": "S27CG552",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {"view_type": "單機", "category": "單機", "model": "S27CG552", "price": "4990"},
+        )
+        self.assertEqual(postprocessed["model"], "S27CG552EC")
+        self.assertNotIn("model", blocked)
+
+    def test_prefix_completion_needs_two_independent_matching_passes(self):
+        base = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27CG552EC",
+            "price": "4990",
+            "thinking": "主角自己的價牌清楚標示 S27CG552，售價 4,990 元。",
+            "model_prefix_completed": True,
+            "model_prefix_completion_from": "S27CG552",
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        first = dict(base)
+        self.assertTrue(immediate_retry_decision(first, 1, [], 3)["retry"])
+        second = dict(base)
+        decision = immediate_retry_decision(second, 2, [first], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+
     def test_unlisted_model_candidate_requires_same_photo_label_evidence(self):
         narration = (
             "中間主角螢幕正下方有實體價牌，清楚標示型號 S24D300GAC，"

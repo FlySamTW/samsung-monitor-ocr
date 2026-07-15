@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.6"
+EVIDENCE_GUARD_REVISION = "20260715.7"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -411,6 +411,8 @@ def immediate_retry_decision(
         record["unlisted_model_photo_consensus"] = consensus
         if not consensus:
             reasons.append("官網未收錄型號需三輪獨立照片證據一致")
+    if record.get("model_prefix_completed") and not _same_model_price_confirmed(record, history):
+        reasons.append("價牌短型號唯一補全需第二輪獨立確認")
     if record.get("model_validation_failed") or is_placeholder_model(model):
         reasons.append("型號未通過正式清單驗證")
     if record.get("price_conflict_detected"):

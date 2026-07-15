@@ -37,6 +37,22 @@ def strict_known_model(value: object, valid_models: list[str]) -> str | None:
     return None
 
 
+def unique_known_model_completion(value: object, valid_models: list[str]) -> str | None:
+    """Complete only a unique short retailer SKU with a trailing catalog suffix."""
+    target = re.sub(r"[^A-Z0-9]", "", normalize_model_token(value))
+    if len(target) < 8 or not re.fullmatch(r"S\d{2}[A-Z0-9]+", target) or is_placeholder_model(target):
+        return None
+    matches: dict[str, str] = {}
+    for model in valid_models or []:
+        normalized = re.sub(r"[^A-Z0-9]", "", normalize_model_token(model))
+        missing = len(normalized) - len(target)
+        if normalized.startswith(target) and 1 <= missing <= 3:
+            matches.setdefault(normalized, model)
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
+
+
 def has_photo_label_model_evidence(
     value: object,
     record: dict | None,

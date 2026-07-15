@@ -58,6 +58,7 @@ from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
     strict_known_model,
+    unique_known_model_completion,
 )
 from skills.audit_fields import (
     immediate_retry_decision,
@@ -961,7 +962,18 @@ def enforce_explicit_structured_authority(result, explicit_fields):
     if explicit_model not in (None, "") and final_model not in (None, ""):
         canonical_explicit = re.sub(r"[^A-Z0-9]", "", str(explicit_model).upper())
         canonical_final = re.sub(r"[^A-Z0-9]", "", str(final_model).upper())
-        if canonical_explicit and canonical_final and canonical_explicit != canonical_final:
+        completion_from = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(result.get("model_prefix_completion_from") or "").upper(),
+        )
+        allowed_prefix_completion = bool(
+            result.get("model_prefix_completed")
+            and canonical_explicit == completion_from
+            and canonical_final.startswith(canonical_explicit)
+            and 1 <= len(canonical_final) - len(canonical_explicit) <= 3
+        )
+        if canonical_explicit and canonical_final and canonical_explicit != canonical_final and not allowed_prefix_completion:
             blocked.append("model")
             result["model"] = None
             result["structured_identity_conflict"] = True
@@ -3170,6 +3182,16 @@ def process_single_image(
             for key in ("view_type", "category", "model", "price")
             if key in data_obj
         }
+        # These fields are pipeline-owned evidence markers.  Never trust a
+        # similarly named key supplied by model output.
+        for internal_key in (
+            "unlisted_model_candidate",
+            "unlisted_model_photo_consensus",
+            "official_model_unverified",
+            "model_prefix_completed",
+            "model_prefix_completion_from",
+        ):
+            data_obj.pop(internal_key, None)
 
         # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
         import difflib # Ensure import available (inline is safe)
@@ -3254,8 +3276,16 @@ def process_single_image(
                 data_obj["model"] = None
             elif valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
                 exact_model = strict_known_model(clean_model, valid_models_list)
+                prefix_completion = unique_known_model_completion(clean_model, valid_models_list)
                 if exact_model:
                     data_obj["model"] = exact_model
+                elif prefix_completion:
+                    data_obj["model"] = prefix_completion
+                    data_obj["model_prefix_completed"] = True
+                    data_obj["model_prefix_completion_from"] = clean_model
+                    console.print(
+                        f"[yellow]⚠️ [Model Guard] 價牌短碼唯一補全，要求第二輪獨立確認: {clean_model} → {prefix_completion}[/yellow]"
+                    )
                 elif should_compare_official_price(fname) and is_samsung_model_like(clean_model) and try_discover_model(clean_model):
                     console.print(f"[bold green]✨ [Auto-Discover] 官網驗證成功：{clean_model}[/bold green]")
                     data_obj["model"] = clean_model

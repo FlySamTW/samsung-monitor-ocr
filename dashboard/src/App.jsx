@@ -152,7 +152,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260715.6";
+const CURRENT_GUARD_REVISION = "20260715.7";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
