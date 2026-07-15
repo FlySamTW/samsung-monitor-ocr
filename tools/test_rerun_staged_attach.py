@@ -30,6 +30,40 @@ class AttachExistingTests(unittest.TestCase):
         self.assertEqual(reason, "structured_narration_conflict")
         self.assertEqual(details["conflicting_records"], 1)
 
+    def test_quality_guard_keeps_review_contained_conflict_without_stopping_batch(self):
+        records = [{
+            "file_name": "wall.jpg",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": None,
+            "thinking": "可見多台完整螢幕，無法鎖定唯一主角，整體符合「遠景」條件。",
+            "raw_model_output": '{"view_type":"遠景","model":null,"price":null}',
+            "auto_review_required": True,
+            "review_status": "需慢模型或人工校正",
+        }]
+        args = SimpleNamespace(
+            min_completion_ratio=0.98,
+            min_quality_guard_records=20,
+            max_single_missing_ratio=0.65,
+        )
+        reason, details = mod.abort_reason_for_rerun(args, records, {"wall.jpg"}, [])
+        self.assertEqual(reason, "")
+        self.assertEqual(details, {"matched_records": 1})
+        self.assertEqual(
+            mod.contained_structured_narration_conflicts(records, {"wall.jpg"}),
+            ["wall.jpg"],
+        )
+
+    def test_quality_guard_understands_serialized_review_flag(self):
+        record = {
+            "file_name": "wall.jpg",
+            "view_type": "單機",
+            "thinking": "整體符合遠景條件。",
+            "auto_review_required": "true",
+        }
+        self.assertTrue(mod.is_explicitly_contained_for_review(record))
+
     def test_wait_tolerates_transient_status_failures(self):
         done = {"is_running": False, "stats": {"processed": 1, "total": 1, "success": 1, "failed": 0}}
         with patch.object(questionable, "json_request", side_effect=[OSError("temporary"), done]) as request:

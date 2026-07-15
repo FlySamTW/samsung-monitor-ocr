@@ -511,3 +511,11 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 ## Presentation Synchronization Iron Rule
 
 `presentation_id` and `presentation_sequence` are the only UI identity truth. Photo, AI live interpretation, active placeholder, revealed card, and inspection modal must render from the same immutable snapshot. Running presentation state must not use filename/index/source-path joins or `current_file`, `stream_file`, or `recent_results` fallbacks. The right card appears only after the same snapshot's narration finishes. Active items are never dropped by watchdog or backpressure; a previous image remains visible until the next image is ready, so continuity never produces a black frame. Every dashboard presentation change requires the 500-item duplicate/out-of-order/overflow/remount soak and a fresh build.
+
+## Content-drift containment rule (2026-07-16)
+
+- Monitoring is not progress polling. Sample the actual structured evidence, readable narration, final guard decision, prior-answer exposure, prompt contamination, UI identity, process uniqueness, and upload isolation.
+- An uncontained structured/narration contradiction is a batch-stopping defect.
+- A contradiction already marked `auto_review_required=true`, `evidence_unresolved=true`, or a recognized manual-review status remains fail-closed for that photo, is counted as `contained_review_conflicts`, and must not stop later photos. It can never be exported as verified or uploaded.
+- The `.11` reference smoke must remain exactly four verified true distant views and three unresolved counterexamples, with zero prior-answer exposure and zero prompt contamination across all 21 passes.
+- Before and after every operational or code change, re-read the current development-guide checkpoint and latest continuity handoff, then verify content, UI, unique hidden processes, and upload isolation. Old regressions are permanent tests.

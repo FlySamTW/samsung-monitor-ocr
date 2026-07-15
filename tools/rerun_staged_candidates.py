@@ -237,14 +237,36 @@ def has_explicit_distant_conclusion(value: object) -> bool:
     return False
 
 
+def is_explicitly_contained_for_review(record: dict[str, object]) -> bool:
+    """Return whether a contradictory result is already isolated from auto acceptance."""
+    truthy = {"1", "true", "yes", "y"}
+    if str(record.get("auto_review_required") or "").strip().lower() in truthy:
+        return True
+    if str(record.get("evidence_unresolved") or "").strip().lower() in truthy:
+        return True
+    review_status = text_value(record.get("review_status")).strip().lower()
+    return review_status in {
+        "review_required",
+        "unresolved",
+        "需慢模型或人工校正",
+        "需人工校正",
+        "待人工校正",
+    }
+
+
 def structured_narration_conflicts(
     records: list[dict[str, object]], candidate_names: set[str]
 ) -> list[str]:
-    """Return impossible single-unit rows whose own evidence concludes distant view."""
+    """Return uncontained single-unit rows whose own evidence concludes distant view."""
     conflicts: list[str] = []
     for record in records:
         name = str(record.get("file_name") or record.get("filename") or "")
         if name not in candidate_names:
+            continue
+        # A contradiction that the evidence gate already marked for review is a
+        # contained outcome, not permission to stop all later candidates.  It
+        # must remain excluded from automatic acceptance/export.
+        if is_explicitly_contained_for_review(record):
             continue
         view_text = " ".join(text_value(record.get(key)) for key in ("view_type", "category", "human_category"))
         if SINGLE_VIEW_TEXT not in view_text or DISTANT_VIEW_TEXT in view_text:
@@ -256,6 +278,27 @@ def structured_narration_conflicts(
         if has_explicit_distant_conclusion(evidence):
             conflicts.append(name)
     return conflicts
+
+
+def contained_structured_narration_conflicts(
+    records: list[dict[str, object]], candidate_names: set[str]
+) -> list[str]:
+    """Return contradictory rows that were safely isolated for review."""
+    contained: list[str] = []
+    for record in records:
+        name = str(record.get("file_name") or record.get("filename") or "")
+        if name not in candidate_names or not is_explicitly_contained_for_review(record):
+            continue
+        view_text = " ".join(text_value(record.get(key)) for key in ("view_type", "category", "human_category"))
+        if SINGLE_VIEW_TEXT not in view_text or DISTANT_VIEW_TEXT in view_text:
+            continue
+        evidence = " ".join(
+            text_value(record.get(key))
+            for key in ("thinking", "stream_buffer", "raw", "raw_model_output", "notes")
+        )
+        if has_explicit_distant_conclusion(evidence):
+            contained.append(name)
+    return contained
 
 
 def has_positive_followme_indicator(text: str) -> bool:
@@ -857,6 +900,10 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     if demoted_single:
         summary["demoted_distant_single_clue"] = len(demoted_single)
         summary["demoted_distant_single_sample"] = ";".join(demoted_single[:5])
+    contained_conflicts = contained_structured_narration_conflicts(rerun_records, candidate_names)
+    if contained_conflicts:
+        summary["contained_review_conflicts"] = len(contained_conflicts)
+        summary["contained_review_conflict_sample"] = ";".join(contained_conflicts[:5])
     abort_reason, guard_details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
     if abort_reason:
         summary.update(guard_details)
@@ -961,6 +1008,10 @@ def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tup
         summary["rescued_followme_distant"] = len(rescued)
     if demoted:
         summary["demoted_distant_single_clue"] = len(demoted)
+    contained_conflicts = contained_structured_narration_conflicts(rerun_records, candidate_names)
+    if contained_conflicts:
+        summary["contained_review_conflicts"] = len(contained_conflicts)
+        summary["contained_review_conflict_sample"] = ";".join(contained_conflicts[:5])
     abort_reason, details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
     if abort_reason:
         raise RuntimeError(f"attach refused by quality guard: {abort_reason} {details}")
