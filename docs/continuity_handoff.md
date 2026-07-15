@@ -14,6 +14,7 @@
 6. 已確認無誤的照片才可上傳 Google Drive；有疑慮者立即在下一個佇列位置進第二輪，仍有疑慮立即進第三輪，最後才交慢模型或人工校正。
 7. 新啟動程序前先辨識並關閉確定無用的舊程序；不得累積多組後端、runner 或 PowerShell 視窗。
 8. Git 工作不得回復使用者或其他 AI 的既有修改。使用者口中的 `git` 包含更新 README、使用手冊、開發手冊、SKILL、commit 及 push。
+9. 第一、第二、第三輪的三層即時守門，必須遵循 [three_layer_accuracy_gate.md](three_layer_accuracy_gate.md)；第三輪仍衝突者必須留在 `review_required`，不得冒充成功或進入上傳清單。
 
 ## 2. 路徑、服務與主要模型
 
@@ -28,6 +29,13 @@
 - 目前基準：Qwen3-VL 8B 仍是暫定主線；其他 8B/近似模型的固定 50 張盲測尚未完整形成可取代主線的正式結論。
 
 ## 3. 2026-07-14 接手時的即時狀態
+
+### 2026-07-15 15:20 接續更新
+
+- 三層即時守門的原理、狀態轉移、遠景／FollowMe 特例、稽核證據與必跑驗證已整理為 [three_layer_accuracy_gate.md](three_layer_accuracy_gate.md)。
+- Dashboard 進度原文的 `輪 N`將改為 `累計判讀 N 次`與 `本張第 X/3 輪`；後端同步新增從 `_ocr_audit/presentation_history` 恢復最大序號，避免安全重啟後累計值歸零。原始碼與隔離 production build 已通過，線上 dist 與後端載入必須等當前 202601 跑者的安全邊界，不得為了部署文字而中斷 OCR。
+- 每五分鐘的 `SamsungOCR_UserContinuityEnsure` 已改用 `wscript.exe //B` 無主控台啟動；自我修復能力保留，不再由可見 PowerShell 視窗執行。
+- 15:10 後端與原接力 runner 離開，但 staging、成功 JSON、retry queue 與 evidence trace 均完整；已用原 `resume-existing-then-continue` 路徑恢復，202601 從 `501/1,504`附近續跑，失敗 `0`，未從零重跑。
 
 ### 2026-07-14 15:16 接續更新
 

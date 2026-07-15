@@ -1394,8 +1394,8 @@ const App = () => {
                     <span aria-hidden="true">·</span>
                     <span data-testid="review-pass-progress">
                       {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
-                      {isReviewRun && completedPassCount ? ` · 輪 ${formatCount(completedPassCount)}` : ''}
-                      {isReviewRun && reviewProgress.current_pass ? ` · 本張 ${reviewProgress.current_pass}/3` : ''}
+                      {isReviewRun && completedPassCount ? ` · 累計判讀 ${formatCount(completedPassCount)} 次` : ''}
+                      {isReviewRun && reviewProgress.current_pass ? ` · 本張第 ${reviewProgress.current_pass}/3 輪` : ''}
                     </span>
                   </div>
                 </div>

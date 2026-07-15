@@ -7,6 +7,7 @@ class ContinuityDaemonTests(unittest.TestCase):
         root=Path(__file__).resolve().parent
         cls.daemon=(root/'ocr_continuity_daemon.ps1').read_text(encoding='utf-8')
         cls.installer=(root/'install_ocr_continuity_daemon.ps1').read_text(encoding='utf-8')
+        cls.hidden_launcher=(root/'ocr_continuity_ensure_hidden.vbs').read_text(encoding='utf-8')
     def test_single_instance_immediate_loop_timeout_shutdown(self):
         for text in (self.daemon,):
             self.assertIn('New-Item -ItemType File -Path $lock', text)
@@ -29,6 +30,10 @@ class ContinuityDaemonTests(unittest.TestCase):
         self.assertIn('schtasks.exe /Create', self.installer)
         self.assertIn('/RL LIMITED', self.installer)
         self.assertIn('/SC MINUTE /MO 5', self.installer)
+        self.assertIn('wscript.exe //B //Nologo', self.installer)
+        self.assertIn('ocr_continuity_ensure_hidden.vbs', self.installer)
+        self.assertIn('shell.Run(command, 0, True)', self.hidden_launcher)
+        self.assertIn('-NonInteractive -WindowStyle Hidden', self.hidden_launcher)
 
     def test_stale_lock_requires_absent_owner_and_age(self):
         self.assertIn('$alive=Get-Process -Id $owner', self.installer)

@@ -519,6 +519,8 @@ Raw rows use `candidate_model` for the tested VLM and keep `model` for the predi
 模型決策 gate 以整體 field/exact accuracy 為第一順位，遠景誤判、FollowMe 誤判、型號幻覺等危險分類不得退步；只有 accuracy 不退步時才用 latency 作次順位。benchmark 不會改 production prompt、OCR 權重或 runtime 設定；不要在 OCR 執行中使用 `--execute`。
 ## v19.45 Evidence Contract
 
+三層即時守門的原理、狀態轉移、遠景／FollowMe 特殊規則、稽核證據與必跑驗證，以 [three_layer_accuracy_gate.md](three_layer_accuracy_gate.md) 為權威說明。修改 `immediate_retry_decision()`、即時插隊、輪次歷程、Dashboard 進度文字或上傳守門時，必須同步檢查該文件。
+
 Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate.
 
 Each pass is recorded in a bounded, idempotent `v1945_evidence_trace.jsonl` without image bytes or secrets. Boundary upgrades must finish the entire active staged runner, verify idle, then start v19.45 with the existing staging/history preserved. `tools/migrate_legacy_v1945_trace.py` resolves legacy staging-only rows through the current-year and 202603 recovery candidate CSVs, adds stable original-source identities, deduplicates by trace ID, and atomically writes `_ocr_audit/v1945_evidence_trace.jsonl`. Any invalid, unresolved, or ambiguous row is fail-closed and must block the backend restart. Do not restart mid-folder or between months of the same staged runner.

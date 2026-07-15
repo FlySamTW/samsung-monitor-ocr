@@ -114,7 +114,10 @@ class BatchOrchestrator:
         self.stream_file = None
         self.latest_result_file = None
         self.display_queue = [] # [v19.8 UX] Completed results waiting to be displayed
-        self.presentation_sequence = 0
+        # Keep the operator's cumulative pass counter monotonic across safe
+        # backend restarts. The durable audit is authoritative; an in-memory
+        # reset would make "cumulative interpretations" silently lie.
+        self.presentation_sequence = self._load_presentation_sequence()
         self.log_system("批次處理已停止。") # Added as per instruction
         self.save_data_file = None 
         self.recent_results = []
@@ -400,6 +403,32 @@ class BatchOrchestrator:
     def _presentation_audit_dir(self) -> Path:
         root = Path(str(self.config.get("audit_dir") or self.output_dir)).resolve()
         return root / "presentation_history"
+
+    def _load_presentation_sequence(self) -> int:
+        """Recover the highest durable pass sequence without loading images."""
+        audit_dir = self._presentation_audit_dir()
+        if not audit_dir.is_dir():
+            return 0
+        highest = 0
+        paths = sorted(
+            audit_dir.glob("presentation_*.jsonl*"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        for path in paths:
+            try:
+                opener = gzip.open if path.suffix.lower() == ".gz" else open
+                with opener(path, "rt", encoding="utf-8") as handle:
+                    for line in handle:
+                        if '"presentation_sequence"' not in line:
+                            continue
+                        try:
+                            item = json.loads(line)
+                            highest = max(highest, int(item.get("presentation_sequence") or 0))
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            continue
+            except (OSError, UnicodeError):
+                continue
+        return highest
 
     def _rotate_presentation_audit(self, path: Path) -> None:
         max_bytes = int(self.config.get("presentation_audit_max_bytes", 64 * 1024 * 1024))

@@ -20,6 +20,8 @@ if($Action -eq 'ensure') {
 if($Action -eq 'status'){ $v=(Get-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue).$name; [pscustomobject]@{registry=$v;startup=(Test-Path (Join-Path ([Environment]::GetFolderPath('Startup')) 'SamsungOCRContinuityDaemon.cmd'))}|ConvertTo-Json; exit 0 }
 if($Action -eq 'uninstall'){Remove-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue; Remove-Item (Join-Path ([Environment]::GetFolderPath('Startup')) 'SamsungOCRContinuityDaemon.cmd') -Force -ErrorAction SilentlyContinue; & schtasks.exe /Delete /TN $taskName /F 2>$null; Write-Output 'user daemon unregistered'; exit 0}
 try { New-Item -Path $key -Force|Out-Null; New-ItemProperty -Path $key -Name $name -Value $cmd -PropertyType String -Force|Out-Null; Write-Output 'registered HKCU Run' } catch { $startup=[Environment]::GetFolderPath('Startup'); $bat=Join-Path $startup 'SamsungOCRContinuityDaemon.cmd'; Set-Content $bat "@echo off`r`nstart \"\" /b powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"$daemon\" -RepoRoot \"$RepoRoot\" -SourceRoot \"$SourceRoot\" -OutputDir \"$OutputDir\"`r`n"; Write-Output 'registered Startup fallback' }
-$tr='powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Action ensure -RepoRoot "{1}" -SourceRoot "{2}" -OutputDir "{3}"' -f (Join-Path $RepoRoot 'tools\install_ocr_continuity_daemon.ps1'),$RepoRoot,$SourceRoot,$OutputDir
+$hiddenEnsure=Join-Path $RepoRoot 'tools\ocr_continuity_ensure_hidden.vbs'
+if(-not (Test-Path $hiddenEnsure)){throw "hidden ensure launcher missing: $hiddenEnsure"}
+$tr='wscript.exe //B //Nologo "{0}" "{1}" "{2}" "{3}"' -f $hiddenEnsure,$RepoRoot,$SourceRoot,$OutputDir
 $created=& schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $tr /RL LIMITED /F 2>&1
 if($LASTEXITCODE -ne 0){Write-Output 'user ensure task creation denied; existing setup kept'}else{Write-Output "registered LIMITED task: $taskName"}
