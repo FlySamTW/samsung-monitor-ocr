@@ -526,6 +526,7 @@ def group_candidates(
 ) -> tuple[dict[tuple[str, str, str], list[dict[str, object]]], int]:
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
     skipped = 0
+    resolved_source_root = source_root.resolve()
     for row in rows:
         if not row_matches_reason(row, reason_contains):
             continue
@@ -533,7 +534,28 @@ def group_candidates(
         audit_folder = str(row.get("audit_folder") or "")
         period = str(row.get("period") or infer_period_from_text(folder))
         file_name = str(row.get("file_name") or "")
-        source_path = resolve_source_path(file_name, Path(folder) if folder else None, source_root, period)
+        source_path = None
+        direct_text = str(row.get("source_path") or "").strip()
+        if direct_text and file_name:
+            direct = Path(direct_text)
+            try:
+                resolved_direct = direct.resolve()
+                resolved_direct.relative_to(resolved_source_root)
+                if (
+                    resolved_direct.is_file()
+                    and resolved_direct.name == file_name
+                    and (not period or period in str(resolved_direct))
+                ):
+                    source_path = resolved_direct
+            except (OSError, ValueError):
+                source_path = None
+        if source_path is None:
+            source_path = resolve_source_path(
+                file_name,
+                Path(folder) if folder else None,
+                resolved_source_root,
+                period,
+            )
         if not source_path or not audit_folder:
             skipped += 1
             continue

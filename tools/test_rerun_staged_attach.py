@@ -127,6 +127,27 @@ class AttachExistingTests(unittest.TestCase):
                 mod.attach_existing_group(args, [], groups)
             request.assert_not_called()
 
+    def test_group_candidates_uses_valid_bound_source_path_without_tree_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "商化照片-202601"
+            source.mkdir()
+            image = source / "one.jpg"
+            image.write_bytes(b"photo")
+            rows = [{
+                "source_path": str(image),
+                "file_name": image.name,
+                "period": "202601",
+                "audit_folder": str(root / "audit"),
+            }]
+            with patch.object(mod, "resolve_source_path", side_effect=AssertionError("tree scan must not run")):
+                grouped, skipped = mod.group_candidates(rows, root, [])
+            self.assertEqual(skipped, 0)
+            self.assertEqual(len(grouped), 1)
+            key = next(iter(grouped))
+            self.assertEqual(Path(key[0]), source.resolve())
+            self.assertEqual(grouped[key][0]["source_path"], str(image.resolve()))
+
 
 if __name__ == "__main__":
     unittest.main()
