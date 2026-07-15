@@ -598,6 +598,8 @@ Before every operational or code change, re-read this section, `SAMSUNG_OCR_EXPE
 
 The durable `presentation_sequence` is boss-facing state. `/api/status` must expose the orchestrator's history-recovered counter even when the bounded live queue is empty after an idle backend restart. It may take the higher live-queue value while running, but it must never replace a valid durable counter with zero. `tools/test_presentation_history_api.py` permanently covers this restart case.
 
+Legacy history can contain a high sequence followed by a process-reset segment starting at one. Once a newer service resumes from the recovered logical total and persists absolute cumulative values, later restarts must adopt those absolute values; they must not add the old segment again. The permanent history regression covers two restarts so the boss-facing total can neither reset nor inflate.
+
 - Pass 2/3 must be stateless. Never send a prior answer, correction wording, previous price/model, invalid model output, mistake-book example, or assistant message back to the model. Retry prompts describe only the current image task.
 - Prompt, parser, evidence normalization, runtime-health checks, persistence, and UI normalization form one schema. A field added to one layer must be accepted, copied, guarded, persisted, rendered, and regression-tested by all relevant layers.
 - The production prompt must not contain a complete copyable JSON answer example. The model may emit one JSON object with a readable `narration`; the UI must render that narration, never raw JSON.

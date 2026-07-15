@@ -264,6 +264,30 @@ class PresentationHistoryTests(unittest.TestCase):
             orchestrator.output_dir = str(audit_root)
             self.assertEqual(orchestrator._load_presentation_sequence(), 1033)
 
+    def test_presentation_sequence_does_not_readd_legacy_segment_after_second_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_root = Path(tmp)
+            history_dir = audit_root / "presentation_history"
+            history_dir.mkdir(parents=True)
+            (history_dir / "presentation_20260715.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"presentation_id": "p-old-1", "presentation_sequence": 1029}),
+                    json.dumps({"presentation_id": "p-old-2", "presentation_sequence": 1031}),
+                    json.dumps({"presentation_id": "p-reset-1", "presentation_sequence": 1}),
+                    json.dumps({"presentation_id": "p-reset-2", "presentation_sequence": 2}),
+                    # A fixed service loaded 1033 and then persisted absolute
+                    # cumulative values.  These must replace, not re-add, the
+                    # legacy 1031-event segment on the next restart.
+                    json.dumps({"presentation_id": "p-durable-1", "presentation_sequence": 1034}),
+                    json.dumps({"presentation_id": "p-durable-latest", "presentation_sequence": 14401}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+            orchestrator.config = {"audit_dir": str(audit_root)}
+            orchestrator.output_dir = str(audit_root)
+            self.assertEqual(orchestrator._load_presentation_sequence(), 14401)
+
     def test_recent_history_restores_disk_and_live_newest_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             audit_root = Path(tmp)

@@ -488,7 +488,8 @@ class BatchOrchestrator:
         audit_dir = self._presentation_audit_dir()
         if not audit_dir.is_dir():
             return 0
-        completed_segments = 0
+        logical_total = 0
+        segment_base = 0
         segment_highest = 0
         previous_sequence = 0
         paths = sorted(
@@ -508,15 +509,26 @@ class BatchOrchestrator:
                             if sequence <= 0:
                                 continue
                             if previous_sequence and sequence < previous_sequence:
-                                completed_segments += segment_highest
+                                segment_base = logical_total
                                 segment_highest = 0
+                            # Newer services resume from the durable logical
+                            # total.  When such an absolute value appears after
+                            # a legacy reset segment, adopt it instead of adding
+                            # the old segment a second time on every restart.
+                            if segment_base and sequence > logical_total:
+                                segment_base = 0
+                                segment_highest = sequence
+                                logical_total = max(logical_total, sequence)
+                                previous_sequence = sequence
+                                continue
                             segment_highest = max(segment_highest, sequence)
+                            logical_total = max(logical_total, segment_base + segment_highest)
                             previous_sequence = sequence
                         except (TypeError, ValueError, json.JSONDecodeError):
                             continue
             except (OSError, UnicodeError):
                 continue
-        return completed_segments + segment_highest
+        return logical_total
 
     def _rotate_presentation_audit(self, path: Path) -> None:
         max_bytes = int(self.config.get("presentation_audit_max_bytes", 64 * 1024 * 1024))
