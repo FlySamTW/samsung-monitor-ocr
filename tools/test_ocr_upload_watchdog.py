@@ -17,6 +17,10 @@ class OcrUploadWatchdogGateTests(unittest.TestCase):
         self.assertLess(refresh.index("prepare_drive_upload_manifest.py"), refresh.index("drive_upload_summary.json"))
         self.assertLess(refresh.index("drive_upload_summary.json"), refresh.index("Write-UploadGateProof"))
         self.assertIn("Remove-Item -LiteralPath $GateProofPath", refresh)
+        final_interlock = refresh.rindex("Test-Path -LiteralPath $BenchmarkLockPath")
+        self.assertLess(final_interlock, refresh.index("Write-UploadGateProof"))
+        self.assertIn("trustedBatchFields", refresh)
+        self.assertIn("pending ledger has an empty next batch", refresh)
 
     def test_manifest_gate_and_content_hashes_precede_uploader_start(self):
         uploader = self.source[

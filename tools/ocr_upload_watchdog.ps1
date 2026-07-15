@@ -313,10 +313,19 @@ function Test-UploadGateProof {
     if ([string]$summary.current_audit_input_sha256 -ne [string]$gate.audit_input_sha256) { return $false }
     if ([string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv)) { return $false }
     $pendingRows = @(Import-Csv -LiteralPath $pendingCsv)
+    $nextBatchRows = @(Import-Csv -LiteralPath $nextBatchCsv)
     $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
     if ($blocked.Count -gt 0) { return $false }
-    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) { return $false }
+    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $nextBatchRows.Count) { return $false }
     if ([int]$gate.pending_count -ne $pendingRows.Count) { return $false }
+    if ($null -eq $gate.next_batch_count -or [int]$gate.next_batch_count -ne $nextBatchRows.Count -or $nextBatchRows.Count -gt $pendingRows.Count) { return $false }
+    if ($pendingRows.Count -gt 0 -and $nextBatchRows.Count -eq 0) { return $false }
+    $trustedBatchFields = @("source_path", "file_name", "year", "period", "drive_folder", "size_bytes", "content_sha256", "status", "reasons")
+    for ($index = 0; $index -lt $nextBatchRows.Count; $index++) {
+        foreach ($field in $trustedBatchFields) {
+            if ([string]$nextBatchRows[$index].$field -ne [string]$pendingRows[$index].$field) { return $false }
+        }
+    }
     if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) { return $false }
     return $true
 }
@@ -609,14 +618,28 @@ function Update-UploadGateProof {
         $risk = Get-Content -LiteralPath $riskJson -Raw | ConvertFrom-Json
         $summary = Get-Content -LiteralPath $manifestSummaryPath -Raw | ConvertFrom-Json
         $pendingRows = @(Import-Csv -LiteralPath $pendingCsv)
+        $nextBatchRows = @(Import-Csv -LiteralPath $nextBatchCsv)
     } catch {
         Write-RunLog "upload gate closed: audit/summary/manifest unreadable"
         return
     }
     $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
-    if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true -or [string]$summary.current_audit_input_sha256 -ne [string]$risk.audit_input_sha256 -or [string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv) -or $blocked.Count -gt 0 -or [int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) {
+    if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true -or [string]$summary.current_audit_input_sha256 -ne [string]$risk.audit_input_sha256 -or [string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv) -or $blocked.Count -gt 0 -or [int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $nextBatchRows.Count -or $nextBatchRows.Count -gt $pendingRows.Count) {
         Write-RunLog "upload gate closed: manifest gate/count validation failed pending=$($pendingRows.Count) blocked=$($blocked.Count)"
         return
+    }
+    if ($pendingRows.Count -gt 0 -and $nextBatchRows.Count -eq 0) {
+        Write-RunLog "upload gate closed: pending ledger has an empty next batch"
+        return
+    }
+    $trustedBatchFields = @("source_path", "file_name", "year", "period", "drive_folder", "size_bytes", "content_sha256", "status", "reasons")
+    for ($index = 0; $index -lt $nextBatchRows.Count; $index++) {
+        foreach ($field in $trustedBatchFields) {
+            if ([string]$nextBatchRows[$index].$field -ne [string]$pendingRows[$index].$field) {
+                Write-RunLog "upload gate closed: next batch is not the exact pending ledger prefix"
+                return
+            }
+        }
     }
     if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) {
         Write-RunLog "upload gate closed: manifest summary predates audit proof"
@@ -654,6 +677,12 @@ function Update-UploadGateProof {
         pending_count = $pendingRows.Count
         next_batch_csv_path = $nextBatchCsv
         next_batch_sha256 = Get-FileSha256 $nextBatchCsv
+        next_batch_count = $nextBatchRows.Count
+    }
+    if ((Test-Path -LiteralPath $RuntimeHealthFusePath) -or (Test-Path -LiteralPath $BenchmarkLockPath)) {
+        Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+        Write-RunLog "upload gate closed before proof write: runtime fuse or benchmark lock became active"
+        return
     }
     Write-UploadGateProof $gate
     if (-not (Test-UploadGateProof)) {

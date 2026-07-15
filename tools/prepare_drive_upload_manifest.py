@@ -76,6 +76,7 @@ class ManifestRow:
     period: str
     drive_folder: str
     size_bytes: int
+    content_sha256: str
     status: str
     reasons: str
 
@@ -549,6 +550,7 @@ def classify_file(
         period=period,
         drive_folder=drive_folder,
         size_bytes=size_bytes,
+        content_sha256="",
         status=status,
         reasons=";".join(reasons),
     )
@@ -618,7 +620,9 @@ def stage_upload_batch(rows: list[ManifestRow], stage_dir: Path) -> Path:
 
     map_path = stage_dir.parent / "staging_map.csv"
     with map_path.open("w", encoding="utf-8-sig", newline="") as f:
-        fieldnames = ["index", "stage_file", "source_path", "file_name", "year", "drive_folder"]
+        fieldnames = [
+            "index", "stage_file", "source_path", "file_name", "year", "drive_folder", "content_sha256"
+        ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for index, row in enumerate(rows, start=1):
@@ -634,6 +638,7 @@ def stage_upload_batch(rows: list[ManifestRow], stage_dir: Path) -> Path:
                     "file_name": row.file_name,
                     "year": row.year,
                     "drive_folder": row.drive_folder,
+                    "content_sha256": row.content_sha256,
                 }
             )
     return map_path
@@ -646,6 +651,7 @@ def main() -> int:
     parser.add_argument("--uploaded-log", default=None, help="CSV of already uploaded files to skip.")
     parser.add_argument("--max-bytes", type=int, default=2_500_000, help="Mark larger files for review.")
     parser.add_argument("--limit-ready", type=int, default=0, help="Optional pending ready-row limit for upload.")
+    parser.add_argument("--years", default="", help="Optional comma-separated upload scope, for example 2026 or 2025,2024.")
     parser.add_argument("--no-stage", action="store_true", help="Do not copy the next batch into staging.")
     args = parser.parse_args()
 
@@ -699,12 +705,16 @@ def main() -> int:
     all_rows.sort(key=newest_first_key)
     ready_rows = sorted((row for row in all_rows if row.status == "ready"), key=newest_first_key)
     review_rows = sorted((row for row in all_rows if row.status != "ready"), key=newest_first_key)
-    pending_rows = [
+    pending_rows_all = [
         row
         for row in ready_rows
         if (row.source_path, row.file_name) not in uploaded_pairs
     ]
+    scoped_years = {item.strip() for item in args.years.split(",") if item.strip()}
+    pending_rows = [row for row in pending_rows_all if not scoped_years or row.year in scoped_years]
     upload_rows = pending_rows[: args.limit_ready] if args.limit_ready else pending_rows
+    for row in upload_rows:
+        row.content_sha256 = file_sha256(Path(row.source_path))
 
     write_csv(manifest_dir / "drive_upload_all.csv", all_rows)
     write_csv(manifest_dir / "drive_upload_ready.csv", ready_rows)
@@ -757,8 +767,11 @@ def main() -> int:
         "uploaded_log": str(uploaded_log) if uploaded_log.exists() else "",
         "total_images": len(all_rows),
         "ready": len(ready_rows),
-        "uploaded_skipped": len(ready_rows) - len(pending_rows),
+        "uploaded_skipped": len(ready_rows) - len(pending_rows_all),
+        "out_of_scope_ready": len(pending_rows_all) - len(pending_rows),
         "ready_pending": len(pending_rows),
+        "ready_pending_all_years": len(pending_rows_all),
+        "upload_scope_years": sorted(scoped_years),
         "review_required": len(review_rows),
         "stale_uploaded_review_required": stale_uploaded_review,
         "next_batch": len(upload_rows),

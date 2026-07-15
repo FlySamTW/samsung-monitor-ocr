@@ -16,6 +16,29 @@ from pathlib import Path
 
 
 SCHEMA = "samsung-ocr-upload-gate/v1"
+TRUSTED_BATCH_FIELDS = (
+    "source_path",
+    "file_name",
+    "year",
+    "period",
+    "drive_folder",
+    "size_bytes",
+    "content_sha256",
+    "status",
+    "reasons",
+)
+
+
+def active_interlock_errors(output_dir: Path) -> list[str]:
+    audit_dir = output_dir / "_ocr_audit"
+    errors: list[str] = []
+    runtime_health_fuse = audit_dir / "runtime_health_fuse.json"
+    benchmark_lock = audit_dir / "model_benchmark.lock"
+    if runtime_health_fuse.exists():
+        errors.append(f"runtime_health_fuse_active:{runtime_health_fuse}")
+    if benchmark_lock.exists():
+        errors.append(f"model_benchmark_lock_active:{benchmark_lock}")
+    return errors
 
 
 def file_sha256(path: Path) -> str:
@@ -49,9 +72,9 @@ def as_int(value: object, default: int = -1) -> int:
 def build_proof(output_dir: Path, year: int) -> tuple[dict | None, list[str]]:
     audit_dir = output_dir / "_ocr_audit"
     manifest_dir = output_dir / "_drive_upload"
-    runtime_health_fuse = audit_dir / "runtime_health_fuse.json"
-    if runtime_health_fuse.exists():
-        return None, [f"runtime_health_fuse_active:{runtime_health_fuse}"]
+    interlock_errors = active_interlock_errors(output_dir)
+    if interlock_errors:
+        return None, interlock_errors
     risk_json = audit_dir / f"distant_followme_risk_{year}_latest.json"
     risk_csv = audit_dir / f"distant_followme_risk_{year}_latest.csv"
     summary_path = manifest_dir / "drive_upload_summary.json"
@@ -66,6 +89,7 @@ def build_proof(output_dir: Path, year: int) -> tuple[dict | None, list[str]]:
         risk = read_json(risk_json)
         summary = read_json(summary_path)
         pending_rows = read_csv(pending_csv)
+        next_batch_rows = read_csv(next_batch_csv)
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
         return None, [f"unreadable_authority:{exc}"]
 
@@ -102,8 +126,43 @@ def build_proof(output_dir: Path, year: int) -> tuple[dict | None, list[str]]:
         errors.append(f"pending_contains_blocked:{len(blocked)}")
     if as_int(summary.get("ready_pending")) != len(pending_rows):
         errors.append("pending_count_mismatch")
-    if as_int(summary.get("next_batch")) != len(pending_rows):
+    if as_int(summary.get("next_batch")) != len(next_batch_rows):
         errors.append("next_batch_count_mismatch")
+    scope_years = summary.get("upload_scope_years")
+    if not isinstance(scope_years, list):
+        errors.append("upload_scope_missing_or_invalid")
+        scope_years = []
+    normalized_scope = {str(value).strip() for value in scope_years if str(value).strip()}
+    if normalized_scope and any(
+        str(row.get("year") or row.get("drive_folder") or "").strip() not in normalized_scope
+        for row in pending_rows
+    ):
+        errors.append("pending_outside_upload_scope")
+    def trusted_row(row: dict[str, str]) -> tuple[str, ...]:
+        return tuple(str(row.get(field) or "") for field in TRUSTED_BATCH_FIELDS)
+
+    pending_ids = [(str(row.get("source_path") or ""), str(row.get("file_name") or "")) for row in pending_rows]
+    next_batch_ids = [(str(row.get("source_path") or ""), str(row.get("file_name") or "")) for row in next_batch_rows]
+    if len(set(pending_ids)) != len(pending_ids):
+        errors.append("pending_duplicate_identity")
+    if len(set(next_batch_ids)) != len(next_batch_ids):
+        errors.append("next_batch_duplicate_identity")
+    if pending_rows and not next_batch_rows:
+        errors.append("next_batch_empty_with_pending")
+    invalid_content_hashes = [
+        row for row in next_batch_rows
+        if len(str(row.get("content_sha256") or "")) != 64
+        or any(
+            char not in "0123456789abcdef"
+            for char in str(row.get("content_sha256") or "").lower()
+        )
+    ]
+    if invalid_content_hashes:
+        errors.append(f"next_batch_content_hash_missing_or_invalid:{len(invalid_content_hashes)}")
+    if [trusted_row(row) for row in next_batch_rows] != [
+        trusted_row(row) for row in pending_rows[: len(next_batch_rows)]
+    ]:
+        errors.append("next_batch_not_pending_prefix")
     if summary_path.stat().st_mtime_ns < risk_json.stat().st_mtime_ns:
         errors.append("manifest_predates_risk_audit")
 
@@ -147,6 +206,8 @@ def build_proof(output_dir: Path, year: int) -> tuple[dict | None, list[str]]:
         "pending_count": len(pending_rows),
         "next_batch_csv_path": str(next_batch_csv.resolve()),
         "next_batch_sha256": next_batch_hash,
+        "next_batch_count": len(next_batch_rows),
+        "upload_scope_years": sorted(normalized_scope),
     }
     return proof, []
 
@@ -158,14 +219,47 @@ def write_atomic(path: Path, payload: dict) -> None:
     os.replace(temp, path)
 
 
+def validate_proof_snapshot(output_dir: Path, year: int, proof: dict) -> list[str]:
+    """Re-read every authority and prove it still describes the written snapshot."""
+    try:
+        rebuilt, errors = build_proof(output_dir, year)
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return [f"proof_readback_failed:{exc}"]
+    if rebuilt is None:
+        return errors or ["proof_readback_invalid"]
+    expected = {key: value for key, value in proof.items() if key != "generated_at"}
+    actual = {key: value for key, value in rebuilt.items() if key != "generated_at"}
+    if expected != actual:
+        return ["proof_authority_snapshot_changed_during_build"]
+    return []
+
+
 def run(output_dir: Path, year: int, *, execute: bool = False) -> dict:
     proof_path = output_dir / "_drive_upload" / "upload_gate_proof.json"
-    proof, errors = build_proof(output_dir, year)
+    try:
+        proof, errors = build_proof(output_dir, year)
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        proof, errors = None, [f"proof_build_failed:{exc}"]
     if execute:
+        final_interlock_errors = active_interlock_errors(output_dir)
+        if final_interlock_errors:
+            proof = None
+            errors = list(dict.fromkeys([*errors, *final_interlock_errors]))
         if proof is None:
             proof_path.unlink(missing_ok=True)
         else:
-            write_atomic(proof_path, proof)
+            try:
+                write_atomic(proof_path, proof)
+            except (OSError, UnicodeError, TypeError, ValueError) as exc:
+                proof = None
+                errors = list(dict.fromkeys([*errors, f"proof_write_failed:{exc}"]))
+                proof_path.unlink(missing_ok=True)
+            if proof is not None:
+                readback_errors = validate_proof_snapshot(output_dir, year, proof)
+                if readback_errors:
+                    proof = None
+                    errors = list(dict.fromkeys([*errors, *readback_errors]))
+                    proof_path.unlink(missing_ok=True)
     return {
         "valid": proof is not None,
         "executed": bool(execute and proof is not None),

@@ -11,7 +11,8 @@ class RecursiveCompletionContractTests(unittest.TestCase):
         tail = self.runner[self.runner.index('incomplete_folders: list[dict[str, str]]'):]
         self.assertIn('reason = "missing_summary"', tail)
         self.assertIn('reason = "source_inventory_changed"', tail)
-        self.assertIn('{"error", "blocked"}', tail)
+        self.assertIn('{"copied", "skipped_existing"}', tail)
+        self.assertIn('not in', tail)
         self.assertIn('"error_count": len(incomplete_folders)', tail)
         self.assertLess(tail.index("return 2"), tail.index("return 0"))
 

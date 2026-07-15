@@ -107,7 +107,7 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("function Test-FullProjectCompletionMarker", self.source)
         self.assertIn("folder_discovery_sha256", self.source)
         self.assertIn("folder_summary_sha256", self.source)
-        self.assertIn('$_.' + 'status -in @("error", "blocked")', self.source)
+        self.assertIn('$_.' + 'status -notin @("copied", "skipped_existing")', self.source)
         self.assertIn("$fullProjectDone = Test-FullProjectCompletionMarker", self.source)
 
 

@@ -818,7 +818,7 @@ def main() -> int:
             reason = "missing_summary"
         elif not resume_row_matches_current(summary, folder_row):
             reason = "source_inventory_changed"
-        elif str(summary.get("status") or "").lower() in {"error", "blocked"}:
+        elif str(summary.get("status") or "").lower() not in {"copied", "skipped_existing"}:
             reason = str(summary.get("status") or "incomplete")
         if reason:
             incomplete_folders.append({"folder": folder_key, "reason": reason})

@@ -106,11 +106,22 @@ function Test-UploadGateProof {
     if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true) { return $false }
     if ([string]$summary.current_audit_input_sha256 -ne [string]$gate.audit_input_sha256) { return $false }
     if ([string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv)) { return $false }
-    try { $pendingRows = @(Import-Csv -LiteralPath $pendingCsv) } catch { return $false }
+    try {
+        $pendingRows = @(Import-Csv -LiteralPath $pendingCsv)
+        $nextBatchRows = @(Import-Csv -LiteralPath $nextBatchCsv)
+    } catch { return $false }
     $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
     if ($blocked.Count -gt 0) { return $false }
-    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) { return $false }
+    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $nextBatchRows.Count) { return $false }
     if ([int]$gate.pending_count -ne $pendingRows.Count) { return $false }
+    if ($null -eq $gate.next_batch_count -or [int]$gate.next_batch_count -ne $nextBatchRows.Count -or $nextBatchRows.Count -gt $pendingRows.Count) { return $false }
+    if ($pendingRows.Count -gt 0 -and $nextBatchRows.Count -eq 0) { return $false }
+    $trustedBatchFields = @("source_path", "file_name", "year", "period", "drive_folder", "size_bytes", "content_sha256", "status", "reasons")
+    for ($index = 0; $index -lt $nextBatchRows.Count; $index++) {
+        foreach ($field in $trustedBatchFields) {
+            if ([string]$nextBatchRows[$index].$field -ne [string]$pendingRows[$index].$field) { return $false }
+        }
+    }
     if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) { return $false }
     return $true
 }
@@ -149,7 +160,7 @@ function Test-FullProjectCompletionMarker {
     if ($discoveredCount -lt 0 -or $discoveredCount -ne [int]$marker.discovered_folder_count) { return $false }
     try {
         $rows = @(Import-Csv -LiteralPath $summary)
-        $bad = @($rows | Where-Object { $_.status -in @("error", "blocked") })
+        $bad = @($rows | Where-Object { $_.status -notin @("copied", "skipped_existing") })
     } catch { return $false }
     return $bad.Count -eq 0 -and [int]$marker.completed_folder_count -eq $discoveredCount
 }

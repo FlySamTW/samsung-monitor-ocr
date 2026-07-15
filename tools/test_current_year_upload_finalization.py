@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
+from tools import build_upload_gate_proof as upload_gate_module
 from tools.audit_distant_followme_risk import (
     file_sha256,
     finalization_input_sha256,
@@ -251,6 +252,54 @@ class CurrentYearUploadFinalizationTests(unittest.TestCase):
             rejected = build_upload_gate_proof(item["output"], 2026, execute=True)
             self.assertFalse(rejected["valid"])
             self.assertFalse(proof_path.exists())
+
+    def test_shared_upload_gate_proof_refuses_model_benchmark_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            audit = output / "_ocr_audit"
+            audit.mkdir(parents=True)
+            (audit / "model_benchmark.lock").write_text("locked", encoding="utf-8")
+            proof_path = output / "_drive_upload" / "upload_gate_proof.json"
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text("{}", encoding="utf-8")
+            rejected = build_upload_gate_proof(output, 2026, execute=True)
+            self.assertFalse(rejected["valid"])
+            self.assertTrue(any("model_benchmark_lock_active" in error for error in rejected["errors"]))
+            self.assertFalse(proof_path.exists())
+
+    def test_shared_proof_rechecks_interlocks_immediately_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            proof_path = output / "_drive_upload" / "upload_gate_proof.json"
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text("stale", encoding="utf-8")
+            with (
+                patch.object(upload_gate_module, "build_proof", return_value=({"gate_open": True}, [])),
+                patch.object(
+                    upload_gate_module,
+                    "active_interlock_errors",
+                    return_value=["model_benchmark_lock_active:racing-lock"],
+                ),
+            ):
+                rejected = upload_gate_module.run(output, 2026, execute=True)
+            self.assertFalse(rejected["valid"])
+            self.assertFalse(proof_path.exists())
+            self.assertIn("model_benchmark_lock_active:racing-lock", rejected["errors"])
+
+    def test_shared_proof_removes_itself_when_any_authority_changes_during_readback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            proof_path = output / "_drive_upload" / "upload_gate_proof.json"
+            first = {"schema": upload_gate_module.SCHEMA, "gate_open": True, "pending_count": 1}
+            changed = {"schema": upload_gate_module.SCHEMA, "gate_open": True, "pending_count": 2}
+            with (
+                patch.object(upload_gate_module, "build_proof", side_effect=[(first, []), (changed, [])]),
+                patch.object(upload_gate_module, "active_interlock_errors", return_value=[]),
+            ):
+                rejected = upload_gate_module.run(output, 2026, execute=True)
+            self.assertFalse(rejected["valid"])
+            self.assertFalse(proof_path.exists())
+            self.assertIn("proof_authority_snapshot_changed_during_build", rejected["errors"])
 
 
 if __name__ == "__main__":

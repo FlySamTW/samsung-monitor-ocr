@@ -45,6 +45,7 @@ $BackendErr = Join-Path $LogDir "auto_questionable_backend_$Stamp.err.log"
 $BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\model_benchmark.lock"
 $UploadGateProofBuilder = Join-Path $RepoRoot "tools\build_upload_gate_proof.py"
 $UploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
+$HistoricalUploadAuthorizationPath = Join-Path $OutputDir "_ocr_audit\historical_upload_authorization.json"
 $script:UploadCompleted = $false
 
 function Write-RunLog {
@@ -185,7 +186,11 @@ function Refresh-UploadAndReviewSplit {
         throw "current-year risk audit failed; refusing to build upload manifest"
     }
     Write-RunLog "refreshing upload manifest"
-    & $Python "tools\prepare_drive_upload_manifest.py" --output-dir $OutputDir --no-stage *>> $LogPath
+    $manifestArgs = @("tools\prepare_drive_upload_manifest.py", "--output-dir", $OutputDir, "--no-stage")
+    if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
+        $manifestArgs += @("--years", [string]$year)
+    }
+    & $Python @manifestArgs *>> $LogPath
     $manifestExit = $LASTEXITCODE
     Write-RunLog "manifest refresh exit=$manifestExit"
     if ($manifestExit -ne 0) {
@@ -278,7 +283,7 @@ function Start-Uploader-IfNeeded {
         $uploadOut = Join-Path $OutputDir "_drive_upload\rclone_drive_upload_stdout.log"
         $uploadErr = Join-Path $OutputDir "_drive_upload\rclone_drive_upload_stderr.log"
         $process = Start-Process -FilePath $Python `
-            -ArgumentList @(
+            -ArgumentList (@(
                 "tools\rclone_drive_upload.py",
                 "--output-dir", $OutputDir,
                 "--execute",
@@ -287,7 +292,7 @@ function Start-Uploader-IfNeeded {
                 "--transfers", "4",
                 "--checkers", "8",
                 "--rclone-timeout-seconds", "1200"
-            ) `
+            ) + $(if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) { @("--years", [string](Get-Date).Year) } else { @() })) `
             -WorkingDirectory $RepoRoot `
             -WindowStyle Hidden `
             -RedirectStandardOutput $uploadOut `
@@ -355,9 +360,17 @@ function Assert-FullProjectRecursiveComplete {
     }
     $discovered = @(Import-Csv -LiteralPath $discoveryPath)
     $summaries = @(Import-Csv -LiteralPath $summaryPath)
+    if ($discovered.Count -eq 0) { throw "full-project discovery inventory is empty" }
     $summaryByFolder = @{}
     foreach ($row in $summaries) { if ($row.folder) { $summaryByFolder[[string]$row.folder] = $row } }
     $errors = @()
+    $discoveryKeys = @($discovered | ForEach-Object { [string]$_.folder })
+    $summaryKeys = @($summaries | ForEach-Object { [string]$_.folder })
+    if (@($discoveryKeys | Sort-Object -Unique).Count -ne $discoveryKeys.Count) { $errors += "duplicate_discovery_folder" }
+    if (@($summaryKeys | Sort-Object -Unique).Count -ne $summaryKeys.Count) { $errors += "duplicate_summary_folder" }
+    foreach ($key in $summaryKeys) {
+        if ($key -and $key -notin $discoveryKeys) { $errors += "extra_summary:$key" }
+    }
     foreach ($folder in $discovered) {
         $key = [string]$folder.folder
         if (-not $summaryByFolder.ContainsKey($key)) {
@@ -365,7 +378,7 @@ function Assert-FullProjectRecursiveComplete {
             continue
         }
         $row = $summaryByFolder[$key]
-        if ([string]$row.status -in @("error", "blocked")) { $errors += "$($row.status):$key" }
+        if ([string]$row.status -notin @("copied", "skipped_existing")) { $errors += "incomplete_$($row.status):$key" }
         if ([string]$row.image_count -ne [string]$folder.image_count) { $errors += "image_count_changed:$key" }
         if ([string]$row.source_latest_mtime -ne [string]$folder.latest_mtime) { $errors += "source_changed:$key" }
     }
@@ -379,6 +392,39 @@ function Assert-FullProjectRecursiveComplete {
         folder_discovery_sha256 = Get-FileSha256 $discoveryPath
         folder_summary_sha256 = Get-FileSha256 $summaryPath
     }
+}
+
+function Write-HistoricalUploadAuthorization {
+    $currentMarkerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
+    if (-not (Test-Path -LiteralPath $currentMarkerPath -PathType Leaf)) {
+        throw "historical upload blocked: current-year completion marker is missing"
+    }
+    try { $currentMarker = Get-Content -LiteralPath $currentMarkerPath -Raw | ConvertFrom-Json } catch {
+        throw "historical upload blocked: current-year completion marker is unreadable"
+    }
+    if ([int]$currentMarker.pending_count -ne 0 -or -not [string]$currentMarker.audit_input_sha256 -or -not [string]$currentMarker.backfill_run_id) {
+        throw "historical upload blocked: current-year marker lacks exact zero-pending authority"
+    }
+    $recursiveProof = Assert-FullProjectRecursiveComplete
+    $auditDir = Join-Path $OutputDir "_ocr_audit"
+    $discoveryPath = Join-Path $auditDir "folder_discovery.csv"
+    $summaryPath = Join-Path $auditDir "folder_summary.csv"
+    [pscustomobject]@{
+        schema = "samsung-ocr-historical-upload-authorization/v1"
+        generated_at = (Get-Date).ToString("o")
+        all_year_questionable_review = $true
+        final_model_review = $true
+        current_year_marker_path = $currentMarkerPath
+        current_year_marker_sha256 = Get-FileSha256 $currentMarkerPath
+        folder_discovery_path = $discoveryPath
+        folder_discovery_sha256 = $recursiveProof.folder_discovery_sha256
+        folder_summary_path = $summaryPath
+        folder_summary_sha256 = $recursiveProof.folder_summary_sha256
+        discovered_folder_count = $recursiveProof.discovered_folder_count
+        completed_folder_count = $recursiveProof.completed_folder_count
+        error_count = $recursiveProof.error_count
+    } | ConvertTo-Json | Set-Content -LiteralPath $HistoricalUploadAuthorizationPath -Encoding UTF8
+    Write-RunLog "historical upload authorization written path=$HistoricalUploadAuthorizationPath"
 }
 
 function Invoke-QuestionablePass {
@@ -454,6 +500,9 @@ function Invoke-QuestionablePass {
 
 Push-Location $RepoRoot
 try {
+    if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
+        Remove-Item -LiteralPath $HistoricalUploadAuthorizationPath -Force -ErrorAction SilentlyContinue
+    }
     Write-RunLog "watcher started; waiting for recursive OCR runner to finish"
 
     while ($true) {
@@ -529,6 +578,9 @@ try {
         }
     }
 
+    if (-not $CurrentYearOnly -and $SkipCurrentYearPhases) {
+        Write-HistoricalUploadAuthorization
+    }
     Refresh-UploadAndReviewSplit
     Rebuild-DriveCorrectionLedgerIfSafe
     if (-not (Update-UploadGateProof -Required)) { throw "current-year upload proof missing after final review" }

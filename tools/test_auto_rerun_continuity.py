@@ -54,10 +54,20 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("Start-Uploader-IfNeeded -WaitForCompletion", SCRIPT)
         proof = SCRIPT.index("Update-UploadGateProof -Required")
         uploader = SCRIPT.rindex("Start-Uploader-IfNeeded -WaitForCompletion")
-        marker = SCRIPT.index("current_year_rerun_cycle_complete.json")
+        marker = SCRIPT.index(r'$markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"', uploader)
         self.assertLess(proof, uploader)
         self.assertLess(uploader, marker)
         self.assertIn("pending_count = [int]$gate.pending_count", SCRIPT)
+
+    def test_historical_upload_requires_inventory_bound_authorization(self):
+        self.assertIn("samsung-ocr-historical-upload-authorization/v1", SCRIPT)
+        self.assertIn("Write-HistoricalUploadAuthorization", SCRIPT)
+        self.assertIn("current_year_marker_sha256", SCRIPT)
+        self.assertIn("folder_discovery_sha256", SCRIPT)
+        self.assertIn("folder_summary_sha256", SCRIPT)
+        authorization = SCRIPT.rindex("Write-HistoricalUploadAuthorization")
+        uploader = SCRIPT.rindex("Start-Uploader-IfNeeded -WaitForCompletion")
+        self.assertLess(authorization, uploader)
 
     def test_intermediate_review_phases_cannot_start_uploader(self):
         start = SCRIPT.index("function Start-Uploader-IfNeeded")
