@@ -72,6 +72,10 @@ def main() -> None:
     retained_prompt, retained_compacted = ocr.build_runtime_system_prompt(iterated_prompt, "")
     assert retained_compacted is False
     assert retained_prompt == iterated_prompt + "\n\n" + ocr.V1945_OUTPUT_CONTRACT
+    assert "narration" in ocr.V1945_OUTPUT_CONTRACT
+    assert 'parsed.get("narration")' in (
+        PROJECT_ROOT / "samsung_ocr_batch_processor.py"
+    ).read_text(encoding="utf-8")
 
     assert not ocr.has_explicit_distant_layout_evidence(
         "這是 3C 賣場，有展示區與多台螢幕，但中間一台是主角。"

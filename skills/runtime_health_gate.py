@@ -113,6 +113,17 @@ def trip_runtime_health_fuse(
         "pid": os.getpid(),
         "clearance": "manual_after_fix_and_regression_only",
     }
+    if path.is_file():
+        history_dir = path.parent / "runtime_health_fuse_history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archived = history_dir / f"runtime_health_fuse_{stamp}.json"
+        try:
+            archived.write_bytes(path.read_bytes())
+        except OSError:
+            # Failure to archive must not prevent the active interlock from
+            # being refreshed with the newest incident.
+            pass
     temp = path.with_name(path.name + f".tmp.{os.getpid()}")
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp, path)

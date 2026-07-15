@@ -53,6 +53,8 @@ class EvidenceContractTests(unittest.TestCase):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         full, _ = batch.build_runtime_system_prompt(prompt, "\\nDYNAMIC_REFERENCE")
         self.assertTrue(full.endswith(batch.V1945_OUTPUT_CONTRACT))
+        self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
 
     def test_second_pass_is_independent_of_prior_evidence(self):

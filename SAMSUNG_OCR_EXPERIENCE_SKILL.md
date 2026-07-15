@@ -461,6 +461,8 @@ The contract version and guard implementation identity are separate authorities.
 
 The runtime health fuse is durable, not an in-memory stop flag. A trip atomically writes `_ocr_audit/runtime_health_fuse.json`. The batch start API, continuity supervisor, upload watchdog, manifest gate, shared upload proof builder, and uploader all fail closed while that marker exists. No scheduler may delete it; clearance is manual only after the cause is fixed and the critical regressions plus a bounded live smoke run pass.
 
+While the fuse remains active, `/api/start_batch` has exactly one constrained diagnostic exception: an explicit `runtime_health_trial=true` request whose folder is under `_ocr_staging`, contains `runtime_health_smoke` in its relative path, contains 1-15 images, has no success/failure session JSON, and is protected by `model_benchmark.lock`. This exception cannot resume production or open upload. A new incident archives the previous fuse before atomically refreshing the active marker. After the bounded smoke passes and its trace/UI evidence is audited, archive and manually remove the active fuse before normal continuation.
+
 Monitoring means progress plus content quality plus presentation health plus upload isolation. A counter that advances while answers are contaminated is a failure, not progress. The recurring monitor must audit all four dimensions and must never auto-resume a run stopped by the runtime health gate.
 
 Anti-bypass invariants are part of that contract:

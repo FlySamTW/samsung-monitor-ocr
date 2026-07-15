@@ -72,6 +72,15 @@ const isStructuredModelOutput = (text) => {
 const humanizeStructuredModelOutput = (text, fallback) => {
   const value = String(text || "").trim();
   if (!isStructuredModelOutput(value)) return value;
+  try {
+    const normalized = value.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+    const parsed = JSON.parse(normalized);
+    const narration = String(parsed?.narration || parsed?.desc || "").trim();
+    if (narration) return narration;
+  } catch {
+    // A live JSON stream is often incomplete. Show bounded evidence below
+    // until the model's narration field becomes parseable.
+  }
   const field = (name) => {
     const match = value.match(new RegExp(`"${name}"\\s*:\\s*"([^"\\r\\n]*)"`, "i"));
     return match ? match[1].trim() : "";

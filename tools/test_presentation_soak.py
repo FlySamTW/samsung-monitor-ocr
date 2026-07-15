@@ -294,6 +294,7 @@ class PresentationSoakTests(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("isStructuredModelOutput(text)", app)
         self.assertIn("humanizeStructuredModelOutput(rawSameFileStream, pendingNarration)", app)
+        self.assertIn("parsed?.narration || parsed?.desc", app)
         self.assertIn("isStructuredModelOutput(text.replace(/^\\[THINK\\]\\s*/, ''))", app)
 
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):

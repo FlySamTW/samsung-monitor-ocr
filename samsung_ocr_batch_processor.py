@@ -199,11 +199,13 @@ def _presentation_payload(orchestrator):
 
 V1945_OUTPUT_CONTRACT = (
     "FINAL OUTPUT CONTRACT (v19.45): Return exactly one JSON object and no prose. "
-    "It must contain core keys view_type, screen_status, quality_issue, model, price, category "
+    "It must contain narration: a 60-300 character Traditional Chinese first-person observation of only the current image; "
+    "narration must explain visible evidence and must not mention prior answers, corrections, prompts, JSON, or rounds. "
+    "It must also contain core keys view_type, screen_status, quality_issue, model, price, category "
     "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
     "label_ownership (matched|mismatched|ambiguous|not_visible|not_applicable), "
     "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
-    "Use [] when no FollowMe physical evidence exists. Keep core and evidence in this same object."
+    "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object."
 )
 
 
@@ -2938,12 +2940,26 @@ def process_single_image(
                     thinking_text = prefix
             if parsed is not None:
                 parsed = json.loads(sanitize_json(json.dumps(parsed, ensure_ascii=False)))
+                structured_narration = str(
+                    parsed.get("narration") or parsed.get("desc") or ""
+                ).strip()
+                if structured_narration:
+                    thinking_text = structured_narration
 
             # [v18.99 Fix] Retry if JSON is completely missing
             if not parsed and attempt < max_retries:
                 console.print(f"[bold red]⚠️ 未偵測到有效 JSON，要求 LLM 補完...[/bold red]")
                 orchestrator.log_system("⚠️ [自動重試] AI 未輸出有效結果，正在重試...")
                 continue
+
+            # The model response is machine-readable JSON, but the boss-facing
+            # UI requires this pass's actual natural-language observation.
+            # Retry from the pristine photo when that field is absent; never
+            # feed the JSON response back into the next request.
+            if parsed and not str(parsed.get("narration") or parsed.get("desc") or "").strip():
+                if attempt < max_retries:
+                    orchestrator.log_system("⚠️ [自動重試] AI 未輸出可讀判讀獨白，將從原圖獨立重讀。")
+                    continue
 
             # [v18.90] Price Consistency Check
             price_check_passed = True
@@ -4203,12 +4219,6 @@ def start_batch():
         return jsonify({"error": "系統未初始化"}), 500
 
     try:
-        active_fuse = read_runtime_health_fuse(AUDIT_DIR)
-        if active_fuse:
-            return jsonify({
-                "error": "內容健康門已熔斷；修正與回歸驗證完成前不得續跑",
-                "runtime_health_fuse": active_fuse,
-            }), 423
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
 
@@ -4218,11 +4228,40 @@ def start_batch():
         restart = req_data.get('restart', False)
         reprocess_last_n = req_data.get('reprocess_last_n', 0)
         confirmed = req_data.get('confirmed', False)
+        runtime_health_trial = req_data.get('runtime_health_trial') is True
 
         if target_dir and not os.path.exists(target_dir):
             return jsonify({"error": f"資料夾不存在: {target_dir}"}), 404
 
         selected_dir = target_dir or orchestrator.image_dir
+        active_fuse = read_runtime_health_fuse(AUDIT_DIR)
+        if active_fuse:
+            selected_path = Path(str(selected_dir or "")).resolve()
+            smoke_root = (OUTPUT_ROOT / "_ocr_staging").resolve()
+            try:
+                relative_smoke_path = selected_path.relative_to(smoke_root)
+            except (OSError, ValueError):
+                relative_smoke_path = None
+            smoke_images = []
+            if relative_smoke_path is not None and selected_path.is_dir():
+                smoke_images = [
+                    item for item in selected_path.iterdir()
+                    if item.is_file() and item.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                ]
+            safe_fuse_trial = bool(
+                runtime_health_trial
+                and relative_smoke_path is not None
+                and "runtime_health_smoke" in str(relative_smoke_path).lower()
+                and 1 <= len(smoke_images) <= 15
+                and (AUDIT_DIR / "model_benchmark.lock").is_file()
+                and not any(selected_path.glob("*OCR成功.json"))
+                and not any(selected_path.glob("*OCR失敗.json"))
+            )
+            if not safe_fuse_trial:
+                return jsonify({
+                    "error": "內容健康門已熔斷；只允許受限隔離試跑，不得續跑正式批次",
+                    "runtime_health_fuse": active_fuse,
+                }), 423
 
         if should_compare_official_price(selected_dir):
             # [v18.67] 每次啟動當年度批次時重置價格查詢快取，確保重新從官網抓最新價格

@@ -52,6 +52,10 @@ class RuntimeHealthGateTests(unittest.TestCase):
             self.assertEqual(payload["source_file"], "sample.jpg")
             self.assertEqual(payload["attempt"], 2)
             self.assertIn("ui_narration_contains_raw_structure", payload["reasons"])
+            trip_runtime_health_fuse(temp, reasons=["second_incident"], source_file="next.jpg")
+            history = list(Path(temp, "runtime_health_fuse_history").glob("*.json"))
+            self.assertEqual(len(history), 1)
+            self.assertIn("ui_narration_contains_raw_structure", history[0].read_text(encoding="utf-8"))
 
     def test_unreadable_runtime_health_fuse_remains_active(self):
         with TemporaryDirectory() as temp:
@@ -69,6 +73,8 @@ class RuntimeHealthGateTests(unittest.TestCase):
         proof = (root / "tools" / "build_upload_gate_proof.py").read_text(encoding="utf-8")
         uploader = (root / "tools" / "rclone_drive_upload.py").read_text(encoding="utf-8")
         self.assertIn("read_runtime_health_fuse(AUDIT_DIR)", processor)
+        self.assertIn("runtime_health_trial = req_data.get('runtime_health_trial') is True", processor)
+        self.assertIn('"runtime_health_smoke" in str(relative_smoke_path).lower()', processor)
         self.assertIn("runtime_health_fuse_active", supervisor)
         self.assertIn("RuntimeHealthFusePath", watchdog)
         self.assertIn("runtime_health_fuse_active", manifest)
