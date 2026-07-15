@@ -62,6 +62,10 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("Full-Project-ContinuationReady", self.source)
         self.assertIn("currentYear.completed_at", self.source)
         self.assertIn("request.requested_at", self.source)
+        self.assertIn("Test-UploadGateProof", self.source)
+        self.assertIn("[int]$gate.pending_count -ne 0", self.source)
+        self.assertIn("manifest_summary_sha256", self.source)
+        self.assertIn("backfill_run_id", self.source)
 
     def test_full_project_starts_recursive_before_all_year_watcher(self):
         recursive = self.source.index('"tools\\recursive_ocr_flat_export.py"')
@@ -74,6 +78,13 @@ class ContinuitySupervisorTests(unittest.TestCase):
     def test_full_project_folder_timeout_allows_accuracy_first_multiday_runs(self):
         self.assertIn('"--timeout-minutes","10080"', self.source)
         self.assertNotIn('"--timeout-minutes","360"', self.source)
+
+    def test_full_project_marker_is_bound_to_current_inventory_and_zero_errors(self):
+        self.assertIn("function Test-FullProjectCompletionMarker", self.source)
+        self.assertIn("folder_discovery_sha256", self.source)
+        self.assertIn("folder_summary_sha256", self.source)
+        self.assertIn('$_.' + 'status -in @("error", "blocked")', self.source)
+        self.assertIn("$fullProjectDone = Test-FullProjectCompletionMarker", self.source)
 
 
 if __name__ == "__main__":

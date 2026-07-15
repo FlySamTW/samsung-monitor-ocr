@@ -198,6 +198,7 @@
 - 三層守門另補齊四條可重現漏洞：單機結構／明示遠景敘述衝突、`view_type/category` 衝突、`label_ownership=matched`／鄰機價牌敘述衝突、FollowMe 正式 SKU 繞過實體證據。遠景若仍帶同主體 FollowMe 強實體線索或 `S32FM50x/S32FM70x/S43FM70x` 文字也不得通過。官方參考價差達 20% 以上需獨立重讀一次，但兩輪同型號、同照片價格且價牌歸屬一致時保留實際店價，不用官網價覆蓋照片。
 - 新三層守門的實際規則身分為 `evidence_guard_revision=20260715.2`。單有 `v19.45 verified` 但缺少這個修訂碼的舊 live trace 不具新版驗證效力；安全邊界的 backfill builder 會將這些原圖全部重新列入候選，Drive manifest 也會失敗封閉。舊 trace 遷移不得偽造新修訂碼。
 - 2026-07-15 新修訂碼 dry-run 已用正式 `_ocr_audit` 驗證：5,951/5,951 個唯一原圖身分全數列入新守門 backfill，舊規則已驗證數 0，缺檔 0、衝突 0、無效列 0。這是舊 live `v19.45` 結果沒有被誤算為新規則完成的實際證明。
+- 2026-07-15 接力鏈唯讀稽核發現並已加固四條邊界後漏洞：新 boundary 必須等 backfill 完成且驗證數=原圖數才解 lock；目前已在執行、無法載入新腳本的 PID 8668 則由每 5 分鐘 supervisor 以 current guard revision 重建剩餘候選並自癒續跑。Manifest 或 review split 非零、proof 過期／雜湊不符均不得寫 current-year marker 或啟 uploader；中間輪次不得上傳，必須所有規定複核結束、uploader 結束、manifest/proof 再建且 pending=0 才允許歷史年度。歷史 recursive 任一資料匣 `error/blocked/缺 summary/來源變動` 會非零結束，full marker 必須綁定當前 discovery/summary SHA-256 與 error=0，否則 supervisor 繼續補跑。
 - 上述磁碟變更尚未載入目前 active OCR；不曾重啟後端、建置 live `dashboard/dist` 或刷新使用者頁面。`tools/windows_user_launcher.ps1` 現會在既有安全邊界重啟時偵測 `dashboard/src` 比 `dist` 新並自動建置，因此新版後端計數與前端標示會一起套用，不會在 OCR 執行中途出現新舊契約不一致。完整 critical regression、PowerShell parser、Python compile 與不碰 live dist 的暫存 Vite build 均已通過。
 
 ## 9. 已知未解決與重大風險

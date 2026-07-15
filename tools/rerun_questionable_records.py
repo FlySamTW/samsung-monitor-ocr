@@ -200,6 +200,9 @@ def reason_for(row: dict[str, str]) -> list[str]:
     reasons: list[str] = []
     if is_complete_auto_verified(row):
         return []
+    period = norm(row.get("period") or row.get("file_name") or row.get("source_path"))
+    if "2026" in period and norm(row.get("evidence_guard_revision")) != EVIDENCE_GUARD_REVISION:
+        reasons.append("evidence_guard_revision_missing")
     model = row.get("human_model") or row.get("model")
     price = row.get("human_price") or row.get("price")
     distant = is_distant(row)

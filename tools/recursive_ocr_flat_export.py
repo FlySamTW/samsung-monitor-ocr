@@ -808,6 +808,36 @@ def main() -> int:
         write_state(state_path, state)
         print(f"[接力] 完成：{summary.get('status')} {folder_row['folder']}", flush=True)
 
+    refresh_runtime_discovery()
+    incomplete_folders: list[dict[str, str]] = []
+    for folder_row in folders:
+        folder_key = str(folder_row["folder"])
+        summary = summary_by_folder.get(folder_key)
+        reason = ""
+        if not summary:
+            reason = "missing_summary"
+        elif not resume_row_matches_current(summary, folder_row):
+            reason = "source_inventory_changed"
+        elif str(summary.get("status") or "").lower() in {"error", "blocked"}:
+            reason = str(summary.get("status") or "incomplete")
+        if reason:
+            incomplete_folders.append({"folder": folder_key, "reason": reason})
+    state["completion_audit"] = {
+        "discovered_folder_count": len(folders),
+        "completed_folder_count": len(folders) - len(incomplete_folders),
+        "error_count": len(incomplete_folders),
+        "incomplete_samples": incomplete_folders[:20],
+    }
+    if incomplete_folders:
+        state["failed_at"] = datetime.now().isoformat()
+        write_state(state_path, state)
+        print(
+            f"[recursive] completion audit failed incomplete={len(incomplete_folders)} "
+            f"sample={incomplete_folders[:3]}",
+            flush=True,
+        )
+        return 2
+
     state["finished_at"] = datetime.now().isoformat()
     write_state(state_path, state)
     print(f"[接力] 全部結束 folders={len(folders)} unsupported={len(unsupported)}")

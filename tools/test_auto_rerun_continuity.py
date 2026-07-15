@@ -37,11 +37,34 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("$CurrentYearFirst -and -not $SkipCurrentYearPhases", SCRIPT)
         self.assertIn("full_project_rerun_cycle_complete.json", SCRIPT)
         self.assertIn("all_year_questionable_review = $true", SCRIPT)
+        self.assertIn("Assert-FullProjectRecursiveComplete", SCRIPT)
+        self.assertIn("folder_discovery_sha256", SCRIPT)
+        self.assertIn("folder_summary_sha256", SCRIPT)
+        self.assertIn("error_count = $recursiveProof.error_count", SCRIPT)
 
     def test_fresh_manifest_precedes_fail_closed_drive_ledger_rebuild(self):
         self.assertIn("build_drive_correction_reconciliation.py", SCRIPT)
         main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]
         self.assertLess(main_tail.index("Rebuild-DriveCorrectionLedgerIfSafe"), main_tail.index("Start-Uploader-IfNeeded"))
+
+    def test_manifest_review_split_and_exact_gate_proof_are_mandatory(self):
+        self.assertIn('throw "upload manifest refresh failed; completion and upload remain blocked"', SCRIPT)
+        self.assertIn('throw "review split failed; completion and upload remain blocked"', SCRIPT)
+        self.assertIn("build_upload_gate_proof.py", SCRIPT)
+        self.assertIn("Start-Uploader-IfNeeded -WaitForCompletion", SCRIPT)
+        proof = SCRIPT.index("Update-UploadGateProof -Required")
+        uploader = SCRIPT.rindex("Start-Uploader-IfNeeded -WaitForCompletion")
+        marker = SCRIPT.index("current_year_rerun_cycle_complete.json")
+        self.assertLess(proof, uploader)
+        self.assertLess(uploader, marker)
+        self.assertIn("pending_count = [int]$gate.pending_count", SCRIPT)
+
+    def test_intermediate_review_phases_cannot_start_uploader(self):
+        start = SCRIPT.index("function Start-Uploader-IfNeeded")
+        end = SCRIPT.index("function Start-Recursive-IfNeeded", start)
+        body = SCRIPT[start:end]
+        self.assertIn('if (-not $WaitForCompletion)', body)
+        self.assertIn('uploader deferred until all configured review phases finish', body)
 
     def test_accuracy_first_staged_and_recursive_runs_have_multiday_timeout(self):
         self.assertGreaterEqual(SCRIPT.count('"--timeout-minutes", "10080"'), 2)

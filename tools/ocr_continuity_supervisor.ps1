@@ -113,11 +113,77 @@ function Full-Project-ContinuationReady {
     $request = Read-JsonFile $fullProjectRequestPath
     $currentYear = Read-JsonFile $currentYearCompletePath
     if (-not $request -or -not $currentYear) { return $false }
+    if (-not (Test-UploadGateProof)) { return $false }
+    $gate = Read-JsonFile $uploadGateProofPath
+    if (-not $gate -or [int]$gate.pending_count -ne 0) { return $false }
+    if (
+        [string]$currentYear.upload_gate_schema -ne [string]$gate.schema -or
+        [string]$currentYear.audit_input_sha256 -ne [string]$gate.audit_input_sha256 -or
+        [string]$currentYear.manifest_summary_sha256 -ne [string]$gate.manifest_summary_sha256 -or
+        [string]$currentYear.pending_sha256 -ne [string]$gate.pending_sha256 -or
+        [string]$currentYear.backfill_run_id -ne [string]$gate.backfill_run_id -or
+        [int]$currentYear.pending_count -ne 0
+    ) { return $false }
     try {
         return ([datetime]$currentYear.completed_at) -ge ([datetime]$request.requested_at)
     } catch {
         return $false
     }
+}
+
+function Test-FullProjectCompletionMarker {
+    $marker = Read-JsonFile $fullProjectCompletePath
+    if (-not $marker -or [int]$marker.error_count -ne 0) { return $false }
+    $discovery = Join-Path $audit "folder_discovery.csv"
+    $summary = Join-Path $audit "folder_summary.csv"
+    if (
+        (Get-FileSha256 $discovery) -ne [string]$marker.folder_discovery_sha256 -or
+        (Get-FileSha256 $summary) -ne [string]$marker.folder_summary_sha256
+    ) { return $false }
+    $discoveredCount = Get-CsvRowCount $discovery
+    if ($discoveredCount -lt 0 -or $discoveredCount -ne [int]$marker.discovered_folder_count) { return $false }
+    try {
+        $rows = @(Import-Csv -LiteralPath $summary)
+        $bad = @($rows | Where-Object { $_.status -in @("error", "blocked") })
+    } catch { return $false }
+    return $bad.Count -eq 0 -and [int]$marker.completed_folder_count -eq $discoveredCount
+}
+
+function Start-EvidenceBackfillIfNeeded {
+    $builder = Join-Path $RepoRoot "tools\build_v1945_evidence_backfill.py"
+    $candidate = Join-Path $audit "v1945_evidence_backfill_2026.csv"
+    $result = Join-Path $audit "v1945_evidence_backfill_2026_results.csv"
+    $summaryCsv = Join-Path $audit "v1945_evidence_backfill_2026_run_summary.csv"
+    $builderOutput = @(& $python $builder --audit-dir $audit --year "2026" --output $candidate --execute 2>&1)
+    $builderExit = $LASTEXITCODE
+    $builderText = $builderOutput -join "`n"
+    if ($builderExit -ne 0) {
+        Alert "evidence_backfill_builder_failed" @{detail=$builderText}
+        throw "evidence backfill builder failed closed"
+    }
+    try { $proof = $builderText | ConvertFrom-Json } catch {
+        Alert "evidence_backfill_builder_unreadable" @{detail=$builderText}
+        throw "evidence backfill builder returned unreadable output"
+    }
+    if ($proof.executed -ne $true) { throw "evidence backfill builder did not atomically write candidates" }
+    if ([int]$proof.candidate_rows -eq 0) {
+        Log-Event "evidence_backfill_complete" @{sources=[int]$proof.unique_year_sources;verified=[int]$proof.already_verified_year_sources}
+        return $false
+    }
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    Start-Hidden $python @(
+        "tools\rerun_staged_candidates.py",
+        "--source-root",$SourceRoot,
+        "--output-dir",$OutputDir,
+        "--backend-url",$BackendUrl,
+        "--input-csv",$candidate,
+        "--output-csv",$result,
+        "--run-summary-csv",$summaryCsv,
+        "--execute","--resume-existing-then-continue",
+        "--poll-seconds","10","--timeout-minutes","10080"
+    ) (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
+    Log-Event "evidence_backfill_restarted" @{remaining=[int]$proof.candidate_rows;sources=[int]$proof.unique_year_sources}
+    return $true
 }
 
 try {
@@ -189,7 +255,11 @@ try {
         Alert "staged_or_recursive_state_ambiguous" @{staged=$staged.Count;recursive=$recursive.Count}
         exit 8
     }
-    $fullProjectDone = Test-Path -LiteralPath $fullProjectCompletePath
+    $fullProjectDone = Test-FullProjectCompletionMarker
+    if (-not $fullProjectDone -and (Start-EvidenceBackfillIfNeeded)) {
+        $pipelineTransitionStarted = $true
+        exit 0
+    }
     $fullProjectReady = Full-Project-ContinuationReady
     if ($fullProjectDone) {
         Log-Event "full_project_complete_noop" @{marker=$fullProjectCompletePath}

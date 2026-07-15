@@ -14,6 +14,7 @@ from tools.audit_distant_followme_risk import (
     finalization_input_sha256,
     validate_finalization_proof,
 )
+from tools.build_upload_gate_proof import run as build_upload_gate_proof
 from tools.prepare_drive_upload_manifest import current_year_risk_audit_is_fresh, main as prepare_manifest_main
 
 
@@ -216,6 +217,40 @@ class CurrentYearUploadFinalizationTests(unittest.TestCase):
             self.assertEqual(summary["current_year_upload_gate_fail_reasons"], [])
             self.assertEqual(summary["current_year_finalization_proof"]["expected_candidate_count"], 1)
             self.assertEqual(summary["next_batch_sha256"], file_sha256(batch))
+
+    def test_shared_upload_gate_proof_is_atomic_and_tamper_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item = self.build_fixture(root)
+            with patch("tools.audit_distant_followme_risk.build_candidates", return_value=self.completed_backfill()):
+                proof = validate_finalization_proof(item["output"], 2026, item["candidate"], item["result"], item["summary"])
+            risk_csv = item["output"] / "_ocr_audit" / "distant_followme_risk_2026_latest.csv"
+            risk_json = item["output"] / "_ocr_audit" / "distant_followme_risk_2026_latest.json"
+            write_csv(risk_csv, [], ["file_name", "reason"])
+            risk_json.write_text(json.dumps({
+                "audit_complete": True,
+                "audit_input_sha256": proof["audit_input_sha256"],
+                "risk_output_sha256": file_sha256(risk_csv),
+                "backfill_run_id": proof["backfill_run_id"],
+                "finalization_proof": proof,
+            }), encoding="utf-8")
+            argv = [
+                "prepare_drive_upload_manifest.py",
+                "--output-dir", str(item["output"]),
+                "--no-stage",
+            ]
+            with patch.object(sys, "argv", argv):
+                self.assertEqual(prepare_manifest_main(), 0)
+            built = build_upload_gate_proof(item["output"], 2026, execute=True)
+            proof_path = item["output"] / "_drive_upload" / "upload_gate_proof.json"
+            self.assertTrue(built["valid"])
+            self.assertTrue(proof_path.is_file())
+            pending = item["output"] / "_drive_upload" / "drive_upload_ready_pending.csv"
+            with pending.open("a", encoding="utf-8") as handle:
+                handle.write("tampered\n")
+            rejected = build_upload_gate_proof(item["output"], 2026, execute=True)
+            self.assertFalse(rejected["valid"])
+            self.assertFalse(proof_path.exists())
 
 
 if __name__ == "__main__":

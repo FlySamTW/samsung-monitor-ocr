@@ -43,12 +43,16 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
             self.script.index('    Start-And-Verify\n'),
         )
 
-    def test_verified_upgrade_starts_full_year_evidence_backfill_before_unlock(self):
+    def test_verified_upgrade_completes_full_year_evidence_backfill_before_unlock(self):
         self.assertIn('function Start-EvidenceBackfill', self.script)
         self.assertIn('build_v1945_evidence_backfill.py', self.script)
         self.assertIn('v1945_evidence_backfill_2026.csv', self.script)
         self.assertIn('evidence_backfill_started', self.script)
-        self.assertIn('upgrade_verified_and_evidence_backfill_started', self.script)
+        self.assertIn('evidence_backfill_running_lock_retained', self.script)
+        self.assertIn('evidence_backfill_completed', self.script)
+        self.assertIn('upgrade_verified_and_evidence_backfill_completed', self.script)
+        self.assertIn('[int]$completion.candidate_rows -ne 0', self.script)
+        self.assertIn('[int]$completion.already_verified_year_sources -ne [int]$completion.unique_year_sources', self.script)
         sequence = self.script.index('    Start-And-Verify\n    Start-EvidenceBackfill\n    Remove-Item')
         self.assertGreater(sequence, self.script.index('    Invoke-LegacyTraceMigration\n'))
 
@@ -59,6 +63,12 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
     def test_supervisor_interlock_is_fail_closed(self):
         self.assertIn('planned_backend_upgrade_interlock', self.supervisor)
         self.assertIn('if ($planned.purpose -eq "backend_upgrade_v1945")', self.supervisor)
+
+    def test_supervisor_restarts_any_remaining_guard_revision_backfill(self):
+        self.assertIn('function Start-EvidenceBackfillIfNeeded', self.supervisor)
+        self.assertIn('build_v1945_evidence_backfill.py', self.supervisor)
+        self.assertIn('evidence_backfill_restarted', self.supervisor)
+        self.assertIn('"--execute","--resume-existing-then-continue"', self.supervisor)
 
     def test_failed_verification_retains_lock_and_success_removes_it(self):
         self.assertIn('upgrade_failed_lock_retained', self.script)

@@ -229,6 +229,42 @@ function Start-EvidenceBackfill {
         $ownedRunner = @(Owned "rerun_staged_candidates\.py")
         if (($status -and [bool]$status.is_running) -or $ownedRunner.Count -gt 0) {
             Log "evidence_backfill_started" @{ pid=$process.Id; candidates=$candidateCount; stdout=$stdout; stderr=$stderr }
+            while (-not $process.HasExited) {
+                Start-Sleep -Seconds 60
+                $live = Get-Status
+                Log "evidence_backfill_running_lock_retained" @{
+                    pid=$process.Id
+                    processed=if($live){$live.review_progress.processed}else{$null}
+                    total=if($live){$live.review_progress.total}else{$null}
+                    folder=if($live){$live.current_relative_dir}else{$null}
+                }
+            }
+            if ($process.ExitCode -ne 0) {
+                throw "evidence backfill runner exited with code $($process.ExitCode); lock retained"
+            }
+            $verifyOutput = & $python $builder `
+                --audit-dir $auditDir `
+                --year "2026" `
+                --output $candidateCsv `
+                --execute
+            $verifyExit = $LASTEXITCODE
+            $verifyText = $verifyOutput -join [Environment]::NewLine
+            if ($verifyExit -ne 0) { throw "post-backfill candidate verification failed: $verifyText" }
+            try { $completion = $verifyText | ConvertFrom-Json } catch { throw "post-backfill verification returned invalid JSON: $verifyText" }
+            if (
+                $completion.executed -ne $true -or
+                [int]$completion.candidate_rows -ne 0 -or
+                [int]$completion.missing_sources -ne 0 -or
+                [int]$completion.conflicting_sources -ne 0 -or
+                [int]$completion.invalid_rows -ne 0 -or
+                [int]$completion.unique_year_sources -le 0 -or
+                [int]$completion.already_verified_year_sources -ne [int]$completion.unique_year_sources
+            ) { throw "evidence backfill completion proof failed closed: $verifyText" }
+            Log "evidence_backfill_completed" @{
+                sources=[int]$completion.unique_year_sources
+                verified=[int]$completion.already_verified_year_sources
+                remaining=[int]$completion.candidate_rows
+            }
             return
         }
         Start-Sleep -Seconds 2
@@ -260,7 +296,7 @@ try {
     Start-EvidenceBackfill
     Remove-Item -LiteralPath $lockPath -Force
     $script:lockOwned=$false
-    Log "lock_released" @{ reason="upgrade_verified_and_evidence_backfill_started" }
+    Log "lock_released" @{ reason="upgrade_verified_and_evidence_backfill_completed" }
 } catch {
     Log "upgrade_failed_lock_retained" @{ error=$_.Exception.Message; lock=$lockPath }
     exit 1

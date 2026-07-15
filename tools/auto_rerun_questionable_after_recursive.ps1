@@ -43,6 +43,9 @@ $LogPath = Join-Path $LogDir "auto_rerun_questionable_after_recursive_$Stamp.log
 $BackendOut = Join-Path $LogDir "auto_questionable_backend_$Stamp.out.log"
 $BackendErr = Join-Path $LogDir "auto_questionable_backend_$Stamp.err.log"
 $BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\model_benchmark.lock"
+$UploadGateProofBuilder = Join-Path $RepoRoot "tools\build_upload_gate_proof.py"
+$UploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
+$script:UploadCompleted = $false
 
 function Write-RunLog {
     param([string]$Message)
@@ -183,9 +186,44 @@ function Refresh-UploadAndReviewSplit {
     }
     Write-RunLog "refreshing upload manifest"
     & $Python "tools\prepare_drive_upload_manifest.py" --output-dir $OutputDir --no-stage *>> $LogPath
-    Write-RunLog "manifest refresh exit=$LASTEXITCODE"
+    $manifestExit = $LASTEXITCODE
+    Write-RunLog "manifest refresh exit=$manifestExit"
+    if ($manifestExit -ne 0) {
+        throw "upload manifest refresh failed; completion and upload remain blocked"
+    }
     & $Python "tools\split_drive_review_required.py" --output-dir $OutputDir *>> $LogPath
-    Write-RunLog "review split exit=$LASTEXITCODE"
+    $splitExit = $LASTEXITCODE
+    Write-RunLog "review split exit=$splitExit"
+    if ($splitExit -ne 0) {
+        throw "review split failed; completion and upload remain blocked"
+    }
+}
+
+function Update-UploadGateProof {
+    param([switch]$Required)
+    if (-not (Test-Path -LiteralPath $UploadGateProofBuilder)) {
+        if ($Required) { throw "upload gate proof builder missing: $UploadGateProofBuilder" }
+        Write-RunLog "upload gate proof builder missing; uploader remains blocked"
+        return $false
+    }
+    $proofOutput = @(& $Python $UploadGateProofBuilder --output-dir $OutputDir --execute 2>&1)
+    $proofExit = $LASTEXITCODE
+    $proofText = $proofOutput -join "`n"
+    if ($proofExit -ne 0) {
+        Write-RunLog "upload gate proof closed exit=$proofExit detail=$proofText"
+        if ($Required) { throw "content-bound upload gate proof is not valid" }
+        return $false
+    }
+    try {
+        $summary = $proofText | ConvertFrom-Json
+        if ($summary.valid -ne $true -or $summary.executed -ne $true) { throw "proof summary is not valid/executed" }
+    } catch {
+        if ($Required) { throw "upload gate proof summary unreadable: $proofText" }
+        Write-RunLog "upload gate proof summary unreadable; uploader remains blocked"
+        return $false
+    }
+    Write-RunLog "upload gate proof verified pending=$($summary.pending_count) audit=$($summary.audit_input_sha256)"
+    return $true
 }
 
 function Rebuild-DriveCorrectionLedgerIfSafe {
@@ -213,7 +251,16 @@ function Rebuild-DriveCorrectionLedgerIfSafe {
 }
 
 function Start-Uploader-IfNeeded {
+    param([switch]$WaitForCompletion)
     Wait-ForBenchmarkLock "uploader launch/check"
+    if (-not $WaitForCompletion) {
+        Write-RunLog "uploader deferred until all configured review phases finish"
+        return
+    }
+    if (-not (Update-UploadGateProof -Required:$WaitForCompletion)) {
+        Write-RunLog "uploader blocked because exact content-bound proof is unavailable"
+        return
+    }
     $pendingCsv = Join-Path $OutputDir "_drive_upload\drive_upload_ready_pending.csv"
     $pendingCount = 0
     if (Test-Path -LiteralPath $pendingCsv) {
@@ -221,14 +268,16 @@ function Start-Uploader-IfNeeded {
     }
     if ($pendingCount -le 0) {
         Write-RunLog "no ready upload pending rows"
+        $script:UploadCompleted = $true
         return
     }
     $uploader = Stop-ExtraOwnedProcesses "rclone_drive_upload.py|rclone.exe" "uploader"
+    $process = $null
     if ($uploader.Count -eq 0) {
-        Write-RunLog "starting rclone uploader"
+        Write-RunLog "starting content-bound rclone uploader"
         $uploadOut = Join-Path $OutputDir "_drive_upload\rclone_drive_upload_stdout.log"
         $uploadErr = Join-Path $OutputDir "_drive_upload\rclone_drive_upload_stderr.log"
-        Start-Process -FilePath $Python `
+        $process = Start-Process -FilePath $Python `
             -ArgumentList @(
                 "tools\rclone_drive_upload.py",
                 "--output-dir", $OutputDir,
@@ -242,9 +291,24 @@ function Start-Uploader-IfNeeded {
             -WorkingDirectory $RepoRoot `
             -WindowStyle Hidden `
             -RedirectStandardOutput $uploadOut `
-            -RedirectStandardError $uploadErr | Out-Null
+            -RedirectStandardError $uploadErr -PassThru
+    } elseif ($WaitForCompletion) {
+        $process = Get-Process -Id ([int]$uploader[0].ProcessId) -ErrorAction SilentlyContinue
     } else {
         Write-RunLog "uploader already active; not starting another"
+    }
+    if ($WaitForCompletion) {
+        if (-not $process) { throw "uploader process could not be observed" }
+        Write-RunLog "waiting for verified uploader completion pid=$($process.Id)"
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "uploader exited with code $($process.ExitCode)" }
+        Refresh-UploadAndReviewSplit
+        if (-not (Update-UploadGateProof -Required)) { throw "post-upload gate proof invalid" }
+        $remaining = 0
+        if (Test-Path -LiteralPath $pendingCsv) { $remaining = @(Import-Csv -LiteralPath $pendingCsv).Count }
+        if ($remaining -ne 0) { throw "uploader stopped with $remaining verified rows still pending" }
+        $script:UploadCompleted = $true
+        Write-RunLog "verified uploader completed and pending manifest is empty"
     }
 }
 
@@ -274,6 +338,47 @@ function Start-Recursive-IfNeeded {
         -WindowStyle Hidden `
         -RedirectStandardOutput $recursiveOut `
         -RedirectStandardError $recursiveErr | Out-Null
+}
+
+function Get-FileSha256 {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Assert-FullProjectRecursiveComplete {
+    $auditDir = Join-Path $OutputDir "_ocr_audit"
+    $discoveryPath = Join-Path $auditDir "folder_discovery.csv"
+    $summaryPath = Join-Path $auditDir "folder_summary.csv"
+    if (-not (Test-Path -LiteralPath $discoveryPath) -or -not (Test-Path -LiteralPath $summaryPath)) {
+        throw "full-project inventory or folder summary is missing"
+    }
+    $discovered = @(Import-Csv -LiteralPath $discoveryPath)
+    $summaries = @(Import-Csv -LiteralPath $summaryPath)
+    $summaryByFolder = @{}
+    foreach ($row in $summaries) { if ($row.folder) { $summaryByFolder[[string]$row.folder] = $row } }
+    $errors = @()
+    foreach ($folder in $discovered) {
+        $key = [string]$folder.folder
+        if (-not $summaryByFolder.ContainsKey($key)) {
+            $errors += "missing:$key"
+            continue
+        }
+        $row = $summaryByFolder[$key]
+        if ([string]$row.status -in @("error", "blocked")) { $errors += "$($row.status):$key" }
+        if ([string]$row.image_count -ne [string]$folder.image_count) { $errors += "image_count_changed:$key" }
+        if ([string]$row.source_latest_mtime -ne [string]$folder.latest_mtime) { $errors += "source_changed:$key" }
+    }
+    if ($errors.Count -gt 0) {
+        throw "full-project recursive evidence incomplete: $($errors[0..([math]::Min(9,$errors.Count-1))] -join '; ')"
+    }
+    return [pscustomobject]@{
+        discovered_folder_count = $discovered.Count
+        completed_folder_count = $discovered.Count
+        error_count = 0
+        folder_discovery_sha256 = Get-FileSha256 $discoveryPath
+        folder_summary_sha256 = Get-FileSha256 $summaryPath
+    }
 }
 
 function Invoke-QuestionablePass {
@@ -426,18 +531,28 @@ try {
 
     Refresh-UploadAndReviewSplit
     Rebuild-DriveCorrectionLedgerIfSafe
-    Start-Uploader-IfNeeded
+    if (-not (Update-UploadGateProof -Required)) { throw "current-year upload proof missing after final review" }
+    Start-Uploader-IfNeeded -WaitForCompletion
     if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
+        if (-not $script:UploadCompleted) { throw "current-year verified uploads are not complete" }
+        $gate = Get-Content -LiteralPath $UploadGateProofPath -Raw | ConvertFrom-Json
         $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
         [pscustomobject]@{
             completed_at = (Get-Date -Format "s")
             primary_model = $PrimaryModel
             primary_passes = $PrimaryPasses
             current_year_only = [bool]$CurrentYearOnly
+            upload_gate_schema = [string]$gate.schema
+            audit_input_sha256 = [string]$gate.audit_input_sha256
+            manifest_summary_sha256 = [string]$gate.manifest_summary_sha256
+            pending_sha256 = [string]$gate.pending_sha256
+            pending_count = [int]$gate.pending_count
+            backfill_run_id = [string]$gate.backfill_run_id
         } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding UTF8
         Write-RunLog "current-year rerun completion marker written path=$markerPath"
     }
     if (-not $CurrentYearOnly -and $SkipCurrentYearPhases) {
+        $recursiveProof = Assert-FullProjectRecursiveComplete
         $fullMarkerPath = Join-Path $OutputDir "_ocr_audit\full_project_rerun_cycle_complete.json"
         [pscustomobject]@{
             completed_at = (Get-Date -Format "s")
@@ -445,6 +560,11 @@ try {
             primary_passes = $PrimaryPasses
             all_year_questionable_review = $true
             final_model_review = $true
+            discovered_folder_count = $recursiveProof.discovered_folder_count
+            completed_folder_count = $recursiveProof.completed_folder_count
+            error_count = $recursiveProof.error_count
+            folder_discovery_sha256 = $recursiveProof.folder_discovery_sha256
+            folder_summary_sha256 = $recursiveProof.folder_summary_sha256
         } | ConvertTo-Json | Set-Content -LiteralPath $fullMarkerPath -Encoding UTF8
         Write-RunLog "full-project rerun completion marker written path=$fullMarkerPath"
     }
