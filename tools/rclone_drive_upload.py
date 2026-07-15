@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import shutil
@@ -153,6 +154,88 @@ def prepare_manifest(args, limit: int) -> Path:
     return args.manifest_dir / "drive_upload_next_batch.csv"
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_sha256(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(char in "0123456789abcdef" for char in text)
+
+
+def _is_zero_or_empty(value: object) -> bool:
+    if value in (None, "", 0, "0"):
+        return True
+    if isinstance(value, (list, dict)):
+        return len(value) == 0
+    return False
+
+
+def validate_prepared_manifest(manifest_dir: Path, next_batch: Path, rows: list[dict[str, str]]) -> None:
+    """Reject a prepared batch unless its summary proves it is the exact safe batch."""
+    summary_path = manifest_dir / "drive_upload_summary.json"
+    if not next_batch.is_file():
+        raise SystemExit(f"prepared upload batch missing: {next_batch}")
+    if not summary_path.is_file():
+        raise SystemExit(f"upload manifest summary missing: {summary_path}")
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError) as exc:
+        raise SystemExit(f"upload manifest summary unreadable: {exc}") from exc
+    if not isinstance(summary, dict):
+        raise SystemExit("upload manifest summary must be a JSON object")
+
+    expected_batch_hash = str(summary.get("next_batch_sha256") or "").strip().lower()
+    actual_batch_hash = sha256_file(next_batch)
+    if not _is_sha256(expected_batch_hash) or expected_batch_hash != actual_batch_hash:
+        raise SystemExit("prepared upload batch SHA-256 does not match manifest summary")
+
+    has_current_year = any(
+        str(row.get("year") or row.get("drive_folder") or "").strip() == "2026"
+        for row in rows
+    )
+    if not has_current_year:
+        return
+
+    if summary.get("current_year_upload_gate_open") is not True:
+        raise SystemExit("2026 upload gate is not open")
+    if summary.get("current_year_risk_audit_fresh") is not True:
+        raise SystemExit("2026 risk audit is not fresh")
+
+    proof = summary.get("current_year_finalization_proof")
+    if not isinstance(proof, dict) or proof.get("complete") is not True:
+        raise SystemExit("2026 finalization proof is missing or incomplete")
+    required_proof_fields = {
+        "expected_candidate_count",
+        "scanned_result_count",
+        "missing_or_invalid",
+        "duplicate_source_identity",
+        "audit_input_sha256",
+    }
+    if not required_proof_fields.issubset(proof):
+        raise SystemExit("2026 finalization proof is missing required fields")
+    try:
+        expected_count = int(proof.get("expected_candidate_count"))
+        scanned_count = int(proof.get("scanned_result_count"))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("2026 finalization proof counts are missing or invalid") from exc
+    if expected_count <= 0 or scanned_count != expected_count:
+        raise SystemExit("2026 finalization proof count mismatch")
+    if not _is_zero_or_empty(proof.get("missing_or_invalid")):
+        raise SystemExit("2026 finalization proof reports missing or invalid inputs")
+    if not _is_zero_or_empty(proof.get("duplicate_source_identity")):
+        raise SystemExit("2026 finalization proof reports duplicate source identities")
+
+    proof_hash = str(proof.get("audit_input_sha256") or "").strip().lower()
+    current_hash = str(summary.get("current_audit_input_sha256") or "").strip().lower()
+    if not _is_sha256(proof_hash) or not _is_sha256(current_hash) or proof_hash != current_hash:
+        raise SystemExit("2026 audit input SHA-256 proof does not match current inputs")
+
+
 def load_staged_paths(manifest_dir: Path, rows: list[dict[str, str]]) -> dict[tuple[str, str], Path]:
     """Return only staged files belonging to this manifest batch."""
     staging_root = (manifest_dir / "staging").resolve()
@@ -203,6 +286,7 @@ def write_files_from(manifest_dir: Path, year: str, rows: list[dict[str, str]]) 
 def upload_once(args, batch_id: str, cycle: int) -> int:
     next_batch = prepare_manifest(args, args.limit)
     rows = read_csv(next_batch)
+    validate_prepared_manifest(args.manifest_dir, next_batch, rows)
     if not rows:
         print("[upload] no pending ready rows", flush=True)
         return 0

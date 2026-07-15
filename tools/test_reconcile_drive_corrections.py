@@ -1,5 +1,7 @@
 from pathlib import Path
-import csv, json, tempfile, unittest
+import csv, json, sys, tempfile, unittest
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 from tools.reconcile_drive_corrections import Reconciler
 
 class FakeRclone:
@@ -58,6 +60,14 @@ class ReconcileDriveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fake=FakeRclone({'2026/new.jpg':[{'ID':'new','Size':3,'MD5':'22af645d1859cb5ca6da0c484f1f37ea'}]}); row=self.make(root); rec=self.rec(root,[row],fake); rec.upload_new(row); calls=len(fake.calls); rec.upload_new(row); self.assertEqual(len(fake.calls),calls)
             row['status']='new_ready'; fake=FakeRclone({}); rec=self.rec(root,[row],fake); rec.upload_new(row,dry_plan=True); self.assertIn('planned_command',row); self.assertEqual(fake.calls,[])
+    def test_upload_new_hard_rejects_any_non_ready_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); fake=FakeRclone({}); row=self.make(root,status='detected')
+            rec=self.rec(root,[row],fake); rec.upload_new(rec.rows[0])
+            self.assertEqual(fake.calls,[])
+            self.assertEqual(rec.rows[0]['status'],'detected')
+            self.assertIn('status=new_ready',rec.rows[0]['last_error'])
+
     def test_execute_requires_phase_and_schema_tokens(self):
         src=(Path(__file__).parent/'reconcile_drive_corrections.py').read_text(encoding='utf-8')
         for token in ('discover-old','upload-new','trash-old','--immutable','--drive-use-trash','new_uploaded_verified','unchanged_remote_verified','old_trash_pending'):

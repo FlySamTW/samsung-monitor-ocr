@@ -465,6 +465,19 @@ The machine-readable evidence contract is authoritative for acceptance: screen c
 
 Any change to `build_ocr_messages()`, `immediate_retry_decision()`, the retry queue, v19.45 trace, presentation history, or upload manifest must preserve the validation matrix in the authoritative document and run `tools/test_v1945_evidence_contract.py`, `tools/test_immediate_retry_queue.py`, and `tools/run_critical_regressions.py`.
 
+## Current-Year Upload Finalization Contract
+
+Current-year upload is globally closed until the whole authoritative source inventory is finalized. Per-file `ready`, a newer risk CSV, a successful process exit, or an empty candidate list is not completion proof.
+
+- The finalization proof binds the candidate-builder summary, exact candidate/result sets, every folder run summary, canonical success/rename/copied authorities, unique source identities, existing outputs, and zero remaining unverified v19.45 sources.
+- Zero candidates are acceptable only when the inventory is non-empty and every source is already verified; otherwise fail closed.
+- The risk audit writes an `audit_input_sha256`. The manifest must recompute it, block every current-year row on drift, and bind the exact next-batch CSV SHA-256.
+- Explicit distant approval is valid only for the same backfill run and audit input, and must bind source identity, target content SHA-256, and approval time.
+- `rclone_drive_upload.py` revalidates the rebuilt batch before staging or rclone. The watchdog order is audit → proof → manifest → hash gate → uploader; the supervisor requires a fresh content-bound gate receipt.
+- Drive correction ledger integrity does not imply replacement authority. Gate readiness, old-ID discovery, new upload readback, and recoverable old-file trash receipt are separate phases. `upload-new` requires `status=new_ready`; ambiguous or duplicate identities never proceed.
+
+Required regression coverage is `tools/test_current_year_upload_finalization.py`, `test_rclone_upload_safety_unit.py`, watchdog/supervisor tests, Drive correction builder/reconciler tests, and `tools/run_critical_regressions.py`.
+
 ## Presentation Synchronization Iron Rule
 
 `presentation_id` and `presentation_sequence` are the only UI identity truth. Photo, AI live interpretation, active placeholder, revealed card, and inspection modal must render from the same immutable snapshot. Running presentation state must not use filename/index/source-path joins or `current_file`, `stream_file`, or `recent_results` fallbacks. The right card appears only after the same snapshot's narration finishes. Active items are never dropped by watchdog or backpressure; a previous image remains visible until the next image is ready, so continuity never produces a black frame. Every dashboard presentation change requires the 500-item duplicate/out-of-order/overflow/remount soak and a fresh build.

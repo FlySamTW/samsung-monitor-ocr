@@ -6,7 +6,8 @@ param(
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
     [int]$RcloneTimeoutSeconds = 1200,
-    [int]$OcrStallMinutes = 120
+    [int]$OcrStallMinutes = 120,
+    [int]$UploadGateProofMaxAgeMinutes = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +35,8 @@ $LogDir = Join-Path $RepoRoot "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogPath = Join-Path $LogDir ("ocr_upload_watchdog_{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $LockPath = Join-Path $OutputDir "_ocr_audit\ocr_upload_watchdog.lock"
+$GateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
+$script:LastAuditExit = -1
 
 function Write-RunLog([string]$Message) {
     $line = "[{0}] {1}" -f (Get-Date -Format "s"), $Message
@@ -231,6 +234,90 @@ function Get-CsvRowCount([string]$Path) {
     }
 }
 
+function Get-FileSha256([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() } catch { return "" }
+}
+
+function Get-TextSha256([string]$Text) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes($Text)
+        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Test-CurrentAuditProof([string]$RiskJson, [string]$RiskCsv) {
+    if (-not (Test-Path -LiteralPath $RiskJson -PathType Leaf) -or -not (Test-Path -LiteralPath $RiskCsv -PathType Leaf)) { return $false }
+    try { $risk = Get-Content -LiteralPath $RiskJson -Raw | ConvertFrom-Json } catch { return $false }
+    $proof = $risk.finalization_proof
+    if ($risk.audit_complete -ne $true -or -not $proof -or $proof.audit_complete -ne $true -or $proof.complete -ne $true) { return $false }
+    if (-not $risk.audit_input_sha256 -or $risk.audit_input_sha256 -ne $proof.audit_input_sha256) { return $false }
+    if ((Get-FileSha256 $RiskCsv) -ne ([string]$risk.risk_output_sha256).ToLowerInvariant()) { return $false }
+    try {
+        $expected = [int]$proof.expected_candidate_count
+        $scanned = [int]$proof.scanned_result_count
+        $duplicates = [int]$proof.duplicate_source_identity
+    } catch { return $false }
+    if ($expected -le 0 -or $scanned -ne $expected -or $duplicates -ne 0 -or @($proof.missing_or_invalid).Count -ne 0) { return $false }
+    $inputPaths = @([string]$proof.candidate_csv, [string]$proof.candidate_summary_json)
+    if ([int]$proof.candidate_rows -gt 0) {
+        $inputPaths += @([string]$proof.result_csv, [string]$proof.run_summary_csv)
+    }
+    foreach ($path in $inputPaths) {
+        if (-not (Get-FileSha256 $path)) { return $false }
+    }
+    if (-not $proof.backfill_run_id -or [string]$proof.backfill_run_id -ne [string]$risk.backfill_run_id) { return $false }
+    return $true
+}
+
+function Write-UploadGateProof($Proof) {
+    $parent = Split-Path -Parent $GateProofPath
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $temp = "$GateProofPath.tmp.$PID"
+    $Proof | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temp -Encoding UTF8
+    Move-Item -LiteralPath $temp -Destination $GateProofPath -Force
+}
+
+function Test-UploadGateProof {
+    if (-not (Test-Path -LiteralPath $GateProofPath -PathType Leaf)) { return $false }
+    try { $gate = Get-Content -LiteralPath $GateProofPath -Raw | ConvertFrom-Json } catch { return $false }
+    if ($gate.schema -ne "samsung-ocr-upload-gate/v1" -or $gate.gate_open -ne $true) { return $false }
+    try { $gateAge = ((Get-Date) - [datetime]$gate.generated_at).TotalMinutes } catch { return $false }
+    if ($gateAge -lt 0 -or $gateAge -gt $UploadGateProofMaxAgeMinutes) { return $false }
+
+    $riskJson = [string]$gate.audit_summary_path
+    $riskCsv = [string]$gate.risk_csv_path
+    $manifestSummaryPath = [string]$gate.manifest_summary_path
+    $pendingCsv = [string]$gate.pending_csv_path
+    $nextBatchCsv = [string]$gate.next_batch_csv_path
+    foreach ($path in @($riskJson, $riskCsv, $manifestSummaryPath, $pendingCsv, $nextBatchCsv)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    }
+    if ((Get-FileSha256 $riskJson) -ne ([string]$gate.audit_summary_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $riskCsv) -ne ([string]$gate.risk_output_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $manifestSummaryPath) -ne ([string]$gate.manifest_summary_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $pendingCsv) -ne ([string]$gate.pending_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $nextBatchCsv) -ne ([string]$gate.next_batch_sha256).ToLowerInvariant()) { return $false }
+    foreach ($input in @($gate.audit_inputs)) {
+        if (-not $input.path -or (Get-FileSha256 ([string]$input.path)) -ne ([string]$input.sha256).ToLowerInvariant()) { return $false }
+    }
+    if (-not (Test-CurrentAuditProof $riskJson $riskCsv)) { return $false }
+    try { $summary = Get-Content -LiteralPath $manifestSummaryPath -Raw | ConvertFrom-Json } catch { return $false }
+    if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true) { return $false }
+    if ([string]$summary.current_audit_input_sha256 -ne [string]$gate.audit_input_sha256) { return $false }
+    if ([string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv)) { return $false }
+    $pendingRows = @(Import-Csv -LiteralPath $pendingCsv)
+    $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
+    if ($blocked.Count -gt 0) { return $false }
+    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) { return $false }
+    if ([int]$gate.pending_count -ne $pendingRows.Count) { return $false }
+    if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) { return $false }
+    return $true
+}
+
 function Repair-FolderSummaryIfShrunk {
     $auditDir = Join-Path $OutputDir "_ocr_audit"
     $summary = Join-Path $auditDir "folder_summary.csv"
@@ -383,6 +470,10 @@ function Remove-StaleUploadLockIfNeeded {
 }
 
 function Start-UploaderIfNeeded {
+    if (-not (Test-UploadGateProof)) {
+        Write-RunLog "upload gate closed or proof/hash validation failed; uploader skipped"
+        return
+    }
     $pendingCsv = Join-Path $OutputDir "_drive_upload\drive_upload_ready_pending.csv"
     $pending = Get-CsvRowCount $pendingCsv
     if ($pending -le 0) {
@@ -458,7 +549,8 @@ function Run-DistantFollowMeAudit {
         --output-csv $riskCsv `
         --summary-json $riskJson `
         --sample-csv $sampleCsv *>> $LogPath
-    Write-RunLog "distant FollowMe risk audit exit=$LASTEXITCODE"
+    $script:LastAuditExit = $LASTEXITCODE
+    Write-RunLog "distant FollowMe risk audit exit=$script:LastAuditExit"
     if (Test-Path -LiteralPath $riskJson) {
         try {
             $risk = Get-Content -LiteralPath $riskJson -Raw | ConvertFrom-Json
@@ -474,6 +566,95 @@ function Run-DistantFollowMeAudit {
             Write-RunLog "distant FollowMe risk summary unreadable"
         }
     }
+}
+
+function Update-UploadGateProof {
+    # Invalidate any prior approval before refreshing its authorities.  A
+    # failed audit or manifest rebuild must leave no reusable open gate.
+    Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+    Run-DistantFollowMeAudit
+    $year = (Get-Date).Year
+    $auditDir = Join-Path $OutputDir "_ocr_audit"
+    $manifestDir = Join-Path $OutputDir "_drive_upload"
+    $riskCsv = Join-Path $auditDir ("distant_followme_risk_{0}_latest.csv" -f $year)
+    $riskJson = Join-Path $auditDir ("distant_followme_risk_{0}_latest.json" -f $year)
+    if ($script:LastAuditExit -ne 0 -or -not (Test-CurrentAuditProof $riskJson $riskCsv)) {
+        Write-RunLog "upload gate closed: audit/finalization proof incomplete"
+        return
+    }
+
+    Write-RunLog "upload gate audit proof verified; rebuilding manifest"
+    & $Python "tools\prepare_drive_upload_manifest.py" --output-dir $OutputDir --no-stage *>> $LogPath
+    $manifestExit = $LASTEXITCODE
+    if ($manifestExit -ne 0) {
+        Write-RunLog "upload gate closed: manifest rebuild failed exit=$manifestExit"
+        return
+    }
+
+    $manifestSummaryPath = Join-Path $manifestDir "drive_upload_summary.json"
+    $pendingCsv = Join-Path $manifestDir "drive_upload_ready_pending.csv"
+    $nextBatchCsv = Join-Path $manifestDir "drive_upload_next_batch.csv"
+    if (-not (Test-Path -LiteralPath $manifestSummaryPath -PathType Leaf) -or -not (Test-Path -LiteralPath $pendingCsv -PathType Leaf) -or -not (Test-Path -LiteralPath $nextBatchCsv -PathType Leaf)) {
+        Write-RunLog "upload gate closed: manifest summary or pending CSV missing"
+        return
+    }
+    try {
+        $risk = Get-Content -LiteralPath $riskJson -Raw | ConvertFrom-Json
+        $summary = Get-Content -LiteralPath $manifestSummaryPath -Raw | ConvertFrom-Json
+        $pendingRows = @(Import-Csv -LiteralPath $pendingCsv)
+    } catch {
+        Write-RunLog "upload gate closed: audit/summary/manifest unreadable"
+        return
+    }
+    $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
+    if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true -or [string]$summary.current_audit_input_sha256 -ne [string]$risk.audit_input_sha256 -or [string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv) -or $blocked.Count -gt 0 -or [int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) {
+        Write-RunLog "upload gate closed: manifest gate/count validation failed pending=$($pendingRows.Count) blocked=$($blocked.Count)"
+        return
+    }
+    if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) {
+        Write-RunLog "upload gate closed: manifest summary predates audit proof"
+        return
+    }
+
+    $proof = $risk.finalization_proof
+    $auditInputs = @()
+    $proofInputPaths = @([string]$proof.candidate_csv, [string]$proof.candidate_summary_json)
+    if ([int]$proof.candidate_rows -gt 0) {
+        $proofInputPaths += @([string]$proof.result_csv, [string]$proof.run_summary_csv)
+    }
+    foreach ($path in $proofInputPaths) {
+        $hash = Get-FileSha256 $path
+        if (-not $hash) {
+            Write-RunLog "upload gate closed: finalization input missing"
+            return
+        }
+        $auditInputs += [pscustomobject]@{ path=$path; sha256=$hash }
+    }
+    $gate = [ordered]@{
+        schema = "samsung-ocr-upload-gate/v1"
+        generated_at = (Get-Date).ToString("o")
+        gate_open = $true
+        audit_summary_path = $riskJson
+        audit_summary_sha256 = Get-FileSha256 $riskJson
+        risk_csv_path = $riskCsv
+        risk_output_sha256 = Get-FileSha256 $riskCsv
+        audit_input_sha256 = [string]$risk.audit_input_sha256
+        audit_inputs = $auditInputs
+        manifest_summary_path = $manifestSummaryPath
+        manifest_summary_sha256 = Get-FileSha256 $manifestSummaryPath
+        pending_csv_path = $pendingCsv
+        pending_sha256 = Get-FileSha256 $pendingCsv
+        pending_count = $pendingRows.Count
+        next_batch_csv_path = $nextBatchCsv
+        next_batch_sha256 = Get-FileSha256 $nextBatchCsv
+    }
+    Write-UploadGateProof $gate
+    if (-not (Test-UploadGateProof)) {
+        Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+        Write-RunLog "upload gate closed: post-write proof/hash validation failed"
+        return
+    }
+    Write-RunLog "upload gate open: audit proof, manifest gate, and pending hash verified pending=$($pendingRows.Count)"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LockPath) | Out-Null
@@ -494,8 +675,8 @@ try {
     Start-BackendIfNeeded
     Start-RecursiveIfNeeded
     Start-AutoRerunWatcherIfNeeded
+    Update-UploadGateProof
     Start-UploaderIfNeeded
-    Run-DistantFollowMeAudit
     Log-Progress
     Write-RunLog "watchdog done"
 } finally {

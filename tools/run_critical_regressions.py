@@ -18,6 +18,13 @@ def main() -> int:
         [sys.executable, "-m", "unittest", "-v", "tools.test_migrate_legacy_v1945_trace"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_safe_backend_boundary_upgrade"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_build_v1945_evidence_backfill"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_current_year_upload_finalization"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_questionable_upload_guards"],
+        [sys.executable, str(ROOT / "test_rclone_upload_safety_unit.py")],
+        [sys.executable, str(ROOT / "tools" / "test_ocr_upload_watchdog.py")],
+        [sys.executable, str(ROOT / "tools" / "test_ocr_continuity_supervisor.py")],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_build_drive_correction_reconciliation"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_reconcile_drive_corrections"],
     ]
     for command in commands:
         print("[critical]", " ".join(command), flush=True)

@@ -1,6 +1,6 @@
 # Samsung Monitor OCR 專案完整移交
 
-> 更新時間：2026-07-14（Asia/Taipei）
+> 更新時間：2026-07-15（Asia/Taipei）
 > 專案根目錄：`D:\00_商化\samsung-monitor-ocr`
 > 本文件供下一個 AI 直接接手。所有數字都可能隨執行變動，接手後必須先查 API、程序、audit 與上傳摘要，不可直接沿用本文數字。
 
@@ -30,6 +30,16 @@
 
 ## 3. 2026-07-14 接手時的即時狀態
 
+### 2026-07-15 16:24 接續更新
+
+- 原有唯一 Dashboard 分頁與 OCR 全程未中斷。兩次實際 DOM 核對從 202601 `577/1,504` 前進到 `607/1,504`，成功數相同、失敗 `0`；第二次主圖、AI 第二輪逐字判讀與右側最上方處理卡均為 `M-台南市-中西區-集雅社-台南西門-241.jpg`，右側其後保留 241 第一輪與 240/239 第三輪卡，證明進度、判讀與累積縮圖同步。
+- 上傳 finalization proof 已改為內容綁定：候選 builder 摘要、候選／結果／folder summary、全年 canonical `success_records/rename_plan/copied` 與 v19.45 trace 任一變動，都會令 2026 risk audit 過期。零候選只有在「全年來源數大於 0 且全部已有 verified trace、canonical inventory 完整」時才算完成，不能用空 CSV 冒充。
+- `prepare_drive_upload_manifest.py` 現在對所有 2026 row 套用全年完成守門，輸出 normalized proof、目前 audit input SHA-256、next-batch SHA-256 與 gate fail reasons。明確遠景人工核准另綁 backfill run、audit input、原圖 identity、目標內容 hash 與 approved timestamp。
+- `rclone_drive_upload.py` 每輪重建 manifest 後，在 staging/rclone 前重算 batch SHA；含 2026 時還會再次核對 finalization counts、缺失／重複來源、risk freshness 與 audit hash。`ocr_upload_watchdog.ps1` 順序固定為 audit → proof → manifest → hash gate → uploader；supervisor 沒有新鮮 `upload_gate_proof.json` 也不得啟動 uploader。
+- 897 筆 stale uploaded reconciliation 已把 ledger integrity、全部列已對帳、全部 replacement gate ready、可上傳新檔、可替換舊檔拆成不同布林值；`gate_blocked` 不再可能被 `safe_to_replace` 掩蓋，任何非 `new_ready` row 都不得呼叫 rclone。
+- 新增 zero-candidate、canonical tamper、candidate/result mismatch、batch tamper、2026 proof 缺欄、watchdog/supervisor 順序、gate-blocked ledger、duplicate identity 與非 ready upload 拒絕測試；完整 `tools/run_critical_regressions.py` 已通過。未執行任何遠端上傳。
+- 唯一安全邊界 watcher 仍為 PID 8668；此批程式只會在整個 current-year runner 自然完成、連續兩次 idle/complete/no-worker 後載入，現在不得手動重啟或提前刷新正式 risk/manifest。
+
 ### 2026-07-15 15:40 接續更新
 
 - 15:25 唯讀稽核確認服務於 15:11 恢復後 `presentation_sequence` 從舊的約 1,030 重設為 1；前端若依序號排序，舊縮圖會壓住新卡。
@@ -39,6 +49,7 @@
 - 原分頁驗證：右側最新卡已由舊 1,030 輪更新為目前新照片，10 秒內新卡增至序號 76；LLM 第三輪文字與同張照片識別同步。
 - 關鍵回歸、新的重啟區段計數測試、Vite production build 全部通過。
 - 上傳仍 fail-closed：現有 2026 manifest 全數 review，`ready_pending=0`、`next_batch=0`；等 202601 完成後才更新 risk audit/manifest，並處理 897 筆 stale uploaded reconciliation。
+- 15:44 已補啟動唯一隱藏安全邊界 watcher（PID 8668），`model_benchmark.lock` 擁有者相符，等待上限 72 小時、每 60 秒唯讀檢查一次。它必須等 `running=false`、`processed=total`、staged/uploader 均為 0 且連續兩次成立，才可載入新後端；當前只記錄 `waiting_for_boundary`，未中斷 OCR。
 
 ### 2026-07-15 15:20 接續更新
 

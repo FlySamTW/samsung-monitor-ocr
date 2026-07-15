@@ -6,10 +6,10 @@ uploaded rows to the current copied.csv mapping by exact image content (with a
 strict filename-identity fallback only when the old local copy is gone), then
 requires a current manifest row before emitting an actionable record.
 
-Dry-run is the default.  ``--execute`` replaces the JSONL atomically only when
-every stale row has one unambiguous current source mapping and manifest row.
-Missing historical Drive IDs are allowed; the reconciler's read-only
-``discover-old`` phase can fill those later by unique remote path.
+Dry-run is the default. ``--execute`` may write a structurally sound local
+ledger for the read-only ``discover-old`` phase, but the summary keeps upload
+and replacement authority separate. Gate-blocked rows can never upload, and
+replacement remains closed until every old Drive ID is uniquely resolved.
 """
 from __future__ import annotations
 
@@ -22,7 +22,10 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from build_v1945_evidence_backfill import stable_source_id
+try:
+    from tools.build_v1945_evidence_backfill import stable_source_id
+except ImportError:
+    from build_v1945_evidence_backfill import stable_source_id
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -240,6 +243,16 @@ def write_atomic_jsonl(path: Path, rows: list[dict]) -> None:
     os.replace(temp, path)
 
 
+def _duplicate_source_identities(rows: list[dict]) -> list[str]:
+    """Return non-empty source identities used by more than one ledger row."""
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        value = str(row.get("source_identity") or "").strip()
+        if value:
+            counts[value] += 1
+    return sorted(identity for identity, count in counts.items() if count > 1)
+
+
 def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> dict:
     output_dir = output_dir.resolve()
     upload_dir = output_dir / "_drive_upload"
@@ -251,27 +264,72 @@ def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> 
     }
     missing_inputs = [str(path) for path in required.values() if not path.is_file()]
     current_outputs, current_errors = _load_current_outputs(audit_dir, year)
+    stale_rows = read_csv(required["stale"])
+    uploaded_rows = read_csv(required["uploaded"])
+    manifest_rows = read_csv(required["manifest"])
     rows, summary = build_rows(
         output_dir=output_dir,
         year=year,
-        stale_rows=read_csv(required["stale"]),
-        uploaded_rows=read_csv(required["uploaded"]),
-        manifest_rows=read_csv(required["manifest"]),
+        stale_rows=stale_rows,
+        uploaded_rows=uploaded_rows,
+        manifest_rows=manifest_rows,
         current_outputs=current_outputs,
         current_mapping_errors=current_errors + [f"missing input: {path}" for path in missing_inputs],
     )
-    safe = not missing_inputs and summary["mapping_errors"] == 0 and not current_errors
+    duplicate_identities = _duplicate_source_identities(rows)
+    accounted_statuses = (
+        summary["new_ready"]
+        + summary["gate_blocked"]
+        + summary["mapping_errors"]
+    )
+    all_rows_accounted = (
+        len(stale_rows) == len(rows)
+        and summary["stale_rows"] == len(stale_rows)
+        and summary["ledger_rows"] == len(rows)
+        and accounted_statuses == summary["ledger_rows"]
+    )
+    ledger_integrity_ok = (
+        not missing_inputs
+        and summary["mapping_errors"] == 0
+        and not current_errors
+        and not duplicate_identities
+    )
+    all_replacements_gate_ready = (
+        summary["gate_blocked"] == 0
+        and summary["mapping_errors"] == 0
+        and summary["new_ready"] == summary["ledger_rows"]
+    )
+    all_old_drive_ids_resolved = summary["old_drive_id_discovery_required"] == 0
+    safe_to_upload_new = (
+        ledger_integrity_ok
+        and all_rows_accounted
+        and all_replacements_gate_ready
+    )
+    safe_to_replace = safe_to_upload_new and all_old_drive_ids_resolved
+    ledger_written = bool(execute and ledger_integrity_ok)
     summary.update({
         "output_dir": str(output_dir),
         "ledger": str(ledger.resolve()),
         "execute_requested": execute,
-        "executed": bool(execute and safe),
-        "safe_to_replace": safe,
+        "executed": ledger_written,
+        "ledger_written": ledger_written,
+        "ledger_integrity_ok": ledger_integrity_ok,
+        "all_rows_accounted": all_rows_accounted,
+        "all_replacements_gate_ready": all_replacements_gate_ready,
+        "all_old_drive_ids_resolved": all_old_drive_ids_resolved,
+        "safe_to_upload_new": safe_to_upload_new,
+        "safe_to_replace": safe_to_replace,
+        "duplicate_identities": len(duplicate_identities),
+        "duplicate_identity_samples": duplicate_identities[:30],
         "current_outputs": len(current_outputs),
         "current_mapping_errors": len(current_errors),
         "missing_inputs": missing_inputs,
     })
-    if execute and safe:
+    # A structurally sound local ledger is useful for the read-only
+    # discover-old phase even while one or more replacement rows remain gate
+    # blocked or still need their historical Drive ID.  Writing it must not be
+    # confused with permission to upload or replace anything.
+    if ledger_written:
         write_atomic_jsonl(ledger, rows)
         summary_path = ledger.with_suffix(ledger.suffix + ".summary.json")
         temp = summary_path.with_name(summary_path.name + f".tmp.{os.getpid()}")

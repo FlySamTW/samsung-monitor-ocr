@@ -9,7 +9,7 @@ class QuestionableUploadGuardTests(unittest.TestCase):
         path.write_bytes(b"jpg")
         return path
 
-    def test_stale_current_year_gate_is_scoped_to_risky_rows(self):
+    def test_stale_current_year_finalization_blocks_every_current_year_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ordinary = self._file(root, "M-202601-Store-\u2191$100-x.jpg")
@@ -18,8 +18,10 @@ class QuestionableUploadGuardTests(unittest.TestCase):
             distant_row = classify_file(distant, root, 100000, current_year_risk_fresh=False,
                                         auto_verified_names={distant.name})
             self.assertEqual(ordinary_row.status, "review")
+            self.assertIn("current_year_finalization_proof_missing_or_stale", ordinary_row.reasons)
             self.assertNotIn("current_year_risk_audit_missing_or_stale", ordinary_row.reasons)
             self.assertEqual(distant_row.status, "review")
+            self.assertIn("current_year_finalization_proof_missing_or_stale", distant_row.reasons)
             self.assertIn("current_year_risk_audit_missing_or_stale", distant_row.reasons)
 
     def test_historical_ready_and_uploaded_rows_ignore_current_year_staleness(self):

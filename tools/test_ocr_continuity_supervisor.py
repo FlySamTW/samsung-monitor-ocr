@@ -32,6 +32,29 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("rclone_drive_upload.py", self.source)
         self.assertNotIn("--no-resume", self.source)
 
+    def test_uploader_requires_fresh_content_bound_gate_proof(self):
+        uploader = self.source[self.source.index('$pending = Join-Path $OutputDir "_drive_upload\\drive_upload_ready_pending.csv"'):]
+        self.assertLess(uploader.index("Test-UploadGateProof"), uploader.index('Start-Hidden $python @("tools\\rclone_drive_upload.py"'))
+        for token in (
+            "upload_gate_proof.json",
+            "UploadGateProofMaxAgeMinutes",
+            "current_year_risk_audit_fresh",
+            "current_year_upload_gate_open",
+            "current_audit_input_sha256",
+            "pending_sha256",
+            "next_batch_sha256",
+            "manifest_summary_sha256",
+            "audit_summary_sha256",
+            '$_.' + 'status -ne "ready"',
+            "uploader_gate_closed",
+        ):
+            self.assertIn(token, self.source)
+
+    def test_uploader_is_deferred_when_pipeline_transition_or_watcher_is_active(self):
+        self.assertIn("$pipelineTransitionStarted = $true", self.source)
+        self.assertIn('$pipelineTransitionStarted -or $watcher.Count -gt 0', self.source)
+        self.assertIn('"uploader_deferred_pipeline_transition"', self.source)
+
     def test_full_project_transition_waits_for_fresh_current_year_marker(self):
         self.assertIn("full_project_continuation_requested.json", self.source)
         self.assertIn("current_year_rerun_cycle_complete.json", self.source)

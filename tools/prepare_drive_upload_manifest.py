@@ -10,12 +10,26 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+try:
+    from tools.audit_distant_followme_risk import (
+        FINALIZATION_PROOF_VERSION,
+        file_sha256,
+        finalization_input_sha256,
+    )
+except ImportError:
+    from audit_distant_followme_risk import (
+        FINALIZATION_PROOF_VERSION,
+        file_sha256,
+        finalization_input_sha256,
+    )
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -109,7 +123,47 @@ def load_uploaded(uploaded_log: Path | None) -> tuple[set[str], set[tuple[str, s
     return uploaded_names, uploaded_pairs
 
 
-def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
+def load_current_year_risk_summary(output_root: Path, year: int) -> dict:
+    path = output_root / "_ocr_audit" / f"distant_followme_risk_{year}_latest.json"
+    try:
+        item = json.loads(path.read_text(encoding="utf-8"))
+        return item if isinstance(item, dict) else {}
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _stable_source_identity(path: str | Path) -> str:
+    return hashlib.sha256(str(Path(path).resolve()).casefold().encode("utf-8")).hexdigest()
+
+
+def load_target_source_identities(output_root: Path) -> dict[str, set[str]]:
+    identities: dict[str, set[str]] = {}
+    audit_root = output_root / "_ocr_audit"
+    for copied_path in audit_root.glob("*/copied.csv"):
+        try:
+            for row in read_csv_rows(copied_path):
+                target_name = str(row.get("target_name") or "").strip()
+                if not target_name and row.get("target_path"):
+                    target_name = Path(str(row.get("target_path"))).name
+                original = str(row.get("original_path") or "").strip()
+                if target_name and original:
+                    identities.setdefault(target_name, set()).add(_stable_source_identity(original))
+        except (OSError, UnicodeError, csv.Error):
+            continue
+    return identities
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def load_visual_accepted_distant_names(
+    output_root: Path,
+    risk_summary: dict | None = None,
+) -> set[str]:
     """Load explicitly approved current-year distant rows.
 
     Visual spot-check files are intentionally not used for upload approval. A
@@ -118,6 +172,15 @@ def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
     """
     audit_root = output_root / "_ocr_audit"
     accepted: set[str] = set()
+    risk_summary = risk_summary or {}
+    proof = risk_summary.get("finalization_proof") or {}
+    if risk_summary.get("audit_complete") is not True or proof.get("audit_complete") is not True:
+        return accepted
+    expected_run_id = str(risk_summary.get("backfill_run_id") or proof.get("backfill_run_id") or "")
+    expected_input_hash = str(risk_summary.get("audit_input_sha256") or proof.get("audit_input_sha256") or "")
+    if not expected_run_id or not expected_input_hash:
+        return accepted
+    target_identities = load_target_source_identities(output_root)
     approval_files = [
         audit_root / "current_year_distant_upload_approval.csv",
         audit_root / "current_year_distant_upload_approval_latest.csv",
@@ -142,7 +205,23 @@ def load_visual_accepted_distant_names(output_root: Path) -> set[str]:
                     or row.get("current_target_name")
                     or ""
                 ).strip()
-                if target_name:
+                source_identity = str(row.get("source_identity") or "").strip().casefold()
+                target_hash = str(row.get("target_content_sha256") or "").strip().casefold()
+                approved_at = str(row.get("approved_at") or "").strip()
+                row_run_id = str(row.get("backfill_run_id") or "").strip()
+                row_input_hash = str(row.get("risk_audit_input_sha256") or "").strip().casefold()
+                target_path = output_root / target_name
+                if (
+                    target_name
+                    and source_identity
+                    and target_hash
+                    and approved_at
+                    and row_run_id == expected_run_id
+                    and row_input_hash == expected_input_hash.casefold()
+                    and source_identity in target_identities.get(target_name, set())
+                    and target_path.is_file()
+                    and file_sha256(target_path).casefold() == target_hash
+                ):
                     accepted.add(target_name)
     return accepted
 
@@ -276,21 +355,91 @@ def load_v1945_trace_names(output_root: Path) -> set[str]:
 
 
 def current_year_risk_audit_is_fresh(output_root: Path, year: int) -> bool:
-    """Fail closed when the current-year risk report is missing or stale."""
+    """Require a content-bound full-year completion proof, never an mtime guess."""
     audit_root = output_root / "_ocr_audit"
     latest_risk = audit_root / f"distant_followme_risk_{year}_latest.csv"
-    if not latest_risk.is_file():
+    latest_summary = audit_root / f"distant_followme_risk_{year}_latest.json"
+    if not latest_risk.is_file() or not latest_summary.is_file():
+        return False
+    try:
+        summary = json.loads(latest_summary.read_text(encoding="utf-8"))
+        proof = summary.get("finalization_proof") or {}
+        if (
+            summary.get("audit_complete") is not True
+            or proof.get("audit_complete") is not True
+            or proof.get("complete") is not True
+        ):
+            return False
+        if proof.get("proof_schema_version") != FINALIZATION_PROOF_VERSION:
+            return False
+        expected_count = _safe_nonnegative_int(proof.get("expected_candidate_count"))
+        scanned_count = _safe_nonnegative_int(proof.get("scanned_result_count"))
+        if (
+            expected_count <= 0
+            or scanned_count != expected_count
+            or bool(proof.get("missing_or_invalid"))
+            or _safe_nonnegative_int(proof.get("duplicate_source_identity")) != 0
+        ):
+            return False
+        candidate_csv = Path(str(proof.get("candidate_csv") or ""))
+        result_csv = Path(str(proof.get("result_csv") or ""))
+        run_summary_csv = Path(str(proof.get("run_summary_csv") or ""))
+        current_hash = finalization_input_sha256(
+            output_root, year, candidate_csv, result_csv, run_summary_csv
+        )
+        return (
+            bool(current_hash)
+            and current_hash == str(proof.get("audit_input_sha256") or "")
+            and current_hash == str(summary.get("audit_input_sha256") or "")
+            and file_sha256(latest_risk) == str(summary.get("risk_output_sha256") or "")
+        )
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
         return False
 
-    newest_record_mtime = 0.0
-    for folder in audit_root.glob(f"*{year}*"):
-        if not folder.is_dir():
-            continue
-        for name in ("success_records.csv", "rename_plan.csv"):
-            path = folder / name
-            if path.is_file():
-                newest_record_mtime = max(newest_record_mtime, path.stat().st_mtime)
-    return latest_risk.stat().st_mtime >= newest_record_mtime
+
+def _safe_nonnegative_int(value: object) -> int:
+    try:
+        parsed = int(float(str(value)))
+        return parsed if parsed >= 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_current_year_finalization_proof(risk_summary: dict) -> dict[str, object]:
+    proof = risk_summary.get("finalization_proof") or {}
+    if not isinstance(proof, dict):
+        proof = {}
+    missing = proof.get("missing_or_invalid") or []
+    if not isinstance(missing, (list, tuple)):
+        missing = [str(missing)] if missing else []
+    return {
+        "complete": proof.get("complete") is True and proof.get("audit_complete") is True,
+        "proof_schema_version": str(proof.get("proof_schema_version") or ""),
+        "expected_candidate_count": _safe_nonnegative_int(proof.get("expected_candidate_count")),
+        "scanned_result_count": _safe_nonnegative_int(proof.get("scanned_result_count")),
+        "missing_or_invalid": [str(item) for item in missing if str(item).strip()],
+        "duplicate_source_identity": _safe_nonnegative_int(proof.get("duplicate_source_identity")),
+        "audit_input_sha256": str(proof.get("audit_input_sha256") or ""),
+        "backfill_run_id": str(proof.get("backfill_run_id") or ""),
+        "candidate_rows": _safe_nonnegative_int(proof.get("candidate_rows")),
+        "finalized_rows": _safe_nonnegative_int(proof.get("finalized_rows")),
+    }
+
+
+def current_audit_input_sha256(output_root: Path, year: int, risk_summary: dict) -> str:
+    proof = risk_summary.get("finalization_proof") or {}
+    if not isinstance(proof, dict):
+        return ""
+    try:
+        return finalization_input_sha256(
+            output_root,
+            year,
+            Path(str(proof.get("candidate_csv") or "")),
+            Path(str(proof.get("result_csv") or "")),
+            Path(str(proof.get("run_summary_csv") or "")),
+        )
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return ""
 
 
 def classify_file(
@@ -352,6 +501,8 @@ def classify_file(
             or file_name in risk_names
             or file_name in auto_verified_names
         )
+        if period_year == CURRENT_YEAR and not current_year_risk_fresh:
+            reasons.append("current_year_finalization_proof_missing_or_stale")
         if period_year == CURRENT_YEAR and not current_year_risk_fresh and risk_sensitive:
             reasons.append("current_year_risk_audit_missing_or_stale")
         if period_year >= 2026 and file_name not in auto_verified_names:
@@ -493,9 +644,15 @@ def main() -> int:
     default_uploaded_log = manifest_dir / "drive_upload_uploaded.csv"
     uploaded_log = Path(args.uploaded_log).resolve() if args.uploaded_log else default_uploaded_log
     uploaded_names, uploaded_pairs = load_uploaded(uploaded_log)
-    accepted_distant_names = load_visual_accepted_distant_names(output_root)
-    risk_names = load_current_year_risk_names(output_root, accepted_distant_names)
+    risk_summary = load_current_year_risk_summary(output_root, CURRENT_YEAR)
     current_year_risk_fresh = current_year_risk_audit_is_fresh(output_root, CURRENT_YEAR)
+    current_input_hash = current_audit_input_sha256(output_root, CURRENT_YEAR, risk_summary)
+    finalization_proof = normalize_current_year_finalization_proof(risk_summary)
+    accepted_distant_names = load_visual_accepted_distant_names(
+        output_root,
+        risk_summary if current_year_risk_fresh else None,
+    )
+    risk_names = load_current_year_risk_names(output_root, accepted_distant_names)
     audit_review_names = load_audit_review_required_names(output_root)
     auto_verified_names = load_complete_auto_verified_names(output_root)
     v1945_trace_names = load_v1945_trace_names(output_root)
@@ -540,7 +697,9 @@ def main() -> int:
     write_csv(manifest_dir / "drive_upload_ready.csv", ready_rows)
     write_csv(manifest_dir / "drive_upload_ready_pending.csv", pending_rows)
     write_csv(manifest_dir / "drive_upload_review_required.csv", review_rows)
-    write_csv(manifest_dir / "drive_upload_next_batch.csv", upload_rows)
+    next_batch_path = manifest_dir / "drive_upload_next_batch.csv"
+    write_csv(next_batch_path, upload_rows)
+    next_batch_sha256 = file_sha256(next_batch_path)
     stale_uploaded_review = write_stale_uploaded_review_csv(
         manifest_dir / "drive_upload_stale_uploaded_review_required.csv",
         review_rows,
@@ -558,6 +717,24 @@ def main() -> int:
     for row in pending_rows:
         pending_by_year[row.drive_folder] = pending_by_year.get(row.drive_folder, 0) + 1
 
+    expected_count = int(finalization_proof.get("expected_candidate_count") or 0)
+    scanned_count = int(finalization_proof.get("scanned_result_count") or 0)
+    proof_input_hash = str(finalization_proof.get("audit_input_sha256") or "")
+    upload_gate_fail_reasons: list[str] = []
+    if not current_year_risk_fresh:
+        upload_gate_fail_reasons.append("current_year_risk_audit_missing_or_stale")
+    if finalization_proof.get("complete") is not True:
+        upload_gate_fail_reasons.append("current_year_finalization_incomplete")
+    if expected_count <= 0 or scanned_count != expected_count:
+        upload_gate_fail_reasons.append("current_year_source_count_mismatch")
+    if finalization_proof.get("missing_or_invalid"):
+        upload_gate_fail_reasons.append("current_year_missing_or_invalid_sources")
+    if int(finalization_proof.get("duplicate_source_identity") or 0) != 0:
+        upload_gate_fail_reasons.append("current_year_duplicate_source_identity")
+    if not re.fullmatch(r"[0-9a-f]{64}", proof_input_hash) or current_input_hash != proof_input_hash:
+        upload_gate_fail_reasons.append("current_year_audit_input_hash_mismatch")
+    current_year_upload_gate_open = not upload_gate_fail_reasons
+
     summary = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "output_dir": str(output_root),
@@ -570,10 +747,16 @@ def main() -> int:
         "review_required": len(review_rows),
         "stale_uploaded_review_required": stale_uploaded_review,
         "next_batch": len(upload_rows),
+        "next_batch_sha256": next_batch_sha256,
         "staging_map": staging_map,
         "max_bytes": args.max_bytes,
         "visual_accepted_distant": len(accepted_distant_names),
         "current_year_risk_audit_fresh": current_year_risk_fresh,
+        "current_year_generation_complete": current_year_upload_gate_open,
+        "current_year_upload_gate_open": current_year_upload_gate_open,
+        "current_year_finalization_proof": finalization_proof,
+        "current_audit_input_sha256": current_input_hash,
+        "current_year_upload_gate_fail_reasons": list(dict.fromkeys(upload_gate_fail_reasons)),
         "ocr_auto_review_required": len(audit_review_names),
         "ready_by_year": dict(sorted(by_year.items(), reverse=True)),
         "pending_by_year": dict(sorted(pending_by_year.items(), reverse=True)),

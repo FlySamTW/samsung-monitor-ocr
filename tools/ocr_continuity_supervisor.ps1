@@ -5,7 +5,8 @@ param(
     [string]$BackendUrl = "http://127.0.0.1:5000",
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
-    [int]$ContextLength = 32768
+    [int]$ContextLength = 32768,
+    [int]$UploadGateProofMaxAgeMinutes = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +19,7 @@ $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
 $fullProjectRequestPath = Join-Path $audit "full_project_continuation_requested.json"
 $currentYearCompletePath = Join-Path $audit "current_year_rerun_cycle_complete.json"
 $fullProjectCompletePath = Join-Path $audit "full_project_rerun_cycle_complete.json"
+$uploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
 $logPath = Join-Path $logDir ("ocr_continuity_supervisor_{0}.jsonl" -f (Get-Date -Format "yyyyMMdd"))
 $python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
@@ -61,6 +63,52 @@ function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     try { return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { return $null }
 }
+function Get-FileSha256([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() } catch { return "" }
+}
+function Get-CsvRowCount([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
+    try { return @((Import-Csv -LiteralPath $Path)).Count } catch { return -1 }
+}
+function Test-UploadGateProof {
+    $gate = Read-JsonFile $uploadGateProofPath
+    if (-not $gate -or $gate.schema -ne "samsung-ocr-upload-gate/v1" -or $gate.gate_open -ne $true) { return $false }
+    try { $gateAge = ((Get-Date) - [datetime]$gate.generated_at).TotalMinutes } catch { return $false }
+    if ($gateAge -lt 0 -or $gateAge -gt $UploadGateProofMaxAgeMinutes) { return $false }
+
+    $riskJson = [string]$gate.audit_summary_path
+    $riskCsv = [string]$gate.risk_csv_path
+    $manifestSummaryPath = [string]$gate.manifest_summary_path
+    $pendingCsv = [string]$gate.pending_csv_path
+    $nextBatchCsv = [string]$gate.next_batch_csv_path
+    foreach ($path in @($riskJson, $riskCsv, $manifestSummaryPath, $pendingCsv, $nextBatchCsv)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    }
+    if ((Get-FileSha256 $riskJson) -ne ([string]$gate.audit_summary_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $riskCsv) -ne ([string]$gate.risk_output_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $manifestSummaryPath) -ne ([string]$gate.manifest_summary_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $pendingCsv) -ne ([string]$gate.pending_sha256).ToLowerInvariant()) { return $false }
+    if ((Get-FileSha256 $nextBatchCsv) -ne ([string]$gate.next_batch_sha256).ToLowerInvariant()) { return $false }
+    foreach ($input in @($gate.audit_inputs)) {
+        if (-not $input.path -or (Get-FileSha256 ([string]$input.path)) -ne ([string]$input.sha256).ToLowerInvariant()) { return $false }
+    }
+
+    $risk = Read-JsonFile $riskJson
+    $summary = Read-JsonFile $manifestSummaryPath
+    if (-not $risk -or $risk.audit_complete -ne $true -or $risk.finalization_proof.audit_complete -ne $true -or $risk.finalization_proof.complete -ne $true) { return $false }
+    if ([string]$risk.audit_input_sha256 -ne [string]$gate.audit_input_sha256 -or [string]$risk.audit_input_sha256 -ne [string]$risk.finalization_proof.audit_input_sha256) { return $false }
+    if ($summary.current_year_risk_audit_fresh -ne $true -or $summary.current_year_upload_gate_open -ne $true) { return $false }
+    if ([string]$summary.current_audit_input_sha256 -ne [string]$gate.audit_input_sha256) { return $false }
+    if ([string]$summary.next_batch_sha256 -ne (Get-FileSha256 $nextBatchCsv)) { return $false }
+    try { $pendingRows = @(Import-Csv -LiteralPath $pendingCsv) } catch { return $false }
+    $blocked = @($pendingRows | Where-Object { $_.status -ne "ready" -or -not [string]::IsNullOrWhiteSpace([string]$_.reasons) })
+    if ($blocked.Count -gt 0) { return $false }
+    if ([int]$summary.ready_pending -ne $pendingRows.Count -or [int]$summary.next_batch -ne $pendingRows.Count) { return $false }
+    if ([int]$gate.pending_count -ne $pendingRows.Count) { return $false }
+    if ((Get-Item -LiteralPath $manifestSummaryPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $riskJson).LastWriteTimeUtc) { return $false }
+    return $true
+}
 function Full-Project-ContinuationReady {
     $request = Read-JsonFile $fullProjectRequestPath
     $currentYear = Read-JsonFile $currentYearCompletePath
@@ -96,6 +144,7 @@ try {
     $staged = @(Owned "rerun_staged_candidates\.py")
     $recursive = @(Owned "recursive_ocr_flat_export\.py")
     $uploader = @(Owned "rclone_drive_upload\.py|rclone\.exe")
+    $pipelineTransitionStarted = $false
 
     if ($status -and [bool]$status.is_running) {
         Log-Event "healthy_noop" @{backend=$backend.Count;watcher=$watcher.Count;staged=$staged.Count;recursive=$recursive.Count;uploader=$uploader.Count;folder=$status.current_relative_dir;file=$status.current_file}
@@ -165,17 +214,26 @@ try {
             "-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2",
             "-SkipCurrentYearPhases","-SkipRecursiveResume"
         ) (Join-Path $logDir "supervisor_full_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_full_watcher_$stamp.err.log")
+        $pipelineTransitionStarted = $true
         Log-Event "full_project_pipeline_started" @{request=$fullProjectRequestPath;current_year_marker=$currentYearCompletePath}
     } elseif ($watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
         Start-Hidden "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1","-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly") (Join-Path $logDir "supervisor_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
+        $pipelineTransitionStarted = $true
         Log-Event "current_year_watcher_started"
     }
     $pending = Join-Path $OutputDir "_drive_upload\drive_upload_ready_pending.csv"
-    if ((Test-Path $pending) -and @(Import-Csv $pending).Count -gt 0 -and $uploader.Count -eq 0) {
-        $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden $python @("tools\rclone_drive_upload.py","--output-dir",$OutputDir,"--execute","--repeat","--limit","100","--transfers","4","--checkers","8","--rclone-timeout-seconds","1200") (Join-Path $logDir "supervisor_uploader_$stamp.out.log") (Join-Path $logDir "supervisor_uploader_$stamp.err.log")
-        Log-Event "ready_uploader_started"
+    $pendingCount = Get-CsvRowCount $pending
+    if ($pendingCount -gt 0 -and $uploader.Count -eq 0) {
+        if ($pipelineTransitionStarted -or $watcher.Count -gt 0) {
+            Log-Event "uploader_deferred_pipeline_transition" @{pending=$pendingCount;watcher=$watcher.Count;transition_started=$pipelineTransitionStarted}
+        } elseif (-not (Test-UploadGateProof)) {
+            Log-Event "uploader_gate_closed" @{pending=$pendingCount;proof=$uploadGateProofPath}
+        } else {
+            $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+            Start-Hidden $python @("tools\rclone_drive_upload.py","--output-dir",$OutputDir,"--execute","--repeat","--limit","100","--transfers","4","--checkers","8","--rclone-timeout-seconds","1200") (Join-Path $logDir "supervisor_uploader_$stamp.out.log") (Join-Path $logDir "supervisor_uploader_$stamp.err.log")
+            Log-Event "ready_uploader_started" @{pending=$pendingCount;proof=$uploadGateProofPath}
+        }
     }
 } finally {
     Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue

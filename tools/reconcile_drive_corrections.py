@@ -90,6 +90,9 @@ class Reconciler:
 
     def upload_new(self, row: dict, dry_plan: bool = False) -> None:
         if row.get("status") in {"new_uploaded_verified", "unchanged_remote_verified", "old_trash_pending", "old_trashed_verified"}: return
+        if row.get("status") != "new_ready":
+            self.set_error(row, "upload requires status=new_ready")
+            return
         local = Path(row.get("local_path") or row.get("source_path") or "")
         name = row.get("corrected_file_name") or local.name
         if not local.is_file(): self.set_error(row, "local corrected file missing"); return
