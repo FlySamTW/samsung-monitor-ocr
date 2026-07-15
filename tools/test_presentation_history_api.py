@@ -182,6 +182,47 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertTrue(all("thumb_b64" not in item for item in items))
             self.assertNotIn("MUST_NOT_LEAK", json.dumps(items, ensure_ascii=False))
 
+    def test_recent_history_restores_disk_and_live_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_root = Path(tmp)
+            history_dir = audit_root / "presentation_history"
+            history_dir.mkdir(parents=True)
+            disk_items = [
+                {
+                    "presentation_id": "p-old",
+                    "presentation_sequence": 500,
+                    "source_item_id": "a" * 64,
+                    "file_name": "old.jpg",
+                    "source_path": "D:/photos/old.jpg",
+                    "completed_at": "2026-07-14T23:59:00",
+                    "thumb_b64": "MUST_NOT_LEAK",
+                    "result": {"view_type": "遠景"},
+                },
+                {
+                    "presentation_id": "p-new-process",
+                    "presentation_sequence": 1,
+                    "source_item_id": "b" * 64,
+                    "file_name": "new.jpg",
+                    "source_path": "D:/photos/new.jpg",
+                    "completed_at": "2026-07-15T00:01:00",
+                    "result": {"view_type": "單機", "model": "S27D300GAC"},
+                },
+            ]
+            (history_dir / "presentation_20260715.jsonl").write_text(
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in disk_items) + "\n{broken",
+                encoding="utf-8",
+            )
+            orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+            orchestrator.config = {"audit_dir": str(audit_root)}
+            orchestrator.output_dir = str(audit_root)
+            orchestrator._state_lock = RLock()
+            orchestrator.display_queue = [dict(disk_items[1])]
+
+            items = orchestrator.get_recent_presentation_history(limit=10)
+            self.assertEqual([item["presentation_id"] for item in items], ["p-new-process", "p-old"])
+            self.assertNotIn("MUST_NOT_LEAK", json.dumps(items, ensure_ascii=False))
+            self.assertEqual(items[0]["source_path"], "D:/photos/new.jpg")
+
     def test_history_api_validates_id_and_limit(self):
         class FakeOrchestrator:
             def get_presentation_history(self, source_item_id, limit=12):
@@ -204,6 +245,25 @@ class PresentationHistoryTests(unittest.TestCase):
             payload = response.get_json()
             self.assertEqual(payload["source_item_id"], "b" * 64)
             self.assertEqual(payload["count"], 1)
+        finally:
+            backend.orchestrator = previous
+
+    def test_recent_history_api_validates_limit_and_returns_collection(self):
+        class FakeOrchestrator:
+            def get_recent_presentation_history(self, limit=200):
+                return [{"presentation_id": "p-1", "file_name": "one.jpg"}][:limit]
+
+        previous = backend.orchestrator
+        backend.orchestrator = FakeOrchestrator()
+        try:
+            client = backend.flask_app.test_client()
+            bad = client.get("/api/presentation_history?limit=nope")
+            self.assertEqual(bad.status_code, 400)
+            response = client.get("/api/presentation_history?limit=999")
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["count"], 1)
+            self.assertEqual(payload["items"][0]["presentation_id"], "p-1")
         finally:
             backend.orchestrator = previous
 

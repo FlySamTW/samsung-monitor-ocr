@@ -561,6 +561,56 @@ class BatchOrchestrator:
             key=lambda item: (int(item.get("presentation_sequence") or 0), str(item.get("started_at") or "")),
         )[-limit:]
 
+    def get_recent_presentation_history(self, limit: int = 200) -> list[dict]:
+        """Return newest durable presentation events for result-rail recovery."""
+        limit = max(1, min(200, int(limit or 200)))
+        found: dict[str, dict] = {}
+        with self._state_lock:
+            live_items = list(self.display_queue)
+        for item in reversed(live_items):
+            presentation_id = str(item.get("presentation_id") or "")
+            if presentation_id:
+                found[presentation_id] = self._public_presentation_event(item)
+
+        audit_dir = self._presentation_audit_dir()
+        if audit_dir.is_dir() and len(found) < limit:
+            paths = sorted(audit_dir.glob("presentation_*.jsonl*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for path in paths:
+                try:
+                    if path.suffix.lower() == ".gz":
+                        with gzip.open(path, "rt", encoding="utf-8") as handle:
+                            lines = list(handle)[-(limit * 4):]
+                    else:
+                        with path.open("rb") as handle:
+                            size = handle.seek(0, os.SEEK_END)
+                            handle.seek(max(0, size - (4 * 1024 * 1024)))
+                            if handle.tell() > 0:
+                                handle.readline()
+                            lines = handle.read().decode("utf-8", errors="ignore").splitlines()
+                    for line in reversed(lines):
+                        try:
+                            item = json.loads(line)
+                        except (TypeError, json.JSONDecodeError):
+                            continue
+                        presentation_id = str(item.get("presentation_id") or "")
+                        if presentation_id and presentation_id not in found:
+                            found[presentation_id] = self._public_presentation_event(item)
+                        if len(found) >= limit:
+                            break
+                except (OSError, UnicodeError):
+                    continue
+                if len(found) >= limit:
+                    break
+
+        return sorted(
+            found.values(),
+            key=lambda item: (
+                str(item.get("completed_at") or item.get("started_at") or ""),
+                str(item.get("presentation_id") or ""),
+            ),
+            reverse=True,
+        )[:limit]
+
     def get_all_records(self):
         """
         [v14.9] Scoped to current folder. Aggregates records for files that actually EXIST.

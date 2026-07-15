@@ -288,6 +288,7 @@ const App = () => {
   const [pendingQueue, setPendingQueue] = useState([]);
   const [activePresentation, setActivePresentation] = useState(null);
   const [revealedResults, setRevealedResults] = useState([]);
+  const [resultRailBatchKey, setResultRailBatchKey] = useState("");
   const [displayedBuffer, setDisplayedBuffer] = useState("");
   const [narrationDisplay, setNarrationDisplay] = useState({
     text: "",
@@ -385,6 +386,65 @@ const App = () => {
     };
   };
 
+  const getResultRailIdentity = (item) => String(
+    item?.source_item_id || item?.source_path || item?.file_name || item?._queueKey || ""
+  );
+
+  const mergeResultRailItems = (items) => {
+    const newestByPhoto = new Map();
+    [...items]
+      .filter(Boolean)
+      .sort((left, right) => Number(right.presentation_sequence || 0) - Number(left.presentation_sequence || 0))
+      .forEach((item) => {
+        const identity = getResultRailIdentity(item);
+        if (identity && !newestByPhoto.has(identity)) newestByPhoto.set(identity, item);
+      });
+    return [...newestByPhoto.values()]
+      .slice(0, MAX_REVEALED_RESULTS)
+      .map((item, index) => ({ ...item, _isCurrent: index === 0 }));
+  };
+
+  const currentResultRailBatchKey = String(data.current_relative_dir || data.image_dir || "");
+  const resultRailStorageKey = "samsung_ocr_result_rail_v1";
+
+  // Preserve the current batch's completed cards across an asset refresh.
+  useEffect(() => {
+    if (!currentResultRailBatchKey || currentResultRailBatchKey === resultRailBatchKey) return;
+    let restored = [];
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(resultRailStorageKey) || "null");
+      if (saved?.batchKey === currentResultRailBatchKey && Array.isArray(saved.items)) {
+        restored = saved.items.map(normalizePresentationItem).filter(Boolean);
+      }
+    } catch (_) {}
+    setRevealedResults(mergeResultRailItems(restored));
+    setResultRailBatchKey(currentResultRailBatchKey);
+  }, [currentResultRailBatchKey, resultRailBatchKey]);
+
+  useEffect(() => {
+    if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
+    try {
+      sessionStorage.setItem(resultRailStorageKey, JSON.stringify({
+        batchKey: resultRailBatchKey,
+        items: revealedResults
+      }));
+    } catch (_) {}
+  }, [revealedResults, resultRailBatchKey, currentResultRailBatchKey]);
+
+  useEffect(() => {
+    if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
+    let cancelled = false;
+    fetch("/api/presentation_history?limit=200")
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (cancelled || !Array.isArray(payload?.items)) return;
+        const restored = payload.items.map(normalizePresentationItem).filter(Boolean);
+        setRevealedResults((prev) => mergeResultRailItems([...restored, ...prev]));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [resultRailBatchKey, currentResultRailBatchKey]);
+
   const getPassLabel = (item) => item?.pass_label || ({
     1: "初次辨識",
     2: "第二輪複核",
@@ -461,10 +521,12 @@ const App = () => {
       || detailedThinking
       || `正在分析 ${currentFile}；等待本輪 AI 回傳第一段判讀文字。`;
     const liveDir = String(data.current_relative_dir || data.image_dir || "").trim();
+    const livePassIndex = Math.max(1, Number(data.review_progress?.current_pass || 1));
     return {
       fileName: currentFile,
       text: trimDisplayNarration(liveText),
-      key: `live:${liveDir}|${currentFile}`,
+      key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`,
+      passIndex: livePassIndex,
       hasModelText: Boolean(sameFileStream || detailedThinking)
     };
   };
@@ -568,6 +630,18 @@ const App = () => {
         .slice(0, MAX_PENDING_PRESENTATIONS);
     });
   }, [data.presentation_queue]);
+
+  // The live LLM stream must never block completed photos from accumulating in
+  // the right rail.  Hydrate the whole compact backend window, then continuously
+  // upsert one newest card per physical photo while the left side remains live.
+  useEffect(() => {
+    if (!isRunning) return;
+    const completed = (Array.isArray(data.presentation_queue) ? data.presentation_queue : [])
+      .map(normalizePresentationItem)
+      .filter(Boolean);
+    if (completed.length === 0) return;
+    setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]));
+  }, [data.presentation_queue, isRunning]);
 
   // Never let a stale async update pair narration with another snapshot.
   useEffect(() => {
@@ -707,12 +781,7 @@ const App = () => {
       if (!revealedKeysRef.current.has(item._queueKey)) {
         revealedKeysRef.current.add(item._queueKey);
         setNarrationDisplay((prev) => prev.text ? { ...prev, phase: "revealed" } : prev);
-        setRevealedResults((prev) => {
-          const cleaned = prev
-            .filter((res) => res._queueKey !== item._queueKey)
-            .map((res) => ({ ...res, _isCurrent: false }));
-          return [item, ...cleaned].slice(0, MAX_REVEALED_RESULTS);
-        });
+        setRevealedResults((prev) => mergeResultRailItems([item, ...prev]));
       }
       const revealHoldMs = pendingQueue.length > 20 ? FAST_REVEAL_HOLD_MS : NORMAL_REVEAL_HOLD_MS;
       releaseTimer = setTimeout(() => {
@@ -1046,11 +1115,15 @@ const App = () => {
         _queueKey: liveStreamSnapshot.key,
         presentation_id: liveStreamSnapshot.key,
         presentation_sequence: '',
+        pass_index: liveStreamSnapshot.passIndex,
+        pass_label: getPassLabel({ pass_index: liveStreamSnapshot.passIndex }),
+        model_id: data.current_model || '',
         _isCurrent: true,
         _pendingReveal: true
       }
     : null;
   const pendingPanelResult = livePendingResult || activePendingResult;
+  const visiblePassPresentation = liveStreamSnapshot ? livePendingResult : activePresentation;
   const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
   const latestBackendNarration = getLatestBackendNarration();
   const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot && narrationDisplay.text
@@ -1382,9 +1455,9 @@ const App = () => {
                                           上一張摘要保留中 · 下一張判讀中
                                       </div>
                                    )}
-                                   {hasPassMetadata(activePresentation) && (
+                                   {hasPassMetadata(visiblePassPresentation) && (
                                      <div style={{ color: '#67e8f9', fontSize: '0.72rem', marginBottom: '5px' }}>
-                                       {getPassHeading(activePresentation)}{activePresentation?.model_id ? ` · ${activePresentation.model_id}` : ''}
+                                       {getPassHeading(visiblePassPresentation)}{visiblePassPresentation?.model_id ? ` · ${visiblePassPresentation.model_id}` : ''}
                                      </div>
                                    )}
                                    {visibleNarration}

@@ -3856,6 +3856,23 @@ def get_presentation_history(source_item_id):
         log.error(f"Presentation history API error: {exc}")
         return jsonify({"error": "判讀歷程暫時無法載入"}), 500
 
+@flask_app.route('/api/presentation_history', methods=['GET'])
+def get_recent_presentation_history():
+    """Restore the newest completed result cards after a dashboard refresh."""
+    if not orchestrator:
+        return jsonify({"error": "Orchestrator 未初始化"}), 500
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit 必須是整數"}), 400
+    limit = max(1, min(200, limit))
+    try:
+        items = orchestrator.get_recent_presentation_history(limit=limit)
+        return jsonify({"count": len(items), "items": items})
+    except Exception as exc:
+        log.error(f"Recent presentation history API error: {exc}")
+        return jsonify({"error": "最近辨識紀錄暫時無法載入"}), 500
+
 @flask_app.route('/api/logs', methods=['GET'])
 def get_logs():
     """獲取系統日誌"""

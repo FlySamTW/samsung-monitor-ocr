@@ -117,7 +117,9 @@ class PresentationSoakTests(unittest.TestCase):
     def test_running_mode_uses_same_file_live_stream_and_keeps_live_priority(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn('liveFile === currentFile ? text : ""', app)
-        self.assertIn('key: `live:${liveDir}|${currentFile}`', app)
+        self.assertIn('key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`', app)
+        self.assertIn("const visiblePassPresentation = liveStreamSnapshot ? livePendingResult : activePresentation", app)
+        self.assertIn("getPassHeading(visiblePassPresentation)", app)
         self.assertIn('if (activePresentation) {', app)
         target_start = app.index('const getDisplayTarget = () =>')
         target_end = app.index('const imageReadyForDisplay', target_start)
@@ -179,7 +181,7 @@ class PresentationSoakTests(unittest.TestCase):
             "toggleHistory(res)",
         ):
             self.assertNotIn(internal_detail, rail)
-        self.assertIn("hasPassMetadata(activePresentation)", app)
+        self.assertIn("hasPassMetadata(visiblePassPresentation)", app)
         self.assertIn("hasPassMetadata(pendingPanelResult)", app)
         self.assertIn("hasPassMetadata(res)", rail)
         self.assertIn("hasPassMetadata(inspectImage)", app)
@@ -221,6 +223,19 @@ class PresentationSoakTests(unittest.TestCase):
         target = app[target_start:target_end]
         self.assertIn("if (!isRunning)", target)
         self.assertNotIn("if (latest) return", target.split("if (!isRunning)", 1)[0])
+
+    def test_result_rail_accumulates_independently_from_live_narration(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const mergeResultRailItems", app)
+        self.assertIn("item?.source_item_id || item?.source_path || item?.file_name", app)
+        self.assertIn("setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]))", app)
+        self.assertIn("samsung_ocr_result_rail_v1", app)
+        self.assertIn("saved?.batchKey === currentResultRailBatchKey", app)
+        self.assertIn("items: revealedResults", app)
+        rail_start = app.index("// The live LLM stream must never block completed photos")
+        rail_end = app.index("// Never let a stale async update", rail_start)
+        self.assertNotIn("getSyncedLiveStream", app[rail_start:rail_end])
+        self.assertNotIn("slice(-1)", app[rail_start:rail_end])
 
     def test_legacy_status_polling_is_bounded_non_overlapping_and_lightweight(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
