@@ -531,6 +531,10 @@ const App = () => {
         if (cancelled || !Array.isArray(payload?.items)) return;
         const allowed = new Set(Array.isArray(payload.source_item_ids) ? payload.source_item_ids.map(String) : []);
         const expectedRunId = String(payload.run_id || "");
+        if (!expectedRunId) {
+          setRevealedResults([]);
+          return;
+        }
         const restored = payload.items
           .map(normalizePresentationItem)
           .filter((item) => item && String(item.run_id || "") === expectedRunId);
@@ -567,12 +571,16 @@ const App = () => {
     accepted: "已通過自動守門",
     review_required: "需慢模型或人工校正"
   }[String(value || "")] || formatMetaValue(value));
+  const isStaleGuardRevision = (item) => Boolean(
+    item
+    && (item.pass_index || item.pass_label)
+    && String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION
+  );
   const isExplicitlyUnresolved = (item) => {
     if (!item) return false;
     // Cards from the stopped contaminated run remain useful as an audit
     // trail, but may not look like accepted results under the new guard.
-    if ((item.pass_index || item.pass_label)
-      && String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION) return true;
+    if (isStaleGuardRevision(item)) return true;
     if (item.auto_review_required === true) return true;
     const decision = String(item.decision || "").trim().toLowerCase();
     if (["retry_scheduled", "review_required", "failed"].includes(decision)) return true;
@@ -1773,7 +1781,7 @@ const App = () => {
                             </div>
                           )}
                           {rightPanelItems.map((res, i) => (
-                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} data-review-state={isExplicitlyUnresolved(res) ? "pending-review" : "completed"} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isExplicitlyUnresolved(res) ? "pending-review" : "completed"} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                   <div style={{ display: 'flex', gap: '8px' }}>
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1791,7 +1799,7 @@ const App = () => {
                                           )}
                                           {!res._pendingReveal && isExplicitlyUnresolved(res) && (
                                             <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>判讀未完成／待複核</span>
+                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : "判讀未完成／待複核"}</span>
                                             </div>
                                           )}
                                           {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && (

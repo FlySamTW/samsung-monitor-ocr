@@ -4157,9 +4157,17 @@ def get_recent_presentation_history():
                 limit=limit,
                 source_item_ids=source_item_ids,
                 run_id=current_run_id,
-                latest_run_only=bool(current_run_id),
-                legacy_run_only=not bool(current_run_id),
+                # An idle transition clears current_run_id.  That must not
+                # reopen every legacy no-run event for the selected folder.
+                # Recover exactly the newest durable run instead, so the
+                # boss-facing rail remains the last coherent batch.
+                latest_run_only=True,
+                legacy_run_only=False,
             )
+            if not current_run_id and items:
+                current_run_id = str(items[0].get("run_id") or "")
+                if not current_run_id:
+                    items = []
         else:
             source_item_ids = None
             current_run_id = ""

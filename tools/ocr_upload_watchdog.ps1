@@ -37,6 +37,7 @@ $LogPath = Join-Path $LogDir ("ocr_upload_watchdog_{0}.log" -f (Get-Date -Format
 $LockPath = Join-Path $OutputDir "_ocr_audit\ocr_upload_watchdog.lock"
 $GateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
 $RuntimeHealthFusePath = Join-Path $OutputDir "_ocr_audit\runtime_health_fuse.json"
+$BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\model_benchmark.lock"
 $script:LastAuditExit = -1
 
 function Write-RunLog([string]$Message) {
@@ -668,6 +669,11 @@ if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
     Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
     Write-RunLog "watchdog fail-closed: runtime health fuse active"
     exit 9
+}
+if (Test-Path -LiteralPath $BenchmarkLockPath) {
+    Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+    Write-RunLog "watchdog fail-closed: model benchmark/backend-upgrade interlock active"
+    exit 8
 }
 if (Test-Path -LiteralPath $LockPath) {
     $ageMinutes = ((Get-Date) - (Get-Item -LiteralPath $LockPath).LastWriteTime).TotalMinutes

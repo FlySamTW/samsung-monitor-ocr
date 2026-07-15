@@ -203,7 +203,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('item.evidence_unresolved === true', unresolved)
         self.assertIn('item.auto_review_required === true', unresolved)
         self.assertIn('item.accepted === false', unresolved)
-        self.assertIn('data-review-state={isExplicitlyUnresolved(res) ? "pending-review" : "completed"}', rail)
+        self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isExplicitlyUnresolved(res) ? "pending-review" : "completed"}', rail)
         self.assertIn('判讀未完成／待複核', rail)
         self.assertIn("!isExplicitlyUnresolved(res) && res.view_type !== '遠景'", rail)
         self.assertIn('!isExplicitlyUnresolved(res) && res.view_type &&', rail)
@@ -300,7 +300,14 @@ class PresentationSoakTests(unittest.TestCase):
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn('const CURRENT_GUARD_REVISION = "20260716.12"', app)
+        self.assertIn('const isStaleGuardRevision = (item)', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
+        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : "判讀未完成／待複核"', app)
+
+    def test_result_rail_refuses_blank_run_identity(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn('if (!expectedRunId)', app)
+        self.assertIn('setRevealedResults([]);', app)
 
     def test_backend_narration_snapshot_cannot_be_hidden_by_animation_state(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")

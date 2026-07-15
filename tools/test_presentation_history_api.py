@@ -395,7 +395,7 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertEqual(orchestrator.recent_results, [])
             self.assertEqual(orchestrator.priority_queue, [])
 
-    def test_current_batch_without_marker_requests_legacy_history_only(self):
+    def test_current_batch_without_marker_recovers_latest_nonlegacy_run(self):
         class FakeOrchestrator:
             current_run_id = ""
 
@@ -404,7 +404,7 @@ class PresentationHistoryTests(unittest.TestCase):
 
             def get_recent_presentation_history(self, **kwargs):
                 self.kwargs = kwargs
-                return []
+                return [{"presentation_id": "p-latest", "run_id": "run-latest"}]
 
         previous = backend.orchestrator
         fake = FakeOrchestrator()
@@ -414,9 +414,31 @@ class PresentationHistoryTests(unittest.TestCase):
                 "/api/presentation_history?limit=200&scope=current_batch"
             )
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["run_id"], "run-latest")
+            self.assertTrue(fake.kwargs["latest_run_only"])
+            self.assertFalse(fake.kwargs["legacy_run_only"])
+        finally:
+            backend.orchestrator = previous
+
+    def test_current_batch_without_marker_refuses_legacy_no_run_history(self):
+        class FakeOrchestrator:
+            current_run_id = ""
+
+            def get_current_source_item_ids(self):
+                return {"c" * 64}
+
+            def get_recent_presentation_history(self, **kwargs):
+                return [{"presentation_id": "p-legacy", "run_id": ""}]
+
+        previous = backend.orchestrator
+        backend.orchestrator = FakeOrchestrator()
+        try:
+            response = backend.flask_app.test_client().get(
+                "/api/presentation_history?limit=200&scope=current_batch"
+            )
+            self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["run_id"], "")
-            self.assertFalse(fake.kwargs["latest_run_only"])
-            self.assertTrue(fake.kwargs["legacy_run_only"])
+            self.assertEqual(response.get_json()["items"], [])
         finally:
             backend.orchestrator = previous
 

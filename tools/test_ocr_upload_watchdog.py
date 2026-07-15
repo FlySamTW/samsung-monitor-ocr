@@ -48,6 +48,13 @@ class OcrUploadWatchdogGateTests(unittest.TestCase):
         self.assertIn("-WindowStyle Hidden", self.source)
         self.assertNotIn("-WindowStyle Normal", self.source)
 
+    def test_model_benchmark_interlock_blocks_every_watchdog_action(self):
+        self.assertIn('$BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\\model_benchmark.lock"', self.source)
+        main = self.source[self.source.index("New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LockPath)"):]
+        self.assertLess(main.index("Test-Path -LiteralPath $BenchmarkLockPath"), main.index("try {"))
+        self.assertIn('Remove-Item -LiteralPath $GateProofPath', main)
+        self.assertIn('exit 8', main)
+
 
 if __name__ == "__main__":
     unittest.main()
