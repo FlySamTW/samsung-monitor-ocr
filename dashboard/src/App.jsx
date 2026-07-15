@@ -501,6 +501,14 @@ const App = () => {
       }
     } catch (_) {}
     setRevealedResults(mergeResultRailItems(restored));
+    setActivePresentation(null);
+    setPendingQueue([]);
+    setNarrationDisplay({ text: "", key: "", phase: "idle", fileName: "", nextFileName: "" });
+    setDisplayedBuffer("");
+    setDisplayTargetKey("");
+    setCurrentThumb(null);
+    setCurrentImageTarget({ src: "", key: "", fileName: "" });
+    setVisibleImageTarget({ src: "", key: "", fileName: "" });
     setResultRailBatchKey(currentResultRailBatchKey);
   }, [currentResultRailBatchKey, resultRailBatchKey]);
 
@@ -521,9 +529,11 @@ const App = () => {
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => {
         if (cancelled || !Array.isArray(payload?.items)) return;
-        const restored = payload.items.map(normalizePresentationItem).filter(Boolean);
         const allowed = new Set(Array.isArray(payload.source_item_ids) ? payload.source_item_ids.map(String) : []);
         const expectedRunId = String(payload.run_id || "");
+        const restored = payload.items
+          .map(normalizePresentationItem)
+          .filter((item) => item && String(item.run_id || "") === expectedRunId);
         setRevealedResults((prev) => mergeResultRailItems([
           ...restored,
           ...prev.filter((item) => (
@@ -1331,9 +1341,9 @@ const App = () => {
   // still-visible prior photo during the handoff window.
   const currentFileLabel = displayedFileName && displayedFileName !== "-" && displayedFileName !== "上一張畫面保留"
     ? displayedFileName
-    : (data.current_file && data.current_file !== "None"
+    : (isRunning && data.current_file && data.current_file !== "None"
       ? data.current_file
-      : (data.latest_result_file || "-"));
+      : (data.presentation_run_id ? (data.latest_result_file || "-") : "-"));
   const narrationPhase = narrationDisplay.phase === "revealed"
     ? "revealed"
     : displayedBuffer && narrationDisplay.key === displayTargetKey ? "typing" : narrationDisplay.phase;
