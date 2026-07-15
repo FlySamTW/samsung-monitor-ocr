@@ -517,6 +517,20 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("`complete_screen_count` 填成實際數到的整數且至少為 3", prompt)
         self.assertIn("禁止填 `matched`", prompt)
 
+    def test_single_prompt_requires_all_machine_readable_evidence_every_pass(self):
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("一般單機的四個機器證據欄位每一輪都必須出現", prompt)
+        self.assertIn("一般單機必須為 true", prompt)
+        self.assertIn("任何分支、任何輪次都不得省略四個機器證據欄位", prompt)
+        schema = prompt.split("### JSON Schema", 1)[1].split("---", 1)[0]
+        for field in (
+            "complete_screen_count",
+            "unique_main",
+            "label_ownership",
+            "followme_physical_evidence",
+        ):
+            self.assertIn(field, schema)
+
     def test_distant_cannot_carry_unresolved_followme_physical_evidence_or_sku(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
