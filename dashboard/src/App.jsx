@@ -770,10 +770,18 @@ const App = () => {
   useEffect(() => {
     const watchdog = setInterval(() => {
       const active = activePresentationRef.current;
-      if (!active) return;
-      const stalledMs = Date.now() - displayWatchdogRef.current.updatedAt;
+      const watched = displayWatchdogRef.current;
+      if (!active || !watched.key || active._queueKey !== watched.key) {
+        // A same-file live stream may temporarily own the left panel while an
+        // older completed presentation waits in the local queue.  That is not
+        // a stalled presentation: the photo, narration, and placeholder are
+        // advancing under the live key.  Clear only the obsolete watchdog
+        // warning; never hide a real queue-key divergence.
+        setPresentationInvariantError((prev) => prev.startsWith("presentation stalled:") ? "" : prev);
+        return;
+      }
+      const stalledMs = Date.now() - watched.updatedAt;
       if (stalledMs < 8000) return;
-      const latestKeys = latestDisplayQueueKeysRef.current;
       setPresentationInvariantError(`presentation stalled: ${active._queueKey}`);
     }, 2000);
     return () => clearInterval(watchdog);

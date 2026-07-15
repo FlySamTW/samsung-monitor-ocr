@@ -114,6 +114,18 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("presentation key divergence", app)
         self.assertIn("presentation_sequence || 0", app)
 
+    def test_live_stream_does_not_leave_a_false_stalled_invariant(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        watchdog_start = app.index("const watchdog = setInterval")
+        watchdog_end = app.index("return () => clearInterval(watchdog);", watchdog_start)
+        watchdog = app[watchdog_start:watchdog_end]
+
+        self.assertIn("const watched = displayWatchdogRef.current", watchdog)
+        self.assertIn("active._queueKey !== watched.key", watchdog)
+        self.assertIn('prev.startsWith("presentation stalled:") ? "" : prev', watchdog)
+        self.assertIn("Date.now() - watched.updatedAt", watchdog)
+        self.assertNotIn("const latestKeys =", watchdog)
+
     def test_running_mode_uses_same_file_live_stream_and_keeps_live_priority(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn('const rawSameFileStream = liveFile === currentFile', app)
