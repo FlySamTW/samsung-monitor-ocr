@@ -1057,7 +1057,16 @@ def is_samsung_model_like(model):
 
 def infer_other_brand_model(context_text="", raw_model=None):
     """Return normalized '它牌(BRAND)' when the main monitor is clearly not Samsung."""
-    raw_text = " ".join(str(part or "") for part in [raw_model, context_text])
+    context = str(context_text or "")
+    # Brand names inside the pixels being displayed are content, not hardware
+    # ownership (for example: "螢幕顯示 ASUS Demo 畫面").
+    context = re.sub(
+        r"(?:螢幕|畫面)?(?:顯示|播放|呈現).{0,40}?(?:DEMO|畫面|內容|介面)",
+        " ",
+        context,
+        flags=re.IGNORECASE,
+    )
+    raw_text = " ".join(str(part or "") for part in [raw_model, context])
     if not raw_text.strip():
         return None
 
@@ -1069,7 +1078,10 @@ def infer_other_brand_model(context_text="", raw_model=None):
 
     upper_text = raw_text.upper()
     raw_upper = str(raw_model or "").upper()
-    subject_terms = r"(主角|主體|這台|此台|這個商品|商品|螢幕|顯示器|MONITOR|品牌|LOGO)"
+    # Generic words such as "螢幕顯示 ASUS Demo 畫面" describe screen
+    # content, not the physical monitor brand.  Require an explicit subject or
+    # brand/logo relationship before replacing a Samsung model with 它牌.
+    subject_terms = r"(主角|主體|這台|此台|這個商品|商品|品牌|LOGO)"
     product_terms = r"(螢幕|顯示器|MONITOR|品牌|LOGO|型號)"
 
     for brand, aliases in OTHER_BRAND_ALIASES:
@@ -3003,7 +3015,12 @@ def process_single_image(
         import difflib # Ensure import available (inline is safe)
         raw_model = data_obj.get("model")
         raw_other_brand_model = infer_other_brand_model(thinking_text, raw_model)
-        if raw_other_brand_model and data_obj.get("view_type") != "遠景":
+        if raw_other_brand_model and is_samsung_model_like(raw_model):
+            # Conflicting prose must trigger the accuracy gate; it may never
+            # silently overwrite an explicit Samsung SKU.
+            data_obj["brand_evidence_conflict"] = True
+            data_obj["rejected_other_brand_model"] = raw_other_brand_model
+        elif raw_other_brand_model and data_obj.get("view_type") != "遠景":
             console.print(f"[dim]🔎 [Other Brand] '{raw_model}' -> '{raw_other_brand_model}'[/dim]")
             data_obj["model"] = raw_other_brand_model
             raw_model = None
@@ -3747,10 +3764,32 @@ def get_status():
         total_success = len(total_success_list)
         total_failed = len(total_failed_list)
 
+        def _flag_true(value):
+            return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+        def _needs_review(record):
+            status = str(record.get("review_status") or "").strip().lower()
+            return (
+                _flag_true(record.get("auto_review_required"))
+                or status in {"review_required", "待審核", "需慢模型或人工校正"}
+            )
+
+        review_required = sum(1 for record in total_success_list if _needs_review(record))
+        verified = sum(
+            1 for record in total_success_list
+            if _flag_true(record.get("auto_verified")) and not _needs_review(record)
+        )
+        verification_unknown = max(0, total_success - verified - review_required)
+
         stats = {
             "processed": total_success + total_failed,
+            # Backward compatibility: success means a non-system-failure OCR
+            # record.  The dashboard labels it "已處理", never "品質通過".
             "success": total_success,
             "failed": total_failed,
+            "verified": verified,
+            "review_required": review_required,
+            "verification_unknown": verification_unknown,
             "total": orchestrator.stats.get('total', 0)
         }
 
@@ -3791,6 +3830,9 @@ def get_status():
             "processed": stats["processed"],
             "success": stats["success"],
             "failed": stats["failed"],
+            "verified": stats["verified"],
+            "review_required": stats["review_required"],
+            "verification_unknown": stats["verification_unknown"],
             "total": stats["total"],
             "current_pass": current_attempt,
             "current_file": current_file,

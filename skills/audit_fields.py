@@ -16,6 +16,31 @@ FOLLOWME_WEAK_CUES = {"screen_content_only", "nearby_signage_only", "unknown"}
 FOLLOWME_INDEPENDENT_STRONG_CUES = {"white_vertical_stand", "round_base", "portrait_display", "attached_price_tray", "attached_followme_product_card"}
 
 
+def is_followme_model(model: Any) -> bool:
+    """Recognize both friendly FollowMe names and the physical product SKUs.
+
+    S32FM80x/S32FM90x are ordinary Smart Monitor models, so only the known
+    FollowMe 32-inch 50x/70x and 43-inch 70x families are included here.
+    """
+    text = re.sub(r"[^A-Z0-9]", "", str(model or "").upper())
+    if not text:
+        return False
+    if text.startswith("FOLLOWME"):
+        return True
+    return bool(re.fullmatch(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", text))
+
+
+def _category_view(category: Any) -> str:
+    text = str(category or "").strip()
+    if "遠景" in text:
+        return "遠景"
+    if text == "單機" or text.startswith("不合格"):
+        return "單機"
+    if text == "失敗":
+        return "失敗"
+    return ""
+
+
 def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str], Dict[str, Any]]:
     """Validate machine-readable visual evidence; prose is never evidence."""
     errors: List[str] = []
@@ -57,17 +82,28 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
         "label_ownership": ownership if ownership in LABEL_OWNERSHIP_VALUES else "not_visible",
         "followme_physical_evidence": normalized_physical,
     }
-    if record.get("view_type") == "遠景":
+    view_type = str(record.get("view_type") or "").strip()
+    category_view = _category_view(record.get("category"))
+    if view_type in {"單機", "遠景", "失敗"} and category_view and category_view != view_type:
+        errors.append("view_category_conflict")
+    if view_type == "遠景":
         if count is None or unique is None:
             errors.append("distant_evidence_missing")
         elif count < 3 or unique:
             errors.append("distant_evidence_inconsistent")
         if ownership == "matched":
             errors.append("distant_owned_label_conflict")
-    if record.get("view_type") == "單機" and unique is not True:
+        if any(
+            item["same_subject"]
+            and item["strength"] in {"strong", "direct"}
+            and item["cue"] not in FOLLOWME_WEAK_CUES
+            for item in normalized_physical
+        ):
+            errors.append("distant_followme_physical_conflict")
+    if view_type == "單機" and unique is not True:
         errors.append("single_unique_main_required")
     model = str(record.get("model") or "")
-    if model.upper().startswith("FOLLOWME"):
+    if is_followme_model(model):
         direct_branding = any(x["cue"] == "direct_followme_branding_on_unit" and x["same_subject"] and x["strength"] in {"strong", "direct"} for x in normalized_physical)
         strong_codes = {x["cue"] for x in normalized_physical if x["cue"] in FOLLOWME_INDEPENDENT_STRONG_CUES and x["same_subject"] and x["strength"] == "strong"}
         if not (direct_branding or len(strong_codes) >= 2):
@@ -225,6 +261,38 @@ def _no_unique_main_evidence(text: str) -> bool:
     )
 
 
+def _narration_declares_distant(text: str) -> bool:
+    normalized = str(text or "")
+    if re.search(r"(?:不是|並非|不屬於|非)\s*[「『\"]?遠景", normalized):
+        return False
+    return bool(
+        re.search(r"(?:符合|屬於|判斷為|分類為|應為).{0,8}遠景(?:.{0,6}條件)?", normalized)
+        or re.search(r"整體.{0,8}遠景(?:.{0,6}條件)?", normalized)
+    )
+
+
+def _label_ownership_conflicts_with_narration(text: str) -> bool:
+    normalized = str(text or "")
+    conflict_patterns = (
+        r"(?:規格牌|價格牌|標籤).{0,16}(?:屬於|對應)(?:旁邊|鄰近|另一台|其他)(?:商品|螢幕|顯示器|機台)?",
+        r"(?:規格牌|價格牌|標籤).{0,16}(?:不能|無法|不可).{0,6}歸屬",
+        r"(?:規格牌|價格牌|標籤).{0,16}(?:與主角無關|不是主角自己的|歸屬不明|歸屬模糊)",
+    )
+    return any(re.search(pattern, normalized) for pattern in conflict_patterns)
+
+
+def _same_model_price_confirmed(record: Dict[str, Any], history: List[Dict[str, Any]]) -> bool:
+    model = re.sub(r"[^A-Z0-9]", "", str(record.get("model") or "").upper())
+    price = _as_int(record.get("price"))
+    if not model or price is None or record.get("label_ownership") != "matched":
+        return False
+    for prior in reversed(history):
+        prior_model = re.sub(r"[^A-Z0-9]", "", str(prior.get("model") or "").upper())
+        if prior_model == model and _as_int(prior.get("price")) == price and prior.get("label_ownership") == "matched":
+            return True
+    return False
+
+
 def immediate_retry_decision(
     record: Dict[str, Any],
     attempt: int,
@@ -259,8 +327,24 @@ def immediate_retry_decision(
         reasons.append("型號未通過正式清單驗證")
     if record.get("price_conflict_detected"):
         reasons.append("價格欄位互相衝突")
+    if record.get("brand_evidence_conflict"):
+        reasons.append("品牌敘述與正式型號衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
+
+    if view_type == "單機" and _narration_declares_distant(thinking):
+        reasons.append("結構為單機但敘述明確判為遠景")
+    if record.get("label_ownership") == "matched" and _label_ownership_conflicts_with_narration(thinking):
+        reasons.append("標籤歸屬與敘述衝突")
+
+    price_status = str(record.get("price_status") or "").strip().lower()
+    diff_percent = record.get("price_diff_percent")
+    try:
+        large_price_diff = price_status in {"high", "low"} and abs(float(diff_percent)) >= 20.0
+    except (TypeError, ValueError):
+        large_price_diff = False
+    if large_price_diff and not _same_model_price_confirmed(record, history):
+        reasons.append("照片價格與官方參考價差異過大，需獨立重讀")
 
     if "遠景" in view_type:
         if current_year and attempt < max_attempts:
@@ -271,13 +355,17 @@ def immediate_retry_decision(
             reasons.append("遠景缺少三台以上完整入鏡證據")
         if attempt >= max_attempts and not contract["valid"] and not _no_unique_main_evidence(thinking):
             reasons.append("遠景缺少無法鎖定唯一主角規格/價格的證據")
-        positive_followme = "FOLLOWME" in thinking.upper().replace(" ", "")
+        compact_thinking = re.sub(r"[^A-Z0-9]", "", thinking.upper())
+        positive_followme = (
+            "FOLLOWME" in compact_thinking
+            or bool(re.search(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", compact_thinking))
+        )
         negative_followme = bool(re.search(r"(?:不是|非|沒有|未見|看不到).{0,10}FOLLOW\s*ME", thinking, re.IGNORECASE))
         if positive_followme and not negative_followme:
             reasons.append("遠景仍含未排除的 FollowMe 線索")
         if quality and quality not in {"無", "正常", "None", "null"}:
             reasons.append(f"遠景與畫質標記需再確認:{quality}")
-    elif "單機" in view_type or "FOLLOWME" in model.upper().replace(" ", ""):
+    elif "單機" in view_type or is_followme_model(model):
         if current_year and not model:
             reasons.append("2026 單機缺型號")
         if current_year and not price:
@@ -287,7 +375,7 @@ def immediate_retry_decision(
         if _explicit_three_complete(thinking) and _no_unique_main_evidence(thinking):
             reasons.append("單機結果與三台以上完整陳列衝突")
 
-    if "FOLLOWME" in model.upper().replace(" ", ""):
+    if is_followme_model(model):
         physical_count = sum(1 for clue in FOLLOWME_PHYSICAL_CLUES if clue in thinking)
         promo_only = _text_has_any(thinking, PROMO_ONLY_CLUES)
         if physical_count < 2 or (promo_only and physical_count < 3):

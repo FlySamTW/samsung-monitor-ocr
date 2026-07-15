@@ -523,6 +523,10 @@ Raw rows use `candidate_model` for the tested VLM and keep `model` for the predi
 
 Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate.
 
+守門不得只檢查欄位是否存在。`view_type/category`、單機結構／明示遠景敘述、`label_ownership=matched`／鄰機價牌敘述任一矛盾都必須 retry/fail closed。FollowMe 的正式 `S32FM50x/S32FM70x/S43FM70x` SKU 與友善名稱使用相同實體證據及第二輪門檻；遠景不得攜帶同主體 FollowMe 強實體線索。畫面播放 ASUS/LG Demo 是內容，不是硬體品牌證據，不可覆蓋正式 Samsung SKU。官方參考價差達 20% 時獨立重讀一次；兩輪同型號、同照片價格、同價牌歸屬後保留照片實價。
+
+Dashboard API 的 `success` 是歷史相容欄位，語意是「已有非系統失敗的判讀記錄」，可能包含 `review_required`。介面只能稱為 `完成判讀`，並分別顯示 `review_required`；Drive 仍只接受 `auto_verified=true && auto_review_required=false`。`windows_user_launcher.ps1` 在安全邊界啟動時會比較 `dashboard/src` 與 `dashboard/dist/index.html` 時間，來源較新必須先 build，避免新版後端計數配上舊前端文字。
+
 ### Current-year upload finalization proof
 
 Current-year upload readiness is a completed-run property, not a per-file guess. `tools/audit_distant_followme_risk.py` must first prove the builder summary, selected candidate/result set, every folder summary, canonical `success_records.csv` / `rename_plan.csv` / `copied.csv`, source identity uniqueness, output existence, and zero remaining unverified v19.45 sources. A zero-row candidate CSV is valid only when the authoritative source inventory is non-empty and every source is already verified.

@@ -203,6 +203,18 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("_frontend_asset_cache", backend)
         self.assertIn('"presentation_sequence_durable": True', backend)
 
+    def test_processed_and_review_metrics_are_not_presented_as_quality_success(self):
+        root = Path(__file__).resolve().parents[1]
+        backend = (root / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
+        app = (root / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn('"verified": verified', backend)
+        self.assertIn('"review_required": review_required', backend)
+        self.assertIn('判讀記錄 ({stats.success})', app)
+        self.assertIn('待人工校正 ({stats.review_required ?? 0})', app)
+        self.assertIn("{l:'完成判讀', v:stats.success", app)
+        self.assertIn("{l:'待複核', v:stats.review_required ?? 0", app)
+        self.assertNotIn('成功記錄 ({stats.success})', app)
+
     def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("/api/presentation_history/", app)

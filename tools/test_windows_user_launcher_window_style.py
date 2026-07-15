@@ -17,5 +17,11 @@ class WindowsLauncherWindowStyleTests(unittest.TestCase):
         self.assertIn("Start-Backend", SCRIPT)
         self.assertIn('"tools\\recursive_ocr_flat_export.py"', SCRIPT)
 
+    def test_dashboard_is_rebuilt_when_source_is_newer_than_dist(self):
+        self.assertIn("$newestSource.LastWriteTimeUtc -gt (Get-Item -LiteralPath $distIndex).LastWriteTimeUtc", SCRIPT)
+        self.assertIn('Dashboard build is present and current.', SCRIPT)
+        self.assertIn('dashboard/dist is missing or stale', SCRIPT)
+        self.assertLess(SCRIPT.index("Ensure-Dashboard"), SCRIPT.index("Start-Backend"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -1491,11 +1491,11 @@ const App = () => {
                  </button>
                  <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
                      style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                     <CheckCircle2 size={12} /> 成功記錄 ({stats.success})
+                      <CheckCircle2 size={12} /> 判讀記錄 ({stats.success})
                  </button>
                  <button onClick={openReviewPanel}
                      style={{ background: '#f59e0b', color: '#111', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                     <AlertCircle size={12} /> 待人工校正
+                      <AlertCircle size={12} /> 待人工校正 ({stats.review_required ?? 0})
                  </button>
                  {controlMsg && <span style={{fontSize:'0.7rem', marginLeft:'5px'}}>{controlMsg}</span>}
                </div>
@@ -1656,9 +1656,9 @@ const App = () => {
               <div className="result-sidebar" style={{ width: 'clamp(360px, 23vw, 430px)', minWidth: '360px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
-                        {l:'成功', v:stats.success, c:'#22c55e'}, {l:'失敗', v:stats.failed, c:'#ef4444'},
-                        {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'}, {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
-                        {l:'最後耗時', v:data.metrics?.last_duration||'-', c:'#00f5ff'},
+                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'待複核', v:stats.review_required ?? 0, c:'#f59e0b'},
+                        {l:'失敗', v:stats.failed, c:'#ef4444'}, {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'},
+                        {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
                         {l:'近期平均', v:recentAverageDuration || data.metrics?.last_duration || '-', c:'#a855f7', title:'最近 5 張實際耗時平均；不讓先前的逾時永久扭曲目前速度'}
                       ].map((item, i)=>(
                         <div key={i} title={item.title || ''} style={{ background:'#0a0a0f', border:'1px solid #333', padding:'8px', borderRadius:'4px', textAlign:'center' }}>

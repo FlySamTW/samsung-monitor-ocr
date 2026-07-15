@@ -822,6 +822,11 @@ class BatchOrchestrator:
                             "price_symbol": meta.get("price_symbol") or "",
                             "official_price": meta.get("official_price") or "",
                             "price_diff_percent": meta.get("price_diff_percent") or "",
+                            "auto_verified": meta.get("auto_verified", False),
+                            "auto_review_required": meta.get("auto_review_required", False),
+                            "review_status": meta.get("review_status") or "",
+                            "evidence_contract_version": meta.get("evidence_contract_version") or "",
+                            "evidence_contract_valid": meta.get("evidence_contract_valid", False),
                             "timestamp": item.get('annotations', [{}])[0].get('created_at', ''),
                             "thumb_b64": None
                         }

@@ -453,6 +453,14 @@ Benchmark manifest 必須是 v2：它固定 labels、每張原圖、case ID/tag/
 
 The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Missing, contradictory, or cross-pass disagreement is `review_required`; prose keywords never rescue a result. Current-year upload readiness requires the v19.45 trace, while historical rows remain governed by their existing gates.
 
+Anti-bypass invariants are part of that contract:
+
+- `view_type` and `category` may not assert different scene types. A structured single-unit result whose narration explicitly concludes `遠景`, or `label_ownership=matched` whose narration assigns the label to a neighboring product, must retry/fail closed.
+- FollowMe friendly names and physical SKUs are equivalent for gating. `S32FM50x`, `S32FM70x`, and `S43FM70x` families require same-subject physical evidence and a current-year second pass; ordinary `S32FM80x/S32FM90x` Smart Monitor SKUs do not.
+- Screen content is not hardware brand evidence. Text such as `螢幕顯示 ASUS Demo 畫面` must never replace a valid Samsung SKU with `它牌(ASUS)`.
+- A photographed price at least 20% away from the official reference requires one independent reread. If a later pass independently confirms the same model, same photographed price, and matched label ownership, preserve the photographed store price; the external reference is not allowed to overwrite it.
+- Dashboard `完成判讀` means a non-system-failure result exists, not that quality passed. Show `待複核` separately; upload readiness still requires `auto_verified=true` and `auto_review_required=false`.
+
 ## v19.45 Three-Layer Accuracy Gate
 
 `docs/three_layer_accuracy_gate.md` is the authoritative design and verification specification. The mechanism is conditional escalation, not three-pass voting:

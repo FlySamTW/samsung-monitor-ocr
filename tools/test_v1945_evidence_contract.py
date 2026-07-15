@@ -13,7 +13,7 @@ from tools.prepare_drive_upload_manifest import (
     load_v1945_trace_names,
 )
 from tools.rerun_questionable_records import is_complete_auto_verified
-from skills.batch_orchestrator import _append_v1945_trace
+from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace
 from samsung_ocr_batch_processor import _merge_v1945_json_objects
 
 
@@ -105,6 +105,24 @@ class EvidenceContractTests(unittest.TestCase):
         row = {"view_type": "遠景", "model": None, "price": None, **evidence(3, False, "not_visible")}
         self.assertTrue(validate_evidence_contract(row)[0])
 
+    def test_distant_cannot_carry_unresolved_followme_physical_evidence_or_sku(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        row = {
+            "file_name": "M-202605-distant-followme.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "",
+            "thinking": "三台完整入鏡，沒有唯一主角；其中可見 S32FM703UC 的白色垂直支架與圓形底座。",
+            **evidence(3, False, "not_visible", physical),
+        }
+        valid, errors, _ = validate_evidence_contract(row)
+        self.assertFalse(valid)
+        self.assertIn("distant_followme_physical_conflict", errors)
+        decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
+
     def test_valid_single_is_auto_verified_without_forcing_extra_passes(self):
         row = {
             "file_name": "M-202605-test.jpg", "view_type": "單機", "category": "單機",
@@ -115,6 +133,61 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(row, 1, [], 3)
         self.assertFalse(decision["retry"])
         self.assertTrue(decision["verified"])
+
+    def test_single_structure_cannot_ignore_explicit_distant_narration(self):
+        row = {
+            "file_name": "M-202605-conflict.jpg", "view_type": "單機", "category": "單機",
+            "model": "S24F332EAC", "price": "2390", "quality_issue": "",
+            "thinking": "檢視整體陳列後，這張符合遠景條件。",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("結構為單機但敘述明確判為遠景", decision["reasons"])
+
+    def test_view_type_and_category_conflict_fails_closed(self):
+        row = {
+            "file_name": "M-202605-category-conflict.jpg", "view_type": "單機", "category": "遠景",
+            "model": "S24F332EAC", "price": "2390", "quality_issue": "",
+            "thinking": "唯一主角自己的規格牌與價格牌清楚可讀。",
+            **evidence(1, True, "matched"),
+        }
+        valid, errors, _ = validate_evidence_contract(row)
+        self.assertFalse(valid)
+        self.assertIn("view_category_conflict", errors)
+        self.assertTrue(immediate_retry_decision(row, 1, [], 3)["retry"])
+
+    def test_matched_label_cannot_contradict_narration_ownership(self):
+        row = {
+            "file_name": "M-202605-owner-conflict.jpg", "view_type": "單機", "category": "單機",
+            "model": "S24F332EAC", "price": "2390", "quality_issue": "",
+            "thinking": "規格牌與價格牌屬於旁邊商品，不能歸屬唯一主角。",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn("標籤歸屬與敘述衝突", decision["reasons"])
+
+    def test_screen_content_brand_does_not_override_samsung_sku(self):
+        narration = "這台是 Samsung S27D392GAC，螢幕顯示 ASUS Demo 畫面，價牌為 4,290 元。"
+        self.assertIsNone(batch.infer_other_brand_model(narration, "S27D392GAC"))
+        self.assertEqual(batch.infer_other_brand_model("主角是 ASUS 螢幕。", None), "它牌(ASUS)")
+
+    def test_large_official_price_difference_requires_independent_confirmation(self):
+        row = {
+            "file_name": "M-202605-price-diff.jpg", "view_type": "單機", "category": "單機",
+            "model": "S27D392GAC", "price": "4290", "quality_issue": "",
+            "price_status": "high", "price_diff_percent": 36.7,
+            "thinking": "唯一主角自己的實體規格牌與價格牌清楚可讀。",
+            **evidence(1, True, "matched"),
+        }
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(first["retry"])
+        self.assertIn("照片價格與官方參考價差異過大，需獨立重讀", first["reasons"])
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
 
     def test_current_year_followme_requires_second_consistent_pass(self):
         physical = [
@@ -130,6 +203,33 @@ class EvidenceContractTests(unittest.TestCase):
         first = immediate_retry_decision(dict(row), 1, [], 3)
         self.assertTrue(first["retry"])
         second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
+
+    def test_followme_sku_requires_physical_evidence_and_second_pass(self):
+        missing = {
+            "file_name": "M-202605-followme-sku.jpg", "view_type": "單機", "category": "單機",
+            "model": "S32FM703UC", "price": "12990", "quality_issue": "",
+            "thinking": "唯一主角自己的規格與價格清楚可讀。",
+            **evidence(1, True, "matched"),
+        }
+        first_missing = immediate_retry_decision(dict(missing), 1, [], 3)
+        self.assertTrue(first_missing["retry"])
+        self.assertIn("followme_physical_evidence_insufficient", first_missing["reasons"])
+
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        valid = dict(missing)
+        valid.update({
+            "thinking": "同一台實機有白色垂直支架與圓形底座，規格與價格屬於唯一主角。",
+            "followme_physical_evidence": physical,
+        })
+        first = immediate_retry_decision(dict(valid), 1, [], 3)
+        self.assertTrue(first["retry"])
+        self.assertIn("2026 FollowMe 必須完成第二輪實體證據複核", first["reasons"])
+        second = immediate_retry_decision(dict(valid), 2, [dict(valid)], 3)
         self.assertFalse(second["retry"])
         self.assertTrue(second["verified"])
 
@@ -247,6 +347,32 @@ class EvidenceContractTests(unittest.TestCase):
             lines = (Path(tmp) / "v1945_evidence_trace.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
             self.assertNotIn("SECRET", lines[0])
+
+    def test_persisted_records_keep_verification_state_for_dashboard_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session-OCR成功.json"
+            path.write_text(json.dumps([{
+                "data": {
+                    "image": "/data/upload/1/sample.jpg",
+                    "ocr_meta": {
+                        "view_type": "單機",
+                        "auto_verified": False,
+                        "auto_review_required": True,
+                        "review_status": "review_required",
+                        "evidence_contract_version": "v19.45",
+                        "evidence_contract_valid": False,
+                    },
+                },
+                "annotations": [{"created_at": "2026-07-15T00:00:00", "result": []}],
+            }], ensure_ascii=False), encoding="utf-8")
+            record_map = {}
+            loader = object.__new__(BatchOrchestrator)
+            loader._load_json_to_map(str(path), record_map)
+            row = record_map["sample.jpg"]
+            self.assertFalse(row["auto_verified"])
+            self.assertTrue(row["auto_review_required"])
+            self.assertEqual(row["review_status"], "review_required")
+            self.assertEqual(row["evidence_contract_version"], "v19.45")
 
 
 if __name__ == "__main__":

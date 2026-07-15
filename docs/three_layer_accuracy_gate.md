@@ -30,11 +30,14 @@
 
 「遠景」的判準不是背景中出現多台螢幕，而是無法鎖定唯一主角及其自己的價牌。相反地，FollowMe 的螢幕內容、海報或附近立牌都只是弱線索；必須看到線索與同一台實機的物理歸屬，才能避免把賣場宣傳物借給錯的主角。
 
+FollowMe 守門同時辨識友善名稱與正式 SKU。`S32FM50x`、`S32FM70x`、`S43FM70x`（含 `LS...XZW` 完整碼）不得因為字串不是以 `FollowMe` 開頭就繞過實體證據與第二輪要求；`S32FM80x/S32FM90x` 則仍是一般 Smart Monitor，不能誤套 FollowMe 規則。
+
 ## 計數單位
 
 - `複核 490/1,504` 是已走完守門流程的「照片數」。
 - `累計判讀 1,013 次` 是所有照片的「判讀事件數」，包含第二、第三輪，因此可大於照片數。
 - `本張第 1/3 輪` 是目前照片的嘗試層級，最多三輪。
+- `完成判讀` 只代表已產生非系統失敗的結果，包含 `review_required`；它不等於品質驗證成功。`待複核` 必須另外顯示，只有 `auto_verified=true` 且 `auto_review_required=false` 才是自動驗證通過。
 
 `presentation_sequence` 必須在後端啟動時從 `_ocr_audit/presentation_history` 取回歷史最大值，使後續序號單調增加。如果重啟後從 0 開始，UI 不得稱為「累計判讀」。
 
@@ -49,6 +52,8 @@
 3. 型號、價格、品質與螢幕狀態沒有未解決衝突。
 4. 結構欄位、敘述與原始 JSON 的核心結論一致。
 
+以下繞過路徑一律視為衝突：`view_type` 與 `category` 指向不同類型；結構說單機但敘述明確說「符合遠景條件」；`label_ownership=matched` 但敘述說價牌屬於旁邊／鄰機／無法歸屬；已有正式 Samsung SKU 時，不能只因螢幕播放 ASUS/LG Demo 內容就改成它牌。
+
 任一條不成立時，不儲存為定案，立即排入下一個佇列位置做第二輪。
 
 ## 第二層：定向交叉複核
@@ -58,6 +63,7 @@
 - 2026 單機缺型號或缺價格。
 - 價牌歸屬不明、唯一主角不明或品質不合格。
 - 型號、價格、結構證據與敘述互相矛盾。
+- 照片價格與官方參考價差異達 20% 以上時至少獨立重讀一次；若下一輪讀到同一型號、同一照片價格且價牌歸屬仍為 `matched`，照片實證優先於官方參考價。不得強迫照片售價等於官網價。
 - FollowMe 候選：2026 FollowMe 至少要兩輪一致，且必須有同一主體的白色垂直支架、圓形底座、託盤或同等實體證據；宣傳立牌單獨不算。
 - 遠景候選：2026 遠景不得在第一、第二輪直接定案。
 
@@ -117,6 +123,10 @@ npm run build
 - 2026 FollowMe 第一輪會排第二輪，第二輪證據一致才通過。
 - 2026 遠景必須完成三輪獨立複核。
 - 結構說單機、敘述說遠景，或相反的衝突不能定案。
+- `view_type/category` 衝突與價牌歸屬敘述衝突不能定案。
+- FollowMe 正式 SKU 不得繞過同主體實體證據與第二輪。
+- 畫面播放它牌 Demo 不得覆蓋清楚的 Samsung 實體 SKU。
+- 大幅官方價差必須至少有一輪獨立同值確認，確認後保留照片上的實際售價。
 - 第三輪仍衝突時必須是 `review_required`，不能出現於可上傳清單。
 - Dashboard 必須顯示同一 `presentation_id` 的照片、AI 判讀、處理中卡片，右側完成卡片只能在該輪結束後顯示。
 - 右側縮圖與單張判讀歷程必須依實際完成時間排序，不能只依輪號排序；服務恢復造成輪號重設時，新結果仍須顯示在最上方。
@@ -129,7 +139,12 @@ npm run build
 | 第三輪不繼承第一、二輪答案 | `test_third_pass_messages_are_independent_of_prior_answers` |
 | 一般單機證據完整可第一輪通過 | `test_valid_single_is_auto_verified_without_forcing_extra_passes` |
 | FollowMe 第一輪不能定案、第二輪一致才通過 | `test_current_year_followme_requires_second_consistent_pass` |
+| FollowMe 正式 SKU 也不能繞過實體證據 | `test_followme_sku_requires_physical_evidence_and_second_pass` |
 | FollowMe 弱宣傳線索不能建立型號 | `test_followme_cue_codes_are_atomic_and_weak_cues_cannot_establish_model` |
+| 單機結構與明示遠景敘述衝突會拒絕 | `test_single_structure_cannot_ignore_explicit_distant_narration` |
+| `view_type/category` 與價牌歸屬矛盾會拒絕 | `test_view_type_and_category_conflict_fails_closed`、`test_matched_label_cannot_contradict_narration_ownership` |
+| 它牌 Demo 畫面不能覆蓋 Samsung SKU | `test_screen_content_brand_does_not_override_samsung_sku` |
+| 大幅價差需要獨立同值確認 | `test_large_official_price_difference_requires_independent_confirmation` |
 | 2026 遠景必須三輪一致 | `test_current_year_distant_requires_three_consistent_passes` |
 | 任一核心證據跨輪衝突，第三輪仍須封閉 | `test_third_pass_core_disagreement_is_unresolved` |
 | 疑慮照片立即插到下一格，不被 B 照片超車 | `tools/test_immediate_retry_queue.py`，呼叫順序必須為 `A1, A2, B1` |

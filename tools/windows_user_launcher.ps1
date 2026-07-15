@@ -218,16 +218,30 @@ function Ensure-Requirements($Python) {
 
 function Ensure-Dashboard {
     $distIndex = Join-Path $RepoRoot "dashboard\dist\index.html"
-    if (Test-Path $distIndex) {
-        Write-Step "Dashboard build is present."
+    $dashboardRoot = Join-Path $RepoRoot "dashboard"
+    $sourcePaths = @(
+        (Join-Path $dashboardRoot "src"),
+        (Join-Path $dashboardRoot "public"),
+        (Join-Path $dashboardRoot "package.json"),
+        (Join-Path $dashboardRoot "vite.config.js")
+    )
+    $newestSource = Get-ChildItem -LiteralPath $sourcePaths -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    $needsBuild = -not (Test-Path -LiteralPath $distIndex)
+    if (-not $needsBuild -and $newestSource) {
+        $needsBuild = $newestSource.LastWriteTimeUtc -gt (Get-Item -LiteralPath $distIndex).LastWriteTimeUtc
+    }
+    if (-not $needsBuild) {
+        Write-Step "Dashboard build is present and current."
         return
     }
 
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-        Fail "dashboard/dist is missing and Node.js was not found. Install Node.js 20+, or pull a build that includes dashboard/dist."
+        Fail "dashboard/dist is missing or stale and Node.js was not found. Install Node.js 20+, or pull a current dashboard build."
     }
 
-    Push-Location (Join-Path $RepoRoot "dashboard")
+    Push-Location $dashboardRoot
     try {
         if (-not (Test-Path "node_modules")) {
             Invoke-Checked -File "npm.cmd" -ProcArgs @("install") -ErrorMessage "Could not install dashboard packages."
