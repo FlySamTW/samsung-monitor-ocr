@@ -46,6 +46,26 @@ const getResultImageSrc = (res) => {
   return null;
 };
 
+const buildLivePendingNarration = ({ fileName, passIndex, reviewMode }) => {
+  const safeFileName = String(fileName || "").trim();
+  if (!safeFileName) return "";
+
+  const normalizedPass = Math.max(1, Number(passIndex) || 1);
+  const passLabel = ({
+    1: "初次辨識",
+    2: "第二輪複核",
+    3: "第三輪獨立判讀",
+    4: "慢模型仲裁"
+  })[normalizedPass] || `第 ${normalizedPass} 輪複核`;
+  const task = reviewMode === "current_year_review"
+    ? "核對遠景、單機與 FollowMe 實體線索，並重新檢查型號及價格標籤"
+    : "辨認照片主體與陳列情境，並檢查可見的型號、價格及 FollowMe 實體線索";
+
+  return `正在針對 ${safeFileName} 進行${passLabel}。本輪會${task}；AI 正在整理這張照片的可見證據，判讀文字將接續顯示。`;
+};
+
+const getLivePhotoIdentityKey = (key) => String(key || "").replace(/\|pass:\d+$/, "");
+
 const getLoadedAssetFingerprint = async () => {
   const assets = [...document.querySelectorAll('script[src], link[rel="stylesheet"][href]')]
     .map((node) => node.src || node.href)
@@ -381,6 +401,10 @@ const App = () => {
       started_at: item.started_at || result.started_at || "",
       completed_at: item.completed_at || result.completed_at || "",
       decision: item.decision || result.decision || "",
+      review_status: item.review_status || result.review_status || "",
+      evidence_unresolved: item.evidence_unresolved ?? result.evidence_unresolved,
+      accepted: item.accepted ?? result.accepted,
+      auto_review_required: item.auto_review_required ?? result.auto_review_required,
       _queueKey: key,
       _isCurrent: false
     };
@@ -466,6 +490,17 @@ const App = () => {
     accepted: "已通過自動守門",
     review_required: "需慢模型或人工校正"
   }[String(value || "")] || formatMetaValue(value));
+  const isExplicitlyUnresolved = (item) => {
+    if (!item) return false;
+    const decision = String(item.decision || "").trim().toLowerCase();
+    if (["retry_scheduled", "review_required", "failed"].includes(decision)) return true;
+    if (decision === "accepted") return false;
+    const reviewStatus = String(item.review_status || "").trim().toLowerCase();
+    if (["review_required", "待審核", "需慢模型或人工校正"].includes(reviewStatus)) return true;
+    return item.evidence_unresolved === true
+      || item.auto_review_required === true
+      || item.accepted === false;
+  };
   const hasPassMetadata = (item) => Boolean(item && (item.pass_index || item.pass_label));
   const getPassHeading = (item) => {
     if (!hasPassMetadata(item)) return "";
@@ -515,13 +550,24 @@ const App = () => {
     });
     const detailedThinking = [...currentFileThinking]
       .reverse()
-      .find((value) => value.length >= 45 && !value.startsWith("這張已完成辨識："));
-    const sameFileStream = liveFile === currentFile ? text : "";
-    const liveText = sameFileStream
-      || detailedThinking
-      || `正在分析 ${currentFile}；等待本輪 AI 回傳第一段判讀文字。`;
+      .find((value) => (
+        value.length >= 45
+        && !value.startsWith("這張已完成辨識：")
+        && !value.includes("AI 本輪未回傳完整判讀文字")
+      ));
+    const sameFileStream = liveFile === currentFile
+      && !text.includes("AI 本輪未回傳完整判讀文字")
+      ? text
+      : "";
     const liveDir = String(data.current_relative_dir || data.image_dir || "").trim();
     const livePassIndex = Math.max(1, Number(data.review_progress?.current_pass || 1));
+    const liveText = sameFileStream
+      || detailedThinking
+      || buildLivePendingNarration({
+        fileName: currentFile,
+        passIndex: livePassIndex,
+        reviewMode: String(data.review_progress?.mode || "")
+      });
     return {
       fileName: currentFile,
       text: trimDisplayNarration(liveText),
@@ -710,10 +756,19 @@ const App = () => {
   const liveVisualSnapshot = getSyncedLiveStream();
   const activeVisualKey = liveVisualSnapshot?.key || activePresentation?._queueKey || "";
   const expectedVisualKey = activeVisualKey || liveVisualSnapshot?.key || currentImagePresentationKey;
+  const isSameLivePhotoPassHandoff = Boolean(
+    liveVisualSnapshot
+    && visibleImage
+    && visibleImage === currentImage
+    && getLivePhotoIdentityKey(visibleImagePresentationKey) === getLivePhotoIdentityKey(expectedVisualKey)
+  );
+  const effectiveVisibleImagePresentationKey = isSameLivePhotoPassHandoff
+    ? expectedVisualKey
+    : visibleImagePresentationKey;
   const imageBelongsToActivePresentation = Boolean(
     expectedVisualKey
     && currentImagePresentationKey === expectedVisualKey
-    && visibleImagePresentationKey === expectedVisualKey
+    && effectiveVisibleImagePresentationKey === expectedVisualKey
     && visibleImage === currentImage
   );
   const imageReadyForDisplay = liveVisualSnapshot || activePresentation
@@ -804,13 +859,19 @@ const App = () => {
   useEffect(() => {
     const live = getSyncedLiveStream();
     if (live?.fileName) {
+      const nextSrc = `/api/image/${encodeURIComponent(live.fileName)}`;
       setImageLoaded(false);
       setImageFailed(false);
       setCurrentThumb(null);
       setCurrentImageTarget({
-        src: `/api/image/${encodeURIComponent(live.fileName)}`,
+        src: nextSrc,
         key: live.key,
         fileName: live.fileName
+      });
+      setVisibleImageTarget((prev) => {
+        const samePhoto = prev.src === nextSrc
+          && getLivePhotoIdentityKey(prev.key) === getLivePhotoIdentityKey(live.key);
+        return samePhoto ? { ...prev, key: live.key, fileName: live.fileName } : prev;
       });
       return;
     }
@@ -825,7 +886,7 @@ const App = () => {
       });
       return;
     }
-  }, [activePresentation, data.current_file, data.current_relative_dir]);
+  }, [activePresentation, data.current_file, data.current_relative_dir, data.review_progress?.current_pass]);
 
   // Do not blank or dim the boss-facing preview between photos. Keep the
   // current photo visible until the next full-resolution image is ready.
@@ -1178,7 +1239,7 @@ const App = () => {
       || displayedBuffer
       || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : ""));
   const isHeldNarration = !visibleNarrationKey.startsWith("live:") && narrationPhase !== "typing";
-  const matchingVisibleImage = visibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
+  const matchingVisibleImage = effectiveVisibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
     ? visibleImage
     : null;
   const heldPresentation = !activePresentation && visibleNarrationKey && !visibleNarrationKey.startsWith("live:")
@@ -1397,7 +1458,7 @@ const App = () => {
                                           <span style={{fontSize:'0.75rem'}}>照片載入中</span>
                                       </div>
                                   )}
-                                  {matchingVisibleImage && <img key={matchingVisibleImage} src={matchingVisibleImage} data-testid="main-preview-image" data-presentation-key={visibleImagePresentationKey} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
+                                  {matchingVisibleImage && <img key={matchingVisibleImage} src={matchingVisibleImage} data-testid="main-preview-image" data-presentation-key={effectiveVisibleImagePresentationKey} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 20, display: 'block' }} alt="P" />}
                                   {imageFailed && !matchingVisibleImage && (
                                       <div style={{ color: '#666', display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                                           <ImageIcon size={28} />
@@ -1580,13 +1641,13 @@ const App = () => {
                             </div>
                           )}
                           {rightPanelItems.map((res, i) => (
-                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} data-review-state={isExplicitlyUnresolved(res) ? "pending-review" : "completed"} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                   <div style={{ display: 'flex', gap: '8px' }}>
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
                                          <div title={res.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-all', marginBottom: '2px' }}>{res.file_name}</div>
                                          {hasPassMetadata(res) && <div style={{ fontSize: '0.62rem', color: '#67e8f9', marginTop: '3px' }}>{getPassHeading(res)}</div>}
-                                         {res._pendingReveal && (
+                                          {res._pendingReveal && (
                                             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                                                 <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>
                                                     處理中
@@ -1595,8 +1656,13 @@ const App = () => {
                                                     AI 即時判讀中
                                                 </span>
                                             </div>
-                                         )}
-                                         {!res._pendingReveal && res.view_type !== '遠景' && (
+                                          )}
+                                          {!res._pendingReveal && isExplicitlyUnresolved(res) && (
+                                            <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>判讀未完成／待複核</span>
+                                            </div>
+                                          )}
+                                          {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && (
                                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(118px, 136px) minmax(76px, 92px)', alignItems: 'center', marginTop: 0, width: 'fit-content', maxWidth: '100%', columnGap: '8px' }}>
                                                 <div style={{ fontSize: '0.76rem', color: res.category?.startsWith('不合格') ? '#ef4444' : '#22c55e', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {res.model || (res.category?.startsWith('不合格') ? res.category.replace('不合格-', '') : '(無型號)')}
@@ -1621,11 +1687,11 @@ const App = () => {
                                             </div>
                                          )}
                                           <div style={{ display: 'flex', gap: '4px', marginTop: '2px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                            {!res._pendingReveal && res.view_type && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.view_type}</span>}
-                                            {!res._pendingReveal && res.view_type !== '遠景' && res.screen_status && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#ec4899', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.screen_status}</span>}
-                                            {!res._pendingReveal && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#f97316', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.quality_issue.replace('不合格-', '')}</span>}
+                                            {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: res.view_type==='遠景'?'#3b82f6':'#22c55e', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.view_type}</span>}
+                                            {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && res.screen_status && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#ec4899', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.screen_status}</span>}
+                                            {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && res.quality_issue && res.quality_issue !== '無' && <span style={{ height: '22px', fontSize: '0.6rem', padding: '0 7px', borderRadius: '3px', background: '#f97316', color: '#fff', display:'inline-flex', alignItems:'center', lineHeight:'20px' }}>{res.quality_issue.replace('不合格-', '')}</span>}
                                              {/* [v18.67] 價格驗證符號 - 包含 ? 未知，但排除 not_compared */}
-                                             {!res._pendingReveal && res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
+                                             {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                 <span
                                                     title={
                                                         res.price_status === 'unknown' ? '官網/PChome 查無價格；需人工確認或重跑' :

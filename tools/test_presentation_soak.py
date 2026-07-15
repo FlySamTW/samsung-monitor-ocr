@@ -116,7 +116,7 @@ class PresentationSoakTests(unittest.TestCase):
 
     def test_running_mode_uses_same_file_live_stream_and_keeps_live_priority(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('liveFile === currentFile ? text : ""', app)
+        self.assertIn('const sameFileStream = liveFile === currentFile', app)
         self.assertIn('key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`', app)
         self.assertIn("const visiblePassPresentation = liveStreamSnapshot ? livePendingResult : activePresentation", app)
         self.assertIn("getPassHeading(visiblePassPresentation)", app)
@@ -139,6 +139,61 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('|| (!isRunning ? latestBackendNarration : null);', app)
         self.assertIn('currentFileThinking', app)
         self.assertIn('!value.startsWith("這張已完成辨識：")', app)
+
+    def test_empty_live_stream_uses_identity_bound_task_narration(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        helper_start = app.index("const buildLivePendingNarration =")
+        helper_end = app.index("const getLoadedAssetFingerprint", helper_start)
+        helper = app[helper_start:helper_end]
+        live_start = app.index("const getSyncedLiveStream = () =>")
+        live_end = app.index("const getLatestBackendNarration", live_start)
+        live = app[live_start:live_end]
+
+        self.assertIn("safeFileName", helper)
+        self.assertIn("passIndex", helper)
+        self.assertIn("reviewMode", helper)
+        self.assertIn("FollowMe 實體線索", helper)
+        self.assertIn("AI 正在整理這張照片的可見證據", helper)
+        self.assertNotIn("未提供", helper)
+        self.assertIn("sameFileStream\n      || detailedThinking\n      || buildLivePendingNarration", live)
+        self.assertIn("fileName: currentFile", live)
+        self.assertIn("passIndex: livePassIndex", live)
+        self.assertIn("reviewMode: String(data.review_progress?.mode || \"\")", live)
+        self.assertIn("key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`", live)
+        self.assertIn('!value.includes("AI 本輪未回傳完整判讀文字")', live)
+        self.assertIn('!text.includes("AI 本輪未回傳完整判讀文字")', live)
+        self.assertLess(live.index("sameFileStream"), live.index("buildLivePendingNarration"))
+        self.assertLess(live.index("detailedThinking"), live.index("buildLivePendingNarration"))
+
+    def test_same_photo_pass_handoff_keeps_preview_identity_synchronized(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn('const getLivePhotoIdentityKey = (key)', app)
+        self.assertIn('.replace(/\\|pass:\\d+$/, "")', app)
+        self.assertIn('data.review_progress?.current_pass]);', app)
+        self.assertIn('getLivePhotoIdentityKey(prev.key) === getLivePhotoIdentityKey(live.key)', app)
+        self.assertIn('return samePhoto ? { ...prev, key: live.key, fileName: live.fileName } : prev;', app)
+        self.assertIn('const effectiveVisibleImagePresentationKey = isSameLivePhotoPassHandoff', app)
+        self.assertIn('effectiveVisibleImagePresentationKey === expectedVisualKey', app)
+        self.assertIn('data-presentation-key={effectiveVisibleImagePresentationKey}', app)
+
+    def test_unresolved_completed_event_never_renders_fallback_as_final_result(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        unresolved_start = app.index("const isExplicitlyUnresolved =")
+        unresolved_end = app.index("const hasPassMetadata", unresolved_start)
+        unresolved = app[unresolved_start:unresolved_end]
+        rail_start = app.index('data-testid="result-rail"')
+        rail_end = app.index('{showReviewPanel && (', rail_start)
+        rail = app[rail_start:rail_end]
+
+        self.assertIn('"retry_scheduled", "review_required", "failed"', unresolved)
+        self.assertIn('if (decision === "accepted") return false;', unresolved)
+        self.assertIn('item.evidence_unresolved === true', unresolved)
+        self.assertIn('item.auto_review_required === true', unresolved)
+        self.assertIn('item.accepted === false', unresolved)
+        self.assertIn('data-review-state={isExplicitlyUnresolved(res) ? "pending-review" : "completed"}', rail)
+        self.assertIn('判讀未完成／待複核', rail)
+        self.assertIn("!isExplicitlyUnresolved(res) && res.view_type !== '遠景'", rail)
+        self.assertIn('!isExplicitlyUnresolved(res) && res.view_type &&', rail)
 
     def test_backend_status_exposes_cached_asset_fingerprint(self):
         backend = (Path(__file__).resolve().parents[1] / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
@@ -205,10 +260,10 @@ class PresentationSoakTests(unittest.TestCase):
     def test_photo_and_narration_share_one_presentation_identity(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("currentImagePresentationKey === expectedVisualKey", app)
-        self.assertIn("visibleImagePresentationKey === expectedVisualKey", app)
+        self.assertIn("effectiveVisibleImagePresentationKey === expectedVisualKey", app)
         self.assertIn("setCurrentImageTarget({", app)
         self.assertIn("setVisibleImageTarget({", app)
-        self.assertIn('data-presentation-key={visibleImagePresentationKey}', app)
+        self.assertIn('data-presentation-key={effectiveVisibleImagePresentationKey}', app)
         self.assertIn('data-testid="active-photo" data-presentation-key={expectedVisualKey}', app)
         self.assertIn("為避免照片與判讀錯配", app)
         self.assertNotIn("{visibleImage && <img", app)
