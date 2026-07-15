@@ -17,6 +17,7 @@ class ContinuitySupervisorTests(unittest.TestCase):
     def test_dead_planned_upgrade_owner_resumes_backfill_fail_closed(self):
         self.assertIn("planned_backend_upgrade_recovery_active", self.source)
         self.assertIn("planned_backend_upgrade_recovery_contract_failed", self.source)
+        self.assertIn("planned_backend_upgrade_recovery_failed", self.source)
         self.assertIn("planned_backend_upgrade_recovery_started", self.source)
         self.assertIn("planned_backend_upgrade_recovery_completed", self.source)
         self.assertIn("$backfillStarted = Start-EvidenceBackfillIfNeeded", self.source)

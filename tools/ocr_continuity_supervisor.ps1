@@ -210,42 +210,47 @@ try {
     if (Test-Path -LiteralPath $BenchmarkLockPath) {
         try {
             $planned = Get-Content -LiteralPath $BenchmarkLockPath -Raw | ConvertFrom-Json
-            if ($planned.purpose -eq "backend_upgrade_v1945") {
-                $plannedOwner = Get-Process -Id ([int]$planned.pid) -ErrorAction SilentlyContinue
-                if ($plannedOwner) {
-                    Log-Event "planned_backend_upgrade_interlock" @{ lock=$BenchmarkLockPath; owner=$planned.pid }
-                    exit 0
-                }
-                $activeBackfill = @(Owned "rerun_staged_candidates\.py")
-                if ($activeBackfill.Count -gt 0 -or ($status -and [bool]$status.is_running)) {
-                    Log-Event "planned_backend_upgrade_recovery_active" @{
-                        lock=$BenchmarkLockPath
-                        owner=$planned.pid
-                        runners=$activeBackfill.Count
-                        backend_running=if($status){[bool]$status.is_running}else{$false}
-                    }
-                    exit 0
-                }
-                if (
-                    -not $status -or
-                    [string]$status.version -notlike "v19.45*" -or
-                    [string]$status.status_contract_version -ne "compact-v2" -or
-                    [string]$status.accuracy_profile -ne "strict"
-                ) {
-                    Alert "planned_backend_upgrade_recovery_contract_failed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
-                    exit 10
-                }
-                $backfillStarted = Start-EvidenceBackfillIfNeeded
-                if ($backfillStarted) {
-                    Log-Event "planned_backend_upgrade_recovery_started" @{lock=$BenchmarkLockPath;owner=$planned.pid}
-                    exit 0
-                }
-                Remove-Item -LiteralPath $BenchmarkLockPath -Force
-                Log-Event "planned_backend_upgrade_recovery_completed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
-            }
         } catch {
             Log-Event "benchmark_lock_unreadable" @{ lock=$BenchmarkLockPath }
             exit 0
+        }
+        if ($planned.purpose -eq "backend_upgrade_v1945") {
+            $plannedOwner = Get-Process -Id ([int]$planned.pid) -ErrorAction SilentlyContinue
+            if ($plannedOwner) {
+                Log-Event "planned_backend_upgrade_interlock" @{ lock=$BenchmarkLockPath; owner=$planned.pid }
+                exit 0
+            }
+            $activeBackfill = @(Owned "rerun_staged_candidates\.py")
+            if ($activeBackfill.Count -gt 0 -or ($status -and [bool]$status.is_running)) {
+                Log-Event "planned_backend_upgrade_recovery_active" @{
+                    lock=$BenchmarkLockPath
+                    owner=$planned.pid
+                    runners=$activeBackfill.Count
+                    backend_running=if($status){[bool]$status.is_running}else{$false}
+                }
+                exit 0
+            }
+            if (
+                -not $status -or
+                [string]$status.version -notlike "v19.45*" -or
+                [string]$status.status_contract_version -ne "compact-v2" -or
+                [string]$status.accuracy_profile -ne "strict"
+            ) {
+                Alert "planned_backend_upgrade_recovery_contract_failed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
+                exit 10
+            }
+            try {
+                $backfillStarted = Start-EvidenceBackfillIfNeeded
+            } catch {
+                Alert "planned_backend_upgrade_recovery_failed" @{lock=$BenchmarkLockPath;owner=$planned.pid;detail=$_.Exception.Message}
+                exit 11
+            }
+            if ($backfillStarted) {
+                Log-Event "planned_backend_upgrade_recovery_started" @{lock=$BenchmarkLockPath;owner=$planned.pid}
+                exit 0
+            }
+            Remove-Item -LiteralPath $BenchmarkLockPath -Force
+            Log-Event "planned_backend_upgrade_recovery_completed" @{lock=$BenchmarkLockPath;owner=$planned.pid}
         }
         if (Test-Path -LiteralPath $BenchmarkLockPath) {
             Log-Event "model_benchmark_interlock" @{lock=$BenchmarkLockPath;purpose=$planned.purpose;owner=$planned.pid}
