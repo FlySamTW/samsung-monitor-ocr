@@ -299,3 +299,4 @@
 - 載入收緊版後第二段正式驗證在 `842→845/1,504` 共 3 張／6 輪：view rewrite 0、null refill 0、material model/price rewrite 0、independent false 0、prior exposed 0、contamination 0。一張跨輪結構衝突正確保留 unresolved，未冒充成功。
 - 同一既有 Chrome 分頁實測仍只有 1 個 `localhost:5000` tab；顯示總進度 `65,331/150,321`、正式進度、自然語句逐字判讀與本場縮圖卡，裸 JSON 0、亂碼 0。後端已改為預設 headless，只有明示 `SAMSUNG_OCR_OPEN_BROWSER=1` 才可要求瀏覽器動作。
 - continuity supervisor 已恢復正式 `.5` backfill；21:45 狀態為 `202601 846/1,504`、verified 445、review 401、failed 0、單一 runner 父子組、uploader 0、runtime fuse 不存在、`_ocr_audit/model_benchmark.lock` 保留。後續監控必須持續抽查 raw/final 結構漂移，不能只報進度。
+- 21:52 實際 Chrome open-tab inventory 發現 5 個歷史 Dashboard 分頁；舊檢查只看 automation-bound tabs，曾錯報為 1。已核對最新頁顯示 `858/1,504`、AI 逐字內容與 15 張當前場次卡，無 raw JSON／亂碼／缺輪次後保留，另外 4 個重複 Dashboard 分頁已關閉。新版 backend 已 headless，後續必須用 actual open tabs 證明只剩一頁。

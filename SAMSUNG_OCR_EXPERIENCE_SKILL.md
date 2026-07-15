@@ -467,6 +467,8 @@ Monitoring means progress plus content quality plus presentation health plus upl
 
 At every repair/resume boundary, reread `docs/development_guide.md` and `docs/continuity_handoff.md`, then compare a live sample's raw structured JSON with its final parsed fields. Progress-only monitoring is insufficient. A non-empty `structured_authority_blocked_fields`, raw/final material mismatch, memory exposure, prompt contamination, UI identity mismatch, raw JSON/garbling, duplicate browser tab, uploader activity, or runtime fuse is a stop-and-investigate signal.
 
+When proving that the dashboard has only one Chrome tab, inspect the user's actual open-tab inventory. The browser controller's bound-tab list is not authoritative after cleanup/finalization and may be empty while duplicate user tabs still exist. Reuse and verify the newest healthy `localhost:5000` tab, close only confirmed duplicate dashboard tabs, and never open a new tab/window for monitoring.
+
 Anti-bypass invariants are part of that contract:
 
 - Structured fields from the current independent pass are authoritative over narration heuristics. Narration may expose a contradiction and force retry/review, but it must never change an explicit `遠景`/`單機`, refill an explicitly null model/price, or replace one non-empty SKU/price with a materially different one. Material replacements are cleared and recorded in `structured_authority_blocked_fields`; only cosmetic case, punctuation, and currency formatting normalization is allowed.
