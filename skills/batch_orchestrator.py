@@ -17,7 +17,11 @@ from skills.model_matching import ModelMatcher
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import enrich_result_for_review
-from skills.model_validation import is_placeholder_model, strict_known_model
+from skills.model_validation import (
+    has_photo_label_model_evidence,
+    is_placeholder_model,
+    strict_known_model,
+)
 from skills.runtime_health_gate import evaluate_runtime_health, trip_runtime_health_fuse
 
 log = logging.getLogger("rich")
@@ -1734,6 +1738,19 @@ class BatchOrchestrator:
                         matched = strict_known_model(raw_model, self.model_matcher.valid_models)
                         if matched:
                             norm_result['model'] = matched
+                        elif (
+                            norm_result.get('unlisted_model_candidate')
+                            and has_photo_label_model_evidence(
+                                raw_model,
+                                norm_result,
+                                norm_result.get('thinking') or norm_result.get('narration') or '',
+                            )
+                        ):
+                            norm_result['model'] = str(raw_model).strip().upper()
+                            norm_result['official_model_unverified'] = True
+                            self.log_system(
+                                f"⚠️ 官網未收錄型號保留為照片證據候選，等待獨立輪次共識: '{raw_model}'"
+                            )
                         else:
                             self.log_system(f"⚠️ 型號未通過標準表精確驗證，已清除並列入複核: '{raw_model}'")
                             norm_result['model'] = None

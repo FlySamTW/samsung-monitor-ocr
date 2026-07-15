@@ -54,7 +54,11 @@ from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
-from skills.model_validation import is_placeholder_model, strict_known_model
+from skills.model_validation import (
+    has_photo_label_model_evidence,
+    is_placeholder_model,
+    strict_known_model,
+)
 from skills.audit_fields import (
     immediate_retry_decision,
     validate_evidence_contract,
@@ -2795,6 +2799,17 @@ def process_single_image(
                 if model_name_global == "qwen3.7-plus":
                     ocg_max_tokens = 900
                     ocg_max_image_px = 2560
+                elif has_photo_label_model_evidence(clean_model, data_obj, thinking_text):
+                    # Current product feeds omit discontinued store stock.  Keep
+                    # the exact structured SKU as a reviewable photo-evidence
+                    # candidate; the multi-pass gate decides whether independent
+                    # agreement is strong enough to verify it.
+                    data_obj["model"] = clean_model
+                    data_obj["unlisted_model_candidate"] = True
+                    data_obj["official_model_unverified"] = True
+                    console.print(
+                        f"[yellow]⚠️ [Model Guard] 官網未收錄，但同張主角價牌證據明確，保留候選並要求獨立複核: {clean_model}[/yellow]"
+                    )
                 else:
                     ocg_max_tokens = 2000
                     ocg_max_image_px = 2560
@@ -3779,6 +3794,12 @@ def process_single_image(
                 result_json["model"] = known_final_model
             elif should_compare_official_price(fname) and is_samsung_model_like(final_guard_model) and try_discover_model(final_guard_model):
                 result_json["model"] = final_guard_model
+            elif (
+                result_json.get("unlisted_model_candidate")
+                and has_photo_label_model_evidence(final_guard_model, result_json, thinking_text)
+            ):
+                result_json["model"] = str(final_guard_model).strip().upper()
+                result_json["official_model_unverified"] = True
             else:
                 result_json["rejected_model"] = str(final_guard_model)
                 result_json["model"] = None

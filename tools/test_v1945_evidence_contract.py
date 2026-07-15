@@ -20,6 +20,7 @@ from tools.prepare_drive_upload_manifest import (
 from tools.rerun_questionable_records import is_complete_auto_verified
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace
 from skills.runtime_health_gate import review_prompt_leak_reasons
+from skills.model_validation import has_photo_label_model_evidence
 from samsung_ocr_batch_processor import _merge_v1945_json_objects
 
 
@@ -33,6 +34,90 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_unlisted_model_candidate_requires_same_photo_label_evidence(self):
+        narration = (
+            "中間主角螢幕正下方有實體價牌，清楚標示型號 S24D300GAC，"
+            "售價 2,990 元，價牌歸屬明確。"
+        )
+        record = {
+            "view_type": "單機",
+            "unique_main": True,
+            "label_ownership": "matched",
+        }
+        self.assertTrue(has_photo_label_model_evidence("S24D300GAC", record, narration))
+        self.assertFalse(
+            has_photo_label_model_evidence(
+                "S24D300GAC",
+                record,
+                "價牌模糊，可能是 S24D300GAC，但無法確認。",
+            )
+        )
+        self.assertFalse(
+            has_photo_label_model_evidence(
+                "S24D300GAC",
+                {**record, "view_type": "遠景"},
+                narration,
+            )
+        )
+
+    def test_unlisted_model_three_independent_pass_consensus_can_verify(self):
+        base = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S24D300GAC",
+            "price": "2990",
+            "thinking": "主角自己的實體價牌清楚標示 S24D300GAC 與 2,990 元。",
+            "unlisted_model_candidate": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        first = dict(base)
+        second = dict(base)
+        third = dict(base)
+        self.assertTrue(immediate_retry_decision(first, 1, [], 3)["retry"])
+        self.assertTrue(immediate_retry_decision(second, 2, [first], 3)["retry"])
+        final = immediate_retry_decision(third, 3, [first, second], 3)
+        self.assertTrue(final["verified"])
+        self.assertFalse(final["unresolved"])
+        self.assertTrue(third["unlisted_model_photo_consensus"])
+
+    def test_unlisted_model_single_late_pass_stays_unresolved(self):
+        distant = {
+            "period": "202601",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "thinking": "三台完整螢幕，無法鎖定唯一主角的規格與價格。",
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(3, False, "not_applicable"),
+        }
+        candidate = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27B610EQ",
+            "price": "6490",
+            "thinking": "中間主角自己的價牌清楚標示 S27B610EQ 與 6,490 元。",
+            "unlisted_model_candidate": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        final = immediate_retry_decision(candidate, 3, [dict(distant), dict(distant)], 3)
+        self.assertFalse(final["verified"])
+        self.assertTrue(final["unresolved"])
+        self.assertFalse(candidate["unlisted_model_photo_consensus"])
+
     def test_explicit_distant_null_fields_cannot_be_rewritten_from_narration(self):
         postprocessed = {
             "view_type": "單機",

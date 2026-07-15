@@ -3,14 +3,14 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
-from skills.model_validation import is_placeholder_model
+from skills.model_validation import is_placeholder_model, normalize_model_token
 
 
 EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.5"
+EVIDENCE_GUARD_REVISION = "20260715.6"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -370,6 +370,31 @@ def immediate_retry_decision(
     thinking = str(record.get("thinking") or record.get("raw_response") or "")
     reasons: list[str] = []
 
+    def unlisted_photo_consensus() -> bool:
+        if not record.get("unlisted_model_candidate"):
+            return False
+        passes = (history + [record])[-max_attempts:]
+        if len(passes) < max_attempts:
+            return False
+        if any(item.get("unlisted_model_candidate") is not True for item in passes):
+            return False
+        if any(item.get("independent_pass") is not True for item in passes):
+            return False
+        if any(item.get("prior_answer_exposed") is True or item.get("prompt_contamination") is True for item in passes):
+            return False
+        if any((item.get("runtime_health") or {}).get("healthy") is not True for item in passes):
+            return False
+        models = [normalize_model_token(item.get("model")) for item in passes]
+        prices = [re.sub(r"[^0-9]", "", str(item.get("price") or "")) for item in passes]
+        if not models[0] or len(set(models)) != 1 or not prices[0] or len(set(prices)) != 1:
+            return False
+        strong_passes = sum(
+            1
+            for item in passes
+            if item.get("unique_main") is True and item.get("label_ownership") == "matched"
+        )
+        return strong_passes >= 2
+
     contract = evidence_contract_decision(record, history)
     record["evidence_contract_version"] = EVIDENCE_CONTRACT_VERSION
     record["normalized_evidence"] = contract["normalized_evidence"]
@@ -381,6 +406,11 @@ def immediate_retry_decision(
 
     if view_type == "失敗" or str(record.get("category") or "") == "失敗":
         reasons.append("處理失敗")
+    if record.get("unlisted_model_candidate"):
+        consensus = unlisted_photo_consensus()
+        record["unlisted_model_photo_consensus"] = consensus
+        if not consensus:
+            reasons.append("官網未收錄型號需三輪獨立照片證據一致")
     if record.get("model_validation_failed") or is_placeholder_model(model):
         reasons.append("型號未通過正式清單驗證")
     if record.get("price_conflict_detected"):
