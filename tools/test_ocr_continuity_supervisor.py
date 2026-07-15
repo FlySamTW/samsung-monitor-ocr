@@ -27,6 +27,17 @@ class ContinuitySupervisorTests(unittest.TestCase):
         release = self.source.index("Remove-Item -LiteralPath $BenchmarkLockPath -Force", recovery)
         self.assertGreater(release, recovery)
 
+    def test_hidden_launches_use_named_nonempty_arguments(self):
+        self.assertIn("[string[]]$ProcessArgs", self.source)
+        self.assertIn("hidden process launch contains an empty executable or argument", self.source)
+        self.assertIn("hidden process launch requires output paths", self.source)
+        self.assertNotIn("Start-Hidden $python @(", self.source)
+        self.assertNotIn('Start-Hidden "powershell.exe" @(', self.source)
+        self.assertGreaterEqual(self.source.count("Start-Hidden -File"), 6)
+        self.assertGreaterEqual(self.source.count("-ProcessArgs"), 6)
+        self.assertGreaterEqual(self.source.count("-OutFile"), 6)
+        self.assertGreaterEqual(self.source.count("-ErrFile"), 6)
+
     def test_exact_repo_owned_processes_and_fail_closed_hung(self):
         self.assertIn("[regex]::Escape($RepoRoot)", self.source)
         self.assertIn('"backend_process_exists_but_api_unhealthy"', self.source)
@@ -47,7 +58,7 @@ class ContinuitySupervisorTests(unittest.TestCase):
 
     def test_uploader_requires_fresh_content_bound_gate_proof(self):
         uploader = self.source[self.source.index('$pending = Join-Path $OutputDir "_drive_upload\\drive_upload_ready_pending.csv"'):]
-        self.assertLess(uploader.index("Test-UploadGateProof"), uploader.index('Start-Hidden $python @("tools\\rclone_drive_upload.py"'))
+        self.assertLess(uploader.index("Test-UploadGateProof"), uploader.index('Start-Hidden -File $python -ProcessArgs @("tools\\rclone_drive_upload.py"'))
         for token in (
             "upload_gate_proof.json",
             "UploadGateProofMaxAgeMinutes",

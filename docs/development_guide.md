@@ -549,6 +549,8 @@ The upgraded boundary keeps its interlock until the backfill runner exits zero a
 
 If the planned `backend_upgrade_v1945` lock owner PID is gone, the supervisor may take over only after the live backend proves v19.45, `compact-v2`, strict accuracy, idle state, and no active staged runner. It must retain the existing lock while starting or observing the resumable evidence backfill. The lock may be removed only when a fresh builder proof reports zero candidates, zero missing/conflicting/invalid sources, and verified sources equal the full 2026 inventory. An unreadable lock, live owner, wrong backend contract, active OCR, or ambiguous runner remains fail-closed.
 
+Every supervisor child launch must call `Start-Hidden` with named `-File`, `-ProcessArgs`, `-OutFile`, and `-ErrFile` parameters. A positional array before scalar output paths is unsafe in PowerShell because array expansion can leave later parameters null. The helper rejects empty executables, arguments, or log paths before `Start-Process`, and every launch keeps `-WindowStyle Hidden`.
+
 Historical recursive completion is inventory-bound. `recursive_ocr_flat_export.py` must return nonzero when any discovered folder is missing from the summary, has changed source identity, or remains `error/blocked`. The full-project marker stores discovery/summary SHA-256 and discovered/completed/error counts; the supervisor must reject a missing, stale, changed, or nonzero-error marker and resume instead of declaring completion.
 
 ## Compact status and operator-facing metadata contract (2026-07-14)

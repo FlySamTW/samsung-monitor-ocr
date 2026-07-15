@@ -56,8 +56,12 @@ function Invoke-Lms([string[]]$Args) {
     $out = & $lms @Args 2>&1
     return [pscustomobject]@{ exit=$LASTEXITCODE; output=($out -join "`n") }
 }
-function Start-Hidden([string]$File, [string[]]$Args, [string]$OutFile, [string]$ErrFile) {
-    Start-Process -FilePath $File -ArgumentList $Args -WorkingDirectory $RepoRoot -WindowStyle Hidden `
+function Start-Hidden([string]$File, [string[]]$ProcessArgs, [string]$OutFile, [string]$ErrFile) {
+    if (-not $File -or -not $ProcessArgs -or $ProcessArgs.Count -eq 0 -or $ProcessArgs.Where({ $null -eq $_ -or [string]$_ -eq "" }).Count -gt 0) {
+        throw "hidden process launch contains an empty executable or argument"
+    }
+    if (-not $OutFile -or -not $ErrFile) { throw "hidden process launch requires output paths" }
+    Start-Process -FilePath $File -ArgumentList $ProcessArgs -WorkingDirectory $RepoRoot -WindowStyle Hidden `
         -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile | Out-Null
 }
 function Read-JsonFile([string]$Path) {
@@ -181,7 +185,7 @@ function Start-EvidenceBackfillIfNeeded {
         return $false
     }
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    Start-Hidden $python @(
+    Start-Hidden -File $python -ProcessArgs @(
         "tools\rerun_staged_candidates.py",
         "--source-root",$SourceRoot,
         "--output-dir",$OutputDir,
@@ -191,7 +195,7 @@ function Start-EvidenceBackfillIfNeeded {
         "--run-summary-csv",$summaryCsv,
         "--execute","--resume-existing-then-continue",
         "--poll-seconds","10","--timeout-minutes","10080"
-    ) (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
+    ) -OutFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
     Log-Event "evidence_backfill_restarted" @{remaining=[int]$proof.candidate_rows;sources=[int]$proof.unique_year_sources}
     return $true
 }
@@ -299,7 +303,7 @@ try {
 
     if (-not $status -and $backend.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden $python @("samsung_ocr_batch_processor.py","--api_base",$ApiBase,"--api_key","lm-studio","--model",$Model,"--dir",$SourceRoot) (Join-Path $logDir "supervisor_backend_$stamp.out.log") (Join-Path $logDir "supervisor_backend_$stamp.err.log")
+        Start-Hidden -File $python -ProcessArgs @("samsung_ocr_batch_processor.py","--api_base",$ApiBase,"--api_key","lm-studio","--model",$Model,"--dir",$SourceRoot) -OutFile (Join-Path $logDir "supervisor_backend_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_backend_$stamp.err.log")
         Log-Event "backend_started" @{model=$Model}
     }
 
@@ -317,7 +321,7 @@ try {
         Log-Event "full_project_complete_noop" @{marker=$fullProjectCompletePath}
     } elseif ($fullProjectReady -and $watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden $python @(
+        Start-Hidden -File $python -ProcessArgs @(
             "tools\recursive_ocr_flat_export.py",
             "--source-root",$SourceRoot,
             "--output-dir",$OutputDir,
@@ -328,19 +332,19 @@ try {
             "--poll-seconds","20",
             "--timeout-minutes","10080",
             "--ignore-current-year-review-gate"
-        ) (Join-Path $logDir "supervisor_full_recursive_$stamp.out.log") (Join-Path $logDir "supervisor_full_recursive_$stamp.err.log")
+        ) -OutFile (Join-Path $logDir "supervisor_full_recursive_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_full_recursive_$stamp.err.log")
         Start-Sleep -Seconds 1
-        Start-Hidden "powershell.exe" @(
+        Start-Hidden -File "powershell.exe" -ProcessArgs @(
             "-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1",
             "-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,
             "-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2",
             "-SkipCurrentYearPhases","-SkipRecursiveResume"
-        ) (Join-Path $logDir "supervisor_full_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_full_watcher_$stamp.err.log")
+        ) -OutFile (Join-Path $logDir "supervisor_full_watcher_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_full_watcher_$stamp.err.log")
         $pipelineTransitionStarted = $true
         Log-Event "full_project_pipeline_started" @{request=$fullProjectRequestPath;current_year_marker=$currentYearCompletePath}
     } elseif ($watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1","-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly") (Join-Path $logDir "supervisor_watcher_$stamp.out.log") (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
+        Start-Hidden -File "powershell.exe" -ProcessArgs @("-NoProfile","-ExecutionPolicy","Bypass","-File","tools\auto_rerun_questionable_after_recursive.ps1","-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly") -OutFile (Join-Path $logDir "supervisor_watcher_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
         $pipelineTransitionStarted = $true
         Log-Event "current_year_watcher_started"
     }
@@ -353,7 +357,7 @@ try {
             Log-Event "uploader_gate_closed" @{pending=$pendingCount;proof=$uploadGateProofPath}
         } else {
             $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-            Start-Hidden $python @("tools\rclone_drive_upload.py","--output-dir",$OutputDir,"--execute","--repeat","--limit","100","--transfers","4","--checkers","8","--rclone-timeout-seconds","1200") (Join-Path $logDir "supervisor_uploader_$stamp.out.log") (Join-Path $logDir "supervisor_uploader_$stamp.err.log")
+            Start-Hidden -File $python -ProcessArgs @("tools\rclone_drive_upload.py","--output-dir",$OutputDir,"--execute","--repeat","--limit","100","--transfers","4","--checkers","8","--rclone-timeout-seconds","1200") -OutFile (Join-Path $logDir "supervisor_uploader_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_uploader_$stamp.err.log")
             Log-Event "ready_uploader_started" @{pending=$pendingCount;proof=$uploadGateProofPath}
         }
     }

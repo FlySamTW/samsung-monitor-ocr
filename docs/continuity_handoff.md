@@ -279,3 +279,4 @@
 - 收尾實際抓到前端少最後一張：最後完成事件與 `is_running=false` 同次到達，舊程式因 running gate 忽略它。現已移除該 gate 並補回歸測試；同一既有 Chrome 分頁實測恢復精確 15 張卡片、8 張待複核、最新 `鹽行-1551`、總進度 `65,331/150,321`，舊批次卡片 0、raw JSON 0、破損字元 0，版面未改。
 - `runtime_health_fuse.json` 與 `model_benchmark.lock` 目前仍保留，正式 OCR 與 uploader 都尚未恢復。解除前仍須完成最新程式的 critical regressions、Git checkpoint，並以文件規範重新確認正式工作目錄與單一隱藏後端進程。
 - 復工前比對手冊又發現：`model_benchmark.lock` 的舊安全升級器 PID 8668 已不存在，但 supervisor 遇到該 planned lock 仍會直接退出，與手冊聲稱的 backfill 接手不符。現已補成 fail-closed takeover：只在擁有者消失、後端為 v19.45/compact-v2/strict、idle 且無 runner 時重建並續接 `.5` backfill；runner 或 OCR 活著時不重複啟動，完整清冊歸零證明成立後才解除 lock。
+- runtime fuse 已人工封存至 `runtime_health_fuse_history` 並核對 SHA-256；首次 takeover 以 exit 11 正確 fail-closed，查明既有 `Start-Hidden` 使用位置陣列造成輸出路徑綁定為 null，沒有啟動 runner 或 uploader。所有 supervisor 子程序呼叫已改用具名 `-File/-ProcessArgs/-OutFile/-ErrFile`，空參數會在啟動前拒絕，並用 mock `Start-Process` 驗證參數、log 路徑與 Hidden window 完整傳遞。
