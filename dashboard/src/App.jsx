@@ -136,6 +136,10 @@ const stripHeavyStatusFields = (value) => {
 };
 const sanitizeStatusPayload = (apiResult) => ({
   ...apiResult,
+  recent_durations: (Array.isArray(apiResult?.recent_results) ? apiResult.recent_results : [])
+    .slice(0, 5)
+    .map((item) => Number(item?.duration))
+    .filter((duration) => Number.isFinite(duration) && duration > 0),
   presentation_queue: (Array.isArray(apiResult?.presentation_queue) ? apiResult.presentation_queue : [])
     .slice(-MAX_CLIENT_STATUS_PRESENTATIONS)
     .map((item) => ({
@@ -1156,6 +1160,11 @@ const App = () => {
   const folderTotal = Number(overallProgress.total_folders || 0);
   const folderDone = Number(overallProgress.completed_folders || 0);
   const reviewProgress = data.review_progress || {};
+  const completedPassCount = Math.max(0, Number(data.presentation_sequence || 0));
+  const recentDurations = Array.isArray(data.recent_durations) ? data.recent_durations : [];
+  const recentAverageDuration = recentDurations.length
+    ? (recentDurations.reduce((sum, duration) => sum + duration, 0) / recentDurations.length).toFixed(2)
+    : null;
   const activeDirectoryText = String(data.current_relative_dir || data.image_dir || "");
   const isReviewRun = reviewProgress.mode === 'current_year_review' || activeDirectoryText.includes('_ocr_staging');
   const reviewPeriodMatches = [...activeDirectoryText.matchAll(/20\d{4}/g)];
@@ -1349,7 +1358,11 @@ const App = () => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: '#888' }}>
                     <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
                     <span>資料夾 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
-                    <span>{isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}{isReviewRun && reviewProgress.current_pass ? ` · 第 ${reviewProgress.current_pass} 輪` : ''}</span>
+                    <span data-testid="review-pass-progress">
+                      {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
+                      {isReviewRun && completedPassCount ? ` · 輪次 ${formatCount(completedPassCount)}` : ''}
+                      {isReviewRun && reviewProgress.current_pass ? ` · 本張 ${reviewProgress.current_pass}/3` : ''}
+                    </span>
                   </div>
                 </div>
                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -1593,9 +1606,10 @@ const App = () => {
                       {[
                         {l:'成功', v:stats.success, c:'#22c55e'}, {l:'失敗', v:stats.failed, c:'#ef4444'},
                         {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'}, {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
-                        {l:'最後耗時', v:data.metrics?.last_duration||'-', c:'#00f5ff'}, {l:'平均耗時', v:data.metrics?.avg_duration||'-', c:'#a855f7'}
+                        {l:'最後耗時', v:data.metrics?.last_duration||'-', c:'#00f5ff'},
+                        {l:'近期平均', v:recentAverageDuration || data.metrics?.last_duration || '-', c:'#a855f7', title:'最近 5 張實際耗時平均；不讓先前的逾時永久扭曲目前速度'}
                       ].map((item, i)=>(
-                        <div key={i} style={{ background:'#0a0a0f', border:'1px solid #333', padding:'8px', borderRadius:'4px', textAlign:'center' }}>
+                        <div key={i} title={item.title || ''} style={{ background:'#0a0a0f', border:'1px solid #333', padding:'8px', borderRadius:'4px', textAlign:'center' }}>
                             <div style={{ color:'#888', fontSize:'0.6rem' }}>{item.l}</div>
                             <div style={{ color:item.c, fontSize:'1.1rem', fontWeight:'bold' }}>{item.v}</div>
                         </div>
