@@ -164,6 +164,7 @@ npm run build
 | 未通過者不能進上傳名單 | `test_trace_persistence_shape_and_upload_exclusion` 與 manifest 守門測試 |
 | 舊 `v19.45 verified` 缺守門修訂碼時必須重跑 | `test_old_v1945_verified_trace_without_guard_revision_is_reprocessed` |
 | 舊成功列缺守門修訂碼時不得完成或上傳 | `test_old_v1945_success_without_guard_revision_is_not_complete` 與 manifest 守門測試 |
+| 內容跑歪必須跨程序持久熔斷 | `test_runtime_health_fuse_is_durable_and_fail_closed` 與 `test_every_continuation_and_upload_surface_checks_the_fuse` |
 
 測試通過只證明程式規則沒有被改壞；正式執行還必須抽查 `_ocr_audit/v1945_evidence_trace.jsonl` 的真實三輪紀錄，並確認 Dashboard 同一 `presentation_id` 的照片、逐字判讀與右側卡片一致。單看程序仍在跑、成功數增加或介面看起來正常，都不能代替這項資料驗證。
 
@@ -173,3 +174,4 @@ npm run build
 - 後一輪不得因為比較新就覆蓋前輪的未解衝突。
 - UI 的「完成」只能表示照片已離開即時守門；`review_required` 必須明顯標示待複核，不可呈現為已定案單機。
 - 上傳只讀取守門後的 ready manifest，不得從 UI 卡片、最新結果或單一輪判讀推斷可上傳。
+- `_ocr_audit/runtime_health_fuse.json` 存在時，不得開始 OCR、排程續跑、重建開放型上傳證明或執行上傳；只能在修正、完整回歸與隔離試跑均通過後人工解除。

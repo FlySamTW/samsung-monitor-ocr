@@ -13,6 +13,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $audit = Join-Path $OutputDir "_ocr_audit"
 $BenchmarkLockPath = Join-Path $audit "model_benchmark.lock"
+$RuntimeHealthFusePath = Join-Path $audit "runtime_health_fuse.json"
 $logDir = Join-Path $RepoRoot "logs"
 $lockPath = Join-Path $audit "ocr_continuity_supervisor.lock"
 $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
@@ -193,6 +194,10 @@ try {
     } catch { Log-Event "duplicate_or_locked"; exit 0 }
 
     $status = Get-BackendStatus
+    if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
+        Alert "runtime_health_fuse_active" @{fuse=$RuntimeHealthFusePath}
+        exit 9
+    }
     if (Test-Path -LiteralPath $BenchmarkLockPath) {
         try {
             $planned = Get-Content -LiteralPath $BenchmarkLockPath -Raw | ConvertFrom-Json
@@ -204,6 +209,8 @@ try {
             Log-Event "benchmark_lock_unreadable" @{ lock=$BenchmarkLockPath }
             exit 0
         }
+        Log-Event "model_benchmark_interlock" @{lock=$BenchmarkLockPath;purpose=$planned.purpose;owner=$planned.pid}
+        exit 0
     }
     $backend = @(Owned "samsung_ocr_batch_processor\.py")
     $watcher = @(Owned "auto_rerun_questionable_after_recursive\.ps1")

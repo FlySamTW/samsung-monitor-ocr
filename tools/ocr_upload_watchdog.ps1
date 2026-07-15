@@ -36,6 +36,7 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogPath = Join-Path $LogDir ("ocr_upload_watchdog_{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $LockPath = Join-Path $OutputDir "_ocr_audit\ocr_upload_watchdog.lock"
 $GateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
+$RuntimeHealthFusePath = Join-Path $OutputDir "_ocr_audit\runtime_health_fuse.json"
 $script:LastAuditExit = -1
 
 function Write-RunLog([string]$Message) {
@@ -282,6 +283,7 @@ function Write-UploadGateProof($Proof) {
 }
 
 function Test-UploadGateProof {
+    if (Test-Path -LiteralPath $RuntimeHealthFusePath) { return $false }
     if (-not (Test-Path -LiteralPath $GateProofPath -PathType Leaf)) { return $false }
     try { $gate = Get-Content -LiteralPath $GateProofPath -Raw | ConvertFrom-Json } catch { return $false }
     if ($gate.schema -ne "samsung-ocr-upload-gate/v1" -or $gate.gate_open -ne $true) { return $false }
@@ -572,6 +574,10 @@ function Update-UploadGateProof {
     # Invalidate any prior approval before refreshing its authorities.  A
     # failed audit or manifest rebuild must leave no reusable open gate.
     Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
+        Write-RunLog "upload gate closed: runtime health fuse active"
+        return
+    }
     Run-DistantFollowMeAudit
     $year = (Get-Date).Year
     $auditDir = Join-Path $OutputDir "_ocr_audit"
@@ -658,6 +664,11 @@ function Update-UploadGateProof {
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LockPath) | Out-Null
+if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
+    Remove-Item -LiteralPath $GateProofPath -Force -ErrorAction SilentlyContinue
+    Write-RunLog "watchdog fail-closed: runtime health fuse active"
+    exit 9
+}
 if (Test-Path -LiteralPath $LockPath) {
     $ageMinutes = ((Get-Date) - (Get-Item -LiteralPath $LockPath).LastWriteTime).TotalMinutes
     if ($ageMinutes -lt 180) {

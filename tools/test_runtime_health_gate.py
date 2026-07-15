@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from skills.runtime_health_gate import BLOCKED_NARRATION, evaluate_runtime_health
+from skills.runtime_health_gate import (
+    BLOCKED_NARRATION,
+    evaluate_runtime_health,
+    read_runtime_health_fuse,
+    trip_runtime_health_fuse,
+)
+from tools.build_upload_gate_proof import build_proof
+from tools.rclone_drive_upload import ensure_runtime_health_fuse_clear
 
 
 def record(**updates):
@@ -27,6 +35,55 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertIn("runtime_health = evaluate_runtime_health(", orchestrator)
         self.assertIn("if not runtime_health.allow_processing:", orchestrator)
         self.assertIn("self.stop_event.set()", orchestrator)
+        self.assertIn("self._persist_runtime_health_fuse(", orchestrator)
+
+    def test_runtime_health_fuse_is_durable_and_fail_closed(self):
+        with TemporaryDirectory() as temp:
+            path = trip_runtime_health_fuse(
+                temp,
+                reasons=["ui_narration_contains_raw_structure"],
+                source_file="sample.jpg",
+                attempt=2,
+                run_id="trial-1",
+            )
+            self.assertTrue(path.is_file())
+            payload = read_runtime_health_fuse(temp)
+            self.assertTrue(payload["active"])
+            self.assertEqual(payload["source_file"], "sample.jpg")
+            self.assertEqual(payload["attempt"], 2)
+            self.assertIn("ui_narration_contains_raw_structure", payload["reasons"])
+
+    def test_unreadable_runtime_health_fuse_remains_active(self):
+        with TemporaryDirectory() as temp:
+            Path(temp, "runtime_health_fuse.json").write_text("not-json", encoding="utf-8")
+            payload = read_runtime_health_fuse(temp)
+            self.assertTrue(payload["active"])
+            self.assertEqual(payload["reason"], "runtime_health_fuse_unreadable")
+
+    def test_every_continuation_and_upload_surface_checks_the_fuse(self):
+        root = Path(__file__).resolve().parents[1]
+        processor = (root / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
+        supervisor = (root / "tools" / "ocr_continuity_supervisor.ps1").read_text(encoding="utf-8")
+        watchdog = (root / "tools" / "ocr_upload_watchdog.ps1").read_text(encoding="utf-8")
+        manifest = (root / "tools" / "prepare_drive_upload_manifest.py").read_text(encoding="utf-8")
+        proof = (root / "tools" / "build_upload_gate_proof.py").read_text(encoding="utf-8")
+        uploader = (root / "tools" / "rclone_drive_upload.py").read_text(encoding="utf-8")
+        self.assertIn("read_runtime_health_fuse(AUDIT_DIR)", processor)
+        self.assertIn("runtime_health_fuse_active", supervisor)
+        self.assertIn("RuntimeHealthFusePath", watchdog)
+        self.assertIn("runtime_health_fuse_active", manifest)
+        self.assertIn("runtime_health_fuse_active", proof)
+        self.assertIn("ensure_runtime_health_fuse_clear", uploader)
+
+    def test_fuse_blocks_proof_builder_and_uploader(self):
+        with TemporaryDirectory() as temp:
+            output = Path(temp)
+            trip_runtime_health_fuse(output / "_ocr_audit", reasons=["content_conflict"])
+            proof, errors = build_proof(output, 2026)
+            self.assertIsNone(proof)
+            self.assertTrue(any("runtime_health_fuse_active" in item for item in errors))
+            with self.assertRaises(SystemExit):
+                ensure_runtime_health_fuse_clear(output)
 
     def test_plain_narration_is_safe_but_upload_still_needs_separate_authority(self):
         decision = evaluate_runtime_health(record(), "唯一主角與價牌歸屬一致。")

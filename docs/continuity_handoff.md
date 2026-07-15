@@ -257,4 +257,6 @@
 - `docs/model_benchmark_20260713.md`
 - 本文件 `docs/continuity_handoff.md`
 
+新版內容健康門不只設定記憶體 stop event，還會原子寫入 `_ocr_audit/runtime_health_fuse.json`。後端續跑 API、五分鐘 continuity supervisor、upload watchdog、manifest／proof builder 與 rclone uploader 都必須在此標記存在時失敗封閉。排程不得自動刪除；只能在缺陷修正、critical regressions 與隔離五張試跑全部通過後手動解除。
+
 本專案尚未完成。接手者的核心責任不是追求表面跑得快，而是讓每張照片的分類、型號、價格、檔名、UI 展示與雲端檔案保持同一份可追溯的正確結果。

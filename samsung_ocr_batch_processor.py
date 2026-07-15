@@ -62,7 +62,11 @@ from skills.audit_fields import (
     has_sufficient_followme_physical_evidence,
     is_followme_model,
 )
-from skills.runtime_health_gate import review_prompt_leak_reasons, BLOCKED_NARRATION
+from skills.runtime_health_gate import (
+    review_prompt_leak_reasons,
+    read_runtime_health_fuse,
+    BLOCKED_NARRATION,
+)
 
 
 def finalize_evidence_contract(result, raw_output=""):
@@ -3867,6 +3871,7 @@ def get_status():
             "stats": stats,
             "overall_progress": overall_progress,
             "review_progress": review_progress,
+            "runtime_health_fuse": read_runtime_health_fuse(AUDIT_DIR),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
@@ -4198,6 +4203,12 @@ def start_batch():
         return jsonify({"error": "系統未初始化"}), 500
 
     try:
+        active_fuse = read_runtime_health_fuse(AUDIT_DIR)
+        if active_fuse:
+            return jsonify({
+                "error": "內容健康門已熔斷；修正與回歸驗證完成前不得續跑",
+                "runtime_health_fuse": active_fuse,
+            }), 423
         if orchestrator.is_running:
             return jsonify({"error": "批次處理已在執行中"}), 400
 

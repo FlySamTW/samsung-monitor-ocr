@@ -734,6 +734,8 @@ def main() -> int:
     scanned_count = int(finalization_proof.get("scanned_result_count") or 0)
     proof_input_hash = str(finalization_proof.get("audit_input_sha256") or "")
     upload_gate_fail_reasons: list[str] = []
+    if (output_root / "_ocr_audit" / "runtime_health_fuse.json").exists():
+        upload_gate_fail_reasons.append("runtime_health_fuse_active")
     if not current_year_risk_fresh:
         upload_gate_fail_reasons.append("current_year_risk_audit_missing_or_stale")
     if finalization_proof.get("complete") is not True:

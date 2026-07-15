@@ -49,6 +49,9 @@ def as_int(value: object, default: int = -1) -> int:
 def build_proof(output_dir: Path, year: int) -> tuple[dict | None, list[str]]:
     audit_dir = output_dir / "_ocr_audit"
     manifest_dir = output_dir / "_drive_upload"
+    runtime_health_fuse = audit_dir / "runtime_health_fuse.json"
+    if runtime_health_fuse.exists():
+        return None, [f"runtime_health_fuse_active:{runtime_health_fuse}"]
     risk_json = audit_dir / f"distant_followme_risk_{year}_latest.json"
     risk_csv = audit_dir / f"distant_followme_risk_{year}_latest.csv"
     summary_path = manifest_dir / "drive_upload_summary.json"

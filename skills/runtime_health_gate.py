@@ -8,14 +8,20 @@ separate upstream upload authority was already proven.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from skills.audit_fields import has_sufficient_followme_physical_evidence, is_followme_model
 
 
 BLOCKED_NARRATION = "AI 判讀文字已由健康閘收回；這張照片必須重新獨立判讀。"
+
+RUNTIME_HEALTH_FUSE_FILENAME = "runtime_health_fuse.json"
+RUNTIME_HEALTH_FUSE_SCHEMA = "samsung-ocr-runtime-health-fuse/v1"
 
 _RAW_FIELD_PATTERN = re.compile(
     r"(?:[\"']?(?:view_type|category|model|price|quality_issue|screen_status|"
@@ -53,6 +59,64 @@ class RuntimeHealthDecision:
         payload = asdict(self)
         payload["reasons"] = list(self.reasons)
         return payload
+
+
+def runtime_health_fuse_path(audit_dir: str | Path) -> Path:
+    return Path(audit_dir).resolve() / RUNTIME_HEALTH_FUSE_FILENAME
+
+
+def read_runtime_health_fuse(audit_dir: str | Path) -> dict[str, Any] | None:
+    path = runtime_health_fuse_path(audit_dir)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return {
+            "schema": RUNTIME_HEALTH_FUSE_SCHEMA,
+            "active": True,
+            "reason": "runtime_health_fuse_unreadable",
+            "path": str(path),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "schema": RUNTIME_HEALTH_FUSE_SCHEMA,
+            "active": True,
+            "reason": "runtime_health_fuse_invalid",
+            "path": str(path),
+        }
+    payload = dict(payload)
+    payload["active"] = True
+    payload["path"] = str(path)
+    return payload
+
+
+def trip_runtime_health_fuse(
+    audit_dir: str | Path,
+    *,
+    reasons: Iterable[Any],
+    source_file: Any = "",
+    attempt: Any = 0,
+    run_id: Any = "",
+) -> Path:
+    """Persist an interlock that no supervisor or uploader may bypass."""
+    path = runtime_health_fuse_path(audit_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": RUNTIME_HEALTH_FUSE_SCHEMA,
+        "active": True,
+        "tripped_at": datetime.now().astimezone().isoformat(),
+        "reasons": list(dict.fromkeys(str(item) for item in reasons if str(item))),
+        "source_file": str(source_file or ""),
+        "attempt": int(attempt or 0),
+        "run_id": str(run_id or ""),
+        "pid": os.getpid(),
+        "clearance": "manual_after_fix_and_regression_only",
+    }
+    temp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+    return path
 
 
 def _contains_json_object(text: str) -> bool:

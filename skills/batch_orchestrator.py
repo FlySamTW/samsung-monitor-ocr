@@ -18,7 +18,7 @@ from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import enrich_result_for_review
 from skills.model_validation import is_placeholder_model, strict_known_model
-from skills.runtime_health_gate import evaluate_runtime_health
+from skills.runtime_health_gate import evaluate_runtime_health, trip_runtime_health_fuse
 
 log = logging.getLogger("rich")
 
@@ -152,6 +152,35 @@ class BatchOrchestrator:
         
         # [v16.12] Force Rerun Queue
         self.priority_queue = [] 
+
+    def _persist_runtime_health_fuse(self, reasons, source_file="", attempt=0, run_id=""):
+        """Persist content failure before releasing the running state."""
+        audit_dir = Path(str(self.config.get("audit_dir") or self.output_dir)).resolve()
+        try:
+            return trip_runtime_health_fuse(
+                audit_dir,
+                reasons=reasons,
+                source_file=source_file,
+                attempt=attempt,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            # A pre-existing supervisor interlock still keeps the pipeline
+            # closed.  If none exists, create a minimal fallback interlock.
+            fallback = audit_dir / "model_benchmark.lock"
+            try:
+                if not fallback.exists():
+                    temp = fallback.with_name(fallback.name + f".tmp.{os.getpid()}")
+                    temp.write_text(json.dumps({
+                        "purpose": "runtime_health_fuse_write_failed",
+                        "pid": os.getpid(),
+                        "started_at": datetime.now().astimezone().isoformat(),
+                        "detail": str(exc),
+                    }, ensure_ascii=False, indent=2), encoding="utf-8")
+                    os.replace(temp, fallback)
+            finally:
+                self.log_system(f"🛑 [內容健康門] 持久熔斷寫入失敗，已保持安全鎖：{exc}")
+            return fallback
 
     @staticmethod
     def _standardize_followme_model(model: object) -> object:
@@ -1597,6 +1626,12 @@ class BatchOrchestrator:
 
                 if isinstance(raw_result, dict) and raw_result.get("runtime_health_stop"):
                     reasons = [str(x) for x in raw_result.get("runtime_health_reasons", []) if str(x)]
+                    self._persist_runtime_health_fuse(
+                        reasons or ["review_prompt_contamination"],
+                        source_file=fname,
+                        attempt=attempt_number,
+                        run_id=run_id,
+                    )
                     self.stream_buffer = str(raw_result.get("thinking") or "AI 判讀已由健康閘停止。")
                     self.log_system(
                         "🛑 [內容健康閘] 已停止 OCR：" + ("；".join(reasons) or "複核提示可能受到前輪答案污染")
@@ -1649,6 +1684,12 @@ class BatchOrchestrator:
                 norm_result["runtime_health"] = runtime_health.to_dict()
                 if not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
+                    self._persist_runtime_health_fuse(
+                        runtime_health.reasons,
+                        source_file=fname,
+                        attempt=attempt_number,
+                        run_id=run_id,
+                    )
                     norm_result["review_status"] = "內容健康閘停止"
                     self.stream_buffer = runtime_health.display_narration
                     self.log_system(

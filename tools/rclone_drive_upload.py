@@ -58,6 +58,12 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def ensure_runtime_health_fuse_clear(output_dir: Path) -> None:
+    fuse = output_dir / "_ocr_audit" / "runtime_health_fuse.json"
+    if fuse.exists():
+        raise SystemExit(f"runtime health fuse is active; upload blocked: {fuse}")
+
+
 def append_uploaded(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = read_csv(path)
@@ -284,6 +290,7 @@ def write_files_from(manifest_dir: Path, year: str, rows: list[dict[str, str]]) 
 
 
 def upload_once(args, batch_id: str, cycle: int) -> int:
+    ensure_runtime_health_fuse_clear(args.output_dir)
     next_batch = prepare_manifest(args, args.limit)
     rows = read_csv(next_batch)
     validate_prepared_manifest(args.manifest_dir, next_batch, rows)
@@ -300,6 +307,7 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
     staged_paths = load_staged_paths(args.manifest_dir, rows)
     staging_root = (args.manifest_dir / "staging").resolve()
     for year, year_rows in sorted(by_year.items(), reverse=True):
+        ensure_runtime_health_fuse_clear(args.output_dir)
         year_stage = (staging_root / year).resolve()
         for row in year_rows:
             stage_path = staged_paths[(row.get("source_path", ""), row.get("file_name", ""))]
