@@ -290,6 +290,17 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertNotIn("第 {formatMetaValue(activePresentation?.pass_index)} 輪", app)
         self.assertNotIn("第 {formatMetaValue(activePresentation?.pass_index)} 輪 · {getPassLabel(activePresentation)} · {formatMetaValue(activePresentation?.model_id)}", app)
 
+    def test_llm_panels_never_render_bare_structured_json(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("isStructuredModelOutput(text)", app)
+        self.assertIn("humanizeStructuredModelOutput(rawSameFileStream, pendingNarration)", app)
+        self.assertIn("isStructuredModelOutput(text.replace(/^\\[THINK\\]\\s*/, ''))", app)
+
+    def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn('const CURRENT_GUARD_REVISION = "20260715.5"', app)
+        self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
+
     def test_backend_narration_snapshot_cannot_be_hidden_by_animation_state(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const activeNarrationSnapshot = activePresentation", app)

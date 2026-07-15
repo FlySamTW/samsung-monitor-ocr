@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.3"
+EVIDENCE_GUARD_REVISION = "20260715.5"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -33,6 +33,25 @@ def is_followme_model(model: Any) -> bool:
     if text.startswith("FOLLOWME"):
         return True
     return bool(re.fullmatch(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", text))
+
+
+def has_sufficient_followme_physical_evidence(record: Dict[str, Any]) -> bool:
+    """Use machine-readable same-subject evidence, never narration keywords."""
+    physical = record.get("followme_physical_evidence") or []
+    if not isinstance(physical, list):
+        return False
+    direct_branding = False
+    strong_codes = set()
+    for item in physical:
+        if not isinstance(item, dict) or item.get("same_subject") is not True:
+            continue
+        cue = str(item.get("cue") or "").strip()
+        strength = str(item.get("strength") or "").strip()
+        if cue == "direct_followme_branding_on_unit" and strength in {"strong", "direct"}:
+            direct_branding = True
+        if cue in FOLLOWME_INDEPENDENT_STRONG_CUES and strength == "strong":
+            strong_codes.add(cue)
+    return direct_branding or len(strong_codes) >= 2
 
 
 def _category_view(category: Any) -> str:
@@ -109,9 +128,7 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
         errors.append("single_unique_main_required")
     model = str(record.get("model") or "")
     if is_followme_model(model):
-        direct_branding = any(x["cue"] == "direct_followme_branding_on_unit" and x["same_subject"] and x["strength"] in {"strong", "direct"} for x in normalized_physical)
-        strong_codes = {x["cue"] for x in normalized_physical if x["cue"] in FOLLOWME_INDEPENDENT_STRONG_CUES and x["same_subject"] and x["strength"] == "strong"}
-        if not (direct_branding or len(strong_codes) >= 2):
+        if not has_sufficient_followme_physical_evidence({"followme_physical_evidence": normalized_physical}):
             errors.append("followme_physical_evidence_insufficient")
     if record.get("model") or record.get("price"):
         if ownership != "matched":
@@ -374,6 +391,12 @@ def immediate_retry_decision(
         reasons.append("最終它牌結果與原始 Samsung SKU 衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
+    if attempt >= 2 and re.search(
+        r"(?:您|你).{0,6}指正|先前.{0,10}(?:判斷|答案|型號|價格)|上一輪.{0,10}(?:判斷|答案|型號|價格)|修正.{0,8}(?:先前|前一).{0,8}(?:判斷|答案)",
+        thinking,
+        re.IGNORECASE,
+    ):
+        reasons.append("本輪出現承接前輪答案的污染語句")
 
     if view_type == "單機" and _narration_declares_distant(thinking):
         reasons.append("結構為單機但敘述明確判為遠景")
@@ -419,9 +442,7 @@ def immediate_retry_decision(
             reasons.append("單機結果與三台以上完整陳列衝突")
 
     if is_followme_model(model):
-        physical_count = sum(1 for clue in FOLLOWME_PHYSICAL_CLUES if clue in thinking)
-        promo_only = _text_has_any(thinking, PROMO_ONLY_CLUES)
-        if physical_count < 2 or (promo_only and physical_count < 3):
+        if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
         if current_year and attempt < 2:
             reasons.append("2026 FollowMe 必須完成第二輪實體證據複核")

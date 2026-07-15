@@ -18,6 +18,7 @@ from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import enrich_result_for_review
 from skills.model_validation import is_placeholder_model, strict_known_model
+from skills.runtime_health_gate import evaluate_runtime_health
 
 log = logging.getLogger("rich")
 
@@ -1593,6 +1594,15 @@ class BatchOrchestrator:
                     previous_results=previous_results,
                 )
                 duration = time.time() - start_t
+
+                if isinstance(raw_result, dict) and raw_result.get("runtime_health_stop"):
+                    reasons = [str(x) for x in raw_result.get("runtime_health_reasons", []) if str(x)]
+                    self.stream_buffer = str(raw_result.get("thinking") or "AI 判讀已由健康閘停止。")
+                    self.log_system(
+                        "🛑 [內容健康閘] 已停止 OCR：" + ("；".join(reasons) or "複核提示可能受到前輪答案污染")
+                    )
+                    self.stop_event.set()
+                    break
                 
                 # [v18.53 Fix] Check stop signal after LLM call completes
                 if self.stop_event.is_set():
@@ -1628,6 +1638,24 @@ class BatchOrchestrator:
                 norm_result['started_at'] = pass_started_at
                 norm_result = enrich_result_for_review(norm_result)
                 norm_result['ocr_attempt'] = attempt_number
+
+                candidate_narration = str(norm_result.get("thinking") or self.stream_buffer or "").strip()
+                runtime_health = evaluate_runtime_health(
+                    norm_result,
+                    candidate_narration,
+                    attempt=1,  # prompt isolation was proven before the model call
+                    upstream_upload_authorized=False,
+                )
+                norm_result["runtime_health"] = runtime_health.to_dict()
+                if not runtime_health.allow_processing:
+                    norm_result["auto_review_required"] = True
+                    norm_result["review_status"] = "內容健康閘停止"
+                    self.stream_buffer = runtime_health.display_narration
+                    self.log_system(
+                        "🛑 [內容健康閘] 已停止 OCR：" + "；".join(runtime_health.reasons)
+                    )
+                    self.stop_event.set()
+                    break
 
                 review_decision = {"retry": False, "reasons": [], "unresolved": False}
                 if self.result_review_fn:

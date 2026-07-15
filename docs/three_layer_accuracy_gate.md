@@ -97,7 +97,9 @@ FollowMe 守門同時辨識友善名稱與正式 SKU。`S32FM50x`、`S32FM70x`�
 
 ### 守門規則修訂碼
 
-`v19.45` 只代表證據欄位契約，不能單獨證明當時已執行目前完整的三層守門。每筆新結果與 trace 必須同時帶有 `evidence_guard_revision=20260715.3`。`.3` 另外強制比對原始結構物件與最終正規化型號：原始 `raw_objects` 已給 Samsung SKU 時，最終不得被螢幕遊戲／Demo 內容的它牌字樣覆蓋為 `它牌(...)`。
+`v19.45` 只代表證據欄位契約，不能單獨證明當時已執行目前完整的三層守門。每筆新結果與 trace 必須同時帶有 `evidence_guard_revision=20260715.5`。`.5` 保留 `.3` 的原始 Samsung SKU／最終它牌衝突守門與 `.4` 的 FollowMe 結構化物理證據修正，並徹底隔離第二、第三輪：不得傳入前輪分類、型號、價格、理由、assistant 回答或價格警告值；同一輪格式重試也必須從原圖與乾淨訊息重建。出現「您指正／先前答案」式承接語、裸 JSON、缺少可讀獨白或執行期內容衝突時，健康閘立即停止 OCR 並封鎖上傳。
+
+監控的定義不是只看數字前進，而是同時驗證進度、內容品質、介面健康、上傳隔離。任何一項失敗都必須熔斷；健康閘停止的 run 不得由排程自行續跑。
 
 - 缺少這個修訂碼的舊 `v19.45 verified` 紀錄，仍視為未通過新規則，必須重新複核。
 - backfill 候選器只會跳過「契約版本、守門修訂碼、`verified=true`」三者同時正確的原圖。
@@ -106,7 +108,7 @@ FollowMe 守門同時辨識友善名稱與正式 SKU。`S32FM50x`、`S32FM70x`�
 
 ## 程式中的責任邊界
 
-- `samsung_ocr_batch_processor.py::build_ocr_messages()`：第二輪注入第一輪待推翻假設；第三輪不注入任何舊答案。
+- `samsung_ocr_batch_processor.py::build_ocr_messages()`：每一輪只能帶入固定規則與當前原圖；第二、第三輪都不得注入任何前輪答案。
 - `skills/batch_orchestrator.py::BatchOrchestrator`：疑慮照片放入 `retry_queue` 的第一格，使呼叫順序成為 `A1 → A2 →（必要時 A3）→ B1`；中間猜測不得寫入正式成功檔或完成卡片。
 - `skills/audit_fields.py::validate_evidence_contract()`：只認結構化螢幕數、唯一主角、價牌歸屬與 FollowMe 同主體實體線索。
 - `skills/audit_fields.py::immediate_retry_decision()`：決定 `verified`、`retry` 或 `unresolved`，並執行一般單機、FollowMe、遠景各自的最低輪次。

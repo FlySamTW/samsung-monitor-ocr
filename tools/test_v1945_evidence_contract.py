@@ -55,13 +55,16 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(full.endswith(batch.V1945_OUTPUT_CONTRACT))
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
 
-    def test_retry_contract_and_prior_evidence_are_present(self):
+    def test_second_pass_is_independent_of_prior_evidence(self):
         previous = [{"view_type": "遠景", "complete_screen_count": 3, "unique_main": False,
                      "label_ownership": "not_visible", "followme_physical_evidence": []}]
         messages = batch.build_ocr_messages("system", "user", 2, previous)
-        self.assertIn(batch.V1945_OUTPUT_CONTRACT, messages[-1]["content"])
-        self.assertIn("complete_screen_count", messages[-2]["content"])
-        self.assertIn("followme_physical_evidence", messages[-2]["content"])
+        self.assertEqual(messages, [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "user"},
+        ])
+        self.assertNotIn("complete_screen_count", json.dumps(messages, ensure_ascii=False))
+        self.assertNotIn("遠景", json.dumps(messages, ensure_ascii=False))
 
     def test_third_pass_messages_are_independent_of_prior_answers(self):
         previous = [
@@ -151,6 +154,18 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(decision["verified"])
         self.assertIn("結構為單機但敘述明確判為遠景", decision["reasons"])
 
+    def test_retry_dialogue_contamination_is_fail_closed(self):
+        row = {
+            "file_name": "M-202601-contaminated.jpg", "view_type": "單機", "category": "單機",
+            "model": "S27CG552EC", "price": "17990", "quality_issue": "",
+            "thinking": "您指正得非常正確，我先前的型號判斷錯誤，現在修正答案。",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 2, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("本輪出現承接前輪答案的污染語句", decision["reasons"])
+
     def test_view_type_and_category_conflict_fails_closed(self):
         row = {
             "file_name": "M-202605-category-conflict.jpg", "view_type": "單機", "category": "遠景",
@@ -201,7 +216,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["retry"])
         self.assertFalse(decision["verified"])
         self.assertIn("最終它牌結果與原始 Samsung SKU 衝突", decision["reasons"])
-        self.assertEqual(decision["evidence_guard_revision"], "20260715.3")
+        self.assertEqual(decision["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
     def test_large_official_price_difference_requires_independent_confirmation(self):
         row = {
@@ -234,6 +249,36 @@ class EvidenceContractTests(unittest.TestCase):
         second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
         self.assertFalse(second["retry"])
         self.assertTrue(second["verified"])
+
+    def test_followme_uses_structured_physical_evidence_not_narration_keywords(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        row = {
+            "file_name": "M-202601-followme-structured.jpg",
+            "view_type": "單機", "category": "單機",
+            "model": 'FollowMe M7 32"', "price": "12990", "quality_issue": "",
+            "thinking": '{"result":"machine-readable evidence is authoritative"}',
+            **evidence(1, True, "matched", physical),
+        }
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertEqual(first["reasons"], ["2026 FollowMe 必須完成第二輪實體證據複核"])
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertTrue(second["verified"])
+        self.assertNotIn("FollowMe 缺少同一實機的物理支架證據", second["reasons"])
+
+    def test_structured_evidence_allows_friendly_followme_normalization(self):
+        narration_without_physical_keywords = "主角規格牌可讀。"
+        self.assertEqual(
+            batch.normalize_followme_model(
+                'FollowMe M7 32"',
+                "12990",
+                narration_without_physical_keywords,
+                structured_physical_confirmed=True,
+            ),
+            'FollowMe M7 32"',
+        )
 
     def test_followme_sku_requires_physical_evidence_and_second_pass(self):
         missing = {

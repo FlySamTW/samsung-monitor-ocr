@@ -38,7 +38,8 @@ def force_reload_skills():
         'skills.field_extraction',
         'skills.evaluation',
         'skills.official_price',  # [v18.67] 官方價格驗證
-        'skills.followme_reference'
+        'skills.followme_reference',
+        'skills.runtime_health_gate',
     ]
 
     for module_name in skills_modules:
@@ -54,7 +55,14 @@ from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
 from skills.model_validation import is_placeholder_model, strict_known_model
-from skills.audit_fields import immediate_retry_decision, validate_evidence_contract, EVIDENCE_CONTRACT_VERSION
+from skills.audit_fields import (
+    immediate_retry_decision,
+    validate_evidence_contract,
+    EVIDENCE_CONTRACT_VERSION,
+    has_sufficient_followme_physical_evidence,
+    is_followme_model,
+)
+from skills.runtime_health_gate import review_prompt_leak_reasons, BLOCKED_NARRATION
 
 
 def finalize_evidence_contract(result, raw_output=""):
@@ -208,36 +216,11 @@ def build_runtime_system_prompt(prompt_template, followme_daily_reference):
 
 
 def build_ocr_messages(system_prompt, user_content, ocr_attempt=1, previous_results=None):
-    """Build isolated per-photo messages; only pass 2 receives pass-1 memory."""
-    attempt = max(1, int(ocr_attempt or 1))
-    history = list(previous_results or [])
-    messages = [
+    """Build a stateless pass; no earlier answer may enter the model context."""
+    return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
-    if attempt == 2 and history:
-        previous = history[-1]
-        previous_payload = {
-            key: previous.get(key)
-            for key in ("view_type", "category", "model", "price", "screen_status", "quality_issue",
-                        "complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence")
-        }
-        previous_payload["疑慮"] = previous.get("reasons", [])
-        messages.extend([
-            {
-                "role": "assistant",
-                "content": "第一次暫定結果：" + json.dumps(previous_payload, ensure_ascii=False),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "請不要延續或合理化第一次答案。根據原圖與人工規則逐項找反證，"
-                    "修正後重新輸出完整繁體中文描述與 JSON。"
-                    + "\\n\\n" + V1945_OUTPUT_CONTRACT
-                ),
-            },
-        ])
-    return messages
 
 
 import random, string
@@ -428,12 +411,12 @@ def extract_natural_monologue(text):
 
 
 
-def normalize_followme_model(raw_model, price=None, context_text=""):
+def normalize_followme_model(raw_model, price=None, context_text="", structured_physical_confirmed=False):
     """Standardize Samsung FollowMe names when the model already detected FollowMe."""
     raw_model_text = str(raw_model or "").upper()
     context_upper = str(context_text or "").upper()
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
-    if has_negative_followme_context(context_text) and not has_strong_followme_physical_signature(context_text) and not has_followme_display_fixture_clue(context_text):
+    if has_negative_followme_context(context_text) and not structured_physical_confirmed and not has_strong_followme_physical_signature(context_text) and not has_followme_display_fixture_clue(context_text):
         return None
     raw_model_has_followme = "FOLLOWME" in raw_model_text or "FOLLOW ME" in raw_model_text
     context_has_followme = has_positive_followme_word(context_text)
@@ -441,7 +424,7 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
         return None
     if should_block_followme_due_to_other_brand(text, context_text):
         return None
-    if not (
+    if not structured_physical_confirmed and not (
         has_strong_followme_physical_signature(context_text)
         or has_followme_display_fixture_clue(context_text)
     ):
@@ -2605,39 +2588,44 @@ def process_single_image(
 
     if ocr_attempt == 2:
         user_prompt += (
-            "\n\n【第 2 輪立即複核】這仍是同一張照片。先重新觀察原圖，再審核第一次答案；"
-            "第一次答案只是待推翻的假設，不是事實。請特別重新計算完整入鏡螢幕台數、確認 FollowMe 文字是否只是"
+            "\n\n【第 2 輪獨立重讀】請把這張當全新照片。"
+            "只根據本次提供的原圖重新計算完整入鏡螢幕台數、確認 FollowMe 文字是否只是"
             "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
+            "請直接描述可見證據，不使用任何對話式更正或承接語。"
             + "\\n\\n" + V1945_OUTPUT_CONTRACT
         )
     elif ocr_attempt >= 3:
         user_prompt += (
-            "\n\n【第 3 輪獨立覆核】請把這張當全新照片，不採信前兩輪答案。逐項獨立判斷："
+            "\n\n【第 3 輪獨立覆核】請把這張當全新照片。逐項獨立判斷："
             "完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、型號清單有效性、價牌空間歸屬。"
-            "不確定就留空，不可為了和舊答案一致而猜測。"
+            "不確定就留空，不可猜測。請直接描述可見證據，不使用任何對話式更正或承接語。"
             + "\\n\\n" + V1945_OUTPUT_CONTRACT
         )
 
 
-    # [Phase 2] Dynamic Mistake Book Injection
-    if orchestrator and orchestrator.image_dir:
-        mistake_file = os.path.join(orchestrator.image_dir, "mistake_book.json")
-        if os.path.exists(mistake_file):
-            try:
-                with open(mistake_file, 'r', encoding='utf-8') as mf:
-                    mistakes = json.load(mf)
-                if mistakes:
-                    mistake_str = "\n\n⚠️ 【歷史糾錯紀錄】請務必注意以下過去常犯的錯誤：\n"
-                    for m in mistakes[-10:]: # 限制最多 10 條以防 token 爆炸
-                        mistake_str += f"- 過去曾有將 {m.get('wrong')} 誤判的紀錄，正確應該是 {m.get('correct')}。請特別仔細比對這兩個型號的字元形狀。\n"
-                    user_prompt += mistake_str
-                    console.print(f"[bold yellow]🧠 已從錯題本載入 {min(len(mistakes), 10)} 條除錯紀錄至 Prompt 中！[/bold yellow]")
-            except Exception as e:
-                log.error(f"Failed to load mistake book: {e}")
+    # Per-photo OCR must remain stateless.  Historical wrong/correct answers
+    # belong in offline regression fixtures, never in a live model prompt.
 
     user_content = [{"type": "text", "text": user_prompt}] + user_images
 
     messages = build_ocr_messages(system_prompt, user_content, ocr_attempt, previous_results)
+    prompt_health_reasons = review_prompt_leak_reasons(
+        ocr_attempt,
+        messages,
+        injected_prior_results=[],
+        prior_results_for_leak_check=previous_results,
+    )
+    if prompt_health_reasons:
+        return {
+            "error": "runtime health gate stopped contaminated review prompt",
+            "runtime_health_stop": True,
+            "runtime_health_reasons": prompt_health_reasons,
+            "thinking": BLOCKED_NARRATION,
+            "view_type": "失敗",
+            "category": "失敗",
+            "model": None,
+            "price": None,
+        }
 
     full_response_text = ""
     # [v17.30 Full Schema] Initialize with all required fields to avoid omission
@@ -2802,6 +2790,9 @@ def process_single_image(
                     result_json["merge_rejected_reason"] = merge_rejected_reason
                     # Restore reasoning as thinking/self-talk
                     result_json["thinking"] = combined_thinking
+                    result_json["independent_pass"] = True
+                    result_json["prior_answer_exposed"] = False
+                    result_json["prompt_contamination"] = False
                     result_json = finalize_evidence_contract(result_json, full_response_text)
                     result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
                     # Set module-level thinking_text so final persistence (line ~1838) keeps it
@@ -2835,7 +2826,16 @@ def process_single_image(
         max_retries = max(1, int(os.environ.get("OCR_MAX_RETRIES", "1")))
         final_result = None
 
+        base_messages = build_ocr_messages(system_prompt, user_content, ocr_attempt, [])
         for attempt in range(max_retries + 1):
+            # Every transport/parser retry starts from the same pristine image
+            # request.  Never append the prior model response to this context.
+            messages = list(base_messages)
+            if attempt > 0:
+                messages.append({
+                    "role": "user",
+                    "content": "本次回應格式無效。請重新獨立觀察原圖，只輸出規定的 JSON；不要引用或修正任何先前回答。",
+                })
             start_llm_t = time.time()
             full_response_text = ""
             args_str = None
@@ -2918,7 +2918,6 @@ def process_single_image(
             if loop_detected or _detect_repetition(full_response_text):
                 if attempt < max_retries:
                     console.print(f"[red]⚠️ 偵測到跳針，重試...[/red]")
-                    messages.append({"role": "user", "content": "你剛剛的回應陷入無限迴圈，請重試並只輸出 JSON。"})
                     continue
                 else:
                     return {"error": "AI repetitive loop detected"}
@@ -2940,10 +2939,6 @@ def process_single_image(
             if not parsed and attempt < max_retries:
                 console.print(f"[bold red]⚠️ 未偵測到有效 JSON，要求 LLM 補完...[/bold red]")
                 orchestrator.log_system("⚠️ [自動重試] AI 未輸出有效結果，正在重試...")
-                # Append the previous incomplete response as assistant output
-                messages.append({"role": "assistant", "content": full_response_text})
-                # Prompt user to force JSON
-                messages.append({"role": "user", "content": "你忘了輸出 JSON！請依照格式要求，在最後補上 JSON 區塊。\n(只輸出 JSON，不要再解釋)"})
                 continue
 
             # [v18.90] Price Consistency Check
@@ -2971,16 +2966,14 @@ def process_single_image(
                             if diff > 5000:
                                 console.print(f"[bold red]⚠️ 價格矛盾警報: 型號 {model_check} 官網價格 ${off_price}, 但 OCR 識別為 ${ocr_p}. 價差 ${int(diff)}[/bold red]")
                                 if attempt < max_retries:
-                                    price_check_passed = False
-                                    # Add Dynamic Hint
-                                    hint_msg = (
-                                        f"警告：你識別出的型號 [{model_check}] 市場均價約 ${off_price}，"
-                                        f"但你讀取到的價格是 ${ocr_p} (價差 ${int(diff)}，超過安全閾值)。\n"
-                                        f"這極大可能是「型號讀錯」或「價格讀錯」。\n"
-                                        f"請仔細重新檢查圖片上的每一個字元，特別是型號的後綴。請修正你的判斷。"
-                                    )
-                                    messages.append({"role": "assistant", "content": full_response_text})
-                                    messages.append({"role": "user", "content": hint_msg})
+                                    # Do not reveal the disputed values to the
+                                    # next model call.  Return them as a conflict
+                                    # and let the orchestrator schedule a wholly
+                                    # independent pass from the original photo.
+                                    parsed["price_conflict_detected"] = True
+                                    parsed["price_conflict_official_reference"] = off_price
+                                    final_result = parsed
+                                    price_check_passed = True
                                 else:
                                     console.print(f"[yellow]⚠️ 已達重試上限，保留原始結果。[/yellow]")
                         except:
@@ -3064,7 +3057,8 @@ def process_single_image(
             is_followme_candidate = False
             negative_followme_context = has_negative_followme_context(thinking_text)
             positive_followme_physical_context = (
-                has_followme_display_fixture_clue(thinking_text)
+                has_sufficient_followme_physical_evidence(data_obj)
+                or has_followme_display_fixture_clue(thinking_text)
             )
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
 
@@ -3083,7 +3077,12 @@ def process_single_image(
 
             if is_followme_candidate:
                  p_val = data_obj.get("price")
-                 mapped_model = normalize_followme_model(raw_model or clean_model, p_val, thinking_text)
+                 mapped_model = normalize_followme_model(
+                     raw_model or clean_model,
+                     p_val,
+                     thinking_text,
+                     structured_physical_confirmed=has_sufficient_followme_physical_evidence(data_obj),
+                 )
                  if mapped_model:
                      clean_model = mapped_model
                      is_followme_bypass = True # [v18.44] Enable Bypass
@@ -3494,8 +3493,12 @@ def process_single_image(
             # ... (Model matching remains same) ...
             valid_models_list = orchestrator.model_matcher.valid_models if orchestrator and orchestrator.model_matcher else []
             if parsed_model and parsed_model not in valid_models_list:
-                exact_model = strict_known_model(parsed_model, valid_models_list)
-                result_json["model"] = exact_model
+                # Friendly FollowMe names were already normalized from explicit
+                # machine-readable physical evidence.  A second generic SKU-list
+                # pass must not erase that verified classification.
+                if not is_followme_model(parsed_model):
+                    exact_model = strict_known_model(parsed_model, valid_models_list)
+                    result_json["model"] = exact_model
 
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
@@ -3721,6 +3724,9 @@ def process_single_image(
     result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
     final_think = thinking_text if 'thinking_text' in locals() else ""
     result_json['thinking'] = build_final_display_thinking(result_json, final_think)
+    result_json["independent_pass"] = True
+    result_json["prior_answer_exposed"] = False
+    result_json["prompt_contamination"] = False
     if orchestrator:
         final_display_thinking = str(result_json.get('thinking') or '').strip()
         if final_display_thinking:

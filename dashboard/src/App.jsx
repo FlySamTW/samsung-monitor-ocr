@@ -143,6 +143,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
+const CURRENT_GUARD_REVISION = "20260715.5";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -182,6 +183,7 @@ const sanitizeStatusPayload = (apiResult) => ({
 const isReadableLmLogLine = (line) => {
   const text = String(line || '').trim();
   if (!text) return false;
+  if (isStructuredModelOutput(text) || isStructuredModelOutput(text.replace(/^\[THINK\]\s*/, ''))) return false;
   const hiddenNoiseTokens = [
     [76, 76, 77].map((code) => String.fromCharCode(code)).join(''),
     [33258, 35328, 33258, 35486].map((code) => String.fromCharCode(code)).join('')
@@ -539,6 +541,10 @@ const App = () => {
   }[String(value || "")] || formatMetaValue(value));
   const isExplicitlyUnresolved = (item) => {
     if (!item) return false;
+    // Cards from the stopped contaminated run remain useful as an audit
+    // trail, but may not look like accepted results under the new guard.
+    if ((item.pass_index || item.pass_label)
+      && String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION) return true;
     const decision = String(item.decision || "").trim().toLowerCase();
     if (["retry_scheduled", "review_required", "failed"].includes(decision)) return true;
     if (decision === "accepted") return false;

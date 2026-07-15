@@ -172,8 +172,15 @@ def main() -> None:
     previous = [{"view_type": "遠景", "model": None, "price": None, "reasons": ["需複核"]}]
     pass2_messages = ocr.build_ocr_messages("system", [{"type": "text", "text": "photo"}], 2, previous)
     pass3_messages = ocr.build_ocr_messages("system", [{"type": "text", "text": "photo"}], 3, previous)
-    assert any("第一次暫定結果" in str(message.get("content")) for message in pass2_messages)
-    assert not any("第一次暫定結果" in str(message.get("content")) for message in pass3_messages)
+    pristine = [{"role": "system", "content": "system"}, {"role": "user", "content": [{"type": "text", "text": "photo"}]}]
+    assert pass2_messages == pristine
+    assert pass3_messages == pristine
+    assert not any("遠景" in str(message.get("content")) for message in pass2_messages)
+
+    source = (PROJECT_ROOT / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
+    assert 'messages.append({"role": "assistant", "content": full_response_text})' not in source
+    assert "第一次暫定結果" not in source
+    assert "歷史糾錯紀錄" not in source
 
     backend_source = (PROJECT_ROOT / "samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
     orchestrator_source = (PROJECT_ROOT / "skills" / "batch_orchestrator.py").read_text(encoding="utf-8")
