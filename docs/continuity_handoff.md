@@ -270,3 +270,11 @@
 - 原右欄會從全域 `/api/presentation_history` 混入舊批次卡片；現改為 `scope=current_batch` 並用 `.ocr_source_map.json` 的 5 個穩定 `source_item_id` 清除跨批次 session/history 污染。瀏覽器驗證舊卡片數由 100+ 降為精確 5，舊 `SF-員林-562` 不再出現。
 - 後端目前是單一隱藏 port-5000 進程，工作目錄仍指向 `D:\00_商化\00_已OCR照片\_ocr_staging\20260715_runtime_health_smoke5_v6\202601_health_smoke5_v6`，狀態 idle。第一次替換誤用不含 `psutil` 的通用 Python，30 秒 fail-closed 後查明；現已改用專案 `.venv`，未形成循環重啟或可見終端機。
 - 已通過 77 項針對性測試、完整 critical regressions 與 production Vite build。下一步不是立刻解除熔斷器，而是建立 15 張分層 smoke、全量稽核其獨立輪次／內容／UI，再決定是否恢復正式 202601 工作目錄與 `.5` backfill。
+
+## 2026-07-15 20:35 十五張隔離驗證與介面收尾
+
+- 第一次 15 張試跑在 4/15 時由內容／介面監控主動停止：同一批來源照片曾在先前試跑出現，僅靠 `source_item_id` 會恢復舊場次卡片。這批不得算成功，也沒有解除正式熔斷器。
+- 已加入每次啟動唯一 `run_id`，並貫穿持久歷程、compact-v2 狀態、current-batch history API 與前端批次 key；compact event 同時保留 guard revision 與 verified/review flags。第二次新場次為 `20260715_202322_313909`，沒有再混入舊卡片。
+- 第二次 15 張隔離驗證完成 15/15：7 張自動通過、8 張證據不足或輪次衝突留待複核、失敗 0。共 34 次模型判讀（第 1 輪 15、第 2 輪 11、第 3 輪 8），34/34 為獨立判讀，上一輪答案暴露 0、prompt contamination 0、runtime unhealthy 0，全部使用 `evidence_guard_revision=20260715.5`，且全部禁止上傳。
+- 收尾實際抓到前端少最後一張：最後完成事件與 `is_running=false` 同次到達，舊程式因 running gate 忽略它。現已移除該 gate 並補回歸測試；同一既有 Chrome 分頁實測恢復精確 15 張卡片、8 張待複核、最新 `鹽行-1551`、總進度 `65,331/150,321`，舊批次卡片 0、raw JSON 0、破損字元 0，版面未改。
+- `runtime_health_fuse.json` 與 `model_benchmark.lock` 目前仍保留，正式 OCR 與 uploader 都尚未恢復。解除前仍須完成最新程式的 critical regressions、Git checkpoint，並以文件規範重新確認正式工作目錄與單一隱藏後端進程。

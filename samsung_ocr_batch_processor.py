@@ -131,6 +131,7 @@ STATUS_PRESENTATION_WINDOW = max(3, min(24, int(os.environ.get("OCR_STATUS_PRESE
 
 _STATUS_EVENT_FIELDS = (
     "presentation_id", "presentation_sequence", "source_item_id", "file_name", "source_path",
+    "run_id", "evidence_guard_revision",
     "pass_index", "pass_label", "ocr_attempt", "retry_reason", "model_id", "accuracy_profile",
     "evidence_contract_version", "started_at", "completed_at", "previous_result_summary",
     "decision", "full_ai_narration", "narration", "stream_buffer",
@@ -138,7 +139,7 @@ _STATUS_EVENT_FIELDS = (
 _STATUS_RESULT_FIELDS = (
     "file_name", "source_path", "view_type", "category", "model", "price", "screen_status",
     "quality_issue", "price_symbol", "price_status", "official_price", "price_diff_percent",
-    "auto_verified", "duration", "timestamp",
+    "auto_verified", "auto_review_required", "review_status", "duration", "timestamp",
 )
 
 
@@ -3928,6 +3929,7 @@ def get_status():
             "presentation_queue": presentation_queue,
             "presentation_sequence": presentation_queue[-1].get("presentation_sequence") if presentation_queue else 0,
             "presentation_sequence_durable": True,
+            "presentation_run_id": str(getattr(orchestrator, "current_run_id", "") or ""),
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             # Kept for API compatibility, but bounded and stripped of image/raw
             # payloads. The current dashboard uses presentation_queue instead.
@@ -3985,15 +3987,23 @@ def get_recent_presentation_history():
     try:
         if scope == "current_batch":
             source_item_ids = orchestrator.get_current_source_item_ids()
-            items = orchestrator.get_recent_presentation_history(limit=limit, source_item_ids=source_item_ids)
+            current_run_id = str(getattr(orchestrator, "current_run_id", "") or "")
+            items = orchestrator.get_recent_presentation_history(
+                limit=limit,
+                source_item_ids=source_item_ids,
+                run_id=current_run_id,
+                latest_run_only=True,
+            )
         else:
             source_item_ids = None
+            current_run_id = ""
             items = orchestrator.get_recent_presentation_history(limit=limit)
         return jsonify({
             "count": len(items),
             "items": items,
             "scope": scope or "global",
             "source_item_ids": sorted(source_item_ids) if source_item_ids is not None else [],
+            "run_id": current_run_id,
         })
     except Exception as exc:
         log.error(f"Recent presentation history API error: {exc}")

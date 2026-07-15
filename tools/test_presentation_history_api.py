@@ -49,6 +49,7 @@ class PresentationHistoryTests(unittest.TestCase):
         self.assertEqual(event["narration"], result["thinking"])
         self.assertEqual(event["stream_buffer"], result["thinking"])
         self.assertEqual(event["full_ai_narration"], result["thinking"])
+        self.assertEqual(event["run_id"], "run-1")
 
     def test_live_status_presentation_window_is_small_and_has_no_inline_images(self):
         class FakeOrchestrator:
@@ -61,12 +62,17 @@ class PresentationHistoryTests(unittest.TestCase):
                     "source_item_id": f"{index:064x}",
                     "file_name": f"photo-{index}.jpg",
                     "source_path": f"D:/photos/photo-{index}.jpg",
+                    "run_id": "run-live",
+                    "evidence_guard_revision": "20260715.5",
                     "narration": "判讀摘要" * 40,
                     "thumb_b64": "MUST_NOT_LEAK" * 10000,
                     "raw_model_output": "MUST_NOT_LEAK",
                     "result": {
                         "view_type": "單機",
                         "model": f"M{index}",
+                        "auto_verified": True,
+                        "auto_review_required": False,
+                        "review_status": "待審核",
                         "thumb_b64": "MUST_NOT_LEAK",
                         "raw_objects": ["MUST_NOT_LEAK"],
                     },
@@ -92,6 +98,10 @@ class PresentationHistoryTests(unittest.TestCase):
         self.assertLess(len(encoded.encode("utf-8")), 100_000)
         self.assertNotIn("MUST_NOT_LEAK", encoded)
         self.assertEqual(items[-1]["presentation_id"], "p-000000039")
+        self.assertEqual(items[-1]["run_id"], "run-live")
+        self.assertEqual(items[-1]["evidence_guard_revision"], "20260715.5")
+        self.assertTrue(items[-1]["result"]["auto_verified"])
+        self.assertFalse(items[-1]["result"]["auto_review_required"])
 
     def test_idle_or_new_batch_never_replays_prior_presentation_events(self):
         class IdleOrchestrator:
@@ -230,6 +240,7 @@ class PresentationHistoryTests(unittest.TestCase):
                     "presentation_id": "p-old",
                     "presentation_sequence": 500,
                     "source_item_id": "a" * 64,
+                    "run_id": "run-old",
                     "file_name": "old.jpg",
                     "source_path": "D:/photos/old.jpg",
                     "completed_at": "2026-07-14T23:59:00",
@@ -240,6 +251,7 @@ class PresentationHistoryTests(unittest.TestCase):
                     "presentation_id": "p-new-process",
                     "presentation_sequence": 1,
                     "source_item_id": "b" * 64,
+                    "run_id": "run-new",
                     "file_name": "new.jpg",
                     "source_path": "D:/photos/new.jpg",
                     "completed_at": "2026-07-15T00:01:00",
@@ -263,6 +275,13 @@ class PresentationHistoryTests(unittest.TestCase):
 
             scoped = orchestrator.get_recent_presentation_history(limit=10, source_item_ids={"b" * 64})
             self.assertEqual([item["presentation_id"] for item in scoped], ["p-new-process"])
+            run_scoped = orchestrator.get_recent_presentation_history(
+                limit=10,
+                source_item_ids={"a" * 64, "b" * 64},
+                run_id="run-new",
+                latest_run_only=True,
+            )
+            self.assertEqual([item["presentation_id"] for item in run_scoped], ["p-new-process"])
 
     def test_history_api_validates_id_and_limit(self):
         class FakeOrchestrator:
@@ -310,11 +329,15 @@ class PresentationHistoryTests(unittest.TestCase):
 
     def test_recent_history_api_scopes_result_rail_to_current_batch(self):
         class FakeOrchestrator:
+            current_run_id = "run-current"
+
             def get_current_source_item_ids(self):
                 return {"b" * 64}
 
-            def get_recent_presentation_history(self, limit=200, source_item_ids=None):
+            def get_recent_presentation_history(self, limit=200, source_item_ids=None, run_id="", latest_run_only=False):
                 self.received_scope = source_item_ids
+                self.received_run_id = run_id
+                self.received_latest_run_only = latest_run_only
                 return [{"presentation_id": "p-current", "source_item_id": "b" * 64}]
 
         previous = backend.orchestrator
@@ -328,7 +351,10 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["scope"], "current_batch")
             self.assertEqual(response.get_json()["source_item_ids"], ["b" * 64])
+            self.assertEqual(response.get_json()["run_id"], "run-current")
             self.assertEqual(fake.received_scope, {"b" * 64})
+            self.assertEqual(fake.received_run_id, "run-current")
+            self.assertTrue(fake.received_latest_run_only)
         finally:
             backend.orchestrator = previous
 

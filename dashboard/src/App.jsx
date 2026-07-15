@@ -487,7 +487,7 @@ const App = () => {
       .map((item, index) => ({ ...item, _isCurrent: index === 0 }));
   };
 
-  const currentResultRailBatchKey = String(data.current_relative_dir || data.image_dir || "");
+  const currentResultRailBatchKey = `${String(data.current_relative_dir || data.image_dir || "")}|run:${String(data.presentation_run_id || "legacy")}`;
   const resultRailStorageKey = "samsung_ocr_result_rail_v1";
 
   // Preserve the current batch's completed cards across an asset refresh.
@@ -752,15 +752,16 @@ const App = () => {
 
   // The live LLM stream must never block completed photos from accumulating in
   // the right rail.  Hydrate the whole compact backend window, then continuously
-  // upsert one newest card per physical photo while the left side remains live.
+  // upsert one newest card per physical photo. The final completion event can
+  // arrive in the same response that flips is_running to false, so hydration
+  // must not be gated by the running flag.
   useEffect(() => {
-    if (!isRunning) return;
     const completed = (Array.isArray(data.presentation_queue) ? data.presentation_queue : [])
       .map(normalizePresentationItem)
       .filter(Boolean);
     if (completed.length === 0) return;
     setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]));
-  }, [data.presentation_queue, isRunning]);
+  }, [data.presentation_queue]);
 
   // Never let a stale async update pair narration with another snapshot.
   useEffect(() => {

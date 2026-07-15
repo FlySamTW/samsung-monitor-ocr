@@ -120,6 +120,7 @@ class BatchOrchestrator:
         self.stream_file = None
         self.latest_result_file = None
         self.display_queue = [] # [v19.8 UX] Completed results waiting to be displayed
+        self.current_run_id = ""
         # Keep the operator's cumulative pass counter monotonic across safe
         # backend restarts. The durable audit is authoritative; an in-memory
         # reset would make "cumulative interpretations" silently lie.
@@ -257,6 +258,7 @@ class BatchOrchestrator:
                 self.priority_queue = []
                 self.retry_queue = []
                 self.session_processed = set()
+                self.current_run_id = ""
 
             self.image_dir = target_dir
             self.config['image_dir'] = target_dir
@@ -561,6 +563,7 @@ class BatchOrchestrator:
                 "presentation_id": presentation_id,
                 "presentation_sequence": sequence,
                 "source_item_id": source_item_id,
+                "run_id": str(result.get("run_id") or self.current_run_id or ""),
                 "file_name": result.get("file_name", ""),
                 "source_path": source_path,
                 "thumb_b64": thumbnail or result.get("thumb_b64", ""),
@@ -586,6 +589,7 @@ class BatchOrchestrator:
                         "view_type", "screen_status", "quality_issue", "model", "price",
                         "category", "price_symbol", "price_status", "official_price",
                         "price_diff_percent", "auto_review_required", "review_status",
+                        "auto_verified",
                     )
                 },
             }
@@ -660,15 +664,20 @@ class BatchOrchestrator:
         self,
         limit: int = 200,
         source_item_ids: set[str] | None = None,
+        run_id: str = "",
+        latest_run_only: bool = False,
     ) -> list[dict]:
         """Return newest durable presentation events, optionally scoped to one work directory."""
         limit = max(1, min(200, int(limit or 200)))
         allowed = None if source_item_ids is None else {str(value) for value in source_item_ids if value}
+        wanted_run_id = str(run_id or "").strip()
         if allowed == set():
             return []
 
         def belongs_to_scope(item: dict) -> bool:
-            return allowed is None or str(item.get("source_item_id") or "") in allowed
+            source_allowed = allowed is None or str(item.get("source_item_id") or "") in allowed
+            run_allowed = not wanted_run_id or str(item.get("run_id") or "") == wanted_run_id
+            return source_allowed and run_allowed
 
         found: dict[str, dict] = {}
         with self._state_lock:
@@ -708,14 +717,19 @@ class BatchOrchestrator:
                 if len(found) >= limit:
                     break
 
-        return sorted(
+        ordered = sorted(
             found.values(),
             key=lambda item: (
                 str(item.get("completed_at") or item.get("started_at") or ""),
                 str(item.get("presentation_id") or ""),
             ),
             reverse=True,
-        )[:limit]
+        )
+        if latest_run_only and not wanted_run_id:
+            latest_run_id = next((str(item.get("run_id") or "") for item in ordered if item.get("run_id")), "")
+            if latest_run_id:
+                ordered = [item for item in ordered if str(item.get("run_id") or "") == latest_run_id]
+        return ordered[:limit]
 
     def get_all_records(self):
         """
@@ -1244,6 +1258,7 @@ class BatchOrchestrator:
                     self.auto_attempts = {}
                     self.auto_result_history = {}
                     self.session_processed = set()
+                    self.current_run_id = ""
                 self.image_dir = target_dir
                 self.config['image_dir'] = target_dir
 
@@ -1255,6 +1270,8 @@ class BatchOrchestrator:
             self.stats['is_running'] = True
             self.session_processed = set()
             self._restore_retry_state()
+            batch_run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            self.current_run_id = batch_run_id
 
         # Presentation data belongs to one batch only.  Keeping rows from a
         # staging rerun makes the dashboard replay deleted files in the next
@@ -1294,7 +1311,7 @@ class BatchOrchestrator:
         self.log_system(f"📁 失敗紀錄: {os.path.basename(self.current_failed_file)}")
 
         # Run in separate thread
-        t = Thread(target=self._safe_run_loop, args=(limit, restart, reprocess_last_n, batch_image_dir))
+        t = Thread(target=self._safe_run_loop, args=(limit, restart, reprocess_last_n, batch_image_dir, batch_run_id))
         t.daemon = True
         with self._state_lock:
             self._worker_thread = t
@@ -1339,11 +1356,11 @@ class BatchOrchestrator:
         except Exception as e:
             log.error(f"Failed to save failed files: {e}")
 
-    def _safe_run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None):
+    def _safe_run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None, batch_run_id: str = ""):
         """Wrapper to catch thread crashes."""
         print(f"DEBUG: _safe_run_loop started. Limit={limit}, Restart={restart}, ReprocessLast={reprocess_last_n}")
         try:
-            self._run_loop(limit, restart, reprocess_last_n, batch_image_dir=batch_image_dir)
+            self._run_loop(limit, restart, reprocess_last_n, batch_image_dir=batch_image_dir, batch_run_id=batch_run_id)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -1443,7 +1460,7 @@ class BatchOrchestrator:
             "processed_all": processed_all
         }
 
-    def _run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None):
+    def _run_loop(self, limit: int, restart: bool, reprocess_last_n: int = 0, batch_image_dir: str = None, batch_run_id: str = ""):
         batch_image_dir = batch_image_dir or str(Path(self.image_dir).resolve())
         # Sanitize path for console logging to prevent cp950 errors
         safe_dir_name = batch_image_dir.encode('ascii', 'replace').decode('ascii')
@@ -1533,7 +1550,8 @@ class BatchOrchestrator:
 
         # 3. Create Run Manifest (Start)
         # ... (unchanged)
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(batch_run_id or self.current_run_id or datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+        self.current_run_id = run_id
         run_dir = os.path.join("runs", run_id)
         os.makedirs(run_dir, exist_ok=True)
         

@@ -372,6 +372,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("Date.parse(item?.completed_at || item?.started_at || \"\")", app)
         self.assertIn("setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]))", app)
         self.assertIn("samsung_ocr_result_rail_v1", app)
+        self.assertIn("data.presentation_run_id || \"legacy\"", app)
         self.assertIn('/api/presentation_history?limit=200&scope=current_batch', app)
         self.assertIn('allowed.has(String(item.source_item_id || ""))', app)
         self.assertIn("saved?.batchKey === currentResultRailBatchKey", app)
@@ -379,6 +380,8 @@ class PresentationSoakTests(unittest.TestCase):
         rail_start = app.index("// The live LLM stream must never block completed photos")
         rail_end = app.index("// Never let a stale async update", rail_start)
         self.assertNotIn("getSyncedLiveStream", app[rail_start:rail_end])
+        self.assertNotIn("if (!isRunning) return;", app[rail_start:rail_end])
+        self.assertIn("}, [data.presentation_queue]);", app[rail_start:rail_end])
         self.assertNotIn("slice(-1)", app[rail_start:rail_end])
 
     def test_legacy_status_polling_is_bounded_non_overlapping_and_lightweight(self):
