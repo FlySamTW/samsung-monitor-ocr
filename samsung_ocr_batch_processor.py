@@ -3815,6 +3815,7 @@ def get_status():
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
             "presentation_sequence": presentation_queue[-1].get("presentation_sequence") if presentation_queue else 0,
+            "presentation_sequence_durable": True,
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             # Kept for API compatibility, but bounded and stripped of image/raw
             # payloads. The current dashboard uses presentation_queue instead.

@@ -30,6 +30,16 @@
 
 ## 3. 2026-07-14 接手時的即時狀態
 
+### 2026-07-15 15:40 接續更新
+
+- 15:25 唯讀稽核確認服務於 15:11 恢復後 `presentation_sequence` 從舊的約 1,030 重設為 1；前端若依序號排序，舊縮圖會壓住新卡。
+- 已熱修純前端：右側縮圖、本張歷程與待顯示佇列改依 `completed_at/started_at` 排序，新卡已回到最上方；OCR 後端未重啟。
+- 當前後端尚未載入持久化計數時，UI 誠實顯示「本次服務判讀」；安全邊界升級後，新後端會回報 `presentation_sequence_durable=true`，UI 才改顯示「累計判讀」。
+- `_load_presentation_sequence()` 已改為依時間順序加總每個重啟區段，現有歷程離線復原為 1,080 次，不再只取最大值而漏算重啟後判讀。
+- 原分頁驗證：右側最新卡已由舊 1,030 輪更新為目前新照片，10 秒內新卡增至序號 76；LLM 第三輪文字與同張照片識別同步。
+- 關鍵回歸、新的重啟區段計數測試、Vite production build 全部通過。
+- 上傳仍 fail-closed：現有 2026 manifest 全數 review，`ready_pending=0`、`next_batch=0`；等 202601 完成後才更新 risk audit/manifest，並處理 897 筆 stale uploaded reconciliation。
+
 ### 2026-07-15 15:20 接續更新
 
 - 三層即時守門的原理、狀態轉移、遠景／FollowMe 特例、稽核證據與必跑驗證已整理為 [three_layer_accuracy_gate.md](three_layer_accuracy_gate.md)。

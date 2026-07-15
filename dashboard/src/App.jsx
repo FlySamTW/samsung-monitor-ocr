@@ -446,11 +446,26 @@ const App = () => {
     item?.source_item_id || item?.source_path || item?.file_name || item?._queueKey || ""
   );
 
+  const presentationTime = (item) => {
+    const parsed = Date.parse(item?.completed_at || item?.started_at || "");
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const comparePresentationsAscending = (left, right) => (
+    presentationTime(left) - presentationTime(right)
+    || Number(left?.presentation_sequence || 0) - Number(right?.presentation_sequence || 0)
+  );
+
+  const comparePresentationsDescending = (left, right) => (
+    presentationTime(right) - presentationTime(left)
+    || Number(right?.presentation_sequence || 0) - Number(left?.presentation_sequence || 0)
+  );
+
   const mergeResultRailItems = (items) => {
     const newestByPhoto = new Map();
     [...items]
       .filter(Boolean)
-      .sort((left, right) => Number(right.presentation_sequence || 0) - Number(left.presentation_sequence || 0))
+      .sort(comparePresentationsDescending)
       .forEach((item) => {
         const identity = getResultRailIdentity(item);
         if (identity && !newestByPhoto.has(identity)) newestByPhoto.set(identity, item);
@@ -708,7 +723,7 @@ const App = () => {
       // Never discard an unrevealed item because the backend window rolled.
       // The active snapshot and pending order are the sole presentation state.
       return next
-        .sort((left, right) => Number(left.presentation_sequence || 0) - Number(right.presentation_sequence || 0))
+        .sort(comparePresentationsAscending)
         .slice(0, MAX_PENDING_PRESENTATIONS);
     });
   }, [data.presentation_queue]);
@@ -1193,6 +1208,9 @@ const App = () => {
   const folderDone = Number(overallProgress.completed_folders || 0);
   const reviewProgress = data.review_progress || {};
   const completedPassCount = Math.max(0, Number(data.presentation_sequence || 0));
+  const completedPassLabel = data.presentation_sequence_durable === true
+    ? '累計判讀'
+    : '本次服務判讀';
   const recentDurations = Array.isArray(data.recent_durations) ? data.recent_durations : [];
   const recentAverageDuration = recentDurations.length
     ? (recentDurations.reduce((sum, duration) => sum + duration, 0) / recentDurations.length).toFixed(2)
@@ -1329,7 +1347,7 @@ const App = () => {
       .map((entry) => normalizePresentationItem(entry))
       .filter(Boolean)
       .reduce((items, entry) => items.some((existing) => existing._queueKey === entry._queueKey) ? items : [...items, entry], []);
-    return combined.sort((a, b) => Number(a.presentation_sequence || 0) - Number(b.presentation_sequence || 0));
+    return combined.sort(comparePresentationsAscending);
   };
   const toggleHistory = async (item) => {
     if (!item?.source_item_id) return;
@@ -1394,7 +1412,7 @@ const App = () => {
                     <span aria-hidden="true">·</span>
                     <span data-testid="review-pass-progress">
                       {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
-                      {isReviewRun && completedPassCount ? ` · 累計判讀 ${formatCount(completedPassCount)} 次` : ''}
+                      {isReviewRun && completedPassCount ? ` · ${completedPassLabel} ${formatCount(completedPassCount)} 次` : ''}
                       {isReviewRun && reviewProgress.current_pass ? ` · 本張第 ${reviewProgress.current_pass}/3 輪` : ''}
                     </span>
                   </div>

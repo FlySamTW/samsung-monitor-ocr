@@ -405,11 +405,18 @@ class BatchOrchestrator:
         return root / "presentation_history"
 
     def _load_presentation_sequence(self) -> int:
-        """Recover the highest durable pass sequence without loading images."""
+        """Recover a monotonic durable pass count without loading images.
+
+        A service restart can leave a later segment whose sequence restarted at
+        one.  Summing the maximum of each chronological segment preserves those
+        passes instead of letting the visible cumulative count move backwards.
+        """
         audit_dir = self._presentation_audit_dir()
         if not audit_dir.is_dir():
             return 0
-        highest = 0
+        completed_segments = 0
+        segment_highest = 0
+        previous_sequence = 0
         paths = sorted(
             audit_dir.glob("presentation_*.jsonl*"),
             key=lambda path: path.stat().st_mtime,
@@ -423,12 +430,19 @@ class BatchOrchestrator:
                             continue
                         try:
                             item = json.loads(line)
-                            highest = max(highest, int(item.get("presentation_sequence") or 0))
+                            sequence = int(item.get("presentation_sequence") or 0)
+                            if sequence <= 0:
+                                continue
+                            if previous_sequence and sequence < previous_sequence:
+                                completed_segments += segment_highest
+                                segment_highest = 0
+                            segment_highest = max(segment_highest, sequence)
+                            previous_sequence = sequence
                         except (TypeError, ValueError, json.JSONDecodeError):
                             continue
             except (OSError, UnicodeError):
                 continue
-        return highest
+        return completed_segments + segment_highest
 
     def _rotate_presentation_audit(self, path: Path) -> None:
         max_bytes = int(self.config.get("presentation_audit_max_bytes", 64 * 1024 * 1024))

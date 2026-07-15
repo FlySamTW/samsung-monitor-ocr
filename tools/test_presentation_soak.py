@@ -201,6 +201,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('"frontend_asset_fingerprint"', backend)
         self.assertIn("get_frontend_asset_fingerprint", backend)
         self.assertIn("_frontend_asset_cache", backend)
+        self.assertIn('"presentation_sequence_durable": True', backend)
 
     def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
@@ -215,7 +216,9 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("formatCount(overallProgress.remaining_images)", app)
         self.assertIn('data-testid="review-pass-progress"', app)
         self.assertIn("const completedPassCount = Math.max(0, Number(data.presentation_sequence || 0));", app)
-        self.assertIn("` · 累計判讀 ${formatCount(completedPassCount)} 次`", app)
+        self.assertIn("data.presentation_sequence_durable === true", app)
+        self.assertIn(": '本次服務判讀'", app)
+        self.assertIn("` · ${completedPassLabel} ${formatCount(completedPassCount)} 次`", app)
         self.assertIn("` · 本張第 ${reviewProgress.current_pass}/3 輪`", app)
         self.assertIn("recent_durations: (Array.isArray(apiResult?.recent_results)", app)
         self.assertIn("const recentDurations = Array.isArray(data.recent_durations)", app)
@@ -299,6 +302,9 @@ class PresentationSoakTests(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const mergeResultRailItems", app)
         self.assertIn("item?.source_item_id || item?.source_path || item?.file_name", app)
+        self.assertIn("const comparePresentationsDescending", app)
+        self.assertIn(".sort(comparePresentationsDescending)", app)
+        self.assertIn("Date.parse(item?.completed_at || item?.started_at || \"\")", app)
         self.assertIn("setRevealedResults((prev) => mergeResultRailItems([...completed, ...prev]))", app)
         self.assertIn("samsung_ocr_result_rail_v1", app)
         self.assertIn("saved?.batchKey === currentResultRailBatchKey", app)
