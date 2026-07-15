@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
@@ -9,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.2"
+EVIDENCE_GUARD_REVISION = "20260715.3"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -297,6 +298,42 @@ def _same_model_price_confirmed(record: Dict[str, Any], history: List[Dict[str, 
     return False
 
 
+def _is_samsung_sku_like(value: Any) -> bool:
+    text = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    if not text:
+        return False
+    if is_followme_model(text):
+        return True
+    return bool(re.fullmatch(r"(?:LS|LC|LU|LF|LH|S|C|U)[A-Z0-9]{6,}", text))
+
+
+def _raw_structured_samsung_models(record: Dict[str, Any]) -> List[str]:
+    """Recover structured Samsung SKUs before downstream brand normalization.
+
+    A final `它牌(...)` value may not erase a Samsung SKU that the model put in
+    its machine-readable object.  Raw objects are evidence of a pipeline conflict,
+    not authority to auto-correct the final answer.
+    """
+    found: List[str] = []
+    raw_objects = record.get("raw_objects") or []
+    if not isinstance(raw_objects, list):
+        raw_objects = [raw_objects]
+    for item in raw_objects:
+        parsed = item
+        if isinstance(item, str):
+            try:
+                parsed = json.loads(item)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+        if not isinstance(parsed, dict):
+            continue
+        payload = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+        candidate = str(payload.get("model") or "").strip()
+        if candidate and _is_samsung_sku_like(candidate):
+            found.append(candidate)
+    return list(dict.fromkeys(found))
+
+
 def immediate_retry_decision(
     record: Dict[str, Any],
     attempt: int,
@@ -333,6 +370,8 @@ def immediate_retry_decision(
         reasons.append("價格欄位互相衝突")
     if record.get("brand_evidence_conflict"):
         reasons.append("品牌敘述與正式型號衝突")
+    if re.fullmatch(r"它牌[（(][^）)]+[）)]", model, re.IGNORECASE) and _raw_structured_samsung_models(record):
+        reasons.append("最終它牌結果與原始 Samsung SKU 衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
 

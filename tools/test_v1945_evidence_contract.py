@@ -179,6 +179,30 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIsNone(batch.infer_other_brand_model(narration, "S27D392GAC"))
         self.assertEqual(batch.infer_other_brand_model("主角是 ASUS 螢幕。", None), "它牌(ASUS)")
 
+    def test_negated_screen_brand_and_raw_samsung_sku_cannot_become_other_brand(self):
+        narration = (
+            "這台螢幕是三星 Odyssey G5，型號 S27FG532EC。雖然畫面有 LG 字樣，"
+            "但那是螢幕內的遊戲畫面，不是品牌標籤，主角是三星商品。"
+        )
+        self.assertIsNone(batch.infer_other_brand_model(narration, "S27FG532EC"))
+
+        row = {
+            "file_name": "M-台南市-永康區-TK3C-中華-1064.jpg",
+            "view_type": "單機", "category": "單機", "model": "它牌(LG)", "price": "4990",
+            "quality_issue": "", "thinking": narration,
+            "raw_objects": [json.dumps({
+                "view_type": "單機", "model": "S27FG532EC", "price": "4990",
+                "complete_screen_count": 1, "unique_main": True,
+                "label_ownership": "matched", "followme_physical_evidence": [],
+            }, ensure_ascii=False)],
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("最終它牌結果與原始 Samsung SKU 衝突", decision["reasons"])
+        self.assertEqual(decision["evidence_guard_revision"], "20260715.3")
+
     def test_large_official_price_difference_requires_independent_confirmation(self):
         row = {
             "file_name": "M-202605-price-diff.jpg", "view_type": "單機", "category": "單機",

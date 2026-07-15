@@ -1090,6 +1090,14 @@ def infer_other_brand_model(context_text="", raw_model=None):
             return normalize_other_brand_model(brand)
         if re.search(rf"{subject_terms}.{{0,30}}(?:{alias_re})", upper_text, re.IGNORECASE):
             return normalize_other_brand_model(brand)
+        content_only_denial = re.search(
+            rf"(?:{alias_re}).{{0,60}}(?:螢幕內|遊戲畫面|畫面內容|影像內容).{{0,40}}"
+            rf"(?:不是|並非|非).{{0,10}}(?:品牌|品牌標籤|實體品牌)",
+            upper_text,
+            re.IGNORECASE,
+        )
+        if content_only_denial:
+            continue
         if re.search(rf"(?:{alias_re}).{{0,24}}{product_terms}", upper_text, re.IGNORECASE):
             return normalize_other_brand_model(brand)
         if re.search(rf"(不是|非|不屬於).{{0,10}}(SAMSUNG|三星).{{0,24}}(?:{alias_re})", upper_text, re.IGNORECASE):
