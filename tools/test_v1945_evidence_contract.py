@@ -721,6 +721,34 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["unresolved"])
         self.assertIn("evidence_thinking_conflict", decision["reasons"])
 
+    def test_distant_narration_can_support_structured_count_without_repeating_integer(self):
+        def distant_pass(count):
+            return {
+                "file_name": "M-202605-distant-many.jpg", "view_type": "遠景", "category": "遠景",
+                "model": None, "price": None, "quality_issue": "",
+                "thinking": "畫面中可見多台螢幕整齊排列，沒有唯一主角，也沒有可歸屬到主角自己的規格或價格。",
+                **evidence(count, False, "ambiguous"),
+            }
+
+        first = distant_pass(5)
+        second = distant_pass(6)
+        third = distant_pass(5)
+        decision = immediate_retry_decision(third, 3, [first, second], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+        self.assertNotIn("evidence_thinking_conflict", decision["reasons"])
+
+    def test_distant_narration_sub_three_statement_still_conflicts_with_structured_count(self):
+        row = {
+            "file_name": "M-202605-distant-contradiction.jpg", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "quality_issue": "",
+            "thinking": "只有一台完整入鏡，沒有唯一主角，也沒有可歸屬的規格或價格。",
+            **evidence(5, False, "ambiguous"),
+        }
+        decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("evidence_thinking_conflict", decision["reasons"])
+
     def test_current_year_distant_requires_three_consistent_passes(self):
         row = {
             "file_name": "M-202605-distant.jpg", "view_type": "遠景", "category": "遠景",

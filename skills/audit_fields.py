@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260715.9"
+EVIDENCE_GUARD_REVISION = "20260715.10"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -300,6 +300,28 @@ def _explicit_three_complete(text: str) -> bool:
     return bool(numeric or reverse or ("完整入鏡" in normalized and _text_has_any(normalized, DISTANT_LAYOUT_CLUES)))
 
 
+def _distant_count_supported_by_narration(text: str, complete_screen_count: Any) -> bool:
+    """Require readable multi-screen support without duplicating the exact count.
+
+    The structured contract remains the authority for the integer count.  The
+    narration must independently describe a multi-screen layout, and an
+    explicit zero/one/two-complete statement always wins as a contradiction.
+    """
+    normalized = str(text or "")
+    count = _as_int(complete_screen_count)
+    if count is None or count < 3:
+        return False
+    sub_three = (
+        r"(?:只有|僅有|僅|只見)?\s*(?:(?<!\d)[012](?!\d)|零|一|二|兩)\s*台[^。；\n]{0,20}完整(?:入鏡)?",
+        r"完整(?:入鏡)?[^。；\n]{0,20}(?:只有|僅有|僅|只見)?\s*(?:(?<!\d)[012](?!\d)|零|一|二|兩)\s*台",
+    )
+    if any(re.search(pattern, normalized) for pattern in sub_three):
+        return False
+    if _explicit_three_complete(normalized):
+        return True
+    return bool(re.search(r"(?:整排|一整排|多台\s*(?:螢幕|顯示器))", normalized))
+
+
 def _no_unique_main_evidence(text: str) -> bool:
     normalized = str(text or "")
     return any(
@@ -430,7 +452,10 @@ def immediate_retry_decision(
     if not contract["valid"]:
         reasons.extend(contract["reasons"])
     if "遠景" in view_type and contract["valid"]:
-        if not _explicit_three_complete(thinking) or not _no_unique_main_evidence(thinking):
+        if not _distant_count_supported_by_narration(
+            thinking,
+            contract["normalized_evidence"].get("complete_screen_count"),
+        ) or not _no_unique_main_evidence(thinking):
             reasons.append("evidence_thinking_conflict")
 
     if view_type == "失敗" or str(record.get("category") or "") == "失敗":

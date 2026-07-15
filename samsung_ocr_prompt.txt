@@ -81,7 +81,7 @@
 
 **輸出方式**：
 1. 只輸出一個完整 JSON 物件，不得在 JSON 前後另寫文字
-2. 在 narration 欄以第一人稱寫出實際完整入鏡台數，明說「3 台以上完整入鏡」與「無法鎖定唯一主角及其自己的規格／價格」；若看不到這些證據就不可選遠景
+2. 在 narration 欄以第一人稱明說「整排／多台（至少 3 台）螢幕完整入鏡」與「無法鎖定唯一主角及其自己的規格／價格」；精確整數必須另填在 `complete_screen_count`，若看不到這些證據就不可選遠景
 3. narration 用一句「整體符合「遠景」條件」結尾
 4. 遠景 JSON 必須把 `complete_screen_count` 填成實際數到的整數且至少為 3、`unique_main` 固定填 `false`；兩欄都禁止填 null
 5. 遠景沒有主角自有價牌：價牌可見但無法歸屬時 `label_ownership` 填 `ambiguous`，完全看不到價牌時填 `not_visible`；禁止填 `matched`
