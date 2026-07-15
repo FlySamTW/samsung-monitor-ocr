@@ -90,6 +90,38 @@ class AttachExistingTests(unittest.TestCase):
         remove.assert_called_once_with(current, ignore_errors=True)
         self.assertFalse(args.keep_staging)
 
+    def test_resume_starts_uniquely_matched_incomplete_active_group_before_attach(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging_root = root / "staging"
+            staging_root.mkdir()
+            source = root / "202601"
+            source.mkdir()
+            digest = __import__("hashlib").sha1(str(source.resolve()).encode()).hexdigest()[:8]
+            current = staging_root / f"202601_demo_{digest}"
+            current.mkdir()
+            groups = {(str(source), str(root / "audit"), "202601"): [{"period": "202601"}]}
+            args = SimpleNamespace(
+                backend_url="http://mock", staging_root=str(staging_root), keep_staging=True,
+                run_summary_csv=str(root / "summary.csv"), max_folders=0, max_per_folder=0,
+            )
+            status = {
+                "is_running": False,
+                "current_relative_dir": str(current),
+                "stats": {"processed": 829, "total": 1504},
+            }
+            started = {"status": "started"}
+            active_summary = {"staging_dir": str(current), "period": "202601"}
+            with patch.object(mod, "json_request", side_effect=[status, started]) as request, \
+                 patch.object(mod, "attach_existing_group", return_value=active_summary) as attach, \
+                 patch.object(mod, "write_dict_csv"):
+                summaries = mod.resume_existing_then_continue(args, groups, "stamp")
+            self.assertEqual(summaries, [active_summary])
+            self.assertEqual(request.call_args_list[1].args[1], "/api/start_batch")
+            self.assertEqual(request.call_args_list[1].args[2]["dir"], str(current.resolve()))
+            self.assertTrue(request.call_args_list[1].args[2]["confirmed"])
+            attach.assert_called_once()
+
     def test_attach_polls_and_never_starts_or_switches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1021,6 +1021,25 @@ def resume_existing_then_continue(
     active_grouped, remaining_items = split_groups_at_current_staging(status, grouped, args.staging_root)
     active_rows = [row for group_rows in active_grouped.values() for row in group_rows]
     active_key = next(iter(active_grouped))
+    stats = dict(status.get("stats") or {})
+    processed = int(stats.get("processed") or 0)
+    total = int(stats.get("total") or 0)
+    if status.get("is_running") is False and total > 0 and processed < total:
+        current_dir = _status_work_dir(status)
+        response = json_request(
+            args.backend_url,
+            "/api/start_batch",
+            {
+                "dir": str(current_dir),
+                "restart": False,
+                "confirmed": True,
+                "reprocess_last_n": 0,
+            },
+            timeout=30,
+        )
+        if str(response.get("status") or "") != "started":
+            raise RuntimeError(f"resume refused: active incomplete staging did not start: {response}")
+        print(f"[resume] continued incomplete active group {current_dir} {processed}/{total}", flush=True)
     original_keep_staging = bool(args.keep_staging)
     # Keep the active staging directory until the dashboard is moved back to
     # the original source folder.  Deleting it first creates a visible broken-
