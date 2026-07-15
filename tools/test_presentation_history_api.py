@@ -135,6 +135,40 @@ class PresentationHistoryTests(unittest.TestCase):
         finally:
             backend._presentation_events = previous_events
 
+    def test_idle_status_keeps_durable_presentation_sequence(self):
+        class IdleOrchestrator:
+            is_running = False
+            presentation_sequence = 13321
+            display_queue = []
+            recent_results = []
+            stats = {"total": 0}
+            stream_buffer = ""
+            current_file = None
+            stream_file = None
+            image_dir = None
+            system_logs = []
+
+            def get_performance_metrics(self):
+                return {}
+
+            def get_all_records(self):
+                return []
+
+            def get_all_failed_records(self):
+                return []
+
+        previous = backend.orchestrator
+        backend.orchestrator = IdleOrchestrator()
+        try:
+            response = backend.flask_app.test_client().get("/api/status")
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["presentation_sequence"], 13321)
+            self.assertTrue(payload["presentation_sequence_durable"])
+            self.assertEqual(payload["presentation_queue"], [])
+        finally:
+            backend.orchestrator = previous
+
     def test_staging_source_map_preserves_original_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

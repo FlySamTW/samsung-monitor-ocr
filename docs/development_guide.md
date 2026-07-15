@@ -592,6 +592,12 @@ Historical recursive completion is inventory-bound. `recursive_ocr_flat_export.p
 
 The monitor is part of the correctness boundary. Progress-only monitoring is insufficient: every observation must also check content quality, photo/narration/card identity, and upload isolation. If any dimension drifts, stop or retain the durable runtime fuse before more photos accumulate.
 
+### Mandatory pre/post-change checkpoint
+
+Before every operational or code change, re-read this section, `SAMSUNG_OCR_EXPERIENCE_SKILL.md`, and the latest `docs/continuity_handoff.md`. After the change, verify all four dimensions again: content accuracy, presentation identity/continuity, process uniqueness/hidden launch, and upload isolation. A previously fixed defect is a permanent regression case, not an informal reminder.
+
+The durable `presentation_sequence` is boss-facing state. `/api/status` must expose the orchestrator's history-recovered counter even when the bounded live queue is empty after an idle backend restart. It may take the higher live-queue value while running, but it must never replace a valid durable counter with zero. `tools/test_presentation_history_api.py` permanently covers this restart case.
+
 - Pass 2/3 must be stateless. Never send a prior answer, correction wording, previous price/model, invalid model output, mistake-book example, or assistant message back to the model. Retry prompts describe only the current image task.
 - Prompt, parser, evidence normalization, runtime-health checks, persistence, and UI normalization form one schema. A field added to one layer must be accepted, copied, guarded, persisted, rendered, and regression-tested by all relevant layers.
 - The production prompt must not contain a complete copyable JSON answer example. The model may emit one JSON object with a readable `narration`; the UI must render that narration, never raw JSON.

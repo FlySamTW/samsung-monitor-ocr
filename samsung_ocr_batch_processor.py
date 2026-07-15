@@ -4085,7 +4085,14 @@ def get_status():
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
-            "presentation_sequence": presentation_queue[-1].get("presentation_sequence") if presentation_queue else 0,
+            # The live queue is intentionally empty while idle.  The durable
+            # counter loaded from presentation_history must remain visible
+            # across a backend restart instead of falling back to zero.
+            "presentation_sequence": max(
+                int(getattr(orchestrator, "presentation_sequence", 0) or 0),
+                int(presentation_queue[-1].get("presentation_sequence", 0) or 0)
+                if presentation_queue else 0,
+            ),
             "presentation_sequence_durable": True,
             "presentation_run_id": str(getattr(orchestrator, "current_run_id", "") or ""),
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
