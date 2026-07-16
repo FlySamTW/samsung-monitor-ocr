@@ -204,7 +204,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('item.auto_review_required === true', unresolved)
         self.assertIn('item.accepted === false', unresolved)
         self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isExplicitlyUnresolved(res) ? "pending-review" : "completed"}', rail)
-        self.assertIn('判讀未完成／待複核', rail)
+        self.assertIn('三輪衝突／已隔離', rail)
+        self.assertIn('待慢模型或人工最終裁決', rail)
         self.assertIn("!isExplicitlyUnresolved(res) && res.view_type !== '遠景'", rail)
         self.assertIn('!isExplicitlyUnresolved(res) && res.view_type &&', rail)
 
@@ -224,7 +225,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('判讀記錄 ({stats.success})', app)
         self.assertIn('待人工校正 ({stats.review_required ?? 0})', app)
         self.assertIn("{l:'完成判讀', v:stats.success", app)
-        self.assertIn("{l:'待複核', v:stats.review_required ?? 0", app)
+        self.assertIn("{l:'待裁決', v:stats.review_required ?? 0", app)
         self.assertNotIn('成功記錄 ({stats.success})', app)
 
     def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
@@ -302,7 +303,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('const CURRENT_GUARD_REVISION = "20260716.19"', app)
         self.assertIn('const isStaleGuardRevision = (item)', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
-        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : "判讀未完成／待複核"', app)
+        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : "三輪衝突／已隔離"', app)
 
     def test_result_rail_refuses_blank_run_identity(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")

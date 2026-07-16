@@ -61,6 +61,30 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertNotIn("structured_narration_followme_conflict", decision.reasons)
         self.assertTrue(decision.allow_processing)
 
+    def test_nearby_followme_card_is_not_foreground_identity(self):
+        narration = (
+            "我看到前景中央一台直立螢幕，正下方有黑色長方形底座與託盤，"
+            "旁邊有 Samsung FollowMe 商品卡，但沒有白色垂直支架。"
+            "所以這不是 FollowMe 單機。"
+        )
+        decision = evaluate_runtime_health(
+            record(
+                view_type="遠景",
+                category="遠景",
+                model=None,
+                price=None,
+                complete_screen_count=2,
+                unique_main=False,
+                label_ownership="not_visible",
+                followme_physical_evidence=[],
+            ),
+            narration,
+            attempt=2,
+            messages=[{"role": "user", "content": "請只依目前圖片獨立判讀。"}],
+        )
+        self.assertNotIn("structured_narration_followme_conflict", decision.reasons)
+        self.assertTrue(decision.allow_processing)
+
     def test_production_result_requires_request_binding_and_image_fingerprint(self):
         base = {
             "request_binding_enforced": True,

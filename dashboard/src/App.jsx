@@ -1739,7 +1739,7 @@ const App = () => {
               <div className="result-sidebar" style={{ width: 'clamp(360px, 23vw, 430px)', minWidth: '360px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
-                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'待複核', v:stats.review_required ?? 0, c:'#f59e0b'},
+                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'待裁決', v:stats.review_required ?? 0, c:'#f59e0b'},
                         {l:'失敗', v:stats.failed, c:'#ef4444'}, {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'},
                         {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
                         {l:'近期平均', v:recentAverageDuration || data.metrics?.last_duration || '-', c:'#a855f7', title:'最近 5 張實際耗時平均；不讓先前的逾時永久扭曲目前速度'}
@@ -1808,7 +1808,8 @@ const App = () => {
                                           )}
                                           {!res._pendingReveal && isExplicitlyUnresolved(res) && (
                                             <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : "判讀未完成／待複核"}</span>
+                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : "三輪衝突／已隔離"}</span>
+                                              {!isStaleGuardRevision(res) && <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: '700' }}>待慢模型或人工最終裁決</span>}
                                             </div>
                                           )}
                                           {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && (

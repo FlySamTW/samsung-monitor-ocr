@@ -45,6 +45,10 @@ _NARRATED_FOLLOWME_CUE_PATTERNS = {
     "attached_followme_product_card": re.compile(r"(?:Follow\s*Me|移動式智慧聯網組)[^。；，,\n]{0,10}(?:產品卡|價牌|價格牌|規格牌|牌面)", re.IGNORECASE),
 }
 _LOCAL_NEGATIONS = ("沒有看到", "未看到", "看不到", "沒有", "未見", "不是", "並非", "非")
+_NON_SUBJECT_FOLLOWME_CONTEXT = re.compile(
+    r"(?:旁邊|旁側|附近|背景|後方|牆上|海報|宣傳|廣告|立牌)"
+    r"[^，。；;：:\n]{0,18}$"
+)
 
 
 def material_structured_authority_fields(record: Dict[str, Any]) -> List[str]:
@@ -91,12 +95,22 @@ def narrated_followme_physical_cues(record: Dict[str, Any]) -> set[str]:
 
 
 def narration_has_positive_followme_identity(text: str) -> bool:
-    """Return true only for a FollowMe mention not locally negated."""
+    """Return true only for a same-subject FollowMe mention not negated.
+
+    Nearby cards, wall posters, and background advertising are weak context,
+    not identity evidence for the photographed foreground unit. Strong fixture
+    combinations remain independently detectable by the fixture guard.
+    """
     raw = str(text or "")
-    return any(
-        not _locally_negated(raw, match.start())
-        for match in re.finditer(r"FOLLOW\s*ME", raw, re.IGNORECASE)
-    )
+    for match in re.finditer(r"FOLLOW\s*ME", raw, re.IGNORECASE):
+        if _locally_negated(raw, match.start()):
+            continue
+        clause = raw[: match.start()]
+        boundary = max((clause.rfind(mark) for mark in "，,。；;：:\n"), default=-1)
+        if _NON_SUBJECT_FOLLOWME_CONTEXT.search(clause[boundary + 1 :]):
+            continue
+        return True
+    return False
 
 
 def narration_has_unmistakable_followme_fixture(text: str) -> bool:

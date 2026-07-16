@@ -368,3 +368,12 @@
 - `.19` 一般規則：2026 單機候選若結構報告至少三台完整螢幕，第一輪永不驗證，必須三輪獨立且 view/model/price/unique_main/ownership 全數一致；任一差異即 unresolved。已人工確認的高風險原圖另以模型輸入像素 SHA-256 綁定期望 view，任何衝突直接成為不可隔離的 runtime-health failure 並熔斷；清冊另用原始檔 SHA-256 核對同一人審權威，兩種雜湊不可混用。123 項針對性測試、完整 critical regressions 與 production dashboard build 已通過。
 - `.19` 五張隔離 smoke 完成 5/5、10 輪：3 verified、2 review-required、0 failed；revision/request/image/independent/prior exposure/prompt contamination/runtime health/invalid verified 全部正常。664 遠景證據未收斂、665 核心型號不一致，均正確 unresolved。新版清冊掃描 5,951 個唯一來源，3 張具 `.19` verified trace，650 以雙 SHA 人審遠景權威排除，待跑 5,947、缺檔／衝突／無效列均為 0。
 - 正式 `.19` 202601 群組現為 1,500 張（原 1,504 扣除 3 張 `.19` verified 與 1 張人審遠景），由唯一隱藏 runner 父子組執行並會接續 202602–202605。原本唯一 Dashboard 分頁已核對為「正在執行」，總進度 `65,331/150,321`、複核數字、照片、LLM 自然語言與卡片同步，沒有待機、裸 JSON 或 `未提供`；uploader 0、Google Drive 未接觸。
+
+## 2026-07-16 14:30 `.19` 鄰近 FollowMe 文宣誤熔斷與正式續接
+
+- 正式批次在 26/1,500、`M-台中市-北屯區-TK3C-新文心-971.jpg` 第 2 輪安全熔斷。原敘述是「旁邊有 Samsung FollowMe 商品卡，但沒有白色垂直支架，所以不是 FollowMe」，結構為遠景、無強實體證據；舊敘述閘把旁邊商品卡錯當前景主體身分。沒有不健康結果進入 verified 或上傳。
+- `narration_has_positive_followme_identity()` 現排除旁邊、背景、牆上、海報、宣傳、廣告與立牌等非主體語境；白色直立支架＋圓形底座等明確同主體結構仍獨立熔斷。實際事故記錄重播、29 項 runtime-health 測試與完整 critical regressions全部通過。
+- 帶事故照片的全新五張隔離 smoke 完成 5/5、12 輪：3 verified、2 unresolved、0 failed；revision、request/image binding、前輪答案暴露、prompt contamination、runtime unhealthy、invalid verified 全為 0，971 完成三輪且舊 fuse 時間未變。舊 fuse 已歸檔後解除。
+- smoke 完成後首次正式接力因後端仍指向 smoke 目錄而正確拒絕，未啟動 OCR 或 uploader。API 在 idle 狀態切回唯一正式 staging 後，隱藏 runner 由 26/1,500 精確續接；971 完成後成為 unresolved，正式流程跨過中斷點至 27/1,500 並開始下一張，fuse 未復發，uploader 仍為 0。
+- 右欄 unresolved 卡片不再寫含糊的「判讀未完成／待複核」，改為「三輪衝突／已隔離」及「待慢模型或人工最終裁決」；統計標籤改為「待裁決」。版面比例未變，25 項 presentation soak 與 production build 通過。
+- Drive 沒有新增：canonical receipt 最後一筆仍為 2026-07-11 11:33:57。帳本有 52,965 筆收據；2026-07-14 嚴格重建時只有 51,459 張仍列為 ready/uploaded-skipped，897 張為已上傳但依新規則需重審。完成本次 2026 finalization、重建 proof 並通過遠景/FollowMe 稽核前，不得新增上傳。
