@@ -294,16 +294,17 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
-    def test_two_weak_wide_single_votes_without_distant_support_cannot_finalize_single(self):
+    def test_three_weak_wide_single_labels_with_three_plus_structure_finish_distant(self):
         weak = make_pass(
             "單機", None, None, 8, True, "ambiguous",
             thinking="我看到一整排螢幕陳列，上方與下方都有完整螢幕，但無型號無價格，所以……這是一般單機。",
         )
         current = copy.deepcopy(weak)
         result = finalize_three_pass_outcome(current, [copy.deepcopy(weak), copy.deepcopy(weak)], unresolved())
-        self.assertFalse(result["verified"])
-        self.assertTrue(result["technical_retry_required"])
-        self.assertEqual(result["technical_retry_reason"], "three_pass_view_majority_missing")
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "three_pass_wide_scene_structural_consensus")
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
 
     def test_structural_distant_veto_does_not_override_bound_single_identity(self):
         history = [
@@ -425,6 +426,34 @@ class ThreePassFinalizationTests(unittest.TestCase):
             result["adjudication_rule"],
             "three_pass_mixed_wide_distant_consensus",
         )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_three_mislabeled_wide_single_calls_finish_as_structural_distant(self):
+        history = [
+            make_pass(
+                view="單機", model=None, price=None, count=5,
+                unique=False, ownership="ambiguous",
+                thinking="我看到一整排、多層貨架螢幕陳列，無法鎖定唯一主角。",
+            ),
+            make_pass(
+                view="單機", model=None, price=None, count=2,
+                unique=True, ownership="matched",
+                thinking="我看到一排螢幕陳列，中央兩台完整，左右被裁切。",
+            ),
+        ]
+        current = make_pass(
+            view="單機", model=None, price=None, count=4,
+            unique=True, ownership="matched",
+            thinking="我看到一排螢幕陳列，上方與下方另有完整螢幕，沒有 FollowMe 實體。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "three_pass_wide_scene_structural_consensus")
         self.assertEqual(current["view_type"], "遠景")
         self.assertGreaterEqual(current["complete_screen_count"], 3)
         self.assertIsNone(current["model"])

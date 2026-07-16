@@ -25,7 +25,10 @@ from tools.prepare_drive_upload_manifest import (
     load_v1945_trace_names,
 )
 from tools.rerun_questionable_records import is_complete_auto_verified
-from tools.finalize_existing_three_pass_reviews import _recover_known_authority_after_restart
+from tools.finalize_existing_three_pass_reviews import (
+    _recover_clean_single_tail_after_restart,
+    _recover_known_authority_after_restart,
+)
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace, cross_photo_duplicate_core
 from skills.runtime_health_gate import review_prompt_leak_reasons
 from skills.model_validation import has_photo_label_model_evidence, unique_known_model_completion
@@ -306,6 +309,34 @@ class EvidenceContractTests(unittest.TestCase):
             current["adjudication_rule"],
             "three_call_known_pixel_authority_restart_recovery",
         )
+
+    def test_two_clean_single_tail_calls_keep_only_repeated_fields(self):
+        calls = []
+        for attempt, model, count in ((2, "S32DM803UC", 1), (3, None, 2)):
+            calls.append({
+                "ocr_attempt": attempt,
+                "input_image_sha256": "4" * 64,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True, "reasons": []},
+                "view_type": "單機",
+                "category": "單機",
+                "model": model,
+                "price": "19900",
+                **evidence(count, True, "matched", []),
+            })
+        current = dict(calls[-1])
+        recovered = _recover_clean_single_tail_after_restart(
+            current,
+            calls,
+            {"auto_retry_reasons": "core_evidence_disagreement；three_call_hard_limit_reached"},
+        )
+        self.assertTrue(recovered)
+        self.assertIsNone(current["model"])
+        self.assertEqual(current["price"], "19900")
+        self.assertEqual(current["complete_screen_count"], 1)
 
     def test_known_650_pixels_require_three_clean_distant_passes(self):
         distant = {

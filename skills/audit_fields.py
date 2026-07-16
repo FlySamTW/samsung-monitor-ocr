@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.32"
+EVIDENCE_GUARD_REVISION = "20260717.33"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -1483,6 +1483,20 @@ def finalize_three_pass_outcome(
             for item in base_integrity
         )
     )
+    wide_scene_structural_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and all(not item.get("model") and not item.get("price") for item in base_integrity)
+        and sum(
+            isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
+            for item in base_integrity
+        ) >= 2
+        and all(_weak_single_claim_in_wide_multiscreen_scene(item) for item in base_integrity)
+    )
     if distant_majority:
         usable = [
             item
@@ -1498,6 +1512,8 @@ def finalize_three_pass_outcome(
     elif followme_local_base_fallback:
         usable = list(single_local_integrity)
     elif mixed_wide_distant_base_fallback:
+        usable = list(base_integrity)
+    elif wide_scene_structural_base_fallback:
         usable = list(base_integrity)
     else:
         # Other adjudication outcomes still require three fully healthy passes.
@@ -1560,6 +1576,10 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = list(usable)
         rule = "three_pass_mixed_wide_distant_consensus"
+    elif wide_scene_structural_base_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "three_pass_wide_scene_structural_consensus"
     elif single_view_base_fallback:
         final_view = "單機"
         supporting = list(usable)

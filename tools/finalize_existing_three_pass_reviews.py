@@ -20,6 +20,7 @@ from skills.audit_fields import (
     finalize_three_pass_outcome,
     validate_evidence_contract,
 )
+from skills.model_validation import normalize_model_token
 from tools.stream_drive_upload import enqueue_finalized_result
 
 
@@ -123,6 +124,84 @@ def _recover_known_authority_after_restart(
     return True
 
 
+def _recover_clean_single_tail_after_restart(
+    current: dict[str, Any], calls: list[dict[str, Any]], meta: dict[str, Any]
+) -> bool:
+    """Finalize two clean tail traces when persisted numbering proves call 3.
+
+    This handles a stop arriving after call 1 consumed its durable budget but
+    before its trace append.  It preserves only fields independently repeated
+    in both remaining traces and never creates another model call.
+    """
+    if len(calls) != 2 or [int(item.get("ocr_attempt") or 0) for item in calls] != [2, 3]:
+        return False
+    if "three_call_hard_limit_reached" not in str(meta.get("auto_retry_reasons") or ""):
+        return False
+    image_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower() for item in calls
+    }
+    if "" in image_hashes or len(image_hashes) != 1:
+        return False
+    for item in calls:
+        runtime = item.get("runtime_health") or {}
+        if (
+            item.get("request_id_verified") is not True
+            or item.get("independent_pass") is not True
+            or item.get("prior_answer_exposed") is True
+            or item.get("prompt_contamination") is True
+            or not isinstance(runtime, dict)
+            or runtime.get("healthy") is not True
+            or str(item.get("view_type") or item.get("category") or "").strip() != "單機"
+            or (item.get("normalized_evidence") or item).get("unique_main") is not True
+        ):
+            return False
+    model_keys = [normalize_model_token(item.get("model")) for item in calls]
+    model = calls[-1].get("model") if model_keys[0] and model_keys[0] == model_keys[1] else None
+    price_keys = [re.sub(r"[^0-9]", "", str(item.get("price") or "")) for item in calls]
+    price = calls[-1].get("price") if price_keys[0] and price_keys[0] == price_keys[1] else None
+    matched_votes = sum(
+        (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+        for item in calls
+    )
+    if matched_votes < 2:
+        model = None
+        price = None
+    counts = [
+        (item.get("normalized_evidence") or item).get("complete_screen_count")
+        for item in calls
+    ]
+    current.update({
+        "view_type": "單機",
+        "category": "單機",
+        "complete_screen_count": min(
+            (value for value in counts if isinstance(value, int) and value in {1, 2}),
+            default=1,
+        ),
+        "unique_main": True,
+        "model": model,
+        "price": price,
+        "label_ownership": "matched" if matched_votes >= 2 else "ambiguous",
+        "followme_physical_evidence": [],
+        "followme_family_confirmed": False,
+        "screen_status": "正常",
+        "quality_issue": "無",
+        "three_pass_adjudicated": True,
+        "adjudication_rule": "two_clean_tail_calls_after_persisted_attempt_one",
+        "restart_recovery_missing_attempt_one_trace": True,
+        "thinking": (
+            "模型呼叫總數已由持久化輪次計數到第 3 輪；第 1 輪在停止邊界前未寫入 trace。"
+            "現存第 2、3 輪均為同圖、無記憶且確認唯一單機；只保留兩輪共同支持的欄位，"
+            "沒有進行第 4 次呼叫。"
+        ),
+    })
+    current["narration"] = current["thinking"]
+    valid, _errors, normalized = validate_evidence_contract(current)
+    if not valid:
+        return False
+    current["normalized_evidence"] = normalized
+    return True
+
+
 def finalize_file(
     result_path: Path,
     trace_path: Path,
@@ -159,7 +238,16 @@ def finalize_file(
         recovered_restart_authority = _recover_known_authority_after_restart(
             current, calls, existing_meta
         )
-        if recovered_restart_authority or apply_human_audited_pixel_authority(current, calls[:-1], 3):
+        recovered_clean_tail = False
+        if not recovered_restart_authority:
+            recovered_clean_tail = _recover_clean_single_tail_after_restart(
+                current, calls, existing_meta
+            )
+        if (
+            recovered_restart_authority
+            or recovered_clean_tail
+            or apply_human_audited_pixel_authority(current, calls[:-1], 3)
+        ):
             current["three_pass_adjudicated"] = True
             current["adjudication_summary"] = (
                 "三輪獨立判讀已完成；依人工核對且以完整影像雜湊綁定的像素事實定案，"
