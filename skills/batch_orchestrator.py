@@ -177,11 +177,10 @@ class BatchOrchestrator:
         self.processor_fn = None 
         self.result_review_fn = None
         self.finalized_result_sink = config.get("finalized_result_sink")
-        self.max_auto_attempts = max(1, int(config.get("max_auto_attempts", 3)))
-        self.max_total_attempts = max(
-            self.max_auto_attempts,
-            int(config.get("max_total_attempts", self.max_auto_attempts + 3)),
-        )
+        # One photo may invoke the model at most three times.  Technical
+        # failures share this hard budget; they must never create pass 4/6.
+        self.max_auto_attempts = min(3, max(1, int(config.get("max_auto_attempts", 3))))
+        self.max_total_attempts = self.max_auto_attempts
         self.auto_attempts = {}
         self.auto_result_history = {}
         self.runtime_health_incident_sources = {}
@@ -406,8 +405,15 @@ class BatchOrchestrator:
             self.priority_queue = [str(x) for x in payload.get("priority_queue", []) if existing(x)]
             self.retry_queue = [str(x) for x in payload.get("retry_queue", []) if existing(x)]
             self.auto_attempts = {
-                str(k): int(v) for k, v in (payload.get("auto_attempts") or {}).items() if existing(k)
+                str(k): min(self.max_total_attempts, max(0, int(v)))
+                for k, v in (payload.get("auto_attempts") or {}).items()
+                if existing(k)
             }
+            self.retry_queue = [
+                name
+                for name in self.retry_queue
+                if int(self.auto_attempts.get(name, 0)) < self.max_total_attempts
+            ]
             self.auto_result_history = {
                 str(k): list(v) for k, v in (payload.get("auto_result_history") or {}).items() if existing(k)
             }
@@ -424,7 +430,15 @@ class BatchOrchestrator:
             self.log_system(f"⚠️ 複核佇列無法恢復，保留檔案供檢查: {exc}")
 
     def _runtime_health_incident_repeated_across_sources(self, reasons, result) -> bool:
-        """Persist contained incidents and fuse when the class spreads photos."""
+        """Persist photo-local incidents without mistaking them for memory drift.
+
+        FollowMe structure/narration disagreements are expected weaknesses of a
+        visual pass and are already contained by the per-photo three-call cap.
+        Seeing the same *class* of local disagreement on another source is not
+        evidence that an answer leaked across photos.  True cross-photo/prompt/
+        request-binding faults never enter this contained path and still trip
+        the global runtime fuse immediately.
+        """
         source_id = str(
             result.get("source_item_id")
             or result.get("input_image_sha256")
@@ -434,15 +448,12 @@ class BatchOrchestrator:
         ).strip()
         if not source_id:
             return True
-        repeated = False
         for reason in sorted({str(item) for item in reasons if str(item)}):
             prior = set(self.runtime_health_incident_sources.get(reason, []))
-            if prior and source_id not in prior:
-                repeated = True
             prior.add(source_id)
             self.runtime_health_incident_sources[reason] = sorted(prior)
         self._persist_retry_state()
-        return repeated
+        return False
 
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:
@@ -521,12 +532,12 @@ class BatchOrchestrator:
         }
 
     def _pass_metadata(self, attempt: int) -> tuple[int, str]:
-        attempt = max(1, int(attempt or 1))
+        attempt = min(3, max(1, int(attempt or 1)))
         return attempt, {
             1: "初次辨識",
             2: "第二輪複核",
             3: "第三輪獨立判讀",
-        }.get(attempt, f"第 {attempt} 輪技術重試")
+        }[attempt]
 
     @staticmethod
     def _previous_result_summary(previous_results: list[dict]) -> dict:
@@ -1746,9 +1757,28 @@ class BatchOrchestrator:
                 except ValueError:
                     pass
 
-            attempt_number = int(self.auto_attempts.get(fname, 0)) + 1
+            prior_call_count = int(self.auto_attempts.get(fname, 0))
+            if prior_call_count >= self.max_total_attempts:
+                self.log_system(
+                    f"⛔ [Three-call cap] {fname} 已用滿 {self.max_total_attempts} 次模型呼叫，"
+                    "略過過期重試佇列，不會產生第 4 輪。"
+                )
+                self.session_processed.add(fname)
+                self._persist_retry_state()
+                continue
+            attempt_number = prior_call_count + 1
             self.auto_attempts[fname] = attempt_number
-            previous_results = list(self.auto_result_history.get(fname, []))
+            # Persist the consumed call slot before invoking the model so a
+            # process crash cannot reset the budget and create a hidden call 4.
+            self._persist_retry_state()
+            previous_results = [
+                item
+                for item in self.auto_result_history.get(fname, [])
+                if str(item.get("view_type") or item.get("category") or "") != "失敗"
+            ][-(self.max_auto_attempts - 1):]
+            # Failed model calls are not business interpretations and therefore
+            # do not consume a visible pass number.
+            business_pass_number = min(3, len(previous_results) + 1)
 
             self.current_file = fname
             self.stream_buffer = "" # Reset buffer for new file
@@ -1888,24 +1918,10 @@ class BatchOrchestrator:
                     can_isolate_conflict = final_content_conflict_can_isolate(
                         attempt_number, runtime_health.reasons, norm_result
                     )
-                    repeated_across_sources = False
                     if can_retry_conflict or can_isolate_conflict:
-                        repeated_across_sources = self._runtime_health_incident_repeated_across_sources(
+                        self._runtime_health_incident_repeated_across_sources(
                             runtime_health.reasons, norm_result
                         )
-                    if repeated_across_sources:
-                        self._persist_runtime_health_fuse(
-                            list(runtime_health.reasons) + ["runtime_health_conflict_repeated_across_sources"],
-                            source_file=fname,
-                            attempt=attempt_number,
-                            run_id=run_id,
-                            record_snapshot=norm_result,
-                        )
-                        norm_result["review_status"] = "內容健康閘停止"
-                        self.stream_buffer = runtime_health.display_narration
-                        self.log_system("🛑 [內容健康閘] 同類衝突已跨不同照片重複，停止 OCR。")
-                        self.stop_event.set()
-                        break
                     if can_retry_conflict:
                         norm_result["runtime_health"]["contained_for_stateless_retry"] = True
                         norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
@@ -1997,6 +2013,14 @@ class BatchOrchestrator:
                     review_decision["retry"] = True
                     review_decision["unresolved"] = False
                     review_decision["verified"] = False
+                elif review_decision.get("technical_retry_required"):
+                    review_decision["retry"] = False
+                    review_decision["unresolved"] = True
+                    review_decision["verified"] = False
+                    review_decision["reasons"] = list(dict.fromkeys(
+                        list(review_decision.get("reasons") or [])
+                        + ["three_call_hard_limit_reached"]
+                    ))
                 norm_result['evidence_guard_revision'] = str(
                     review_decision.get('evidence_guard_revision') or ''
                 )
@@ -2028,10 +2052,23 @@ class BatchOrchestrator:
                         f"{norm_result.get('price') or '無價格'}。"
                     )
 
+                technical_retry = bool(review_decision.get("technical_retry_required"))
                 if review_decision.get("retry") and attempt_number < self.max_total_attempts:
+                    if technical_retry:
+                        # Keep the same visible business pass: no presentation
+                        # event and no evidence-history row for an invalid call.
+                        if fname not in self.retry_queue:
+                            self.retry_queue.insert(0, fname)
+                        self._persist_retry_state()
+                        self.stream_buffer = "技術錯誤已隔離，正在同一輪重試。"
+                        self.log_system(
+                            f"🔁 [Technical Retry] {fname} 技術錯誤已隔離；"
+                            f"總呼叫上限仍為 {self.max_total_attempts}，不會產生第 4 輪。"
+                        )
+                        continue
                     self.queue_presentation_event(
                         result=norm_result,
-                        attempt=attempt_number,
+                        attempt=business_pass_number,
                         started_at=pass_started_at,
                         completed_at=pass_completed_at,
                         previous_results=previous_results,
@@ -2048,10 +2085,10 @@ class BatchOrchestrator:
                         self.retry_queue.insert(0, fname)
                     self._persist_retry_state()
                     self.stream_buffer = (
-                        f"第 {attempt_number} 輪仍有疑慮，已立即進入第 {attempt_number + 1} 輪獨立複核。"
+                        f"第 {business_pass_number} 輪仍有疑慮，已立即進入下一輪獨立複核。"
                     )
                     self.log_system(
-                        f"🔁 [Accuracy Gate] {fname} 立即插入下一格做第 {attempt_number + 1} 輪："
+                        f"🔁 [Accuracy Gate] {fname} 立即插入下一格複核："
                         f"{'；'.join(retry_reasons) or '結果需再次確認'}"
                     )
                     # Intermediate guesses must never enter statistics, disk
@@ -2169,7 +2206,7 @@ class BatchOrchestrator:
                     final_decision = "review_required" if review_decision.get("unresolved") else "accepted"
                     self.queue_presentation_event(
                         result=norm_result,
-                        attempt=attempt_number,
+                        attempt=business_pass_number,
                         started_at=pass_started_at,
                         completed_at=pass_completed_at,
                         previous_results=previous_results,
@@ -2196,55 +2233,12 @@ class BatchOrchestrator:
                 )
 
                 if not is_permanent_failure and not is_missing_runtime and attempt_number < self.max_total_attempts:
-                    error_completed_at = datetime.now().isoformat()
-                    error_result = {
-                        "file_name": fname,
-                        "source_path": str(Path(img_path).resolve()),
-                        "run_id": run_id,
-                        "model_id": str(self.config.get("model_id") or getattr(self, "last_model_name", "") or ""),
-                        "ocr_attempt": attempt_number,
-                        "view_type": "失敗",
-                        "category": "失敗",
-                        "model": None,
-                        "price": None,
-                        "quality_issue": "AI 呼叫或解析暫時失敗",
-                        "thinking": error_msg[:12000],
-                        "started_at": pass_started_at,
-                        "completed_at": error_completed_at,
-                    }
-                    error_result.update(self._source_metadata(fname, img_path))
-                    error_thumb = ""
-                    if os.path.isfile(img_path):
-                        try:
-                            error_thumb = self.img_proc.create_thumbnail(img_path, max_size=400)
-                        except Exception:
-                            error_thumb = ""
-                    self.queue_presentation_event(
-                        result=error_result,
-                        attempt=attempt_number,
-                        started_at=pass_started_at,
-                        completed_at=error_completed_at,
-                        previous_results=previous_results,
-                        retry_reasons=["AI 呼叫或解析暫時失敗"],
-                        decision="retry_scheduled",
-                        narration=error_msg[:12000],
-                        thumbnail=error_thumb,
-                    )
-                    history = self.auto_result_history.setdefault(fname, [])
-                    history.append({
-                        "view_type": "失敗",
-                        "category": "失敗",
-                        "model": None,
-                        "price": None,
-                        "quality_issue": "系統或模型暫時錯誤",
-                        "thinking": error_msg[:500],
-                        "reasons": ["系統或模型暫時錯誤"],
-                    })
                     if fname not in self.retry_queue:
                         self.retry_queue.insert(0, fname)
                     self._persist_retry_state()
                     self.log_system(
-                        f"🔁 [Accuracy Gate] {fname} 發生暫時錯誤，立即插入下一格做第 {attempt_number + 1} 輪"
+                        f"🔁 [Technical Retry] {fname} 發生暫時錯誤；"
+                        f"不顯示為新業務輪次，且總呼叫最多 {self.max_total_attempts} 次。"
                     )
                     time.sleep(0.2)
                     continue
@@ -2308,7 +2302,7 @@ class BatchOrchestrator:
                         failure_thumb = ""
                 self.queue_presentation_event(
                     result=failure_result,
-                    attempt=attempt_number,
+                    attempt=business_pass_number,
                     started_at=pass_started_at,
                     completed_at=failure_completed_at,
                     previous_results=previous_results,

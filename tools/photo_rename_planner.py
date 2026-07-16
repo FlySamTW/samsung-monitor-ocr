@@ -127,6 +127,8 @@ def canonical_followme_model(model: str) -> Optional[str]:
 def model_segment(row: Dict[str, str]) -> str:
     model = choose_field(row, "human_model", "model")
     if not model:
+        if str(row.get("followme_family_confirmed") or "").strip().lower() in {"1", "true", "yes", "y"}:
+            return "FollowMe 型號未細分"
         return UNKNOWN_MODEL
     followme = canonical_followme_model(model)
     return followme or model.strip().upper()

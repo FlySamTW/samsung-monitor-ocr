@@ -119,7 +119,7 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertIn("first_pass_content_conflict_can_retry(", orchestrator)
         self.assertIn("attempt_number, runtime_health.reasons", orchestrator)
         self.assertIn("final_content_conflict_can_isolate(", orchestrator)
-        self.assertIn("runtime_health_conflict_repeated_across_sources", orchestrator)
+        self.assertIn("_runtime_health_incident_repeated_across_sources(", orchestrator)
         self.assertIn('"contained_for_stateless_retry"', orchestrator)
         self.assertIn("self.stop_event.set()", orchestrator)
         self.assertIn("self._persist_runtime_health_fuse(", orchestrator)
@@ -427,7 +427,7 @@ class RuntimeHealthGateTests(unittest.TestCase):
         price_conflict = ["structured_authority_material_conflict:price"]
         self.assertFalse(first_pass_content_conflict_can_retry(1, price_conflict, weak))
 
-    def test_runtime_incident_registry_fuses_only_after_a_second_source(self):
+    def test_photo_local_runtime_incident_never_fuses_another_source(self):
         from skills.batch_orchestrator import BatchOrchestrator
 
         orchestrator = object.__new__(BatchOrchestrator)
@@ -440,9 +440,13 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(orchestrator._runtime_health_incident_repeated_across_sources(
             reasons, {"source_item_id": "source-a"}
         ))
-        self.assertTrue(orchestrator._runtime_health_incident_repeated_across_sources(
+        self.assertFalse(orchestrator._runtime_health_incident_repeated_across_sources(
             reasons, {"source_item_id": "source-b"}
         ))
+        self.assertEqual(
+            orchestrator.runtime_health_incident_sources[reasons[0]],
+            ["source-a", "source-b"],
+        )
 
     def test_narrated_followme_fixture_omission_trips_runtime_health(self):
         decision = evaluate_runtime_health(

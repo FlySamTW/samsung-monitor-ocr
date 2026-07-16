@@ -55,8 +55,7 @@ const buildLivePendingNarration = ({ fileName, passIndex, reviewMode }) => {
     1: "初次辨識",
     2: "第二輪複核",
     3: "第三輪獨立判讀",
-    4: "系統技術重試"
-  })[normalizedPass] || `第 ${normalizedPass} 輪複核`;
+  })[normalizedPass] || "三輪完成";
   const task = reviewMode === "current_year_review"
     ? "核對遠景、單機與 FollowMe 實體線索，並重新檢查型號及價格標籤"
     : "辨認照片主體與陳列情境，並檢查可見的型號、價格及 FollowMe 實體線索";
@@ -152,7 +151,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.21";
+const CURRENT_GUARD_REVISION = "20260716.22";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -567,8 +566,7 @@ const App = () => {
     1: "初次辨識",
     2: "第二輪複核",
     3: "第三輪獨立判讀",
-    4: "系統技術重試"
-  }[Number(item?.pass_index)] || "未提供");
+  }[Number(item?.pass_index)] || (Number(item?.pass_index) > 3 ? "三輪完成" : "未提供"));
 
   const formatMetaValue = (value) => {
     if (value === null || value === undefined || value === "") return "未提供";
@@ -613,9 +611,11 @@ const App = () => {
   const getPassHeading = (item) => {
     if (!hasPassMetadata(item)) return "";
     const parts = [];
-    if (item?.pass_index) parts.push(`第 ${formatMetaValue(item.pass_index)} 輪`);
+    const passIndex = Number(item?.pass_index || 0);
+    if (passIndex > 3) parts.push("三輪完成");
+    else if (passIndex > 0) parts.push(`第 ${formatMetaValue(passIndex)} 輪`);
     const label = item?.pass_label || (item?.pass_index ? getPassLabel(item) : "");
-    if (label) parts.push(label);
+    if (label && passIndex <= 3) parts.push(label);
     return parts.join(" · ");
   };
   const getNarrationFullText = (item) => String(item?.narration || item?.stream_buffer || "").trim();
@@ -1478,18 +1478,18 @@ const App = () => {
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       {/* 1. Header */}
-      <header className="app-header" style={{ height: '50px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', borderBottom: '1px solid #333', background: '#111' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <header className="app-header" style={{ height: '56px', minHeight: '56px', flexShrink: 0, display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) auto minmax(520px, 38vw) 118px', columnGap: '12px', alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #333', background: '#111', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <Activity color="#00f5ff" size={24} />
-              <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff', background: 'none', WebkitBackgroundClip: 'initial', WebkitTextFillColor: 'initial' }}>
+              <h1 style={{ margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff', background: 'none', WebkitBackgroundClip: 'initial', WebkitTextFillColor: 'initial' }}>
                   三星電腦螢幕-通路陳列-照片分析
               </h1>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-               <span style={{ fontSize: '0.75rem', color: '#ffffff', fontWeight: 'bold', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
+          <div style={{ display: 'contents' }}>
+               <span style={{ fontSize: '0.62rem', color: '#ffffff', fontWeight: 'bold', whiteSpace: 'nowrap', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
                  {UI_VERSION}
                </span>
-                <div style={{ width: '360px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ width: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: '#d1d5db' }}>
                     <span style={{ fontWeight: '800', color: '#ffffff' }}>初次辨識總進度 {formatCount(overallProcessed)}/{formatCount(overallTotal)} 張</span>
                     <span style={{ color: '#22c55e', fontWeight: '800' }}>{overallPercent.toFixed(1)}%</span>
@@ -1497,7 +1497,7 @@ const App = () => {
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', fontSize: '0.58rem', color: '#888' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, whiteSpace: 'nowrap', fontSize: '0.54rem', color: '#888' }}>
                     <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
                     <span aria-hidden="true">·</span>
                     <span>資料匣 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
@@ -1508,12 +1508,12 @@ const App = () => {
                       {isReviewRun && reviewProgress.current_pass
                         ? Number(reviewProgress.current_pass) <= 3
                           ? ` · 本張第 ${reviewProgress.current_pass}/3 輪`
-                          : ` · 本張第 ${reviewProgress.current_pass} 輪技術重試`
+                          : ' · 本張三輪已完成'
                         : ''}
                     </span>
                   </div>
                 </div>
-               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+               <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
                     <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>

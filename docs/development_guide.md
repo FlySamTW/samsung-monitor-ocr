@@ -53,7 +53,7 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 2. 門市資料必須在辨識結果前方。
 3. 原流水號放最後。
 4. `FollowMe` 是型號，不是檔名分類；類別仍用 `單機` 或 `遠景`。
-5. `FollowMe` 必須細分：`FollowMe_M5_32吋`、`FollowMe_M7_32吋`、`FollowMe_Pro_M7_43吋`。
+5. `FollowMe` 有足夠同主體實體證據時必須保留產品家族；型號有兩輪一致證據才細分為 `FollowMe_M5_32吋`、`FollowMe_M7_32吋`、`FollowMe_Pro_M7_43吋`。若只確認產品家族但版本不一致，寫 `FollowMe_型號未細分`，不可退回遠景，也不可猜版本。
 6. 型號讀不到寫 `型號未辨識`；價格讀不到寫 `無價格`。
    - 例外：若重新辨識後確認主角是非三星螢幕，型號欄寫 `它牌(品牌)`，例如 `它牌(ACER)`、`它牌(ASUS)`、`它牌(LG)`；不需要也不應填它牌實際型號。
 7. 價格預設用全形 `＄`，必要時可改半形 `$`。
@@ -61,7 +61,7 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 9. Windows 檔名不可用字元需清理，雙引號改成 `吋`，空白改成 `_`，半形 `?` 要轉成全形 `？`。
 10. 批量整理輸出可全部放同一層新資料夾；年月已在檔名中，若同名則加尾碼，不可覆蓋。
 11. `HEIC`、`WebP` 目前可不處理；接力或審計工具應列出略過數，不可把略過檔案算進完成率。
-12. 當年度（2026 與未來）`遠景` 不可直接視為 Drive ready；因目前遠景誤判風險高，必須先進重辨識/人工校正桶，確認不是單機、FollowMe 或它牌單機後才能上傳。
+12. 當年度（2026 與未來）`遠景` 必須完成最多三輪的同圖無記憶複核；至少兩輪安全結構證據確認無唯一主角、無主角自有價牌且無 FollowMe 實體線索後，該張立即排入 Drive。不得累積整年，也不得等待未指定的人工作業。
 
 ## 歷年接力規則
 
@@ -388,7 +388,7 @@ npm.cmd --prefix dashboard run build
 ## 2026-07-08 FollowMe Staged Rerun Patch
 
 - `tools\rerun_staged_candidates.py` now rescues obvious foreground FollowMe false-distant rerun outputs before applying the abort guard: if a candidate has FollowMe/stand/base/tray evidence but the model returns `遠景 / 無型號`, it is converted back to `單機` with a conservative FollowMe family model.
-- This does not force upload: if the price is still missing, current-year rename/upload guards keep the row review-required.
+- 現行 `.22` 會在最多三輪後如實定案；價格讀不到就記為無價格，該張仍立即逐張上傳，不再等待人工桶。
 - The tool now removes `_ocr_staging` folders when a group aborts or staging copy fails. If `D:` becomes full again, check stale `_ocr_staging` before rerunning OCR.
 
 ## 2026-07-08 FollowMe With Nearby Non-Samsung Products
@@ -398,7 +398,7 @@ npm.cmd --prefix dashboard run build
 - Do not require the classic white circular base for every FollowMe rescue. If a `Samsung FollowMe`/`FollowMe` product label is attached to a visible standing/vertical display, treat it as FollowMe review evidence even when the model says the base is not white or not visible. Do not confuse this with a pure poster/ad: the sign must be tied to a standing display/product area.
 - 2026-07-09 v19.34 fix: the positive FollowMe display-sign clue must override old negative checks like `沒有白色支架`, `沒有圓形底座`, or `不是 FollowMe` when the same narration also says a visible standing/vertical display has a `Samsung FollowMe`/`FollowMe` product label. This prevents the backend from rescuing the filename but leaving the row as `遠景` or showing contradictory narration.
 - Regression check: text equivalent to `LG CordZero ... Samsung Follow Me ... 展示用的立式螢幕` should infer `FollowMe M7 32"`; text equivalent to `LG StanbyME ... 沒有 Samsung FollowMe` should infer `None`.
-- User-confirmed sample `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` must resolve to a `單機-FollowMe...` output, not `遠景`. If price is not readable it must stay blocked from current-year upload as `無價格`.
+- User-confirmed sample `M-台中市-南屯區-TK3C-台中嶺東-697.jpg` must resolve to a `單機-FollowMe...` output, not `遠景`. If price is not readable it is finalized as `無價格` and uploaded under the per-photo `.22` rule.
 - Post-processing must never fabricate a replacement narration such as `最終校正...` to hide a raw model contradiction. Preserve the image-grounded raw narration in audit evidence; if it contradicts the structured result, the content-health/evidence gate must withdraw the operator-facing narration and retry or mark review-required. A result card must never show a corrected FollowMe value beside contradictory prose, but the remedy is fail-closed rejection, not prose rewriting.
 
 ## 2026-07-08 Distant-View Quality Audit
@@ -554,15 +554,26 @@ Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `labe
 
 Dashboard API 的 `success` 是歷史相容欄位，語意是「已有非系統失敗的判讀記錄」，可能包含 `review_required`。介面只能稱為 `完成判讀`，並分別顯示 `review_required`；Drive 仍只接受 `auto_verified=true && auto_review_required=false`。`windows_user_launcher.ps1` 在安全邊界啟動時會比較 `dashboard/src` 與 `dashboard/dist/index.html` 時間，來源較新必須先 build，避免新版後端計數配上舊前端文字。
 
-### Current-year per-photo finalization and upload (revision `20260716.21`)
+### Current-year per-photo finalization and upload (revision `20260716.22`)
 
-Formal OCR is a per-photo pipeline.  A photo that passes on round 1 is finalized immediately.  A photo with a FollowMe cue, distant view, missing model/price, large price difference, or core-evidence uncertainty receives independent rounds 2 and 3 from the same pristine image, with no previous answer in the prompt.  After three usable same-image passes, `finalize_three_pass_outcome` makes one bounded evidence-majority decision.  The result is still a valid completed photo when it is `遠景`, or a `單機` with only a model, only a price, or neither.  Missing fields are recorded as missing; they are not a reason to isolate or abandon the photo.
+Formal OCR is a per-photo pipeline.  A photo that passes on round 1 is finalized immediately.  A photo with a FollowMe cue, distant view, missing model/price, large price difference, or core-evidence uncertainty receives independent rounds 2 and 3 from the same pristine image, with no previous answer in the prompt.  **The hard limit is three total model calls per photo, including transport/parser retries.** `max_total_attempts=max_auto_attempts<=3`; configuration, restored retry state, exceptions, or UI metadata may never create a fourth call or a pass index above 3.  The call budget is persisted before the model request so a crash/restart cannot reset it.  After the third call, `finalize_three_pass_outcome` makes one bounded evidence decision or emits one terminal technical failure; it never queues round 4.  The result is valid when it is `遠景`, or a `單機` with only a model, only a price, or neither.  Missing fields are recorded as missing; they are not a reason to isolate or abandon the photo.
 
 A scene with `complete_screen_count=0`, `unique_main=false`, no owned label and no same-subject FollowMe fixture may finalize as `遠景／無型號／無價格` when at least two usable passes agree.  This covers store/environment photos with no complete monitor and prevents six useless technical retries.  Counts 1 or 2 do not receive this allowance because a partially missed main unit may exist; they still require conservative single/distant evidence resolution.
 
 Every verified result is atomically enqueued to `_drive_upload_stream` as soon as its result JSON is durable.  The single hidden worker publishes the deterministic flat filename and uploads exactly that photo.  It preserves `↑/↓/✓/?` when a price exists, replaces an obsolete same-name remote object in place, never creates `_2`, and writes the canonical receipt only after a unique size+MD5 readback.  OCR does not wait for network throughput.  `tools/stream_drive_upload.py` is this authority; the older completed-run proof and bulk uploader remain only for legacy reconciliation and must not block this per-photo lane.
 
-Only technical-integrity faults may prevent finalization: wrong request/image binding, prior-answer or prompt contamination, cross-photo identity drift, unhealthy runtime output, invalid evidence schema, changed source bytes, or failed Drive readback.  Such a photo is marked `技術錯誤／該張未上傳` and retried after repair.  Ordinary visual ambiguity is never called `三輪衝突／已隔離`, never waits for a nonexistent slow model or unspecified human, and never blocks later photos.
+Only technical-integrity faults may prevent finalization: wrong request/image binding, prior-answer or prompt contamination, cross-photo identity drift, unhealthy runtime output, invalid evidence schema, changed source bytes, or failed Drive readback.  A technical call does not create a visible business pass card, but it still consumes one of the three total calls.  If the budget is exhausted, the photo emits one terminal technical result and later photos continue; no automatic fourth call is allowed.  Ordinary visual ambiguity is never called `三輪衝突／已隔離`, never waits for a nonexistent slow model or unspecified human, and never blocks later photos.
+
+FollowMe family evidence is also a final field, not an informal note. Two usable passes with sufficient same-subject physical evidence establish the FollowMe family even when M5/M7/Pro or price disagrees. In that case `.22` writes `FollowMe 型號未細分`, leaves unsupported price/model detail empty, and uploads the photo as a truthful single unit; it must never fall back to `遠景`.
+
+Photo-local FollowMe narration/structure disagreement is contained inside that photo's three-call budget. Seeing the same local disagreement class on another source is recorded for monitoring but is not proof of cross-photo memory infection and must not stop the batch. Only direct prior-answer leakage, copied cross-photo identity, prompt contamination, request/image binding failure, or another non-local technical fault may trip the batch-wide fuse. This paragraph supersedes older historical notes below that treated a second local conflict as automatic batch-wide drift or mentioned calls 4–6.
+
+### Live-dashboard deployment and header iron rule (revision `20260716.22`)
+
+- A planned repair must not begin by stopping the only live OCR service.  First read this guide and the continuity handoff, finish the code change, run targeted regressions, build `dashboard/dist`, and bring up a hidden green backend on a spare port.  Only after its `/api/status`, asset fingerprint, guard revision, process uniqueness and upload isolation pass may the old OCR loop be paused and the original dashboard address be replaced.  The user's existing tab stays on the same address and reloads through the asset fingerprint; never open a terminal window, browser window, or monitoring tab.
+- The production handoff is incomplete until the original address reports `is_running=true`, the current file/pass advances, exactly one backend listener and one stream worker remain, and the existing page shows the new fingerprint.  `待機中` during an avoidable planned repair is a deployment failure, not an acceptable intermediate state.
+- The header must preserve four non-overlapping regions at the production viewport and browser zoom: title, version, full-program progress, and live/upload status.  Use a bounded grid with `minWidth:0`, a dedicated progress column, and a fixed status column.  The total `65,331/150,321`, folders, current review progress, current pass, upload total, and pending upload count must remain readable and may never paint over one another.  This rule does not change the finalized 50/50 photo/narration workspace or right accumulated-card rail.
+- Every change to the header or deployment path must run `tools/test_presentation_soak.py`, a production Vite build, and a live same-tab verification showing one current photo, readable LLM narration, advancing right cards, advancing review count, and upload status.  The regression must reject `pass_index>3`, `系統技術重試`, overlap-prone flex header markup, stale guard revision, and missing full-program totals.
 
 The legacy completed-run proof is still required only when operating `tools/rclone_drive_upload.py` for old bulk manifests. `tools/audit_distant_followme_risk.py` must first prove the builder summary, selected candidate/result set, every folder summary, canonical `success_records.csv` / `rename_plan.csv` / `copied.csv`, source identity uniqueness, output existence, and zero remaining unverified v19.45 sources. A zero-row candidate CSV is valid only when the authoritative source inventory is non-empty and every source is already verified.
 

@@ -11,8 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.photo_rename_planner import copy_planned_image_idempotent, plan_single_image
-from tools.rclone_drive_upload import md5_file
+from tools.rclone_drive_upload import md5_file, read_csv
 from tools.stream_drive_upload import (
+    _append_uploaded_atomic,
     enqueue_finalized_result,
     process_one_job,
     read_stream_status,
@@ -63,12 +64,14 @@ class FakeRclone:
     def __init__(self):
         self.remote = None
         self.copy_calls = 0
+        self.copy_command = None
 
     def __call__(self, command, **_kwargs):
         action = command[1]
         if action == "copyto":
             local = Path(command[2])
             self.copy_calls += 1
+            self.copy_command = list(command)
             self.remote = {
                 "Name": Path(command[3]).name,
                 "Size": local.stat().st_size,
@@ -84,6 +87,31 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_fresh_receipt_refreshes_stale_matching_legacy_ledger_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "drive_upload_uploaded.csv"
+            stale = {
+                "index": "7",
+                "source_path": "same-source.jpg",
+                "file_name": "same-target.jpg",
+                "drive_file_id": "",
+                "uploaded_at": "2026-07-04T15:46:47",
+            }
+            fresh = {
+                **stale,
+                "drive_file_id": "fresh-drive-id",
+                "uploaded_at": "2026-07-16T18:00:00",
+            }
+
+            _append_uploaded_atomic(ledger, stale)
+            count = _append_uploaded_atomic(ledger, fresh)
+
+            self.assertEqual(count, 1)
+            rows = read_csv(ledger)
+            self.assertEqual(rows[0]["index"], "1")
+            self.assertEqual(rows[0]["drive_file_id"], "fresh-drive-id")
+            self.assertEqual(rows[0]["uploaded_at"], "2026-07-16T18:00:00")
+
     def test_only_verified_bound_result_enters_outbox(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -128,6 +156,33 @@ class StreamDriveUploadTests(unittest.TestCase):
             self.assertNotIn("型號未辨識", payload["target_name"])
             self.assertNotIn("無價格", payload["target_name"])
 
+    def test_confirmed_followme_family_never_falls_back_to_distant_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-台中市-大里區-SF-大里-632.jpg"
+            make_image(source)
+            output = root / "output"
+            physical = [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]
+            row = verified_result(
+                source,
+                model=None,
+                price=None,
+                price_status="not_compared",
+                price_symbol="",
+                followme_family_confirmed=True,
+                followme_physical_evidence=physical,
+            )
+
+            job = enqueue_finalized_result(row, output_dir=output)
+            payload = json.loads(job.read_text(encoding="utf-8"))
+
+            self.assertIn("-單機-FollowMe_型號未細分-", payload["target_name"])
+            self.assertNotIn("-遠景-", payload["target_name"])
+
     def test_price_comparison_symbol_is_preserved_in_target_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -171,6 +226,8 @@ class StreamDriveUploadTests(unittest.TestCase):
             )
 
             self.assertEqual(fake.copy_calls, 1)
+            self.assertIn("--local-encoding", fake.copy_command)
+            self.assertEqual(fake.copy_command[fake.copy_command.index("--local-encoding") + 1], "None")
             self.assertEqual(receipt["drive_file_id"], "drive-test-id")
             self.assertTrue((output / "_drive_upload_stream" / "receipts" / f"{'a' * 64}.json").is_file())
             ledger = (output / "_drive_upload" / "drive_upload_uploaded.csv").read_text(encoding="utf-8-sig")

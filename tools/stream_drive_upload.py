@@ -177,7 +177,8 @@ def enqueue_finalized_result(
                 "view_type", "category", "model", "price", "price_symbol", "price_status",
                 "official_price", "price_diff_percent", "screen_status", "quality_issue",
                 "complete_screen_count", "unique_main", "label_ownership",
-                "followme_physical_evidence", "three_pass_adjudicated", "adjudication_rule",
+                "followme_physical_evidence", "followme_family_confirmed",
+                "three_pass_adjudicated", "adjudication_rule",
             )
         },
         "run_id": str(row.get("run_id") or ""),
@@ -256,10 +257,25 @@ def _append_uploaded_atomic(path: Path, row: dict[str, str]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = read_csv(path)
     key = (row.get("source_path", ""), row.get("file_name", ""))
-    if key not in {(item.get("source_path", ""), item.get("file_name", "")) for item in existing}:
+    matching_index = next(
+        (
+            index
+            for index, item in enumerate(existing)
+            if (item.get("source_path", ""), item.get("file_name", "")) == key
+        ),
+        None,
+    )
+    if matching_index is None:
         row = dict(row)
         row["index"] = str(len(existing) + 1)
         existing.append(row)
+    else:
+        # A fresh exact Drive readback supersedes stale legacy metadata for the
+        # same source and deterministic filename.  Keep the stable row index,
+        # but refresh hashes, receipt time and Drive ID atomically.
+        replacement = dict(row)
+        replacement["index"] = str(existing[matching_index].get("index") or matching_index + 1)
+        existing[matching_index] = replacement
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with temp.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=UPLOAD_HEADERS, extrasaction="ignore")
@@ -282,6 +298,11 @@ def _copy_remote(
 ) -> None:
     command = [
         str(rclone), "copyto", str(published), f"{remote}:{year}/{file_name}",
+        # Windows permits the literal full-width question mark used for the
+        # unknown-price badge. Rclone's default local encoder treats that
+        # glyph as an escape for the forbidden ASCII '?', making a real file
+        # appear missing. Preserve the exact local Unicode filename.
+        "--local-encoding", "None",
         # The exact deterministic name may already contain a stale result from
         # an earlier OCR revision.  copyto must replace that object in place;
         # --ignore-existing would silently preserve the wrong bytes.

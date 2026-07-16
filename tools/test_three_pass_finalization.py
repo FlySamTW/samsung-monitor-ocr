@@ -98,6 +98,50 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(result["adjudication_rule"], "two_pass_distant_structural_consensus")
         self.assertEqual(current["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
+    def test_two_distant_results_survive_one_local_runtime_narration_conflict(self):
+        history = [
+            make_pass("遠景", None, None, 3, False, "ambiguous"),
+            make_pass("單機", "S27F612EAC", "5990", 1, True, "matched"),
+        ]
+        current = make_pass(
+            "遠景", None, None, 4, False, "not_visible", healthy=False
+        )
+        current["runtime_health"]["reasons"] = [
+            "structured_narration_followme_conflict"
+        ]
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_cross_photo_or_prior_answer_distant_pass_never_supplies_majority(self):
+        unsafe_rows = [
+            make_pass(
+                "遠景", None, None, 3, False, "ambiguous",
+                cross_photo_duplicate_core_suspected=True,
+            ),
+            make_pass(
+                "遠景", None, None, 3, False, "ambiguous",
+                prior_answer_exposed=True,
+            ),
+        ]
+        for unsafe in unsafe_rows:
+            with self.subTest(unsafe=unsafe):
+                history = [
+                    unsafe,
+                    make_pass("單機", "S27F612EAC", "5990", 1, True, "matched"),
+                ]
+                current = make_pass("遠景", None, None, 3, False, "not_visible")
+
+                result = finalize_three_pass_outcome(current, history, unresolved())
+
+                self.assertFalse(result["verified"])
+                self.assertTrue(result["technical_retry_required"])
+
     def test_single_consensus_keeps_supported_model_price_pair(self):
         history = [
             make_pass(model="S27CG552EC", price="4990"),
@@ -156,6 +200,27 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["model"], 'FollowMe M7 32"')
         self.assertEqual(current["price"], "12990")
 
+    def test_followme_fixture_consensus_survives_variant_disagreement(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(model='FollowMe M7 32"', price="12990", physical=fixture),
+            make_pass(model='FollowMe M5 32"', price="11990", physical=fixture),
+        ]
+        current = make_pass(model='FollowMe Pro M7 43"', price="17990", physical=fixture)
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+
     def test_any_technical_failure_requires_another_healthy_pass(self):
         history = [
             make_pass(healthy=False),
@@ -203,6 +268,23 @@ class ThreePassFinalizationTests(unittest.TestCase):
 
         self.assertTrue(result["technical_retry_required"])
         self.assertFalse(result["verified"])
+
+    def test_pass_four_or_six_can_never_be_adjudicated(self):
+        history = [
+            make_pass("遠景", None, None, 3, False, "ambiguous"),
+            make_pass("遠景", None, None, 4, False, "not_visible"),
+        ]
+        for attempt in (4, 6):
+            with self.subTest(attempt=attempt):
+                decision = unresolved()
+                decision["attempt"] = attempt
+                current = make_pass("遠景", None, None, 3, False, "ambiguous")
+
+                result = finalize_three_pass_outcome(current, history, decision)
+
+                self.assertFalse(result["verified"])
+                self.assertTrue(result["technical_retry_required"])
+                self.assertIn("three_call_hard_limit_reached", result["reasons"])
 
     def test_original_model_self_talk_is_preserved_for_audit(self):
         history = [

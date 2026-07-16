@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.21"
+EVIDENCE_GUARD_REVISION = "20260716.22"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -865,7 +865,9 @@ def immediate_retry_decision(
     }
 
 
-def _adjudication_pass_is_usable(record: Dict[str, Any]) -> bool:
+def _adjudication_pass_is_usable(
+    record: Dict[str, Any], *, allow_local_distant_conflict: bool = False
+) -> bool:
     """Accept only independently bound, image-grounded passes for final voting."""
     view = str(record.get("view_type") or record.get("category") or "").strip()
     if view not in {"單機", "遠景"}:
@@ -883,8 +885,19 @@ def _adjudication_pass_is_usable(record: Dict[str, Any]) -> bool:
     if record.get("requires_structured_retry") is True:
         return False
     runtime = record.get("runtime_health") or {}
-    if not isinstance(runtime, dict) or runtime.get("healthy") is not True:
+    if not isinstance(runtime, dict):
         return False
+    if runtime.get("healthy") is not True:
+        runtime_reasons = {
+            str(reason) for reason in (runtime.get("reasons") or []) if str(reason)
+        }
+        if not (
+            allow_local_distant_conflict
+            and view == "遠景"
+            and runtime_reasons
+            and runtime_reasons <= {"structured_narration_followme_conflict"}
+        ):
+            return False
     valid, _errors, _normalized = validate_evidence_contract(record)
     return valid
 
@@ -940,22 +953,51 @@ def finalize_three_pass_outcome(
     if attempt < int(max_attempts or 3) or outcome.get("unresolved") is not True:
         return outcome
 
-    # The third/current pass must itself be healthy.  Two older healthy answers
-    # never get to outvote a broken, unbound, or contaminated current request;
-    # that is a technical retry, not a content adjudication.
-    if not _adjudication_pass_is_usable(record):
-        return _technical_retry_outcome(outcome, "three_pass_current_integrity_invalid")
+    max_attempts = min(3, max(1, int(max_attempts or 3)))
+    if attempt > max_attempts:
+        return _technical_retry_outcome(outcome, "three_call_hard_limit_reached")
 
-    passes = (list(history or []) + [record])[-int(max_attempts or 3):]
-    usable = [item for item in passes if _adjudication_pass_is_usable(item)]
-    if len(passes) < int(max_attempts or 3) or len(usable) != len(passes):
-        return _technical_retry_outcome(outcome, "three_healthy_bound_passes_required")
-    image_hashes = {
+    passes = (list(history or []) + [record])[-max_attempts:]
+
+    # At the third and final model call, two independently bound structural
+    # distant results are enough to settle the safe null identity outcome.
+    # A photo-local narration conflict may be ignored, but prompt/cross-photo/
+    # request-binding failures never participate.
+    distant_candidates = [
+        item
+        for item in passes
+        if _adjudication_pass_is_usable(item, allow_local_distant_conflict=True)
+        and str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+    ]
+    hash_counts = Counter(
         str(item.get("input_image_sha256") or "").strip().lower()
-        for item in usable
-    }
-    if "" in image_hashes or len(image_hashes) != 1:
-        return _technical_retry_outcome(outcome, "three_pass_input_hash_mismatch")
+        for item in distant_candidates
+        if str(item.get("input_image_sha256") or "").strip()
+    )
+    winning_hashes = [image_hash for image_hash, votes in hash_counts.items() if votes >= 2]
+    current_hash = str(record.get("input_image_sha256") or "").strip().lower()
+    distant_majority = bool(
+        len(winning_hashes) == 1 and current_hash == winning_hashes[0]
+    )
+    if distant_majority:
+        usable = [
+            item
+            for item in distant_candidates
+            if str(item.get("input_image_sha256") or "").strip().lower() == winning_hashes[0]
+        ]
+    else:
+        # Other adjudication outcomes still require three fully healthy passes.
+        if not _adjudication_pass_is_usable(record):
+            return _technical_retry_outcome(outcome, "three_pass_current_integrity_invalid")
+        usable = [item for item in passes if _adjudication_pass_is_usable(item)]
+        if len(passes) < max_attempts or len(usable) != len(passes):
+            return _technical_retry_outcome(outcome, "three_healthy_bound_passes_required")
+        image_hashes = {
+            str(item.get("input_image_sha256") or "").strip().lower()
+            for item in usable
+        }
+        if "" in image_hashes or len(image_hashes) != 1:
+            return _technical_retry_outcome(outcome, "three_pass_input_hash_mismatch")
 
     distant: list[Dict[str, Any]] = []
     no_screen_distant: list[Dict[str, Any]] = []
@@ -1087,13 +1129,21 @@ def finalize_three_pass_outcome(
         record["unique_main"] = True
         record["label_ownership"] = "matched" if matched_votes >= 2 else "ambiguous"
         if rule == "two_pass_followme_physical_consensus":
+            # Physical consensus proves the FollowMe family even when the
+            # three stateless passes disagree on M5/M7/Pro.  Preserve that
+            # truthful family classification without inventing a variant.
+            record["followme_family_confirmed"] = True
             record["followme_physical_evidence"] = list(
                 (supporting[-1].get("normalized_evidence") or supporting[-1]).get(
                     "followme_physical_evidence"
                 )
                 or []
             )
-        result_text = f"單機，{model or '無型號'}，{price or '無價格'}"
+        model_text = (
+            model
+            or ("FollowMe（型號未細分）" if record.get("followme_family_confirmed") is True else "無型號")
+        )
+        result_text = f"單機，{model_text}，{price or '無價格'}"
 
     record["three_pass_adjudicated"] = True
     record["adjudication_rule"] = rule
