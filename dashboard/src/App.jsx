@@ -151,7 +151,6 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.26";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -283,6 +282,17 @@ const App = () => {
   const [reviewMsg, setReviewMsg] = useState('');
   const stats = data.stats || defaultState.stats;
   const isRunning = Boolean(data.is_running || stats.is_running);
+  const serverGuardRevision = String(data.evidence_guard_revision || "").trim();
+  const contentRepairActive = Boolean(
+    data.runtime_health_fuse?.active
+    || data.runtime_health_fuse?.reason
+    || data.runtime_health_fuse?.reasons?.length
+  );
+  const operationStatusLabel = isRunning
+    ? '正在執行'
+    : contentRepairActive
+      ? '內容守門修復中'
+      : '待機中';
 
   // Refs for auto-scroll
   const logsContainerRef = useRef(null);
@@ -585,7 +595,9 @@ const App = () => {
   const isStaleGuardRevision = (item) => Boolean(
     item
     && (item.pass_index || item.pass_label)
-    && String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION
+    && serverGuardRevision
+    && String(item.evidence_guard_revision || "")
+    && String(item.evidence_guard_revision || "") !== serverGuardRevision
   );
   const isExplicitlyUnresolved = (item) => {
     if (!item) return false;
@@ -1526,8 +1538,8 @@ const App = () => {
                 </div>
                <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', justifySelf: 'end' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
-                    <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }}></div>
+                    <span style={{ fontSize: '0.7rem', color: contentRepairActive ? '#fbbf24' : '#888' }}>{operationStatusLabel}</span>
                   </div>
                   <span data-testid="stream-upload-progress" style={{ fontSize: '0.56rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
                     上傳總數 {formatCount(streamUpload.canonical_uploaded)} · 待上傳 {formatCount(streamUpload.pending)}
@@ -1564,9 +1576,9 @@ const App = () => {
                   </div>
                 </div>
                 <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: '8px', minWidth: '118px' }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#f97316', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }} />
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#f97316', boxShadow: isRunning ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }} />
                   <span style={{ color: isRunning ? '#d1fae5' : '#fed7aa', fontSize: '0.75rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                    {isRunning ? '正在執行' : '待機中'}
+                    {operationStatusLabel}
                   </span>
                 </div>
               </div>

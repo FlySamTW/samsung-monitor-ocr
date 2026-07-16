@@ -64,6 +64,7 @@ from skills.audit_fields import (
     immediate_retry_decision,
     validate_evidence_contract,
     EVIDENCE_CONTRACT_VERSION,
+    EVIDENCE_GUARD_REVISION,
     has_sufficient_followme_physical_evidence,
     followme_models_equivalent,
     is_followme_model,
@@ -71,6 +72,7 @@ from skills.audit_fields import (
 from skills.runtime_health_gate import (
     review_prompt_leak_reasons,
     read_runtime_health_fuse,
+    public_runtime_health_fuse,
     BLOCKED_NARRATION,
 )
 from tools.stream_drive_upload import enqueue_finalized_result, read_stream_status
@@ -234,15 +236,16 @@ V1945_OUTPUT_CONTRACT = (
     "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
     "Count complete_screen_count once from the first original full image. Supplemental crops are duplicate views; never count them or use crop edges as evidence. "
     "A complete monitor has all four outer bezel sides and corners inside the ORIGINAL frame. Any bezel touching, crossing, or missing beyond an original image edge contributes zero. "
-    "Always scan the ENTIRE original image region by region (left/center/right, top/middle/bottom), including away from center. "
-    "Three visible panels are not three complete monitors. 'one complete centered monitor plus one edge-cut monitor on each side' means count=1 only after confirming no other complete monitors anywhere else; otherwise count every additional complete monitor. "
-    "MANDATORY BORDER-CONTACT CHECK: inspect the monitor nearest every ORIGINAL edge. In a three-panel close-up with left bezel outside left edge, center fully inside, and right bezel outside right edge, the count is exactly 1, never 3. "
+    "Always scan the ENTIRE original image region by region. Visible panels are not complete monitors: one complete centered monitor plus one edge-cut monitor on each side means count=1 only after confirming no other complete monitors anywhere else. "
+    "In that edge-cut case, the count is exactly 1, never 3. Brands rendered inside a screen are signal content, not the physical monitor brand. "
+    "MANDATORY BORDER-CONTACT CHECK: any outer bezel side/corner outside the ORIGINAL frame contributes zero. "
     "Narration must locate complete and edge-cut panels before reporting the count; a single-unit answer must state no additional complete monitor exists elsewhere. "
-    "Brand names, computers, games, or advertisements rendered inside a screen are signal content, not the physical monitor brand. Lenovo/LOQ, ASUS/ROG, LG, AMD, Intel, or other logos shown only in screen pixels can never make the monitor other-brand and can never invalidate a Samsung product card spatially aligned directly below that physical monitor. Hardware identity comes from the physical bezel/logo and the same-subject product card, not displayed content. "
+    "Screen-rendered brands or advertisements are signal content, not hardware identity; use the physical bezel and same-subject product card. "
     "Any price explicitly read in narration must have exactly the same digits as structured price. A narration/structured price disagreement is unsafe and must not be finalized. "
-    "A dominant centered complete monitor with its readable aligned label or price is single-unit/單機 with unique_main=true and label_ownership=matched, even when one or more neighboring monitors are partial or visible. "
-    "A dominant foreground portable or portrait display with a same-subject white round base plus attached tray is a single-unit FollowMe candidate even when the vertical pole is partly hidden and even when 3+ background televisions are visible; it can never be distant. "
-    "Promotional, people, food, scenery, or advertisement content shown on the screen is only weak screen-content evidence: it cannot prove FollowMe by itself, but it can NEVER negate a same-subject white vertical stand, round base, or attached tray. With two or more such strong physical cues, never call the foreground product a non-real unit or distant. "
+    "If narration clearly reads a Samsung SKU and price from the dominant monitor's own spatially aligned card, structured model, price, and label_ownership=matched must report the same evidence; do not narrate readable values and then return null. "
+    "A dominant full monitor with its aligned readable label is 單機, unique_main=true, label_ownership=matched; partial neighbors do not change that. "
+    "A foreground display with a same-subject white round base plus attached tray is a FollowMe candidate regardless of background screens. Screen content is weak, cannot prove FollowMe, and can NEVER negate its hardware. "
+    "A round base counts only when the complete physical floor base is visible inside the ORIGINAL frame. A white vertical pole alone is insufficient. A continuous retail shelf price rail is not an attached tray. Smart Monitor M7/M5 or an S32FM SKU alone is a product family, not direct FollowMe branding. "
     "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
     "MANDATORY FINAL SELF-CHECK: direct FollowMe branding on the unit, or two or more same-subject strong physical cues, forces view_type=單機 and unique_main=true. Never output 遠景 with those evidence items; background screen count cannot override the foreground subject. "
     "MANDATORY LAST FRAME CHECK: if narration identifies a centered monitor with its own aligned readable Samsung model/price card and says the left and right neighboring monitors are cut by the ORIGINAL image edges, output 單機, unique_main=true, label_ownership=matched, and complete_screen_count=1; 遠景 or count=3 is impossible."
@@ -1518,6 +1521,34 @@ MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
 MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
 OVERALL_PROGRESS_CACHE = {"mtime": None, "data": None}
+SOURCE_MAP_COUNT_CACHE = {"path": None, "signature": None, "count": 0}
+
+
+def _staging_source_count(image_dir) -> int:
+    """Return the durable staging denominator without rereading it every poll."""
+    if not image_dir:
+        return 0
+    source_map = Path(str(image_dir)) / ".ocr_source_map.json"
+    try:
+        stat = source_map.stat()
+    except OSError:
+        return 0
+    signature = (stat.st_mtime_ns, stat.st_size)
+    if (
+        SOURCE_MAP_COUNT_CACHE.get("path") == str(source_map)
+        and SOURCE_MAP_COUNT_CACHE.get("signature") == signature
+    ):
+        return int(SOURCE_MAP_COUNT_CACHE.get("count") or 0)
+    try:
+        payload = json.loads(source_map.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    count = len(items) if isinstance(items, (dict, list)) else 0
+    SOURCE_MAP_COUNT_CACHE.update(
+        {"path": str(source_map), "signature": signature, "count": count}
+    )
+    return int(count)
 
 def should_save_manual_learning_rule(data: dict) -> bool:
     """Only an explicit checkbox plus a non-empty reusable hint creates a rule."""
@@ -4265,7 +4296,12 @@ def get_status():
         # never renders a misleading "1,504 / 0" progress label.
         if not orchestrator.is_running and not stats["total"]:
             current_folder = overall_progress.get("current_folder") or {}
-            stats["total"] = int(current_folder.get("image_count") or stats["processed"] or 0)
+            stats["total"] = int(
+                _staging_source_count(getattr(orchestrator, "image_dir", None))
+                or current_folder.get("image_count")
+                or stats["processed"]
+                or 0
+            )
 
         # Keep live self-talk tied to the active image. Showing the previous
         # result here makes the dashboard appear one image out of sync.
@@ -4304,6 +4340,7 @@ def get_status():
         status_obj = {
             "version": VERSION,
             "status_contract_version": "compact-v2",
+            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
             "frontend_asset_fingerprint": get_frontend_asset_fingerprint(),
             "accuracy_profile": ACCURACY_PROFILE,
             "manual_rule_count": int(getattr(orchestrator, "manual_rule_count", 0) or 0),
@@ -4316,7 +4353,7 @@ def get_status():
             "stats": stats,
             "overall_progress": overall_progress,
             "review_progress": review_progress,
-            "runtime_health_fuse": read_runtime_health_fuse(AUDIT_DIR),
+            "runtime_health_fuse": public_runtime_health_fuse(read_runtime_health_fuse(AUDIT_DIR)),
             "stream_upload": read_stream_status(OUTPUT_ROOT),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
@@ -4728,7 +4765,7 @@ def start_batch():
             if not safe_fuse_trial:
                 return jsonify({
                     "error": "內容健康門已熔斷；只允許受限隔離試跑，不得續跑正式批次",
-                    "runtime_health_fuse": active_fuse,
+                    "runtime_health_fuse": public_runtime_health_fuse(active_fuse),
                 }), 423
 
         if should_compare_official_price(selected_dir):

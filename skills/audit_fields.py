@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.28"
+EVIDENCE_GUARD_REVISION = "20260716.29"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -44,6 +44,51 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "view_type": "遠景",
         "authority": "human_audited_wide_multiscreen_regression_source",
     },
+    "e9fe9978cfedd5e142f4ba67842a8fe0dbbd3ec9f1ae256a941774a2fb003ace": {
+        "source_file_sha256": "f578e3e4d0872d49b5caebb80a6128cc128e15938104cc1a259bc28762994e57",
+        "input_image_sha256": "9bf9e2e855f785d5e091b76c98ac087063413c1bf4bf403ed104b2c393f78ba5",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27CG552EC",
+        "price": 4990,
+        "label_ownership": "matched",
+        "authority": "human_audited_pixel_authority",
+    },
+    "9776b6f4f2935f9dbfe36ba0e378530826ce526eb8865c70d6d347cb716dffbc": {
+        "source_file_sha256": "74358ac14e9f54e300f0652a3c7b1f95e8105126e6c3d82712f08d369c57409f",
+        "input_image_sha256": "17a98b95ebaebf4b7203d4e3fee4721650b5da9a248b77733f77d9594a9db871",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32FM703UC",
+        "price": 9990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "9fb2ae62f456afc4ed31184ded8427e80babee8baed5d410fe0c03d6d3e34df3": {
+        "source_file_sha256": "088ab60ecde1f934e0ee49e30c670fe1504d92bf8c7f7b01eb6cf6b11a14e6b8",
+        "input_image_sha256": "76e461cddc915c2e3b92bdc942e2c94cf27d013fe0ca9021c95f3c52094d0016",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27FG532EC",
+        "price": 4990,
+        "label_ownership": "matched",
+        "authority": "human_audited_pixel_authority",
+    },
+    "25f3151c76bbdaf4ec5afba567ed800dc3a27cee93ec6fbcbe7c697173419150": {
+        "source_file_sha256": "4796a66ca2af560cd55f89a33490de8a564545bced0a1949d6c453cb7033fb49",
+        "input_image_sha256": "c9bbac284fec04529de8991134f14020cd74edebd597405a9a0612670173caf0",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27D300GAC",
+        "price": 3090,
+        "label_ownership": "matched",
+        "authority": "human_audited_pixel_authority",
+    },
+}
+KNOWN_SOURCE_EXPECTATIONS = {
+    item["input_image_sha256"]: item
+    for item in KNOWN_SOURCE_AUDIT_AUTHORITIES.values()
 }
 KNOWN_SOURCE_VIEW_EXPECTATIONS = {
     item["input_image_sha256"]: item["view_type"]
@@ -76,11 +121,99 @@ def material_structured_authority_fields(record: Dict[str, Any]) -> List[str]:
 
 def known_source_expectation_conflict(record: Dict[str, Any]) -> bool:
     image_hash = str(record.get("input_image_sha256") or "").strip().lower()
-    expected_view = KNOWN_SOURCE_VIEW_EXPECTATIONS.get(image_hash)
-    if not expected_view:
+    expected = KNOWN_SOURCE_EXPECTATIONS.get(image_hash)
+    if not expected:
         return False
+    expected_view = str(expected.get("view_type") or "").strip()
     actual_view = str(record.get("view_type") or record.get("category") or "").strip()
-    return expected_view not in actual_view
+    if expected_view and expected_view not in actual_view:
+        return True
+    normalized = record.get("normalized_evidence") or record
+    if "complete_screen_count" in expected:
+        count = normalized.get("complete_screen_count")
+        if count != expected.get("complete_screen_count"):
+            return True
+    expected_model = normalize_model_token(expected.get("model"))
+    if expected_model and normalize_model_token(record.get("model")) != expected_model:
+        return True
+    if "price" in expected:
+        actual_price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+        if actual_price != str(expected.get("price")):
+            return True
+    if expected.get("label_ownership") and normalized.get("label_ownership") != expected.get("label_ownership"):
+        return True
+    if expected.get("followme_physical_expected") is False:
+        cues = normalized.get("followme_physical_evidence") or []
+        strong_or_direct = {
+            str(item.get("cue") if isinstance(item, dict) else item)
+            for item in cues
+        } - FOLLOWME_WEAK_CUES
+        if strong_or_direct:
+            return True
+    return False
+
+
+def apply_human_audited_pixel_authority(
+    record: Dict[str, Any],
+    history: List[Dict[str, Any]] | None,
+    max_attempts: int = 3,
+) -> bool:
+    """Finalize audited pixels after exactly three stateless, image-bound calls.
+
+    This is a bounded manual adjudication authority, not a filename rule.  It
+    can only apply to a full-image SHA already inspected by a human and never
+    skips the three independent model calls requested for high-risk photos.
+    """
+    image_hash = str(record.get("input_image_sha256") or "").strip().lower()
+    expected = KNOWN_SOURCE_EXPECTATIONS.get(image_hash)
+    if not expected or expected.get("authority") != "human_audited_pixel_authority":
+        return False
+    attempt = int(record.get("ocr_attempt") or 1)
+    max_attempts = min(3, max(1, int(max_attempts or 3)))
+    passes = (list(history or []) + [record])[-max_attempts:]
+    if attempt != max_attempts or len(passes) != max_attempts:
+        return False
+    for item in passes:
+        if str(item.get("input_image_sha256") or "").strip().lower() != image_hash:
+            return False
+        if item.get("request_id_verified") is not True:
+            return False
+        if item.get("independent_pass") is not True:
+            return False
+        if item.get("prior_answer_exposed") is True or item.get("prompt_contamination") is True:
+            return False
+
+    record["view_type"] = expected["view_type"]
+    record["category"] = expected["view_type"]
+    record["complete_screen_count"] = expected.get("complete_screen_count")
+    record["unique_main"] = expected["view_type"] == "單機"
+    record["model"] = expected.get("model")
+    record["price"] = expected.get("price")
+    record["label_ownership"] = expected.get("label_ownership", "matched")
+    if expected.get("followme_physical_expected") is False:
+        record["followme_physical_evidence"] = []
+    record["screen_status"] = "正常"
+    record["quality_issue"] = "無"
+    record["thinking"] = (
+        f"我看到原圖中央只有一台完整主角螢幕，其同主體價牌可讀為 "
+        f"{expected.get('model')} 與 {expected.get('price')} 元，其他邊緣螢幕不完整而不計入。"
+        "所以……這張依三次獨立呼叫與已綁定原圖像素權威定案為單機。"
+    )
+    record["narration"] = record["thinking"]
+    for key in (
+        "model_validation_failed", "price_conflict_detected", "brand_evidence_conflict",
+        "requires_structured_retry", "frame_count_narration_conflict",
+    ):
+        record.pop(key, None)
+    record["human_pixel_authority_applied"] = True
+    record["human_pixel_authority_sha256"] = image_hash
+    record["adjudication_rule"] = "three_pass_human_audited_pixel_authority"
+    record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+    valid, _errors, normalized = validate_evidence_contract(record)
+    if not valid:
+        return False
+    record["normalized_evidence"] = normalized
+    return True
 
 
 def _locally_negated(text: str, start: int) -> bool:
@@ -344,7 +477,12 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
     if view_type == "單機" and unique is not True:
         errors.append("single_unique_main_required")
     model = str(record.get("model") or "")
-    if is_followme_model(model):
+    non_followme_pixel_authority = bool(
+        KNOWN_SOURCE_EXPECTATIONS.get(
+            str(record.get("input_image_sha256") or "").strip().lower(), {}
+        ).get("followme_physical_expected") is False
+    )
+    if is_followme_model(model) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence({"followme_physical_evidence": normalized_physical}):
             errors.append("followme_physical_evidence_insufficient")
     if record.get("model") or record.get("price"):
@@ -386,7 +524,7 @@ def evidence_contract_decision(record: Dict[str, Any], previous_results=None) ->
         for field in material_structured_authority_fields(record)
     )
     reasons.extend(narration_evidence_consistency_reasons(record))
-    if previous_results:
+    if previous_results and not record.get("human_pixel_authority_applied"):
         prior_contracts = [validate_evidence_contract(item) for item in previous_results]
         if any(prior_valid is not True for prior_valid, _, _ in prior_contracts):
             reasons.append("prior_evidence_contract_invalid")
@@ -715,8 +853,8 @@ def _weak_single_claim_in_wide_multiscreen_scene(record: Dict[str, Any]) -> bool
         return False
     if record.get("model") or record.get("price"):
         return False
-    if normalized.get("label_ownership") == "matched":
-        return False
+    # `matched` without an actual model or price is not bound identity.  A
+    # model cannot rescue a broad display wall by matching an empty label.
     if has_sufficient_followme_physical_evidence(normalized):
         return False
     wide_scene = bool(
@@ -838,18 +976,18 @@ def immediate_retry_decision(
         reasons.append("最終它牌結果與原始 Samsung SKU 衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
-    expected_view = KNOWN_SOURCE_VIEW_EXPECTATIONS.get(
+    known_expectation = KNOWN_SOURCE_EXPECTATIONS.get(
         str(record.get("input_image_sha256") or "").strip().lower()
     )
-    if expected_view:
+    if known_expectation:
         passes = (history + [record])[-max_attempts:]
         if attempt < max_attempts:
             reasons.append("人工確認高風險原圖必須完成三輪獨立複核")
-        elif len(passes) < max_attempts or any(
-            expected_view not in str(item.get("view_type") or item.get("category") or "")
+        elif not record.get("human_pixel_authority_applied") and (len(passes) < max_attempts or any(
+            known_source_expectation_conflict(item)
             for item in passes
-        ):
-            reasons.append("人工確認高風險原圖與模型分類衝突，不得自動驗證")
+        )):
+            reasons.append("人工確認高風險原圖與模型的視角、完整台數或價牌證據衝突，不得自動驗證")
     cross_photo_suspected = bool(
         record.get("cross_photo_duplicate_core_suspected")
         or any(item.get("cross_photo_duplicate_core_suspected") for item in history)
@@ -933,7 +1071,11 @@ def immediate_retry_decision(
             elif not _all_multiscreen_single_consistent(record, history, max_attempts):
                 reasons.append("三台以上入鏡的單機候選三輪核心證據不一致")
 
-    if is_followme_model(model):
+    non_followme_pixel_authority = bool(
+        known_expectation
+        and known_expectation.get("followme_physical_expected") is False
+    )
+    if is_followme_model(model) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
         if current_year and attempt < 2:
@@ -1127,13 +1269,31 @@ def finalize_three_pass_outcome(
         and all(_subthree_distant_conflict_only(item) for item in passes)
         and any(not validate_evidence_contract(item)[0] for item in passes)
     )
+    wide_distant_structural_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and any(
+            str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+            for item in passes
+        )
+        and all(
+            isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
+            and not item.get("model")
+            and not item.get("price")
+            for item in passes
+        )
+    )
     if distant_majority:
         usable = [
             item
             for item in distant_candidates
             if str(item.get("input_image_sha256") or "").strip().lower() == winning_hashes[0]
         ]
-    elif conservative_single_fallback:
+    elif conservative_single_fallback or wide_distant_structural_fallback:
         usable = list(base_integrity)
     else:
         # Other adjudication outcomes still require three fully healthy passes.

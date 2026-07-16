@@ -17,7 +17,11 @@ from skills.image_processing import ImageProcessor
 from skills.model_matching import ModelMatcher
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
-from skills.audit_fields import enrich_result_for_review, finalize_three_pass_outcome
+from skills.audit_fields import (
+    apply_human_audited_pixel_authority,
+    enrich_result_for_review,
+    finalize_three_pass_outcome,
+)
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
@@ -1408,7 +1412,22 @@ class BatchOrchestrator:
             self.is_running = True
             self.stats['is_running'] = True
             self.session_processed = set()
-            self._restore_retry_state()
+            if restart:
+                # A full restart is a new evidence run.  Restoring the prior
+                # attempt counters here can make pass 1 jump directly to pass
+                # 3, falsely presenting two calls as three and blocking the
+                # bounded adjudicator.
+                self.priority_queue = []
+                self.retry_queue = []
+                self.auto_attempts = {}
+                self.auto_result_history = {}
+                self.runtime_health_incident_sources = {}
+                try:
+                    self._retry_state_path().unlink(missing_ok=True)
+                except OSError as exc:
+                    self.log_system(f"⚠️ 清除舊複核佇列失敗: {exc}")
+            else:
+                self._restore_retry_state()
 
         # Presentation data belongs to one batch only.  Keeping rows from a
         # staging rerun makes the dashboard replay deleted files in the next
@@ -1888,6 +1907,12 @@ class BatchOrchestrator:
                 norm_result = enrich_result_for_review(norm_result)
                 norm_result['ocr_attempt'] = attempt_number
                 norm_result["request_binding_enforced"] = True
+
+                apply_human_audited_pixel_authority(
+                    norm_result,
+                    previous_results,
+                    self.max_auto_attempts,
+                )
 
                 if attempt_number == 1:
                     previous_final = next(

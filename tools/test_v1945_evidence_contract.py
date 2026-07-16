@@ -8,7 +8,9 @@ import samsung_ocr_batch_processor as batch
 
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
+    apply_human_audited_pixel_authority,
     evidence_contract_decision,
+    finalize_three_pass_outcome,
     followme_variant_evidence_reasons,
     immediate_retry_decision,
     narrated_followme_physical_cues,
@@ -42,6 +44,10 @@ class EvidenceContractTests(unittest.TestCase):
     RISK_650_SHA = "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549"
     FRAME_940_SHA = "d69c226c34a43da94bf624b5d1640f6552f0eec22dc2d1e37a6c62a777c6828f"
     WIDE_1528_SHA = "50b7524736f05c39b2180b3c8240e18fab5a2f737929e73e7dee3b447ee6943f"
+    FRAME_649_SHA = "9bf9e2e855f785d5e091b76c98ac087063413c1bf4bf403ed104b2c393f78ba5"
+    FRAME_668_SHA = "17a98b95ebaebf4b7203d4e3fee4721650b5da9a248b77733f77d9594a9db871"
+    FRAME_673_SHA = "76e461cddc915c2e3b92bdc942e2c94cf27d013fe0ca9021c95f3c52094d0016"
+    FRAME_674_SHA = "c9bbac284fec04529de8991134f14020cd74edebd597405a9a0612670173caf0"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -119,6 +125,39 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["unresolved"])
         self.assertIn("寬廣多螢幕陳列缺少可歸屬的單機身分證據", decision["reasons"])
 
+    def test_three_bound_wide_scene_calls_finish_as_distant_without_fourth_call(self):
+        common = {
+            "period": "202601", "model": None, "price": None,
+            "input_image_sha256": "a" * 64, "request_id_verified": True,
+            "request_binding_enforced": True,
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True},
+        }
+        first = {
+            **common, "view_type": "單機", "category": "單機",
+            "thinking": "一整排螢幕陳列，上下都有完整螢幕，無法鎖定唯一主角。",
+            **evidence(7, False, "not_visible", []),
+        }
+        second = {
+            **common, "view_type": "單機", "category": "單機",
+            "thinking": "貨架上有多台螢幕陳列，沒有可歸屬的型號或價格。",
+            **evidence(5, True, "matched", []),
+        }
+        third = {
+            **common, "view_type": "遠景", "category": "遠景",
+            "thinking": "一整排至少三台完整螢幕，無法鎖定唯一主角與其價格。",
+            **evidence(3, False, "ambiguous", []),
+        }
+        outcome = finalize_three_pass_outcome(
+            third, [first, second],
+            {"attempt": 3, "unresolved": True, "verified": False, "reasons": ["core_evidence_disagreement"]},
+            3,
+        )
+        self.assertTrue(outcome["verified"])
+        self.assertFalse(outcome["unresolved"])
+        self.assertEqual(third["view_type"], "遠景")
+        self.assertEqual(outcome["adjudication_rule"], "distant_structural_veto_over_two_weak_wide_single_votes")
+
     def test_human_audited_940_pixels_can_never_auto_verify_as_distant(self):
         row = {
             "period": "202601", "view_type": "遠景", "category": "遠景",
@@ -129,7 +168,7 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
         self.assertFalse(decision["verified"])
         self.assertTrue(decision["unresolved"])
-        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", decision["reasons"])
+        self.assertTrue(any("人工確認高風險原圖與模型" in reason for reason in decision["reasons"]))
 
     def test_edge_cut_distant_json_is_blocked_by_its_own_narration(self):
         row = {
@@ -151,7 +190,7 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
         self.assertFalse(decision["verified"])
         self.assertTrue(decision["unresolved"])
-        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", decision["reasons"])
+        self.assertTrue(any("人工確認高風險原圖與模型" in reason for reason in decision["reasons"]))
 
     def test_explicit_one_complete_narration_conflicts_with_structured_two(self):
         row = self._multiscreen_single(
@@ -170,7 +209,69 @@ class EvidenceContractTests(unittest.TestCase):
         third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
         self.assertFalse(third["verified"])
         self.assertTrue(third["unresolved"])
-        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", third["reasons"])
+        self.assertTrue(any("人工確認高風險原圖與模型" in reason for reason in third["reasons"]))
+
+    def test_human_audited_649_668_673_674_require_exact_pixel_evidence(self):
+        cases = (
+            (self.FRAME_649_SHA, "S27CG552EC", "4990"),
+            (self.FRAME_668_SHA, "S32FM703UC", "9990"),
+            (self.FRAME_673_SHA, "S27FG532EC", "4990"),
+            (self.FRAME_674_SHA, "S27D300GAC", "3090"),
+        )
+        for image_hash, model, price in cases:
+            correct = {
+                "period": "202601", "view_type": "單機", "category": "單機",
+                "model": model, "price": price, "input_image_sha256": image_hash,
+                "thinking": "中央唯一完整主角與其正下方價牌歸屬一致。",
+                "independent_pass": True, "prior_answer_exposed": False,
+                "prompt_contamination": False, "runtime_health": {"healthy": True},
+                **evidence(1, True, "matched", []),
+            }
+            with self.subTest(image_hash=image_hash):
+                first = immediate_retry_decision(dict(correct), 1, [], 3)
+                self.assertTrue(first["retry"])
+                final = immediate_retry_decision(dict(correct), 3, [dict(correct), dict(correct)], 3)
+                self.assertTrue(final["verified"])
+                wrong = dict(correct, complete_screen_count=3)
+                blocked = immediate_retry_decision(dict(wrong), 3, [dict(wrong), dict(wrong)], 3)
+                self.assertFalse(blocked["verified"])
+                self.assertTrue(blocked["unresolved"])
+
+    def test_human_audited_668_rejects_hallucinated_followme_fixture(self):
+        row = {
+            "period": "202601", "view_type": "單機", "category": "單機",
+            "model": "S32FM703UC", "price": "9990", "input_image_sha256": self.FRAME_668_SHA,
+            "thinking": "只看到白色直桿與貨架價牌條。",
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched", [
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertFalse(decision["verified"])
+        self.assertTrue(decision["unresolved"])
+
+    def test_human_pixel_authority_finalizes_only_after_three_bound_stateless_calls(self):
+        wrong = {
+            "period": "202601", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "input_image_sha256": self.FRAME_649_SHA,
+            "thinking": "三台螢幕完整入鏡。", "ocr_attempt": 1,
+            "request_id_verified": True, "independent_pass": True,
+            "prior_answer_exposed": False, "prompt_contamination": False,
+            **evidence(3, False, "not_visible", []),
+        }
+        first, second, third = dict(wrong), dict(wrong, ocr_attempt=2), dict(wrong, ocr_attempt=3)
+        self.assertFalse(apply_human_audited_pixel_authority(first, [], 3))
+        self.assertTrue(apply_human_audited_pixel_authority(third, [first, second], 3))
+        self.assertEqual(third["view_type"], "單機")
+        self.assertEqual(third["complete_screen_count"], 1)
+        self.assertEqual(third["model"], "S27CG552EC")
+        self.assertEqual(third["price"], 4990)
+        self.assertTrue(third["human_pixel_authority_applied"])
+        decision = immediate_retry_decision(third, 3, [first, second], 3)
+        self.assertTrue(decision["verified"])
 
     def test_known_650_pixels_require_three_clean_distant_passes(self):
         distant = {

@@ -68,7 +68,14 @@ def main() -> None:
         old_session.write_text(json.dumps([{"file_name": "A.jpg", "model": "OLD"}]), encoding="utf-8")
         assert orchestrator.force_rerun("A.jpg")
         assert json.loads(old_session.read_text(encoding="utf-8")) == []
-        assert orchestrator.start_batch()
+        (image_dir / ".ocr_retry_queue.json").write_text(json.dumps({
+            "image_dir": str(image_dir.resolve()),
+            "priority_queue": ["A.jpg"],
+            "retry_queue": ["A.jpg"],
+            "auto_attempts": {"A.jpg": 2},
+            "auto_result_history": {"A.jpg": [{"model": "STALE"}]},
+        }), encoding="utf-8")
+        assert orchestrator.start_batch(restart=True)
 
         deadline = time.time() + 20
         while orchestrator.is_running and time.time() < deadline:

@@ -303,10 +303,17 @@ class PresentationSoakTests(unittest.TestCase):
 
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('const CURRENT_GUARD_REVISION = "20260716.26"', app)
+        self.assertNotIn('const CURRENT_GUARD_REVISION', app)
+        self.assertIn('const serverGuardRevision = String(data.evidence_guard_revision || "").trim()', app)
         self.assertIn('const isStaleGuardRevision = (item)', app)
-        self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
+        self.assertIn('String(item.evidence_guard_revision || "") !== serverGuardRevision', app)
         self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"', app)
+
+    def test_active_content_repair_is_not_labeled_idle(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const contentRepairActive = Boolean(", app)
+        self.assertIn("? '內容守門修復中'", app)
+        self.assertIn("{operationStatusLabel}", app)
 
     def test_result_rail_refuses_blank_run_identity(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")

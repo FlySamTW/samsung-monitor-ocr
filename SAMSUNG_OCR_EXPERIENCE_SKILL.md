@@ -563,3 +563,14 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - A pixel-authority conflict may consume only the remaining independent passes of that same photo. It must not stop unrelated photos, exceed three model calls, or enter upload; the third pass must settle truthfully or fail that photo closed.
 - When this class regresses, stop the formal OCR loop but keep backend/dashboard/uploader/tab continuity. Resume only after offline regressions and a new isolated live smoke prove both directions plus FollowMe preservation.
 - Permanent live acceptance run `20260716_221131_225238` proves five photos at revision `.28`, each in exactly three stateless passes with no prior-answer exposure or prompt contamination. Required outcomes are `940=單機/count 1/S32FM803UC/12900`, `1528=遠景`, `1385=遠景`, `939=FollowMe Pro M7 43\"/17990`, and `646=單機/S27D300GAC/3090`.
+
+## Revision `.29` operational invariants
+
+- Never use narration length as an instruction-echo fuse. Match actual instruction/template echo only.
+- The server owns `evidence_guard_revision`; the UI never hard-codes it. A durable fuse is shown as repair-in-progress, not idle, and public status never exposes raw evidence.
+- Idle staging progress reads the cached `.ocr_source_map.json.items` denominator; do not substitute processed count and create `N/N` false completion.
+- Pixel-bound human adjudication requires exactly three stateless, request-bound calls and a known full-image SHA-256. It may finalize the audited fields on call 3 but never create call 4. The `.29` permanent set is 649/668/673/674; 668 explicitly has no FollowMe fixture evidence.
+- Three bound wide-scene calls with counts >=3 and no model/price finish as distant when at least one call explicitly says distant. An empty matched-label claim is not identity.
+- FollowMe: no off-frame base, no shelf rail as tray, no Smart Monitor family name as direct branding, and no white-pole-only proof.
+- When stream-upload pending is nonzero, verify the worker PID exists and receipts advance. Restart only that worker hidden when its status PID is stale; do not restart OCR or open a terminal/browser.
+- `restart=true` must delete/ignore the prior durable retry state and reset attempt/history/incident maps before the first call. A displayed pass number is never proof; audit the trace call sequence as `1,2,3`.

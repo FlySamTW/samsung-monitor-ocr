@@ -9,6 +9,7 @@ from skills.runtime_health_gate import (
     evaluate_runtime_health,
     final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
+    public_runtime_health_fuse,
     read_runtime_health_fuse,
     trip_runtime_health_fuse,
 )
@@ -227,6 +228,32 @@ class RuntimeHealthGateTests(unittest.TestCase):
                 self.assertFalse(decision.allow_processing)
                 self.assertEqual(decision.display_narration, BLOCKED_NARRATION)
         self.assertNotIn("view_type", decision.display_narration)
+
+    def test_long_natural_narration_does_not_trip_instruction_echo(self):
+        narration = (
+            "我看到畫面中央是一台完整入鏡的螢幕，機身、螢幕與正下方價牌都在原圖內。"
+            "左右邊緣的其他螢幕都被畫面邊界截斷，因此不計入完整螢幕數量。"
+            "我只描述這張照片中能直接看到的商品外觀、擺放方式與價牌位置。"
+        ) * 4
+        self.assertGreater(len(narration), 300)
+        decision = evaluate_runtime_health(record(), narration)
+        self.assertNotIn("ui_narration_instruction_echo", decision.reasons)
+        self.assertTrue(decision.allow_processing)
+
+    def test_public_fuse_never_exposes_raw_model_output(self):
+        public = public_runtime_health_fuse({
+            "active": True,
+            "reason": "content_conflict",
+            "record_snapshot": {
+                "model": "S24F332EAC",
+                "raw_model_output": "secret raw payload",
+                "narration": "long internal evidence",
+            },
+        })
+        self.assertTrue(public["active"])
+        self.assertEqual(public["record_snapshot"]["model"], "S24F332EAC")
+        self.assertNotIn("raw_model_output", public["record_snapshot"])
+        self.assertNotIn("narration", public["record_snapshot"])
 
     def test_raw_field_assignment_and_json_fence_are_blocked(self):
         for narration in ('model=S24F332EAC price=2390', '```json\n{"price":2390}\n```'):

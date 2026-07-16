@@ -109,6 +109,33 @@ def read_runtime_health_fuse(audit_dir: str | Path) -> dict[str, Any] | None:
     return payload
 
 
+def public_runtime_health_fuse(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return the bounded operator-facing fuse state, never raw model evidence."""
+    if not payload:
+        return None
+    source = dict(payload)
+    public = {
+        key: source.get(key)
+        for key in (
+            "schema", "active", "tripped_at", "reason", "reasons",
+            "source_file", "attempt", "run_id", "clearance",
+        )
+        if source.get(key) not in (None, "")
+    }
+    snapshot = source.get("record_snapshot")
+    if isinstance(snapshot, Mapping):
+        public["record_snapshot"] = {
+            key: snapshot.get(key)
+            for key in (
+                "view_type", "category", "model", "price", "complete_screen_count",
+                "unique_main", "label_ownership", "followme_physical_evidence",
+                "independent_pass", "prior_answer_exposed", "prompt_contamination",
+            )
+            if snapshot.get(key) not in (None, "")
+        }
+    return public
+
+
 def trip_runtime_health_fuse(
     audit_dir: str | Path,
     *,
@@ -190,7 +217,9 @@ def narration_contains_raw_structure(value: Any) -> bool:
 def narration_contains_instruction_echo(value: Any) -> bool:
     """Reject operator-facing narration that copies prompt/rule instructions."""
     text = str(value or "").strip()
-    return bool(text and (_INSTRUCTION_ECHO_PATTERN.search(text) or len(text) > 300))
+    # Length is a presentation concern, not proof of prompt contamination.
+    # A detailed but natural observation must not stop an entire production run.
+    return bool(text and _INSTRUCTION_ECHO_PATTERN.search(text))
 
 
 def _flatten_content(value: Any) -> str:
