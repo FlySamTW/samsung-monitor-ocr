@@ -24,6 +24,7 @@ from skills.model_validation import (
 )
 from skills.runtime_health_gate import (
     evaluate_runtime_health,
+    final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
     trip_runtime_health_fuse,
 )
@@ -177,6 +178,7 @@ class BatchOrchestrator:
         self.max_auto_attempts = max(1, int(config.get("max_auto_attempts", 3)))
         self.auto_attempts = {}
         self.auto_result_history = {}
+        self.runtime_health_incident_sources = {}
         self.source_metadata_map = {}
         
         # [v16.12] Force Rerun Queue
@@ -321,6 +323,7 @@ class BatchOrchestrator:
                 self.session_results = []
                 self.auto_attempts = {}
                 self.auto_result_history = {}
+                self.runtime_health_incident_sources = {}
 
             self.image_dir = target_dir
             self.config['image_dir'] = target_dir
@@ -374,6 +377,7 @@ class BatchOrchestrator:
             "retry_queue": list(dict.fromkeys(self.retry_queue)),
             "auto_attempts": self.auto_attempts,
             "auto_result_history": self.auto_result_history,
+            "runtime_health_incident_sources": self.runtime_health_incident_sources,
             "updated_at": datetime.now().isoformat(),
         }
         temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -401,12 +405,38 @@ class BatchOrchestrator:
             self.auto_result_history = {
                 str(k): list(v) for k, v in (payload.get("auto_result_history") or {}).items() if existing(k)
             }
+            self.runtime_health_incident_sources = {
+                str(reason): list(dict.fromkeys(str(item) for item in sources if str(item)))
+                for reason, sources in (payload.get("runtime_health_incident_sources") or {}).items()
+                if isinstance(sources, list)
+            }
             if self.priority_queue or self.retry_queue:
                 self.log_system(
                     f"♻️ 已恢復未完成複核佇列：人工 {len(self.priority_queue)}、自動 {len(self.retry_queue)}"
                 )
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             self.log_system(f"⚠️ 複核佇列無法恢復，保留檔案供檢查: {exc}")
+
+    def _runtime_health_incident_repeated_across_sources(self, reasons, result) -> bool:
+        """Persist contained incidents and fuse when the class spreads photos."""
+        source_id = str(
+            result.get("source_item_id")
+            or result.get("input_image_sha256")
+            or result.get("source_path")
+            or result.get("file_name")
+            or ""
+        ).strip()
+        if not source_id:
+            return True
+        repeated = False
+        for reason in sorted({str(item) for item in reasons if str(item)}):
+            prior = set(self.runtime_health_incident_sources.get(reason, []))
+            if prior and source_id not in prior:
+                repeated = True
+            prior.add(source_id)
+            self.runtime_health_incident_sources[reason] = sorted(prior)
+        self._persist_retry_state()
+        return repeated
 
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:
@@ -1337,6 +1367,7 @@ class BatchOrchestrator:
                     self.retry_queue = []
                     self.auto_attempts = {}
                     self.auto_result_history = {}
+                    self.runtime_health_incident_sources = {}
                     self.session_processed = set()
                     self.current_run_id = ""
                 self.image_dir = target_dir
@@ -1834,14 +1865,49 @@ class BatchOrchestrator:
                     upstream_upload_authorized=False,
                 )
                 norm_result["runtime_health"] = runtime_health.to_dict()
+                runtime_health_force_unresolved = False
                 if not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
-                    if first_pass_content_conflict_can_retry(attempt_number, runtime_health.reasons):
+                    can_retry_conflict = first_pass_content_conflict_can_retry(
+                        attempt_number, runtime_health.reasons
+                    )
+                    can_isolate_conflict = final_content_conflict_can_isolate(
+                        attempt_number, runtime_health.reasons
+                    )
+                    repeated_across_sources = False
+                    if can_retry_conflict or can_isolate_conflict:
+                        repeated_across_sources = self._runtime_health_incident_repeated_across_sources(
+                            runtime_health.reasons, norm_result
+                        )
+                    if repeated_across_sources:
+                        self._persist_runtime_health_fuse(
+                            list(runtime_health.reasons) + ["runtime_health_conflict_repeated_across_sources"],
+                            source_file=fname,
+                            attempt=attempt_number,
+                            run_id=run_id,
+                            record_snapshot=norm_result,
+                        )
+                        norm_result["review_status"] = "內容健康閘停止"
+                        self.stream_buffer = runtime_health.display_narration
+                        self.log_system("🛑 [內容健康閘] 同類衝突已跨不同照片重複，停止 OCR。")
+                        self.stop_event.set()
+                        break
+                    if can_retry_conflict:
                         norm_result["runtime_health"]["contained_for_stateless_retry"] = True
                         norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
                         self.log_system(
-                            "⚠️ [內容健康閘] 第一輪 FollowMe／遠景矛盾已隔離；"
-                            "只允許同張照片做一次無記憶第二輪。"
+                            "⚠️ [內容健康閘] 本張 FollowMe 證據矛盾已隔離；"
+                            "只允許同張照片完成最多三輪無記憶複核。"
+                        )
+                    elif can_isolate_conflict:
+                        runtime_health_force_unresolved = True
+                        norm_result["runtime_health"]["contained_as_unresolved"] = True
+                        norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
+                        norm_result["thinking"] = runtime_health.display_narration
+                        norm_result["narration"] = runtime_health.display_narration
+                        self.log_system(
+                            "⚠️ [內容健康閘] 同張照片第三輪仍有敘述／證據矛盾；"
+                            "已固定隔離待最終裁決，主批次繼續。"
                         )
                     else:
                         self._persist_runtime_health_fuse(
@@ -1867,6 +1933,15 @@ class BatchOrchestrator:
                         previous_results,
                         self.max_auto_attempts,
                     ) or review_decision
+                if runtime_health_force_unresolved:
+                    review_decision["retry"] = False
+                    review_decision["unresolved"] = True
+                    review_decision["verified"] = False
+                    review_decision["reasons"] = list(dict.fromkeys(
+                        list(review_decision.get("reasons") or [])
+                        + list(runtime_health.reasons)
+                        + ["same_photo_runtime_conflict_isolated_after_three_passes"]
+                    ))
                 norm_result['evidence_guard_revision'] = str(
                     review_decision.get('evidence_guard_revision') or ''
                 )

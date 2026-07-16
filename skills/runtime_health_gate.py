@@ -292,17 +292,29 @@ def distant_followme_conflict(record: Mapping[str, Any]) -> bool:
 
 
 def first_pass_content_conflict_can_retry(attempt: int, reasons: Iterable[Any]) -> bool:
-    """Allow one bounded stateless retry for an already-contained view conflict.
+    """Allow bounded stateless retries for a containable same-photo conflict.
 
-    Only the exact FollowMe/distant view inconsistency class is eligible. Model,
-    price, prompt, UI, or other runtime defects still trip the durable fuse on
-    first sight. Repetition on pass 2 is never containable.
+    A first-pass FollowMe/view inconsistency gets one fresh look. A narration-
+    only FollowMe evidence conflict may also receive pass 3 because the result
+    remains non-verifiable and a later independent pass can safely adjudicate
+    the single photo. Model, price, prompt, UI, and binding defects still fuse.
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
+    current_attempt = int(attempt or 1)
+    if current_attempt == 1:
+        return bool(normalized and normalized.issubset(_FIRST_PASS_CONTAINABLE_CONTENT_REASONS))
     return bool(
-        int(attempt or 1) == 1
-        and normalized
-        and normalized.issubset(_FIRST_PASS_CONTAINABLE_CONTENT_REASONS)
+        current_attempt == 2
+        and normalized == {"structured_narration_followme_conflict"}
+    )
+
+
+def final_content_conflict_can_isolate(attempt: int, reasons: Iterable[Any]) -> bool:
+    """End one narration-only conflict as unresolved after the third pass."""
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    return bool(
+        int(attempt or 1) >= 3
+        and normalized == {"structured_narration_followme_conflict"}
     )
 
 

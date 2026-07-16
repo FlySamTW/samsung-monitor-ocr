@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from skills.runtime_health_gate import (
     BLOCKED_NARRATION,
     evaluate_runtime_health,
+    final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
     read_runtime_health_fuse,
     trip_runtime_health_fuse,
@@ -115,7 +116,10 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertIn('"runtime_health_stop": True', processor)
         self.assertIn("runtime_health = evaluate_runtime_health(", orchestrator)
         self.assertIn("if not runtime_health.allow_processing:", orchestrator)
-        self.assertIn("first_pass_content_conflict_can_retry(attempt_number", orchestrator)
+        self.assertIn("first_pass_content_conflict_can_retry(", orchestrator)
+        self.assertIn("attempt_number, runtime_health.reasons", orchestrator)
+        self.assertIn("final_content_conflict_can_isolate(", orchestrator)
+        self.assertIn("runtime_health_conflict_repeated_across_sources", orchestrator)
         self.assertIn('"contained_for_stateless_retry"', orchestrator)
         self.assertIn("self.stop_event.set()", orchestrator)
         self.assertIn("self._persist_runtime_health_fuse(", orchestrator)
@@ -354,7 +358,7 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertIn("structured_authority_material_conflict:view_type", decision.reasons)
         self.assertFalse(decision.allow_processing)
 
-    def test_only_first_pass_followme_view_conflict_gets_one_stateless_retry(self):
+    def test_followme_conflicts_have_bounded_same_photo_actions(self):
         reasons = [
             "distant_followme_strong_evidence_conflict",
             "structured_authority_material_conflict:view_type",
@@ -367,6 +371,30 @@ class RuntimeHealthGateTests(unittest.TestCase):
                 reasons + ["structured_authority_material_conflict:model"],
             )
         )
+        narration_only = ["structured_narration_followme_conflict"]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, narration_only))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, narration_only))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, narration_only))
+        self.assertFalse(final_content_conflict_can_isolate(2, narration_only))
+        self.assertTrue(final_content_conflict_can_isolate(3, narration_only))
+        self.assertFalse(final_content_conflict_can_isolate(3, reasons))
+
+    def test_runtime_incident_registry_fuses_only_after_a_second_source(self):
+        from skills.batch_orchestrator import BatchOrchestrator
+
+        orchestrator = object.__new__(BatchOrchestrator)
+        orchestrator.runtime_health_incident_sources = {}
+        orchestrator._persist_retry_state = lambda: None
+        reasons = ["structured_narration_followme_conflict"]
+        self.assertFalse(orchestrator._runtime_health_incident_repeated_across_sources(
+            reasons, {"source_item_id": "source-a"}
+        ))
+        self.assertFalse(orchestrator._runtime_health_incident_repeated_across_sources(
+            reasons, {"source_item_id": "source-a"}
+        ))
+        self.assertTrue(orchestrator._runtime_health_incident_repeated_across_sources(
+            reasons, {"source_item_id": "source-b"}
+        ))
 
     def test_narrated_followme_fixture_omission_trips_runtime_health(self):
         decision = evaluate_runtime_health(

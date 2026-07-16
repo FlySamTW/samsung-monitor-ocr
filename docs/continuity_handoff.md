@@ -377,3 +377,10 @@
 - smoke 完成後首次正式接力因後端仍指向 smoke 目錄而正確拒絕，未啟動 OCR 或 uploader。API 在 idle 狀態切回唯一正式 staging 後，隱藏 runner 由 26/1,500 精確續接；971 完成後成為 unresolved，正式流程跨過中斷點至 27/1,500 並開始下一張，fuse 未復發，uploader 仍為 0。
 - 右欄 unresolved 卡片不再寫含糊的「判讀未完成／待複核」，改為「三輪衝突／已隔離」及「待慢模型或人工最終裁決」；統計標籤改為「待裁決」。版面比例未變，25 項 presentation soak 與 production build 通過。
 - Drive 沒有新增：canonical receipt 最後一筆仍為 2026-07-11 11:33:57。帳本有 52,965 筆收據；2026-07-14 嚴格重建時只有 51,459 張仍列為 ready/uploaded-skipped，897 張為已上傳但依新規則需重審。完成本次 2026 finalization、重建 proof 並通過遠景/FollowMe 稽核前，不得新增上傳。
+
+## 2026-07-16 15:05 `.19` 單照片內容矛盾收旂與上傳帳本確認
+
+- 正式批次在 30/1,500、`M-台中市-北屯區-TK3C-新文心-975.jpg` 第 2 輪停止。原圖只有黑色圓形桌上底座；敲述前段也說黑色底座，後段卻虛構「白色直立支架與圓形底座已確認」，結構化 FollowMe 實體證據為空。`structured_narration_followme_conflict` 為真實內容漂移警報，不是介面誤報；該輪沒有進入 verified 或上傳。
+- 收旂規則已改為：同一 source identity 的可隔離 FollowMe／敲述矛盾最多只做三輪無記憶獨立判讀；第三輪後仍不安全就固定 unresolved，不得 verified、不得上傳，主批次繼續。同一衝突類別在同一工作目錄的不同 source identity 再現時，才視為跨照片漂移而停整批。事件來源清冊持久化於 `.ocr_retry_queue.json`，切換工作目錄才重置。
+- 30 項 runtime-health 單測、Python compile、`git diff --check` 與完整 critical regressions 全通過。保留舊 fuse 不先刪除的全新 5 張隔離 smoke 完成 5/5：1 verified、4 unresolved、0 failed，共 13 輪。revision mismatch、request/image binding 錯誤、非獨立輪次、前輪答案暴露、prompt contamination、invalid verified 均為 0。975 在第 2 輪的內容衝突被限制於同照片第 3 輪，最終 unresolved；批次自然結束且舊 fuse 時間／來源均未被偷改。
+- 正式狀態回報仍為 65,331/150,321、資料夾 44/136、202601 `.19` 複核 30/1,500（verified 14、待裁決 16、0 failed）。Google Drive 最後新增仍為 2026-07-11 11:33:57，canonical receipt 52,965 筆；2026-07-14 守門重建為 ready/uploaded-skipped 51,459、stale uploaded review 897。隔離 smoke 不計入正式 65,331 進度，也沒有啟動 uploader。
