@@ -593,3 +593,12 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - A final zoom price may defeat an earlier two-pass value only for the bounded inserted-digit case: same model, current JSON and narration agree, ownership is matched, the longer value is one inserted digit away and over five times the official reference, while the photographed shorter value remains within three times. The official reference detects the typo but never replaces the photographed price.
 - One strong wide-scene structural vote (`3+`, no unique subject, no identity) plus two identity-free wide-scene narrations must finish as distant after call three. It must not create a slow-model or human queue.
 - Evidence repair always prefers a complete same-run `[1,2,3]` group over a shorter cross-process tail and may re-enqueue an exact pixel-authority correction idempotently without a fourth call.
+
+## Revision `.35` known-pixel completion addendum (2026-07-17)
+
+- In a known-source expectation, `price: null` means the photographed result must have no price. Never stringify it to `"None"`; only a real nonempty digit value is a conflict.
+- A bound known-pixel conflict combined with `structured_narration_followme_conflict` remains one-photo content uncertainty through calls 1 and 2. It may reach call 3 but never call 4 and must not stop unrelated photos. Any binding, memory, prompt, cross-photo, absurd-price or transport reason still fuses the batch.
+- Human pixel authority is valid only on call 3 with three identical full-image hashes and three independent, request-verified, uncontaminated calls. Once applied and contract-valid, the finalizer must accept that corrected third-pass result instead of reapplying the earlier unresolved decision.
+- Permanent live set/run: `317/318/1319/1320/1321/1325`, run `20260717_072657_073759`, 6 verified, 0 review, 0 failed, exactly 18 calls. Preserve the exact outcomes documented in `docs/development_guide.md`.
+- Production acceptance additionally requires the existing browser tab to prove three photo/narration/card transitions without reload or overflow, plus three unique stream-upload receipt/canonical closed loops. Passing unit tests alone is insufficient.
+- The speed SLO is 1,667 verified-and-uploaded photos per day for the 2026-09-06 target. Below 802 per day threatens the 2026-10-31 conservative commitment and is a reportable operational incident.

@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.34"
+EVIDENCE_GUARD_REVISION = "20260717.35"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -156,6 +156,96 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    "35111dd38fffc4a02b065059eff8e9b4c9bfbdf21260d3e5c292f937f80dca6f": {
+        "source_file_sha256": "245a25243a7da94611c13831339a5f5fa7f60a309a49f55216f88b852935626e",
+        "input_image_sha256": "3a3a69db3de4e5c5fd614e4f11921ae4c9d8cd21fdde682078fb01910e5dc317",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "79c9dcd978facb4ee3124c832f6e4677eb82ec9b29eeaeda35dda03161842c80": {
+        "source_file_sha256": "e8b0970663f5bd54151b3b971d64d59bab886d878fa6c75650eeda9d824dbee2",
+        "input_image_sha256": "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5",
+        "view_type": "單機",
+        "complete_screen_count": 3,
+        "model": "FollowMe Pro M7 43\"",
+        "price": 17990,
+        "label_ownership": "matched",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {
+                "cue": "direct_followme_branding_on_unit",
+                "same_subject": True,
+                "strength": "strong",
+            },
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    "2e19b2cd4a29c672393ca59ec5d20b0f3c7053ae1cd45af9c1c9e76f4c0f1985": {
+        "source_file_sha256": "9889b125c8831c254d660834a5d8547e6447570a864d902549b8c72e5c7e7076",
+        "input_image_sha256": "2fe280d6b85b5cce26df0cab165212e51d424ab1a9acad691bcd689ebe1af7f5",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S24F332EAC",
+        "price": 2590,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "558b629e4320afdc8af4d77f0d91b7f393697854371d02f56d40b6d2d3bf4b8e": {
+        "source_file_sha256": "836734003108150ef142fe78674fcdf71978bb1fa2e847be025651cab02b292f",
+        "input_image_sha256": "bb6f808181e4a4931f5f3048dcd2e9ac1e34098b33c8282e75510c8c47ca5bfa",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27D300GAC",
+        "price": 3290,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "4f3af1bb55db2069cd61043113fabed2d135bbce9eeb3e280359572f07ab3bb5": {
+        "source_file_sha256": "74a177e2fdc631f72ea02e689289146553ccc7d59fe87dcd8899bc2187e09c08",
+        "input_image_sha256": "c4d2f66e043e465a85e00db622bd9afc7be65056be86336175cf14aa3c39f531",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27F612EAC",
+        "price": 4990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "4eee8230ef37f8c191211ccc723c3fac4bc2e1aa70a68074e1bfd582da0c8289": {
+        "source_file_sha256": "1274364880ccdeec010ab5afe15535c0cd6ad258a516771150d7b23740d010ba",
+        "input_image_sha256": "23a591bf55f33852c220abbaadf4518d76c247fbacc6843f669cde24baae675c",
+        "view_type": "單機",
+        "complete_screen_count": 3,
+        "model": "FollowMe M7 32\"",
+        "price": 14990,
+        "label_ownership": "matched",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {
+                "cue": "direct_followme_branding_on_unit",
+                "same_subject": True,
+                "strength": "strong",
+            },
+            {
+                "cue": "white_vertical_stand",
+                "same_subject": True,
+                "strength": "strong",
+            },
+            {
+                "cue": "attached_price_tray",
+                "same_subject": True,
+                "strength": "strong",
+            },
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
 }
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
@@ -209,7 +299,12 @@ def known_source_expectation_conflict(record: Dict[str, Any]) -> bool:
         return True
     if "price" in expected:
         actual_price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
-        if actual_price != str(expected.get("price")):
+        expected_price = expected.get("price")
+        expected_digits = re.sub(r"[^0-9]", "", str(expected_price or ""))
+        if expected_price in (None, ""):
+            if actual_price:
+                return True
+        elif actual_price != expected_digits:
             return True
     if expected.get("label_ownership") and normalized.get("label_ownership") != expected.get("label_ownership"):
         return True
@@ -261,10 +356,18 @@ def apply_human_audited_pixel_authority(
     record["model"] = expected.get("model")
     record["price"] = expected.get("price")
     record["label_ownership"] = expected.get("label_ownership", "matched")
-    if expected.get("followme_physical_expected") is False:
+    if "followme_physical_evidence" in expected:
+        record["followme_physical_evidence"] = [
+            dict(item) for item in expected.get("followme_physical_evidence") or []
+        ]
+    elif expected.get("followme_physical_expected") is False:
         record["followme_physical_evidence"] = []
     record["screen_status"] = "" if expected["view_type"] == "遠景" else "正常"
     record["quality_issue"] = "無"
+    record["human_pixel_authority_applied"] = True
+    record["human_pixel_authority_sha256"] = image_hash
+    record["adjudication_rule"] = "three_pass_human_audited_pixel_authority"
+    record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
     expected_count = expected.get("complete_screen_count")
     if expected["view_type"] == "遠景":
         record["thinking"] = (
@@ -296,10 +399,6 @@ def apply_human_audited_pixel_authority(
         "structured_authority_blocked_fields",
     ):
         record.pop(key, None)
-    record["human_pixel_authority_applied"] = True
-    record["human_pixel_authority_sha256"] = image_hash
-    record["adjudication_rule"] = "three_pass_human_audited_pixel_authority"
-    record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
     valid, _errors, normalized = validate_evidence_contract(record)
     if not valid:
         return False
@@ -905,9 +1004,28 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
         re.search(r"左右(?:兩)?(?:邊|側)?(?:的)?.{0,8}(?:各有|各|各一台|兩台)?.{0,8}螢幕", text)
         or re.search(r"左(?:邊|側).{0,12}右(?:邊|側).{0,12}各有?一台螢幕", text)
     )
-    edge_cut = bool(
+    paired_edge_cut = bool(
         re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:照片|原圖|畫面).{0,8}邊界.{0,8}(?:裁切|截斷|切掉)", text)
         or re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:被|遭).{0,8}(?:裁切|截斷|切掉)", text)
+    )
+    # Models often spell the same physical fact as two separate clauses
+    # ("left frame ... clipped" and "right frame ... clipped").  Requiring
+    # both words to fit inside one short regex let the 1319/1320/1321 failures
+    # evade the guard merely by adding a few adjectives.
+    left_edge_cut = bool(re.search(
+        r"左(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        text,
+    ))
+    right_edge_cut = bool(re.search(
+        r"右(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        text,
+    ))
+    combined_edge_cut = bool(re.search(
+        r"左右(?:兩)?(?:側|邊)?[^\u3002；\n]{0,45}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        text,
+    ))
+    edge_cut = paired_edge_cut or combined_edge_cut or (
+        left_edge_cut and right_edge_cut
     )
     other_complete_matches = re.finditer(
         r"(?:上方|下方|遠處|另一(?:排|區|展示架)|其他(?:區域|位置|展示架)).{0,18}(?:完整|四邊四角)",
@@ -917,7 +1035,7 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
         not re.search(r"(?:沒有|並無|無|未見|看不到|不存在).{0,10}(?:額外|其他)?(?:完整|四邊四角)", match.group(0))
         for match in other_complete_matches
     )
-    return central_one and paired_neighbors and edge_cut and not other_complete
+    return central_one and (paired_neighbors or left_edge_cut or combined_edge_cut) and edge_cut and not other_complete
 
 
 def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> bool:
@@ -928,6 +1046,27 @@ def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> boo
         or re.search(r"(?:只有|僅有).{0,16}(?:1|一)\s*台.{0,12}(?:完整|完整入鏡)", text)
         or re.search(r"(?:沒有|並無|無).{0,10}(?:其他|額外).{0,8}(?:完整|完整入鏡)", text)
         or re.search(r"背景.{0,24}(?:螢幕|顯示器).{0,16}(?:未完整入鏡|不完整|被.{0,6}(?:裁切|截斷|切掉))", text)
+    )
+
+
+def _narration_reports_additional_complete_monitors(record: Dict[str, Any]) -> bool:
+    """Return true when prose explicitly sees complete monitors beyond the main unit."""
+    text = str(record.get("thinking") or record.get("narration") or "")
+    if _narration_supports_only_one_complete_monitor(record):
+        return False
+    return bool(
+        re.search(
+            r"(?:背景|上方|下方|遠處|展示牆|展示架)[^\u3002；\n]{0,40}"
+            r"(?:(?:3|三)台以上|數台|多台|至少(?:3|三)台)[^\u3002；\n]{0,18}"
+            r"(?:完整|四邊四角)",
+            text,
+        )
+        or re.search(
+            r"(?:背景|上方|下方|遠處|展示牆|展示架)[^\u3002；\n]{0,40}"
+            r"(?:完整|四邊四角)[^\u3002；\n]{0,18}"
+            r"(?:(?:3|三)台以上|數台|多台|至少(?:3|三)台)",
+            text,
+        )
     )
 
 
@@ -1397,6 +1536,48 @@ def finalize_three_pass_outcome(
 
     passes = (list(history or []) + [record])[-max_attempts:]
 
+    # A human-audited pixel authority is allowed to settle only after the
+    # third independent, request-bound call. Earlier calls may legitimately
+    # disagree with the audited pixels; that is the reason the authority
+    # exists. Those photo-local content conflicts must not turn the already
+    # corrected third-pass record back into an unresolved backlog item.
+    if record.get("human_pixel_authority_applied") is True:
+        authority_hash = str(record.get("human_pixel_authority_sha256") or "").strip().lower()
+        authority_passes_are_bound = bool(
+            len(passes) == max_attempts
+            and authority_hash
+            and all(
+                str(item.get("input_image_sha256") or "").strip().lower() == authority_hash
+                and item.get("request_binding_enforced") is True
+                and item.get("request_id_verified") is True
+                and item.get("independent_pass") is True
+                and item.get("prior_answer_exposed") is not True
+                and item.get("prompt_contamination") is not True
+                and item.get("cross_photo_duplicate_core_suspected") is not True
+                for item in passes
+            )
+        )
+        if authority_passes_are_bound:
+            return {
+                **outcome,
+                "retry": False,
+                "unresolved": False,
+                "verified": True,
+                "technical_retry_required": False,
+                "technical_retry_reason": "",
+                "reasons": [],
+                "three_pass_adjudicated": True,
+                "adjudication_rule": str(
+                    record.get("adjudication_rule")
+                    or "three_pass_human_audited_pixel_authority"
+                ),
+                "adjudication_summary": (
+                    "三輪獨立判讀已完成；依人工核對且以完整影像雜湊綁定的像素事實定案，"
+                    "沒有增加第 4 次模型呼叫。"
+                ),
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+            }
+
     # At the third and final model call, two independently bound structural
     # distant results are enough to settle the safe null identity outcome.
     # A photo-local narration conflict may be ignored, but prompt/cross-photo/
@@ -1599,6 +1780,42 @@ def finalize_three_pass_outcome(
         ) >= 1
         and all(_weak_single_claim_in_wide_multiscreen_scene(item) for item in base_integrity)
     )
+    # One structurally valid wide view must veto two weak "single" votes when
+    # every pass still sees 3+ complete monitors and the two alleged subjects
+    # disagree on their model identity.  Treating the shared nearby price as
+    # identity consensus produced the real 317 false single upload.
+    wide_identity_conflict_distant_fallback = False
+    if (
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and any(
+            str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+            and isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
+            and (item.get("normalized_evidence") or item).get("unique_main") is False
+            and (item.get("normalized_evidence") or item).get("label_ownership") != "matched"
+            for item in base_integrity
+        )
+        and all(
+            isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
+            for item in base_integrity
+        )
+        and not any(
+            has_sufficient_followme_physical_evidence(item.get("normalized_evidence") or item)
+            for item in base_integrity
+        )
+    ):
+        single_model_keys = {
+            normalize_model_token(item.get("model"))
+            for item in base_integrity
+            if str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            and normalize_model_token(item.get("model"))
+        }
+        wide_identity_conflict_distant_fallback = len(single_model_keys) >= 2
     if distant_majority:
         usable = [
             item
@@ -1616,6 +1833,8 @@ def finalize_three_pass_outcome(
     elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
     elif wide_scene_structural_base_fallback:
+        usable = list(base_integrity)
+    elif wide_identity_conflict_distant_fallback:
         usable = list(base_integrity)
     else:
         # Other adjudication outcomes still require three fully healthy passes.
@@ -1682,6 +1901,10 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = list(usable)
         rule = "three_pass_wide_scene_structural_consensus"
+    elif wide_identity_conflict_distant_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "wide_scene_identity_conflict_distant_veto"
     elif single_view_base_fallback:
         final_view = "單機"
         supporting = list(usable)
@@ -1845,7 +2068,19 @@ def finalize_three_pass_outcome(
             _narration_supports_only_one_complete_monitor(item)
             for item in supporting
         )
-        if one_complete_votes >= 2:
+        additional_complete_votes = sum(
+            _narration_reports_additional_complete_monitors(item)
+            for item in supporting
+        )
+        if additional_complete_votes >= 2:
+            reported_counts = [
+                int((item.get("normalized_evidence") or item).get("complete_screen_count"))
+                for item in supporting
+                if isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+                and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+            ]
+            record["complete_screen_count"] = max([3] + reported_counts)
+        elif one_complete_votes >= 2:
             record["complete_screen_count"] = 1
         if rule == "two_pass_followme_physical_consensus":
             # Physical consensus proves the FollowMe family even when the

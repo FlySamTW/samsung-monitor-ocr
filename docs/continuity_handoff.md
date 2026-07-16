@@ -440,3 +440,14 @@
 - `太平-1099` 三輪後曾留下技術狀態；完整三輪證據實為一輪 `5台／無唯一主角` 加兩輪無型號無價格的整排陳列描述。已以 `three_pass_wide_scene_structural_consensus` 結案為遠景、無型號、無價格並排入上傳。
 - 修復工具已修正完整 `[1,2,3]` 被較短 `[2,3]` 尾端覆蓋的缺陷；正式後端在 idle boundary 以 hidden window 單次替換，既有 Chrome 分頁與主版面未改。
 - 續跑起點：202601 `140/1,500`、verified 140、review 0、failed 0、fuse inactive；stream uploaded 115、canonical 53,080、pending 0，最新 receipt 為修正後的 1105。量測日 `2026-09-06`、保守承諾 `2026-10-31` 不變。
+
+## 2026-07-17 07:45 `.35` 六張實拍驗收與正式恢復
+
+- `.34` 最新 20 張內容稽核抓到 6 張明確錯誤：317 寬景被弱單機票定案；318 捏造畫面外底座／託盤；1319/1320/1321 把左右碰圖界螢幕算完整；1325 漏算背景完整螢幕。51 筆舊 trace 的 prior exposure、prompt contamination、request binding、independence 與跨圖重複均為 0，根因是結構／定案規則，不是記憶感染。
+- OCR 在正式 192/1,500 的照片邊界停止，port 5002 Dashboard 保持在線；uploader 排空後停止。五張已有完整三輪者用 exact pixel authority 修復並排隊，318 補做第三輪。
+- 初次隔離暴露兩個守門缺陷：預期 `price=None` 被字面 `"None"` 誤判衝突；第三輪像素權威已修正內容後，舊 unresolved 決定仍會把它打回。另有 known-pixel + narration FollowMe 複合衝突會在第二輪錯誤停整批。三項均已修正並加入永久測試。
+- 採認場次 `20260717_072657_073759` 完成 6/6 verified、0 review、0 failed、每張恰三輪。317 遠景 count3；318 FollowMe Pro M7 43/17990/count3 且只保留 direct branding；1319/1320/1321 分別為 count1 的 S24F332EAC/2590、S27D300GAC/3290、S27F612EAC/4990；1325 FollowMe M7 32/14990/count3。18 筆 trace 無前輪答案、無提示污染、無非獨立或 request 綁定失敗，六張第三輪 runtime health 全健康，active fuse 0。
+- 186 項 targeted tests 與完整 critical regressions 通過。正式 5002 隱藏替換為 `20260717.35`，從 192/1,500 原位續跑；隔離 5003 已關閉，OCR/uploader 各只有正式背景程序。
+- 現場三次切換核對 `1109→1110→1111→1112`：目前檔名、預覽、LLM 逐字內容、右欄最上方卡片完全一致；子進度 196→199/1,500，累計判讀 16,202→16,209，上傳總數 53,121→53,125，資料匣完整、無水平溢位、未 reload／未新開分頁。
+- 三筆 `.35` Drive 閉環已核對 working→receipt→canonical，source／目標／Drive ID 各自唯一；`.35` failed=0、重複 filename/Drive ID=0。正式流程持續運行，下一接手者不得重新啟動或 restart。
+- 完工日期仍以 `2026-09-06` 為量測目標（約 1,667 張／日、69.5 張／時）；`2026-10-31` 為保守承諾。固定報告必須同時列出 24 小時 verified 增量與 receipt 增量，不能只報累計總盤。

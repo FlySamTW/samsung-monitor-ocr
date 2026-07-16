@@ -277,7 +277,6 @@ def finalize_file(
             apply
             and existing_meta.get("auto_verified") is True
             and existing_meta.get("auto_review_required") is not True
-            and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
             and calls
             and (
                 KNOWN_SOURCE_EXPECTATIONS.get(

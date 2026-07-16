@@ -389,6 +389,7 @@ def _known_pixel_content_conflict_is_photo_local(
     allowed = {
         "known_source_expectation_conflict",
         "structured_authority_material_conflict:model",
+        "structured_narration_followme_conflict",
     }
     return bool(
         "known_source_expectation_conflict" in normalized

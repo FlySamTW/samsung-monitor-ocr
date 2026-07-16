@@ -735,3 +735,13 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 - 同圖三輪若一輪明確給出 `3+` 完整螢幕、`unique_main=false`、無可歸屬型號與價格，其餘兩輪也只是描述整排／展示牆且沒有身分欄位，必須在第三輪結案為遠景；不得留下慢模型、人工裁決或技術待辦。`太平-1099` 永久回歸為遠景、無型號、無價格。
 - 修復工具不得用同來源的兩筆 `[2,3]` 尾端覆蓋同一正式 run 已存在的完整 `[1,2,3]` 證據。已完成但被新版像素權威更正的列可冪等重新排入逐張上傳，不增加第 4 次模型呼叫。
 - 續跑證據：`140/1,500`、verified 140、review 0、failed 0、fuse inactive；修正後 `1105` 已以 `↑$7,490` 上傳。完成日基準仍為量測 `2026-09-06`、保守承諾 `2026-10-31`。
+
+## 2026-07-17 `.35` 已知像素三輪定案與不中斷續跑
+
+- `known_source_expectation_conflict` 比對預期空價格時，`None`／空字串代表「無價格」，不得與字面文字 `"None"` 比較而製造永久衝突；實際非空價格仍必須被攔截。
+- 精確命中 `KNOWN_SOURCE_EXPECTATIONS` 的同張照片若同時出現 `structured_narration_followme_conflict`，只可在第 1、2 次保存為同圖無記憶內容票並前進到第 3 次；不得在第 2 次停整批。任何額外的 request/image、prior-answer、prompt、cross-photo 或價格完整性理由仍立即 fuse。
+- 人工像素權威只能在第 3 次且三筆都為相同 input SHA、request-bound、independent、`prior_answer_exposed=false`、`prompt_contamination=false` 時套用。套用後的第三輪若 evidence contract 與 runtime health 均健康，三輪定案器必須回傳 verified，不得再被前兩輪的內容差異打回 unresolved。這不是跳過模型，也不得產生第 4 次呼叫。
+- 永久實拍驗收 run `20260717_072657_073759`：317=`遠景/null/null/count3`；318=`FollowMe Pro M7 43\"/17990/count3` 且只保留 direct branding；1319=`S24F332EAC/2590/count1`；1320=`S27D300GAC/3290/count1`；1321=`S27F612EAC/4990/count1`；1325=`FollowMe M7 32\"/14990/count3`。6/6 verified、0 review、0 failure、每張恰三輪；18 筆 trace 的 request binding、獨立性與記憶污染欄位全數通過。
+- 完整 `tools/run_critical_regressions.py` 通過後，正式 port 5002 從 192/1,500 原位續跑，不使用 restart。既有分頁驗證 `1109→1110→1111→1112` 四張的目前檔名、預覽、LLM 逐字區與最上方卡片完全一致；202601 子進度 196→199、上傳總數 53,121→53,125、無水平溢位。
+- 串流驗收三筆 `.35` 均完成 working→receipt→canonical，source key／原始路徑／目標檔名／Drive ID 各自唯一；`.35` failure=0、duplicate filename/Drive ID=0。修正舊來源時 canonical 不一定每張 `+1`，必須以逐筆 receipt 與 canonical 同 ID 證明閉環。
+- 速率管理：84,990 張剩餘要在 `2026-09-06` 完成，需平均約 1,667 張／日或 69.5 張／小時；低於 802 張／日已無法守住 `2026-10-31` 保守承諾，必須在固定報告點列為速度事故，而不是只說持續運行。

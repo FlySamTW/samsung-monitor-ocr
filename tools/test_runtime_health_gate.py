@@ -56,6 +56,57 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(final_content_conflict_can_isolate(2, reasons))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons))
 
+    def test_known_distant_null_price_is_not_string_none_conflict(self):
+        sha = "3a3a69db3de4e5c5fd614e4f11921ae4c9d8cd21fdde682078fb01910e5dc317"
+        correct = evaluate_runtime_health(
+            record(
+                input_image_sha256=sha,
+                view_type="遠景",
+                category="遠景",
+                model=None,
+                price=None,
+                complete_screen_count=3,
+                unique_main=False,
+                label_ownership="ambiguous",
+                normalized_evidence={
+                    "complete_screen_count": 3,
+                    "unique_main": False,
+                    "label_ownership": "ambiguous",
+                    "followme_physical_evidence": [],
+                },
+            ),
+            "整排至少三台完整螢幕，無法鎖定唯一主角與自己的價牌。",
+        )
+        self.assertNotIn("known_source_expectation_conflict", correct.reasons)
+
+    def test_known_pixel_followme_narration_conflict_reaches_third_call(self):
+        image_hash = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
+        candidate = record(
+            input_image_sha256=image_hash,
+            view_type="單機",
+            category="單機",
+            model="FollowMe Pro M7 43\"",
+            price="17990",
+            complete_screen_count=1,
+            unique_main=True,
+            label_ownership="matched",
+            followme_physical_evidence=[
+                {
+                    "cue": "attached_followme_product_card",
+                    "same_subject": True,
+                    "strength": "strong",
+                }
+            ],
+        )
+        reasons = [
+            "known_source_expectation_conflict",
+            "structured_narration_followme_conflict",
+        ]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, candidate))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, candidate))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons, candidate))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, candidate))
+
     def test_known_pixel_and_local_model_omission_remain_one_content_event(self):
         from skills.audit_fields import KNOWN_SOURCE_EXPECTATIONS
 

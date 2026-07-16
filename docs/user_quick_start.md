@@ -57,7 +57,7 @@ set LOCAL_LLM_CONTEXT_LENGTH=16384
 - 右側 `辨識紀錄` 最上方若顯示 `處理中 / AI 即時判讀中`，代表它正在配合左側同一張照片播放 AI 判讀內容；完成後才會顯示型號、價格與狀態。
 - 左側 AI 判讀區若顯示 `上一張摘要保留中 · 下一張判讀中`，代表系統正在準備下一段判讀內容；這是為了避免監看畫面中途變黑或空白。
 - 若 OCR 很快，介面會略過太舊的展示項來追上最新照片，但不會刪除 OCR 結果或輸出檔案。
-- 上傳 Google Drive 的進度不放在主介面；需要時查看 `D:\00_商化\00_已OCR照片\_drive_upload\drive_upload_summary.json`。
+- 主介面上方會顯示 Google Drive 累計上傳與待上傳數；需要逐筆收據時再查看 `D:\00_商化\00_已OCR照片\_drive_upload`。總進度只在完成新的初次辨識時增加，第二／第三輪複核應看同列的目前月份子進度與輪次，不能因總數暫時不動就判斷為卡住。
 ## Pause Handoff Note
 
 If this project is handed to another AI after 2026-07-09, do not press a restart button or resume old-year OCR first. Read `docs\handoff_20260709_pause.md`, then continue the 2026 pass3 rerun before returning to older years. Upload only rows marked ready by the Drive manifest; review-required rows must stay local until rerun or manual correction clears them.
@@ -65,3 +65,10 @@ If this project is handed to another AI after 2026-07-09, do not press a restart
 ## Dashboard viewing rule
 
 During a live run, the main screen is intentionally staged for viewers: photo first, AI judgment text always visible, then the right-side result is revealed. If the system is already judging the next photo, the AI area may hold the previous summary with a status label instead of going blank.
+
+## 現行逐張完成規則（2026-07-17）
+
+- 第一輪足夠就立即定案；有疑慮才進第二輪，仍有疑慮才進第三輪，總呼叫硬上限為三次。
+- 遠景、單機只有型號、只有價格或型號價格皆無，都是可成立的真實結果；通過證據守門後都會立即排入逐張上傳。
+- 只有請求／照片綁定錯誤、前輪答案或提示污染、跨照片漂移、來源檔案改變、Drive 回讀失敗等技術問題可以阻止該張上傳。
+- 正在正式運行時不要再雙擊啟動器，也不要另開 Dashboard 視窗；直接使用既有分頁監看總進度、目前月份進度、逐字判讀與右欄累積卡片。

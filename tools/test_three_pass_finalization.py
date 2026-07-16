@@ -4,10 +4,16 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from skills.audit_fields import EVIDENCE_GUARD_REVISION, finalize_three_pass_outcome, validate_evidence_contract
+from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
+    apply_human_audited_pixel_authority,
+    finalize_three_pass_outcome,
+    validate_evidence_contract,
+)
 
 
 IMAGE_HASH = "a" * 64
@@ -109,6 +115,33 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_wide_scene_vetoes_two_single_votes_with_conflicting_models(self):
+        history = [
+            make_pass(
+                "單機", "S32DM703UC", "12990", 3, True, "matched",
+                thinking="前景一台，背景上方與遠處還有數台完整螢幕。",
+            ),
+            make_pass(
+                "遠景", None, None, 3, False, "not_visible",
+                thinking="多台完整螢幕，無法鎖定唯一主角及其規格價格。",
+            ),
+        ]
+        current = make_pass(
+            "單機", "S27CG552EC", "12990", 3, True, "matched",
+            thinking="上方與下方各有完整螢幕，但主角型號需從價牌讀取。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "wide_scene_identity_conflict_distant_veto",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_restart_recovery_joins_exact_bound_calls_one_and_three(self):
         from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
 
@@ -145,6 +178,90 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(
             [item["ocr_attempt"] for item in groups["sample-636.jpg"]],
             [1, 3],
+        )
+
+    def test_prior_revision_known_pixel_row_is_repaired_without_fourth_call(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        image_hash = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            trace = root / "trace.jsonl"
+            result_file = root / "result.json"
+            rows = []
+            for attempt in (1, 2, 3):
+                parsed = make_pass(
+                    "單機",
+                    "FollowMe Pro M7 43\"",
+                    "17990",
+                    1,
+                    True,
+                    "matched",
+                    [
+                        {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                        {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                    ],
+                    image_hash=image_hash,
+                )
+                parsed.update({
+                    "file_name": "sample-318.jpg",
+                    "source_item_id": "known-source",
+                    "period": "202601",
+                    "ocr_attempt": attempt,
+                    "timestamp": f"2026-07-17T06:00:0{attempt}",
+                    "run_id": "old-run",
+                })
+                rows.append({
+                    "file_name": "sample-318.jpg",
+                    "source_item_id": "known-source",
+                    "run_id": "old-run",
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            result_file.write_text(
+                json.dumps([{
+                    "data": {
+                        "image": str(root / "sample-318.jpg"),
+                        "ocr_meta": {
+                            "auto_verified": True,
+                            "auto_review_required": False,
+                            "evidence_guard_revision": "20260717.34",
+                            "view_type": "單機",
+                            "model": "FollowMe Pro M7 43\"",
+                            "price": "17990",
+                        },
+                    }
+                }], ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result",
+                return_value=root / "queued.json",
+            ):
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=True,
+                )
+
+            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]["data"]["ocr_meta"]
+
+        self.assertEqual(report[0]["status"], "finalized")
+        self.assertEqual(saved["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+        self.assertEqual(saved["complete_screen_count"], 3)
+        self.assertEqual(
+            saved["followme_physical_evidence"],
+            [{
+                "cue": "direct_followme_branding_on_unit",
+                "same_subject": True,
+                "strength": "strong",
+            }],
         )
 
     def test_full_same_run_three_call_group_is_not_replaced_by_source_tail(self):
@@ -364,6 +481,116 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["complete_screen_count"], 1)
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
+
+    def test_separate_left_and_right_edge_clauses_cannot_claim_three_complete(self):
+        edge_text = (
+            "我看到三台螢幕並排展示，中央螢幕四邊四角完整在原圖內。"
+            "左側螢幕左外框被照片左邊界截斷，右側螢幕右外框被照片右邊界截斷，"
+            "上方與下方無其他完整螢幕，所以……這是一般單機。"
+        )
+        history = [
+            make_pass("單機", "S24F332EAC", "2590", 3, True, "matched", thinking=edge_text),
+            make_pass("單機", "S24F332EAC", "2590", 1, True, "matched"),
+        ]
+        current = make_pass(
+            "單機", "S24F332EAC", "2590", 3, True, "matched", thinking=edge_text
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["complete_screen_count"], 1)
+
+    def test_two_followme_passes_reporting_background_complete_monitors_keep_count_three(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                "單機", "FollowMe M7 32\"", "14990", 3, True, "matched", physical,
+                thinking="前景是 FollowMe，背景上方展示牆有三台以上完整入鏡的螢幕。",
+            ),
+            make_pass(
+                "單機", "FollowMe M7 32\"", "14990", 1, True, "matched", physical,
+                thinking="前景是 FollowMe，背景展示牆上有數台完整螢幕。",
+            ),
+        ]
+        current = make_pass(
+            "單機", "FollowMe M7 32\"", "14990", 1, True, "matched", physical,
+            thinking="前景是 FollowMe 唯一商品主角。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+
+    def test_audited_followme_pixel_authority_replaces_out_of_frame_cues(self):
+        image_hash = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
+        passes = [
+            make_pass(
+                "單機",
+                "FollowMe Pro M7 43\"",
+                "17990",
+                1,
+                True,
+                "matched",
+                [
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                    {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                ],
+                image_hash=image_hash,
+            )
+            for _ in range(3)
+        ]
+        passes[-1]["ocr_attempt"] = 3
+
+        applied = apply_human_audited_pixel_authority(
+            passes[-1], passes[:-1], max_attempts=3
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(passes[-1]["complete_screen_count"], 3)
+        self.assertEqual(
+            passes[-1]["followme_physical_evidence"],
+            [
+                {
+                    "cue": "direct_followme_branding_on_unit",
+                    "same_subject": True,
+                    "strength": "strong",
+                }
+            ],
+        )
+
+    def test_audited_distant_pixel_authority_marks_live_adjudication(self):
+        image_hash = "3a3a69db3de4e5c5fd614e4f11921ae4c9d8cd21fdde682078fb01910e5dc317"
+        passes = [
+            make_pass(
+                "遠景", None, None, 3, False, "ambiguous", [],
+                image_hash=image_hash,
+            )
+            for _ in range(3)
+        ]
+        passes[-1]["ocr_attempt"] = 3
+
+        applied = apply_human_audited_pixel_authority(
+            passes[-1], passes[:-1], max_attempts=3
+        )
+
+        self.assertTrue(applied)
+        self.assertTrue(passes[-1]["human_pixel_authority_applied"])
+        self.assertEqual(
+            passes[-1]["adjudication_rule"],
+            "three_pass_human_audited_pixel_authority",
+        )
+        result = finalize_three_pass_outcome(
+            passes[-1], passes[:-1], unresolved(), max_attempts=3
+        )
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertFalse(result["retry"])
 
     def test_edge_cut_rule_does_not_hide_other_complete_display_rows(self):
         text = (
