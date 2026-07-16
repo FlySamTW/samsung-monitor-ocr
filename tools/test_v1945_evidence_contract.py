@@ -39,6 +39,64 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    RISK_650_SHA = "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549"
+
+    def _multiscreen_single(self, **updates):
+        row = {
+            "period": "202601", "view_type": "單機", "category": "單機",
+            "model": "S27D300GAC", "price": "3090",
+            "thinking": "中央有一台主角螢幕，規格與價格牌都屬於它自己。",
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True},
+            **evidence(3, True, "matched", []),
+        }
+        row.update(updates)
+        return row
+
+    def test_three_plus_screen_single_never_verifies_on_first_pass(self):
+        row = self._multiscreen_single()
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("2026 三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
+
+        third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertTrue(third["verified"])
+        self.assertFalse(third["unresolved"])
+
+    def test_three_plus_screen_single_disagreement_stays_unresolved(self):
+        row = self._multiscreen_single()
+        conflicting = self._multiscreen_single(model="S27CG552EC", price="4990")
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), conflicting], 3)
+        self.assertFalse(decision["verified"])
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("2026 三台以上入鏡的單機候選三輪核心證據不一致", decision["reasons"])
+
+    def test_known_650_pixels_can_never_auto_verify_as_single(self):
+        row = self._multiscreen_single(input_image_sha256=self.RISK_650_SHA)
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertFalse(first["verified"])
+        self.assertTrue(first["retry"])
+        third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertFalse(third["verified"])
+        self.assertTrue(third["unresolved"])
+        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", third["reasons"])
+
+    def test_known_650_pixels_require_three_clean_distant_passes(self):
+        distant = {
+            "period": "202601", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "input_image_sha256": self.RISK_650_SHA,
+            "thinking": "整排三台以上螢幕完整入鏡，無法鎖定唯一主角及其自己的規格與價格。",
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True},
+            **evidence(3, False, "not_visible", []),
+        }
+        first = immediate_retry_decision(dict(distant), 1, [], 3)
+        self.assertTrue(first["retry"])
+        decision = immediate_retry_decision(dict(distant), 3, [dict(distant), dict(distant)], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+
     def test_negated_followme_with_black_short_stand_and_tray_is_not_a_fixture_conflict(self):
         row = {
             "view_type": "單機", "category": "單機", "model": "S32DM703UC", "price": None,

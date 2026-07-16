@@ -1,11 +1,12 @@
 import csv
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
-from tools.build_v1945_evidence_backfill import run, stable_source_id
+from tools.build_v1945_evidence_backfill import build_candidates, run, stable_source_id
 
 
 class EvidenceBackfillBuilderTests(unittest.TestCase):
@@ -45,6 +46,33 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual(summary["already_verified_year_sources"], 1)
             self.assertEqual([row["file_name"] for row in rows], ["two.jpg"])
             self.assertEqual(rows[0]["reason"], "v1945_evidence_backfill")
+
+    def test_human_audited_source_is_excluded_only_when_pixels_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "known-distant.jpg"
+            source.write_bytes(b"known-distant-pixels")
+            audit = self.make_audit(root, [source])
+            source_id = stable_source_id(source)
+            authority = {
+                source_id: {
+                    "source_file_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "view_type": "遠景",
+                }
+            }
+            rows, summary = build_candidates(audit, "2026", authority)
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["human_audited_year_sources"], 1)
+            self.assertEqual(summary["conflicting_sources"], 0)
+
+            rows, summary = build_candidates(
+                audit,
+                "2026",
+                {source_id: {"source_file_sha256": "0" * 64, "view_type": "遠景"}},
+            )
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["human_audited_year_sources"], 0)
+            self.assertEqual(summary["conflicting_sources"], 1)
 
     def test_old_v1945_verified_trace_without_guard_revision_is_reprocessed(self):
         with tempfile.TemporaryDirectory() as tmp:

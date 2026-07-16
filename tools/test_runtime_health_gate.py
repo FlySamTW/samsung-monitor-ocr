@@ -27,6 +27,25 @@ def record(**updates):
 
 
 class RuntimeHealthGateTests(unittest.TestCase):
+    def test_known_distant_source_fingerprint_conflict_trips_runtime_health(self):
+        sha = "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549"
+        wrong = evaluate_runtime_health(
+            record(input_image_sha256=sha, view_type="單機", category="單機"),
+            "中央有一台主角螢幕，價牌屬於它自己。",
+        )
+        self.assertFalse(wrong.allow_processing)
+        self.assertIn("known_source_expectation_conflict", wrong.reasons)
+
+        correct = evaluate_runtime_health(
+            record(
+                input_image_sha256=sha, view_type="遠景", category="遠景",
+                model=None, price=None, complete_screen_count=3,
+                unique_main=False, label_ownership="not_visible",
+            ),
+            "整排三台以上螢幕完整入鏡，無法鎖定唯一主角。",
+        )
+        self.assertNotIn("known_source_expectation_conflict", correct.reasons)
+
     def test_negated_followme_black_short_stand_and_tray_does_not_trip_fuse(self):
         narration = (
             "我看到前景一台直立螢幕，正下方有黑色短支架與託盤，"

@@ -360,3 +360,11 @@
 - `.18` 將友善名稱與實體 SKU 的一致性限制在既定同款映射，並把敘述熔斷條件限縮為未否定的 FollowMe 身分或明確白色移動架組合。113 項針對性測試、完整 critical regressions 與 production dashboard build 已通過。
 - 舊 fuse 已保留於 `_ocr_audit/trials/runtime_health_fuse_rev17b_false_positive_20260716_123804.json`。`.18` 新 15 張隔離驗證完成 15/15：8 verified、7 review-required、0 failed，共 34 輪；request ID、影像 SHA-256、獨立輪次、無前輪答案、無提示污染與 runtime health 全部通過。714 三輪皆保持 `FollowMe M7 32" / 12990`，因相鄰同款同價的跨照片疑慮保守留待複核；137 完成三輪且普通黑色短架／託盤的「非 FollowMe」敘述不再誤熔斷。沒有錯誤結果進入正式進度或上傳。
 - `.18` 全年清冊重建掃描 63,876 筆、2026 唯一來源 5,951 張；隔離試跑中已有 8 張具 `.18` 有效 trace，待跑 5,943 張，缺檔／衝突／無效列均為 0。正式 202601 第一群組 1,496 張已由唯一隱藏 runner 父子組啟動，既有唯一 Dashboard 分頁顯示「正在執行」、正式總進度 `65,331/150,321`、新版複核進度、自然語言與卡片同步，沒有裸 JSON；runner 會依清冊接續 202602–202605。uploader 與 Google Drive 仍封閉，`model_benchmark.lock` 保留。
+
+## 2026-07-16 13:21 `.18` 正式內容閘失敗與 `.19` 修正
+
+- 25 張內容節點發現已知真遠景 `M-台中市-北屯區-SF-北屯-650.jpg` 再次被第一輪錯列 `單機 / S27D300GAC / 3090` 並冒充 verified。這次前一張不是同款，證明 `.18` 的相鄰重複核心守門無法涵蓋非相鄰語意污染。正式接力器立即停止於 27/1,496，後端與介面保留、uploader 0；本段所有 `.18` 結果失去現行 revision 資格，不得上傳。
+- durable fuse 已寫入 `known_distant_auto_verified_as_single` 與 `multiscreen_single_first_pass_escape`。650 全圖 SHA-256 為 `9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549`，歷史多輪可確認其遠景身分；不得用檔名比對替代像素綁定。
+- `.19` 一般規則：2026 單機候選若結構報告至少三台完整螢幕，第一輪永不驗證，必須三輪獨立且 view/model/price/unique_main/ownership 全數一致；任一差異即 unresolved。已人工確認的高風險原圖另以模型輸入像素 SHA-256 綁定期望 view，任何衝突直接成為不可隔離的 runtime-health failure 並熔斷；清冊另用原始檔 SHA-256 核對同一人審權威，兩種雜湊不可混用。123 項針對性測試、完整 critical regressions 與 production dashboard build 已通過。
+- `.19` 五張隔離 smoke 完成 5/5、10 輪：3 verified、2 review-required、0 failed；revision/request/image/independent/prior exposure/prompt contamination/runtime health/invalid verified 全部正常。664 遠景證據未收斂、665 核心型號不一致，均正確 unresolved。新版清冊掃描 5,951 個唯一來源，3 張具 `.19` verified trace，650 以雙 SHA 人審遠景權威排除，待跑 5,947、缺檔／衝突／無效列均為 0。
+- 正式 `.19` 202601 群組現為 1,500 張（原 1,504 扣除 3 張 `.19` verified 與 1 張人審遠景），由唯一隱藏 runner 父子組執行並會接續 202602–202605。原本唯一 Dashboard 分頁已核對為「正在執行」，總進度 `65,331/150,321`、複核數字、照片、LLM 自然語言與卡片同步，沒有待機、裸 JSON 或 `未提供`；uploader 0、Google Drive 未接觸。

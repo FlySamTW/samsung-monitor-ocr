@@ -20,6 +20,7 @@ from skills.audit_fields import (
     is_followme_model,
     material_structured_authority_fields,
     narration_evidence_consistency_reasons,
+    known_source_expectation_conflict,
 )
 
 
@@ -346,6 +347,8 @@ def evaluate_runtime_health(
         reasons.append(price_reason)
     if distant_followme_conflict(record):
         reasons.append("distant_followme_strong_evidence_conflict")
+    if known_source_expectation_conflict(record):
+        reasons.append("known_source_expectation_conflict")
     if blocked_fields := material_structured_authority_fields(record):
         reasons.append("structured_authority_material_conflict:" + ",".join(blocked_fields))
     consistency_record = dict(record)

@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.18"
+EVIDENCE_GUARD_REVISION = "20260716.19"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -20,6 +20,22 @@ FOLLOWME_CUE_CODES = {
 FOLLOWME_WEAK_CUES = {"screen_content_only", "nearby_signage_only", "unknown"}
 FOLLOWME_INDEPENDENT_STRONG_CUES = {"white_vertical_stand", "round_base", "portrait_display", "attached_price_tray", "attached_followme_product_card"}
 MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
+
+# Human-audited source fingerprints are regression authorities. A conflicting
+# model pass must never become a healthy or verified result. Full-image hashes
+# bind staging copies and renamed files to the same audited pixels.
+KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "458b1d571bb2c1be963a6a82dda198bfbaa4d2b33b7e859f82d2946921c86849": {
+        "source_file_sha256": "59dc7ad4ee2bfa3f389575f06283e9f9543ee507c3c95b3c56bbf94433a5ab95",
+        "input_image_sha256": "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549",
+        "view_type": "遠景",
+        "authority": "human_audited_high_risk_source",
+    },
+}
+KNOWN_SOURCE_VIEW_EXPECTATIONS = {
+    item["input_image_sha256"]: item["view_type"]
+    for item in KNOWN_SOURCE_AUDIT_AUTHORITIES.values()
+}
 
 _NARRATED_FOLLOWME_CUE_PATTERNS = {
     "white_vertical_stand": re.compile(r"(?:白色.{0,4})?(?:垂直支架|直立支架|長直立支架|直桿|立柱)"),
@@ -39,6 +55,15 @@ def material_structured_authority_fields(record: Dict[str, Any]) -> List[str]:
     if not isinstance(values, (list, tuple, set)):
         return []
     return sorted({str(value).strip() for value in values if str(value).strip() in MATERIAL_STRUCTURED_AUTHORITY_FIELDS})
+
+
+def known_source_expectation_conflict(record: Dict[str, Any]) -> bool:
+    image_hash = str(record.get("input_image_sha256") or "").strip().lower()
+    expected_view = KNOWN_SOURCE_VIEW_EXPECTATIONS.get(image_hash)
+    if not expected_view:
+        return False
+    actual_view = str(record.get("view_type") or record.get("category") or "").strip()
+    return expected_view not in actual_view
 
 
 def _locally_negated(text: str, start: int) -> bool:
@@ -563,6 +588,38 @@ def _all_followme_identity_consistent(record: Dict[str, Any], history: List[Dict
     return True
 
 
+def _all_multiscreen_single_consistent(
+    record: Dict[str, Any], history: List[Dict[str, Any]], max_attempts: int
+) -> bool:
+    """Require three independent identical passes before accepting 3+ screens as single."""
+    passes = (history + [record])[-max_attempts:]
+    if len(passes) < max_attempts:
+        return False
+    model = normalize_model_token(record.get("model"))
+    price = _as_int(record.get("price"))
+    if not model or price is None:
+        return False
+    for item in passes:
+        normalized = item.get("normalized_evidence") or item
+        count = normalized.get("complete_screen_count")
+        if (
+            "單機" not in str(item.get("view_type") or item.get("category") or "")
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 3
+            or normalized.get("unique_main") is not True
+            or normalized.get("label_ownership") != "matched"
+            or normalize_model_token(item.get("model")) != model
+            or _as_int(item.get("price")) != price
+            or item.get("independent_pass") is not True
+            or item.get("prior_answer_exposed") is True
+            or item.get("prompt_contamination") is True
+            or (item.get("runtime_health") or {}).get("healthy") is not True
+        ):
+            return False
+    return True
+
+
 def _is_samsung_sku_like(value: Any) -> bool:
     text = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
     if not text:
@@ -674,6 +731,18 @@ def immediate_retry_decision(
         reasons.append("最終它牌結果與原始 Samsung SKU 衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
+    expected_view = KNOWN_SOURCE_VIEW_EXPECTATIONS.get(
+        str(record.get("input_image_sha256") or "").strip().lower()
+    )
+    if expected_view:
+        passes = (history + [record])[-max_attempts:]
+        if attempt < max_attempts:
+            reasons.append("人工確認高風險原圖必須完成三輪獨立複核")
+        elif len(passes) < max_attempts or any(
+            expected_view not in str(item.get("view_type") or item.get("category") or "")
+            for item in passes
+        ):
+            reasons.append("人工確認高風險原圖與模型分類衝突，不得自動驗證")
     cross_photo_suspected = bool(
         record.get("cross_photo_duplicate_core_suspected")
         or any(item.get("cross_photo_duplicate_core_suspected") for item in history)
@@ -736,6 +805,12 @@ def immediate_retry_decision(
             reasons.append(f"單機仍有品質疑慮:{quality}")
         if _explicit_three_complete(thinking) and _no_unique_main_evidence(thinking):
             reasons.append("單機結果與三台以上完整陳列衝突")
+        multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
+        if current_year and isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
+            if attempt < max_attempts:
+                reasons.append("2026 三台以上入鏡的單機候選必須完成三輪獨立複核")
+            elif not _all_multiscreen_single_consistent(record, history, max_attempts):
+                reasons.append("2026 三台以上入鏡的單機候選三輪核心證據不一致")
 
     if is_followme_model(model):
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):

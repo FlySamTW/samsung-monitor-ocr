@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from skills.audit_fields import EVIDENCE_GUARD_REVISION
+from skills.audit_fields import EVIDENCE_GUARD_REVISION, KNOWN_SOURCE_AUDIT_AUTHORITIES
 
 
 FIELDS = ("source_path", "file_name", "period", "audit_folder", "reason", "source_item_id")
@@ -62,13 +62,31 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
     return verified
 
 
-def build_candidates(audit_dir: Path, year: str) -> tuple[list[dict[str, str]], dict]:
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_candidates(
+    audit_dir: Path,
+    year: str,
+    known_source_authorities: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[dict[str, str]], dict]:
     verified = load_verified_source_ids(audit_dir)
+    authorities = dict(
+        KNOWN_SOURCE_AUDIT_AUTHORITIES
+        if known_source_authorities is None
+        else known_source_authorities
+    )
     candidates: dict[str, dict[str, str]] = {}
     seen: dict[str, dict[str, str]] = {}
     missing: list[str] = []
     conflicts: list[str] = []
     invalid: list[str] = []
+    human_audited: set[str] = set()
     copied_rows = 0
     year_rows = 0
 
@@ -103,7 +121,16 @@ def build_candidates(audit_dir: Path, year: str) -> tuple[list[dict[str, str]], 
                 candidates.pop(source_id, None)
                 continue
             seen[source_id] = item
-            if source_id not in verified:
+            authority = authorities.get(source_id)
+            if authority:
+                expected_hash = str(authority.get("source_file_sha256") or "").strip().lower()
+                expected_view = str(authority.get("view_type") or "").strip()
+                if not expected_hash or not expected_view or file_sha256(source) != expected_hash:
+                    conflicts.append(f"{source_id}: human-audit authority mismatch for {source}")
+                    candidates.pop(source_id, None)
+                    continue
+                human_audited.add(source_id)
+            elif source_id not in verified:
                 candidates[source_id] = item
 
     rows = sorted(candidates.values(), key=lambda row: (row["period"], row["source_path"].casefold()))
@@ -115,6 +142,7 @@ def build_candidates(audit_dir: Path, year: str) -> tuple[list[dict[str, str]], 
         "unique_year_sources": len(seen),
         "verified_source_ids": len(verified),
         "already_verified_year_sources": sum(1 for source_id in seen if source_id in verified),
+        "human_audited_year_sources": len(human_audited),
         "candidate_rows": len(rows),
         "missing_sources": len(missing),
         "conflicting_sources": len(conflicts),
