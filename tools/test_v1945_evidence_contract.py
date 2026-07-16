@@ -9,7 +9,12 @@ import samsung_ocr_batch_processor as batch
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     evidence_contract_decision,
+    followme_variant_evidence_reasons,
     immediate_retry_decision,
+    narrated_followme_physical_cues,
+    narration_evidence_consistency_reasons,
+    narration_has_positive_followme_identity,
+    narration_has_unmistakable_followme_fixture,
     validate_evidence_contract,
 )
 from tools.prepare_drive_upload_manifest import (
@@ -34,6 +39,97 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_negated_followme_with_black_short_stand_and_tray_is_not_a_fixture_conflict(self):
+        row = {
+            "view_type": "單機", "category": "單機", "model": "S32DM703UC", "price": None,
+            "thinking": (
+                "我看到一台直立螢幕，正下方有黑色短支架與託盤，"
+                "所以這是一台 Samsung Smart Monitor M7，非 FollowMe。"
+            ),
+            **evidence(1, True, "matched", []),
+        }
+        self.assertEqual(narrated_followme_physical_cues(row), {"portrait_display", "attached_price_tray"})
+        self.assertFalse(narration_has_positive_followme_identity(row["thinking"]))
+        self.assertFalse(narration_has_unmistakable_followme_fixture(row["thinking"]))
+        self.assertEqual(narration_evidence_consistency_reasons(row), [])
+
+    def test_white_round_base_with_attached_tray_is_an_unmistakable_fixture(self):
+        narration = "中央直立螢幕下方有白色圓形底座與託盤，但未見白色垂直支架。"
+        self.assertTrue(narration_has_unmistakable_followme_fixture(narration))
+
+    def test_followme_friendly_names_equal_only_their_established_physical_sku_family(self):
+        self.assertTrue(batch.followme_models_equivalent('FollowMe M7 32"', "S32FM703UC"))
+        self.assertTrue(batch.followme_models_equivalent('FollowMe M5 32"', "LS32FM503UCXZW"))
+        self.assertTrue(batch.followme_models_equivalent('FollowMe Pro M7 43"', "S43FM703UC"))
+        self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S43FM703UC"))
+        self.assertFalse(batch.followme_models_equivalent('FollowMe M5 32"', "S32FM703UC"))
+        self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S32FM803UC"))
+
+    def test_explicit_followme_model_with_same_pass_fixtures_survives_generic_signage_word(self):
+        record = {
+            "model": 'FollowMe M7 32"',
+            "price": "12990",
+            "thinking": (
+                "我看到前景一台直立的 Samsung 螢幕，正下方有白色圓形落地底座與託盤，"
+                "螢幕右側貼有 Samsung Smart Monitor M7 標籤，下方價牌清楚寫 12,990，"
+                "上方藍色立牌寫 Samsung Follow Me 4K，這些證據都屬於同一主體。"
+            ),
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_followme_product_card", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        self.assertFalse(batch.should_block_borrowed_model_rescue(record["thinking"]))
+        self.assertTrue(
+            batch.explicit_followme_model_has_same_pass_physical_evidence(record["model"], record)
+        )
+        self.assertEqual(
+            batch.normalize_followme_model(
+                record["model"], record["price"], record["thinking"],
+                structured_physical_confirmed=True,
+            ),
+            'FollowMe M7 32"',
+        )
+
+        signage_only = dict(record)
+        signage_only["followme_physical_evidence"] = []
+        signage_only["thinking"] = "旁邊活動立牌寫 Samsung Follow Me 4K，但主角實機沒有可歸屬的支架證據。"
+        self.assertTrue(batch.should_block_borrowed_model_rescue(signage_only["thinking"]))
+        self.assertFalse(
+            batch.explicit_followme_model_has_same_pass_physical_evidence(
+                signage_only["model"], signage_only
+            )
+        )
+
+    def test_followme_pro_43_requires_observed_variant_evidence(self):
+        generic_m7 = {
+            "view_type": "單機", "category": "單機",
+            "model": 'FollowMe Pro M7 43"', "price": "12990",
+            "thinking": (
+                "我看到同一台白色移動式螢幕，上方只有 Samsung Follow Me 4K，"
+                "右側是 Smart Monitor M7，價牌為 12,990。"
+            ),
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        self.assertEqual(
+            followme_variant_evidence_reasons(generic_m7),
+            ["followme_pro_identity_evidence_missing"],
+        )
+        decision = evidence_contract_decision(generic_m7)
+        self.assertFalse(decision["valid"])
+        self.assertIn("followme_pro_identity_evidence_missing", decision["reasons"])
+
+        explicit_pro = dict(generic_m7)
+        explicit_pro["price"] = "17990"
+        explicit_pro["thinking"] = "同一實機規格牌清楚寫 FollowMe Pro 43吋，價牌 17,990。"
+        self.assertEqual(followme_variant_evidence_reasons(explicit_pro), [])
+        self.assertTrue(evidence_contract_decision(explicit_pro)["valid"])
+
     def test_request_id_binds_response_to_current_photo(self):
         raw = json.dumps({
             "request_id": "a1b2c3d4",
@@ -415,6 +511,20 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+
+    def test_runtime_prompt_excludes_superseded_maintenance_changelog(self):
+        template = (
+            "現行辨識規則。\n---\n\n## 📌 版本記錄與維護說明\n"
+            "v4.0.1 → 舊規則不得送入模型\n"
+            "## v19.45 Evidence Contract (machine-readable output only)\n"
+            "現行結構契約。"
+        )
+        prompt, compact = batch.build_runtime_system_prompt(template, "\n現行每日參考。")
+        self.assertFalse(compact)
+        self.assertIn("現行辨識規則", prompt)
+        self.assertIn("現行結構契約", prompt)
+        self.assertIn("現行每日參考", prompt)
+        self.assertNotIn("舊規則不得送入模型", prompt)
 
     def test_structured_narration_is_an_allowed_single_object_field(self):
         raw = json.dumps({
@@ -909,6 +1019,33 @@ class EvidenceContractTests(unittest.TestCase):
         second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
         self.assertFalse(second["retry"])
         self.assertTrue(second["verified"])
+
+    def test_current_year_followme_identity_disagreement_never_becomes_majority_success(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        first = {
+            "file_name": "M-202601-followme-714.jpg", "view_type": "單機", "category": "單機",
+            "model": 'FollowMe M7 32"', "price": "12990", "quality_issue": "",
+            "thinking": "同一台實機有白色垂直支架與圓形底座，Smart Monitor M7 價牌 12,990。",
+            **evidence(1, True, "matched", physical),
+        }
+        conflicting_second = {
+            **first,
+            "model": 'FollowMe Pro M7 43"', "price": "17990",
+            "thinking": "同一台實機規格牌清楚寫 FollowMe Pro 43吋，價牌 17,990。",
+        }
+        second = immediate_retry_decision(dict(conflicting_second), 2, [dict(first)], 3)
+        self.assertTrue(second["retry"])
+        self.assertFalse(second["verified"])
+        self.assertIn("2026 FollowMe 各輪型號與價格不一致，不得自動驗證", second["reasons"])
+
+        # A two-to-one majority cannot wash the independently observed conflict.
+        third = immediate_retry_decision(dict(first), 3, [dict(first), dict(conflicting_second)], 3)
+        self.assertTrue(third["unresolved"])
+        self.assertFalse(third["verified"])
+        self.assertIn("2026 FollowMe 各輪型號與價格不一致，不得自動驗證", third["reasons"])
 
     def test_followme_uses_structured_physical_evidence_not_narration_keywords(self):
         physical = [

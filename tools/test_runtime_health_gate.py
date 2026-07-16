@@ -27,6 +27,21 @@ def record(**updates):
 
 
 class RuntimeHealthGateTests(unittest.TestCase):
+    def test_negated_followme_black_short_stand_and_tray_does_not_trip_fuse(self):
+        narration = (
+            "我看到前景一台直立螢幕，正下方有黑色短支架與託盤，"
+            "所以這是一台 Samsung Smart Monitor M7，非 FollowMe。"
+        )
+        decision = evaluate_runtime_health(
+            record(
+                view_type="單機", model="S32DM703UC", price=None,
+                followme_physical_evidence=[],
+            ),
+            narration,
+        )
+        self.assertNotIn("structured_narration_followme_conflict", decision.reasons)
+        self.assertTrue(decision.allow_processing)
+
     def test_production_result_requires_request_binding_and_image_fingerprint(self):
         base = {
             "request_binding_enforced": True,
@@ -314,6 +329,23 @@ class RuntimeHealthGateTests(unittest.TestCase):
         decision = evaluate_runtime_health(
             record(view_type="遠景", model=None, price=None, followme_physical_evidence=[]),
             "中央有一台直立螢幕，下方有白色圓形底座與託盤，但背景另有多台電視。",
+        )
+        self.assertIn("structured_narration_followme_conflict", decision.reasons)
+        self.assertFalse(decision.allow_processing)
+
+    def test_followme_pro_without_observed_43_identity_trips_runtime_health(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        decision = evaluate_runtime_health(
+            record(
+                view_type="單機",
+                model='FollowMe Pro M7 43"',
+                price="12990",
+                followme_physical_evidence=physical,
+            ),
+            "我看到同一台白色移動式螢幕，上方只有 Samsung Follow Me 4K，右側是 Smart Monitor M7，價牌 12,990。",
         )
         self.assertIn("structured_narration_followme_conflict", decision.reasons)
         self.assertFalse(decision.allow_processing)

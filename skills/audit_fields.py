@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.16"
+EVIDENCE_GUARD_REVISION = "20260716.18"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -65,13 +65,103 @@ def narrated_followme_physical_cues(record: Dict[str, Any]) -> set[str]:
     return found
 
 
+def narration_has_positive_followme_identity(text: str) -> bool:
+    """Return true only for a FollowMe mention not locally negated."""
+    raw = str(text or "")
+    return any(
+        not _locally_negated(raw, match.start())
+        for match in re.finditer(r"FOLLOW\s*ME", raw, re.IGNORECASE)
+    )
+
+
+def narration_has_unmistakable_followme_fixture(text: str) -> bool:
+    """Recognize only fixture combinations specific enough to trip the fuse.
+
+    A generic portrait monitor, short black stand, or price tray can appear on
+    ordinary products.  A white round floor base with its attached tray, or a
+    white vertical stand together with a round base, is materially different.
+    """
+    raw = str(text or "")
+    white_round_with_tray = re.compile(
+        r"白色.{0,8}(?:圓形(?:落地)?底座|圓盤底座).{0,10}(?:託盤|托盤)"
+        r"|(?:託盤|托盤).{0,10}白色.{0,8}(?:圓形(?:落地)?底座|圓盤底座)"
+    )
+    for match in white_round_with_tray.finditer(raw):
+        if not _locally_negated(raw, match.start()):
+            return True
+    narrated = narrated_followme_physical_cues({"thinking": raw})
+    return {"white_vertical_stand", "round_base"}.issubset(narrated)
+
+
+def followme_identity_key(model: Any) -> str:
+    """Map only established friendly names and physical SKUs to one variant."""
+    text = re.sub(r"[^A-Z0-9]", "", str(model or "").upper())
+    if not text:
+        return ""
+    if text.startswith("FOLLOWME"):
+        if "PRO" in text or "43" in text:
+            return "PRO_M7_43"
+        if "M5" in text:
+            return "M5_32"
+        if "M7" in text:
+            return "M7_32"
+        return ""
+    if re.fullmatch(r"(?:LS|S)?43FM70\d[A-Z0-9]*", text):
+        return "PRO_M7_43"
+    if re.fullmatch(r"(?:LS|S)?32FM50\d[A-Z0-9]*", text):
+        return "M5_32"
+    if re.fullmatch(r"(?:LS|S)?32FM70\d[A-Z0-9]*", text):
+        return "M7_32"
+    return ""
+
+
+def followme_models_equivalent(first: Any, second: Any) -> bool:
+    first_key = followme_identity_key(first)
+    return bool(first_key and first_key == followme_identity_key(second))
+
+
+def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
+    """Require observable identity evidence before accepting FollowMe Pro 43.
+
+    Generic ``Follow Me 4K`` branding, a white mobile stand, and a 12,990
+    price describe the 32-inch M7 bundle as well.  A structured Pro/43 answer
+    may therefore be accepted only when narration cites Pro, 43-inch/S43FM,
+    or the established 17,990 price band from the same photographed product.
+    This is a rejection-only check and never rewrites the model from price.
+    """
+    if followme_identity_key(record.get("model")) != "PRO_M7_43":
+        return []
+
+    narration = str(record.get("thinking") or record.get("narration") or "")
+    upper = narration.upper()
+    explicit_identity = bool(
+        "FOLLOWME PRO" in upper
+        or "FOLLOW ME PRO" in upper
+        or "S43FM" in upper
+        or re.search(r"(?<!\d)43\s*(?:吋|型|INCH|\")", upper)
+    )
+    digits = re.sub(r"\D", "", str(record.get("price") or ""))
+    price = int(digits) if digits else None
+    established_pro_price = price is not None and 16000 <= price <= 20000
+    if explicit_identity or established_pro_price:
+        return []
+    return ["followme_pro_identity_evidence_missing"]
+
+
 def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
     """Reject material prose/structure gaps without stalling on minor cue omission."""
+    reasons = followme_variant_evidence_reasons(record)
     narrated = narrated_followme_physical_cues(record)
     # One isolated shape word can be incidental. Two independent same-clause
     # fixture cues are the existing strong-evidence threshold and are material.
-    if len(narrated) < 2:
-        return []
+    narration = str(record.get("thinking") or record.get("narration") or "")
+    unmistakable_followme_fixture = narration_has_unmistakable_followme_fixture(narration)
+    material_followme_narration = (
+        narration_has_positive_followme_identity(narration)
+        or unmistakable_followme_fixture
+    )
+    if len(narrated) < 2 or not material_followme_narration:
+        return reasons
     structured = {
         str(item.get("cue") or "").strip()
         for item in (record.get("followme_physical_evidence") or [])
@@ -80,7 +170,7 @@ def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
         and item.get("strength") in {"strong", "direct"}
     }
     if narrated.issubset(structured):
-        return []
+        return reasons
     view = str(record.get("view_type") or record.get("category") or "")
     # The material safety boundary is whether machine evidence can establish
     # the foreground FollowMe subject at all. Once a single-unit record already
@@ -91,8 +181,8 @@ def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
     if "遠景" not in view and has_sufficient_followme_physical_evidence(
         {"followme_physical_evidence": record.get("followme_physical_evidence") or []}
     ):
-        return []
-    reasons = ["narration_followme_physical_evidence_omitted"]
+        return reasons
+    reasons.append("narration_followme_physical_evidence_omitted")
     if "遠景" in view:
         reasons.append("distant_narration_followme_physical_conflict")
     return reasons
@@ -104,12 +194,7 @@ def is_followme_model(model: Any) -> bool:
     S32FM80x/S32FM90x are ordinary Smart Monitor models, so only the known
     FollowMe 32-inch 50x/70x and 43-inch 70x families are included here.
     """
-    text = re.sub(r"[^A-Z0-9]", "", str(model or "").upper())
-    if not text:
-        return False
-    if text.startswith("FOLLOWME"):
-        return True
-    return bool(re.fullmatch(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", text))
+    return bool(followme_identity_key(model))
 
 
 def has_sufficient_followme_physical_evidence(record: Dict[str, Any]) -> bool:
@@ -442,14 +527,40 @@ def _label_ownership_conflicts_with_narration(text: str) -> bool:
 
 def _same_model_price_confirmed(record: Dict[str, Any], history: List[Dict[str, Any]]) -> bool:
     model = re.sub(r"[^A-Z0-9]", "", str(record.get("model") or "").upper())
+    identity = followme_identity_key(record.get("model"))
     price = _as_int(record.get("price"))
     if not model or price is None or record.get("label_ownership") != "matched":
         return False
     for prior in reversed(history):
         prior_model = re.sub(r"[^A-Z0-9]", "", str(prior.get("model") or "").upper())
-        if prior_model == model and _as_int(prior.get("price")) == price and prior.get("label_ownership") == "matched":
+        prior_identity = followme_identity_key(prior.get("model"))
+        same_model = prior_model == model or bool(identity and identity == prior_identity)
+        if same_model and _as_int(prior.get("price")) == price and prior.get("label_ownership") == "matched":
             return True
     return False
+
+
+def _all_followme_identity_consistent(record: Dict[str, Any], history: List[Dict[str, Any]]) -> bool:
+    """Require every independent FollowMe pass to agree on model and price.
+
+    A later two-to-one majority must not erase an observed identity conflict.
+    Once model or price differs, the third pass may document the conflict but
+    cannot turn the photo into an automatic success.
+    """
+    if not history:
+        return False
+    model = followme_identity_key(record.get("model"))
+    price = _as_int(record.get("price"))
+    if not model or price is None or record.get("label_ownership") != "matched":
+        return False
+    for prior in history:
+        if (
+            followme_identity_key(prior.get("model")) != model
+            or _as_int(prior.get("price")) != price
+            or prior.get("label_ownership") != "matched"
+        ):
+            return False
+    return True
 
 
 def _is_samsung_sku_like(value: Any) -> bool:
@@ -631,6 +742,8 @@ def immediate_retry_decision(
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
         if current_year and attempt < 2:
             reasons.append("2026 FollowMe 必須完成第二輪實體證據複核")
+        elif current_year and not _all_followme_identity_consistent(record, history):
+            reasons.append("2026 FollowMe 各輪型號與價格不一致，不得自動驗證")
 
     reasons = list(dict.fromkeys(reasons))
     retry = bool(reasons) and attempt < max_attempts

@@ -345,4 +345,18 @@
 - 04:15 五張 `.15` 隔離 smoke 未通過：南投草屯-674 後的台中北屯-650 原圖是多台螢幕遠景，卻在首輪沿用 674 的 `S27D300GAC / 3,090`並被誤列 verified。原圖、全圖輸入、下方價牌裁切、中央裁切的 SHA-256 全部不同，排除應用程式重用同一影像，判定為模型跨照片語意漂移未被舊守門攔下。
 - `.16` 新增雙層防線：每個 JSON 必須回傳當次 `request_id`，不一致即 durable fuse，並在 trace 保留實際全圖輸入 SHA-256；相鄰不同 source identity 若產生完全相同的型號與價格，後一張不准首輪 verified，必須從原圖無記憶第二輪。正式 runner 繼續封鎖，現有 fuse 保留，未做清冊遷移或 Git 推送。
 - 10:43 `.16` 第三次五張隔離 smoke 完整收尾：5/5 處理、4 verified、1 review-required、0 failed。所有 9 輪 trace 皆有 32-hex／128-bit request ID、`request_id_verified=true`、非空 64-hex 全圖 SHA-256、`prior_answer_exposed=false`、`prompt_contamination=false`。650 三輪仍無法可靠判成原圖遠景，但已被固定 unresolved，不再冒充 verified；913 兩輪皆為 `FollowMe Pro M7 43" / 17,990`，第二輪後 verified。
-- `.16` 最終邊界再收緊：RequestID 從 8 碼擴成完整 128-bit；最後健康門自行要求 request 綁定與影像指紋；跨照片重複不論前張是 verified 或 unresolved 都必須完成三輪且保留 review-required，錯兩次／三次不得洗白。另已移除結構明示 `view_type` 後仍以敲述改寫分類的舊救援路徑。LM Studio CLI 載入索引模型失敗時，launcher 改用官方 local model-load API，後端仍 hidden，瀏覽器仍 opt-in。
+- `.16` 最終邊界再收緊：RequestID 從 8 碼擴成完整 128-bit；最後健康門自行要求 request 綁定與影像指紋；跨照片重複不論前張是 verified 或 unresolved 都必須完成三輪且保留 review-required，錯兩次／三次不得洗白。另已移除結構明示 `view_type` 後仍以敘述改寫分類的舊救援路徑。LM Studio CLI 載入索引模型失敗時，launcher 改用官方 local model-load API，後端仍 hidden，瀏覽器仍 opt-in。
+
+## 2026-07-16 11:25 `.16` 十五張實拍驗收失敗與 `.17` 修正
+
+- `.16` 代表性 15 張隔離 smoke 已處理 15/15：7 verified、8 review-required、0 failed，共 36 輪。36/36 都有正確 128-bit request ID、完整影像 SHA-256、`independent_pass=true`；前輪答案暴露、prompt contamination、runtime unhealthy、跨來源共用影像雜湊均為 0。既有單一 Dashboard 分頁的進度、照片、LLM 自然敘述與右欄卡片同步移動，沒有裸 JSON、亂碼或新增分頁。
+- 試跑仍判定失敗：台南-714 原圖只支持 `FollowMe M7 32" / 12,990`，第一輪 raw JSON 也正確如此，但舊 `立牌` 借用阻擋把明確 FollowMe 型號送進一般型號清除；第二輪又無照片證據猜成 `FollowMe Pro M7 43" / 12,990`，舊守門只確認已進第二輪、未比較 model/price，遂錯誤 verified。
+- `.17` 修正三處且不使用任何前輪答案：明確 FollowMe model 加本輪足夠同主體結構證據不得被 generic 立牌文字清除；Pro 43 必須有同輪可觀察的 Pro／43／S43FM／17,990 身分證據；2026 FollowMe 所有輪次 model/price 必須全數一致，二對一不得洗白既有衝突。
+- 正式總進度仍為 `65,331/150,321`、資料夾 `44/136`、剩餘 `84,990`。正式 runner、continuity daemon 與 uploader 保持停止，Google Drive 未接觸；`model_benchmark.lock` 保留。完成 `.18` 十五張實拍驗收、既有分頁同步證明與 Git push 前不得恢復正式 OCR。
+
+## 2026-07-16 12:46 `.18` 誤熔斷修正與隔離續跑
+
+- `.17b` 在 15 張隔離驗證的第 15 張前安全停止：已完成 14 張，6 張自動驗證、8 張待複核、0 失敗。照片 137 的敘述明示普通 Smart Monitor M7、黑色短架與託盤且「非 FollowMe」，舊健康閘仍誤判為 FollowMe 結構衝突；沒有錯誤結果進入正式進度或上傳。
+- `.18` 將友善名稱與實體 SKU 的一致性限制在既定同款映射，並把敘述熔斷條件限縮為未否定的 FollowMe 身分或明確白色移動架組合。113 項針對性測試、完整 critical regressions 與 production dashboard build 已通過。
+- 舊 fuse 已保留於 `_ocr_audit/trials/runtime_health_fuse_rev17b_false_positive_20260716_123804.json`。`.18` 新 15 張隔離驗證完成 15/15：8 verified、7 review-required、0 failed，共 34 輪；request ID、影像 SHA-256、獨立輪次、無前輪答案、無提示污染與 runtime health 全部通過。714 三輪皆保持 `FollowMe M7 32" / 12990`，因相鄰同款同價的跨照片疑慮保守留待複核；137 完成三輪且普通黑色短架／託盤的「非 FollowMe」敘述不再誤熔斷。沒有錯誤結果進入正式進度或上傳。
+- `.18` 全年清冊重建掃描 63,876 筆、2026 唯一來源 5,951 張；隔離試跑中已有 8 張具 `.18` 有效 trace，待跑 5,943 張，缺檔／衝突／無效列均為 0。正式 202601 第一群組 1,496 張已由唯一隱藏 runner 父子組啟動，既有唯一 Dashboard 分頁顯示「正在執行」、正式總進度 `65,331/150,321`、新版複核進度、自然語言與卡片同步，沒有裸 JSON；runner 會依清冊接續 202602–202605。uploader 與 Google Drive 仍封閉，`model_benchmark.lock` 保留。

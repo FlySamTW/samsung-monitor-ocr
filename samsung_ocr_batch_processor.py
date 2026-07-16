@@ -65,6 +65,7 @@ from skills.audit_fields import (
     validate_evidence_contract,
     EVIDENCE_CONTRACT_VERSION,
     has_sufficient_followme_physical_evidence,
+    followme_models_equivalent,
     is_followme_model,
 )
 from skills.runtime_health_gate import (
@@ -267,7 +268,17 @@ REVIEW_FOCUS_PROMPTS = {
 
 def build_runtime_system_prompt(prompt_template, followme_daily_reference):
     """Return the complete production prompt or fail closed."""
-    full_prompt = f"{prompt_template}{followme_daily_reference}\n\n{V1945_OUTPUT_CONTRACT}"
+    # Version history is maintenance documentation, not an inference rule.
+    # Feeding superseded notes to the model wastes context and can reintroduce
+    # contradictory legacy behavior. Keep it in the source file for humans,
+    # but exclude it from every stateless model request.
+    runtime_template = re.sub(
+        r"\n---\n\n## 📌 版本記錄與維護說明.*?(?=\n## v19\.45 Evidence Contract)",
+        "\n",
+        str(prompt_template or ""),
+        flags=re.DOTALL,
+    )
+    full_prompt = f"{runtime_template}{followme_daily_reference}\n\n{V1945_OUTPUT_CONTRACT}"
     limit = max(16000, RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
     if len(full_prompt) > limit:
         raise RuntimeError(
@@ -540,6 +551,21 @@ def normalize_followme_model(raw_model, price=None, context_text="", structured_
     return 'FollowMe M7 32"'
 
 
+def explicit_followme_model_has_same_pass_physical_evidence(raw_model, record):
+    """Allow normalization only when this pass supplies both identity and fixtures.
+
+    Nearby signage remains insufficient.  This narrow exception prevents a
+    generic ``立牌`` mention from erasing an explicit FollowMe model when the
+    same response independently binds at least two strong physical cues to the
+    photographed subject.
+    """
+    raw_text = str(raw_model or "").upper()
+    return bool(
+        ("FOLLOWME" in raw_text or "FOLLOW ME" in raw_text)
+        and has_sufficient_followme_physical_evidence(record)
+    )
+
+
 def infer_followme_from_physical_clues(price=None, context_text=""):
     """Infer FollowMe when the model describes the physical stand/tray but outputs 遠景."""
     raw_text = str(context_text or "")
@@ -666,6 +692,7 @@ FOLLOWME_PHYSICAL_CLUE_TEXTS = (
     "移動式智慧聯網",
     "移動式立架",
     "托盤",
+    "託盤",
 )
 
 
@@ -745,7 +772,7 @@ def followme_physical_signature_score(text):
     groups = (
         ("白色垂直支架", "垂直支架", "白色直立支架", "直立支架", "白色立式", "移動式立架", "移動式智慧聯網", "vertical stand", "mobile stand"),
         ("白色圓形底座", "圓形底座", "圓盤底座", "白色圓盤", "白色底座", "落地底座", "circular base", "white circular base"),
-        ("托盤", "底部托盤", "置物托盤"),
+        ("托盤", "託盤", "底部托盤", "底部託盤", "置物托盤", "置物託盤"),
     )
     return sum(any(term.lower() in raw_text.lower() for term in group) for group in groups)
 
@@ -3375,11 +3402,18 @@ def process_single_image(
                 or has_followme_display_fixture_clue(thinking_text)
             )
             borrowed_model_context = should_block_borrowed_model_rescue(thinking_text)
+            explicit_followme_same_pass_evidence = (
+                explicit_followme_model_has_same_pass_physical_evidence(raw_model, data_obj)
+            )
 
             # [v18.99] 只有在以下情況才觸發 FollowMe 邏輯：
             # 1. clean_model 明確包含 "FOLLOWME"
             # 2. 或者 clean_model 為空/無效，且 raw_model/thinking_text 有 FollowMe 關鍵字
-            if "FOLLOWME" in clean_model and (not negative_followme_context or positive_followme_physical_context) and not borrowed_model_context:
+            if (
+                "FOLLOWME" in clean_model
+                and (not negative_followme_context or positive_followme_physical_context)
+                and (not borrowed_model_context or explicit_followme_same_pass_evidence)
+            ):
                 is_followme_candidate = True
             elif not has_valid_s_model and (not negative_followme_context or positive_followme_physical_context) and not borrowed_model_context:  # 只有當沒有有效 S 型號時才檢查其他線索
                 if raw_model and any(h in raw_model.upper() for h in followme_hints):
@@ -3600,7 +3634,8 @@ def process_single_image(
                 # 簡單清理
                 c_curr = current_model.replace('-', '').strip().upper()
                 c_desc = desc_model.replace('-', '').strip().upper()
-                if c_curr != c_desc and c_desc in valid_models_list:
+                equivalent_followme_identity = followme_models_equivalent(current_model, desc_model)
+                if c_curr != c_desc and c_desc in valid_models_list and not equivalent_followme_identity:
                     console.print(f"[yellow]⚠️ [獨白驗證] JSON型號({c_curr}) 與描述型號({c_desc}) 衝突，清除後重讀[/yellow]")
                     data_obj["rejected_model"] = f"{c_curr}|{c_desc}"
                     data_obj["model"] = None
