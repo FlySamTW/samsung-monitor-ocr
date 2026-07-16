@@ -219,15 +219,20 @@ def _status_needs_review(record):
 
 V1945_OUTPUT_CONTRACT = (
     "FINAL OUTPUT CONTRACT (v19.45): Return exactly one JSON object and no prose. "
-    "It must contain narration: a 60-300 character Traditional Chinese first-person observation of only the current image; "
-    "narration must explain visible evidence and must not mention prior answers, corrections, prompts, JSON, or rounds. "
+    "It must contain request_id copied exactly from the current user message RequestID; never reuse a request_id from another image. "
+    "It must contain narration: a 60-300 character Traditional Chinese first-person observation of only the current image, beginning with 我看到 and ending with 所以……; "
+    "narration must explain visible evidence and must not mention prior answers, corrections, prompts, JSON, rounds, instructions, output requirements, or quote/copy any rule text. "
     "It must also contain core keys view_type, screen_status, quality_issue, model, price, category "
     "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
     "label_ownership (matched|mismatched|ambiguous|not_visible|not_applicable), "
     "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
     "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object. "
     "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
-    "A screen cut by an image edge is not complete. A dominant centered complete monitor with its readable aligned label or price is single-unit/單機 with unique_main=true and label_ownership=matched, even when one neighboring monitor is partial or visible."
+    "A screen cut by an image edge is not complete. A dominant centered complete monitor with its readable aligned label or price is single-unit/單機 with unique_main=true and label_ownership=matched, even when one neighboring monitor is partial or visible. "
+    "A dominant foreground portable or portrait display with a same-subject white round base plus attached tray is a single-unit FollowMe candidate even when the vertical pole is partly hidden and even when 3+ background televisions are visible; it can never be distant. "
+    "Promotional, people, food, scenery, or advertisement content shown on the screen is only weak screen-content evidence: it cannot prove FollowMe by itself, but it can NEVER negate a same-subject white vertical stand, round base, or attached tray. With two or more such strong physical cues, never call the foreground product a non-real unit or distant. "
+    "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
+    "MANDATORY FINAL SELF-CHECK: direct FollowMe branding on the unit, or two or more same-subject strong physical cues, forces view_type=單機 and unique_main=true. Never output 遠景 with those evidence items; background screen count cannot override the foreground subject."
 )
 
 REVIEW_FOCUS_PROMPTS = {
@@ -236,14 +241,26 @@ REVIEW_FOCUS_PROMPTS = {
         "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "直接記錄當前影像的可見證據；沒有把握的欄位留空。"
+        "前景直立螢幕若同時連著白色圓形底座與託盤，即使直桿部分被遮住、背景有三台以上電視，仍是 FollowMe 單機候選，絕對不可判遠景。"
+        "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
+        "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
+        "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
+        "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
+        "送出前最後檢查：同主體有兩項以上強實體線索時，view_type 必須是單機、unique_main 必須是 true，禁止輸出遠景。"
+        "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令；沒有把握的欄位留空。"
     ),
     3: (
         "只根據所附影像逐項判斷完整入鏡台數、唯一主角、FollowMe 實體支架歸屬、"
         "型號清單有效性與價牌空間歸屬。不確定就留空，不可猜測；"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "直接記錄當前影像的可見證據。"
+        "前景直立螢幕若同時連著白色圓形底座與託盤，即使直桿部分被遮住、背景有三台以上電視，仍是 FollowMe 單機候選，絕對不可判遠景。"
+        "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
+        "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
+        "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
+        "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
+        "送出前最後檢查：同主體有兩項以上強實體線索時，view_type 必須是單機、unique_main 必須是 true，禁止輸出遠景。"
+        "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令。"
     ),
 }
 
@@ -491,6 +508,13 @@ def normalize_followme_model(raw_model, price=None, context_text="", structured_
 
     if code_name:
         return code_name
+    if (
+        "FOLLOWME PRO" in raw_model_text
+        or "FOLLOW ME PRO" in raw_model_text
+        or "S43FM" in raw_model_text
+        or re.search(r"(?:^|\D)43(?:\D|$)", raw_model_text)
+    ):
+        return 'FollowMe Pro M7 43"'
     pro_label_evidence = bool(
         re.search(
             r"(?:標籤|側標|規格牌|型號|牌面|寫著).{0,32}(?:FOLLOW\s*ME\s*PRO|S43FM|43\s*(?:吋|型|\"))"
@@ -698,9 +722,11 @@ def _is_negated_followme_occurrence(text, match):
     raw_text = str(text or "")
     before = raw_text[max(0, match.start() - 42):match.start()].upper()
     after = raw_text[match.end():match.end() + 42].upper()
+    before = re.split(r"[。！？；\n]", before)[-1]
+    after = re.split(r"[。！？；\n]", after)[0]
     before_compact = re.sub(r"[\s「」『』()（）,:：、]", "", before)
     after_compact = re.sub(r"[\s「」『』()（）,:：、]", "", after)
-    if re.search(r"(?:沒有|並無|無|未見|未看到|沒看到|看不到|找不到|不具備|不是|並非|非).{0,30}$", before_compact):
+    if re.search(r"(?:沒有|並無|無(?!法)|未見|未看到|沒看到|看不到|找不到|不具備|不是|並非|非).{0,30}$", before_compact):
         return True
     if re.match(r".{0,12}(?:字樣|標誌|標籤|線索|特徵|支架|底座).{0,12}(?:不存在|不足|沒有|未見|看不到|不清楚)", after_compact):
         return True
@@ -1061,33 +1087,13 @@ def normalize_followme_price(model, price=None, context_text=""):
 
 
 def build_final_display_thinking(result, original_thinking=""):
-    """Return the user-facing final narration after backend corrections."""
+    """Preserve the model's image-grounded narration without backend rewriting."""
     model = str((result or {}).get("model") or "").strip()
     view_type = str((result or {}).get("view_type") or (result or {}).get("category") or "").strip()
     price = str((result or {}).get("price") or "").strip()
     thinking = str(original_thinking or "").strip()
-    upper_model = model.upper()
-    upper_thinking = thinking.upper()
-
     final_price = price if price and price.lower() not in {"null", "none"} else "無價格"
     final_model = model if model and model.lower() not in {"null", "none"} else "無型號"
-
-    followme_final = upper_model.startswith("FOLLOWME")
-    has_conflicting_followme_text = (
-        followme_final
-        and (
-            has_negative_followme_context(thinking)
-            or "整體符合「遠景」條件" in thinking
-            or "不是 FOLLOWME" in upper_thinking
-            or "非 FOLLOWME" in upper_thinking
-        )
-    )
-    if has_conflicting_followme_text:
-        return (
-            f"最終校正：這張判定為單機，型號 {final_model}，價格 {final_price}。"
-            "畫面中有 Samsung FollowMe 立式展示/產品標示，因此不能因旁邊賣場環境、"
-            "其他品牌或背景多台螢幕而判為遠景。"
-        )
 
     if not thinking or thinking == "...":
         return (
@@ -2240,12 +2246,15 @@ def _convert_to_anthropic_messages(messages, max_image_px=2560):
 EVIDENCE_KEYS = {"complete_screen_count", "unique_main", "label_ownership", "followme_physical_evidence"}
 CORE_JSON_KEYS = {"view_type", "screen_status", "quality_issue", "model", "price", "category"}
 PRESENTATION_JSON_KEYS = {"narration", "desc"}
+REQUEST_BINDING_JSON_KEYS = {"request_id"}
 PIPELINE_INTERNAL_RESULT_KEYS = {
     "unlisted_model_candidate",
     "unlisted_model_photo_consensus",
     "official_model_unverified",
     "model_prefix_completed",
     "model_prefix_completion_from",
+    "request_id_verified",
+    "input_image_sha256",
 }
 
 
@@ -2332,7 +2341,7 @@ def _merge_v1945_json_objects(text):
             if duplicate_evidence:
                 return None, objects, "rejected", "duplicate_nested_evidence_keys:" + ",".join(sorted(duplicate_evidence))
             value.update(nested_evidence)
-        unknown = set(value) - CORE_JSON_KEYS - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS
+        unknown = set(value) - CORE_JSON_KEYS - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS - REQUEST_BINDING_JSON_KEYS
         if unknown:
             return None, objects, "rejected", "unknown_keys:" + ",".join(sorted(unknown))
         return value, objects, "single_object", ""
@@ -2342,12 +2351,31 @@ def _merge_v1945_json_objects(text):
         return None, objects, "rejected", "multiple_core_or_unknown_object"
     merged = dict(core[0]["value"])
     evidence = evidence_only[0]["value"] if evidence_only else {}
-    if set(evidence) - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS:
+    if set(evidence) - EVIDENCE_KEYS - PRESENTATION_JSON_KEYS - REQUEST_BINDING_JSON_KEYS:
         return None, objects, "rejected", "evidence_object_has_unknown_keys"
     if set(merged) & set(evidence):
         return None, objects, "rejected", "duplicate_core_evidence_keys"
     merged.update(evidence)
     return merged, objects, "disjoint_core_evidence", ""
+
+
+def validate_request_binding(parsed, expected_request_id):
+    """Bind a model response to this exact photo request; stale responses fail closed."""
+    if not isinstance(parsed, dict):
+        return "request_id_missing"
+    actual = str(parsed.get("request_id") or "").strip()
+    expected = str(expected_request_id or "").strip()
+    if not actual:
+        return "request_id_missing"
+    if not expected or actual != expected:
+        return "request_id_mismatch"
+    return ""
+
+
+def new_request_id():
+    """Return a full 128-bit per-call binding token for production-scale uniqueness."""
+    import uuid
+    return uuid.uuid4().hex
 
 
 def _extract_balanced_json(text):
@@ -2734,8 +2762,11 @@ def process_single_image(
 
 
     # [v17.31 Integrity] Force Echo Filename to prevent crosstalk (849 vs 431 mixup)
-    import uuid
-    random_salt = str(uuid.uuid4())[:8]
+    random_salt = new_request_id()
+    try:
+        input_image_sha256 = hashlib.sha256(base64.b64decode(full_image_b64)).hexdigest()
+    except Exception:
+        input_image_sha256 = ""
 
     # [v18.35 Stateless Purge]
     # 1. 強化無狀態提示 (Engineering Strategy)
@@ -2781,11 +2812,18 @@ def process_single_image(
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_center_b64}"}})
 
-        # Retry-only spatial evidence: full-height overlapping tiles preserve
+        # Deterministic spatial evidence: first pass gets the central subject;
+        # retries add overlapping left/center/right full-height ownership views.
         # object ownership while staying within a deterministic image budget.
         for tile in scene_tiles[:3]:
             user_images.append({"type": "text", "text": f"補充圖：{tile['label']}，原圖全高空間證據，bbox={tile['bbox']}。只能用於定位，不可單獨證明分類。"})
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
+
+    user_prompt += (
+        "\n\n先檢查前景唯一主角，再計算背景螢幕。若同一台前景直立螢幕連著白色圓形落地底座與託盤，"
+        "它就是 FollowMe 單機候選，不得因背景有三台以上完整螢幕而改成遠景。"
+        "自然敘述與結構欄必須逐項一致，且自然敘述不得抄寫這些規則。"
+    )
 
     if ocr_attempt == 2:
         user_prompt += "\n\n" + REVIEW_FOCUS_PROMPTS[2]
@@ -2955,6 +2993,22 @@ def process_single_image(
                         console.print(f"[yellow]🆘 [Fallback] {fname}: 從 Markdown 搶救型號/價格[/yellow]")
 
                 if parsed and isinstance(parsed, dict):
+                    request_binding_error = validate_request_binding(parsed, random_salt)
+                    if request_binding_error:
+                        return {
+                            "error": "runtime health gate stopped an unbound model response",
+                            "runtime_health_stop": True,
+                            "runtime_health_reasons": [request_binding_error],
+                            "thinking": BLOCKED_NARRATION,
+                            "view_type": "失敗",
+                            "category": "失敗",
+                            "model": None,
+                            "price": None,
+                            "input_image_sha256": input_image_sha256,
+                        }
+                    parsed.pop("request_id", None)
+                    parsed["request_id_verified"] = True
+                    parsed["input_image_sha256"] = input_image_sha256
                     # [OCG-v2.5] JSON 成功但 model=null 時,保守補抓型號(低風險)
                     parsed_model = parsed.get("model")
                     parsed_structured = parsed.get("data", parsed)
@@ -3141,6 +3195,25 @@ def process_single_image(
                     thinking_text = prefix
             if parsed is not None:
                 parsed = json.loads(sanitize_json(json.dumps(parsed, ensure_ascii=False)))
+                request_binding_error = validate_request_binding(parsed, random_salt)
+                if request_binding_error:
+                    if request_binding_error == "request_id_missing" and attempt < max_retries:
+                        orchestrator.log_system("⚠️ [回覆綁定門] AI 未回傳本張識別碼，將從原圖無記憶重試。")
+                        continue
+                    return {
+                        "error": "runtime health gate stopped an unbound model response",
+                        "runtime_health_stop": True,
+                        "runtime_health_reasons": [request_binding_error],
+                        "thinking": BLOCKED_NARRATION,
+                        "view_type": "失敗",
+                        "category": "失敗",
+                        "model": None,
+                        "price": None,
+                        "input_image_sha256": input_image_sha256,
+                    }
+                parsed.pop("request_id", None)
+                parsed["request_id_verified"] = True
+                parsed["input_image_sha256"] = input_image_sha256
                 structured_narration = str(
                     parsed.get("narration") or parsed.get("desc") or ""
                 ).strip()
@@ -3239,6 +3312,7 @@ def process_single_image(
         }
         narration_model_fill_allowed = "model" not in explicit_structured_fields
         narration_price_fill_allowed = "price" not in explicit_structured_fields
+        narration_view_fill_allowed = not ({"view_type", "category"} & set(explicit_structured_fields))
         # These fields are pipeline-owned evidence markers.  Never trust a
         # similarly named key supplied by model output.
         for internal_key in (
@@ -3487,6 +3561,7 @@ def process_single_image(
             if (
                 is_followme_standard_name(current_model)
                 and has_negative_followme_context(thinking_text)
+                and not has_sufficient_followme_physical_evidence(data_obj)
                 and not has_positive_followme_physical_clue(thinking_text)
                 and not has_followme_display_fixture_clue(thinking_text)
             ):
@@ -3494,7 +3569,12 @@ def process_single_image(
                 data_obj["model"] = None
                 current_model = None
             elif is_followme_standard_name(current_model):
-                normalized_followme = normalize_followme_model(current_model, data_obj.get("price"), thinking_text)
+                normalized_followme = normalize_followme_model(
+                    current_model,
+                    data_obj.get("price"),
+                    thinking_text,
+                    structured_physical_confirmed=has_sufficient_followme_physical_evidence(data_obj),
+                )
                 if normalized_followme and normalized_followme != current_model:
                     data_obj["model"] = normalized_followme
                     current_model = normalized_followme
@@ -3560,7 +3640,7 @@ def process_single_image(
                 data_obj["model"] = None
             if narration_price_fill_allowed:
                 data_obj["price"] = None
-        elif should_demote_distant_to_single_review(data_obj.get("view_type"), thinking_text):
+        elif narration_view_fill_allowed and should_demote_distant_to_single_review(data_obj.get("view_type"), thinking_text):
             console.print("[yellow]⚠️ [遠景降級] 遠景答案含單一主角/側標/價牌/FollowMe 線索 → 改單機待補，不當遠景放行[/yellow]")
             data_obj["view_type"] = "單機"
             data_obj["category"] = "單機"
@@ -3570,6 +3650,7 @@ def process_single_image(
         if (
             side_label_followme
             and data_obj.get("view_type") == "遠景"
+            and narration_view_fill_allowed
             and narration_model_fill_allowed
             and narration_price_fill_allowed
         ):
@@ -3600,13 +3681,14 @@ def process_single_image(
             data_obj["price"] = None
             if (
                 any(term in thinking_text for term in ["展示區", "多台", "貨架", "遠景"])
+                and narration_view_fill_allowed
                 and not has_positive_followme_physical_clue(thinking_text)
                 and not has_followme_display_fixture_clue(thinking_text)
             ):
                 data_obj["view_type"] = "遠景"
 
         inferred_followme = None if should_block_borrowed_model_rescue(thinking_text) else infer_followme_from_physical_clues(data_obj.get("price"), thinking_text)
-        if inferred_followme and data_obj.get("view_type") == "遠景" and narration_model_fill_allowed:
+        if inferred_followme and data_obj.get("view_type") == "遠景" and narration_view_fill_allowed and narration_model_fill_allowed:
             console.print(f"[yellow]⚠️ [FollowMe 遠景救援] 獨白描述支架/托盤/價牌，遠景改為單機: {inferred_followme}[/yellow]")
             data_obj["view_type"] = "單機"
             data_obj["screen_status"] = data_obj.get("screen_status") or "正常"
@@ -3617,7 +3699,7 @@ def process_single_image(
             ):
                 console.print(f"[green]✅ [FollowMe 實體線索救援] 補回型號: {inferred_followme}[/green]")
 
-        if data_obj.get("view_type") != "遠景":
+        if narration_view_fill_allowed and data_obj.get("view_type") != "遠景":
             current_model = data_obj.get("model")
             current_price = data_obj.get("price")
             has_model = bool(current_model) and str(current_model).lower() not in ("null", "none", "")
@@ -4010,6 +4092,8 @@ def process_single_image(
     result_json["independent_pass"] = True
     result_json["prior_answer_exposed"] = False
     result_json["prompt_contamination"] = False
+    result_json["request_id_verified"] = bool(result_json.get("request_id_verified"))
+    result_json["input_image_sha256"] = input_image_sha256
     if orchestrator:
         final_display_thinking = str(result_json.get('thinking') or '').strip()
         if final_display_thinking:

@@ -276,6 +276,31 @@ function Test-ModelApi($ApiBase, $Model) {
     return $false
 }
 
+function Try-LoadModelApi($ApiBase, $Model) {
+    try {
+        $nativeBase = $ApiBase.TrimEnd("/")
+        if ($nativeBase.EndsWith("/v1")) {
+            $nativeBase = $nativeBase.Substring(0, $nativeBase.Length - 3)
+        }
+        $body = @{
+            model = $Model
+            context_length = 32768
+            flash_attention = $true
+            offload_kv_cache_to_gpu = $true
+        } | ConvertTo-Json
+        $loaded = Invoke-RestMethod `
+            -Uri ($nativeBase + "/api/v1/models/load") `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $body `
+            -TimeoutSec 120
+        return $loaded.status -eq "loaded"
+    } catch {
+        Write-Warn "LM Studio native model-load API failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Ensure-LmStudio($Python) {
     $apiBase = Get-Setting "LOCAL_LLM_API_BASE" "http://127.0.0.1:1234/v1"
     $model = Get-Setting "LOCAL_LLM_MODEL" "qwen/qwen3-vl-8b"
@@ -289,6 +314,12 @@ function Ensure-LmStudio($Python) {
     & $Python "tools\local_llm_manager.py" ensure
     if ($LASTEXITCODE -eq 0 -and (Test-ModelApi $apiBase $model)) {
         Write-Step "LM Studio model is ready."
+        return
+    }
+
+    Write-Info "CLI load did not bind the indexed model; trying the official local model-load API."
+    if ((Try-LoadModelApi $apiBase $model) -and (Test-ModelApi $apiBase $model)) {
+        Write-Step "LM Studio model is ready through the local API."
         return
     }
 
@@ -308,6 +339,12 @@ function Ensure-Environment {
     return $python
 }
 
+function Open-DashboardIfRequested {
+    if ((Get-Setting "SAMSUNG_OCR_OPEN_BROWSER" "0") -eq "1") {
+        Start-Process "http://127.0.0.1:5000/"
+    }
+}
+
 function Start-Backend {
     $python = Ensure-Environment
     Ensure-LmStudio $python
@@ -315,7 +352,7 @@ function Start-Backend {
     $existing = Get-BackendStatus
     if ($existing) {
         Write-Step "OCR dashboard is already running."
-        Start-Process "http://127.0.0.1:5000/"
+        Open-DashboardIfRequested
         return
     }
 
@@ -344,7 +381,7 @@ function Start-Backend {
         Start-Sleep -Seconds 1
         if (Get-BackendStatus) {
             Write-Step "OCR dashboard is ready: http://127.0.0.1:5000/"
-            Start-Process "http://127.0.0.1:5000/"
+            Open-DashboardIfRequested
             return
         }
     }

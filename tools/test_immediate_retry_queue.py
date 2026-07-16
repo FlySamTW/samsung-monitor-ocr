@@ -34,18 +34,24 @@ def main() -> None:
 
         def processor(fname, image_b64, prompt_mgr, image_processor, processed_image=None, ocr_attempt=1, previous_results=None):
             calls.append((fname, ocr_attempt, len(previous_results or [])))
+            binding = {
+                "request_id_verified": True,
+                "input_image_sha256": __import__("hashlib").sha256(__import__("base64").b64decode(image_b64)).hexdigest(),
+            }
             if fname == "A.jpg" and ocr_attempt == 1:
                 return {
                     "view_type": "單機", "category": "單機", "model": None, "price": None,
                     "quality_issue": "沒有規格和價格牌", "thinking": "唯一主角但標籤仍需仔細重讀。",
                     "complete_screen_count": 1, "unique_main": True,
                     "label_ownership": "matched", "followme_physical_evidence": [],
+                    **binding,
                 }
             return {
                 "view_type": "單機", "category": "單機", "model": "S24F332EAC", "price": "2390",
                 "quality_issue": "", "thinking": "唯一主角自己的規格牌與價格牌清楚可讀。",
                 "complete_screen_count": 1, "unique_main": True,
                 "label_ownership": "matched", "followme_physical_evidence": [],
+                **binding,
             }
 
         orchestrator = BatchOrchestrator({
@@ -68,16 +74,25 @@ def main() -> None:
         while orchestrator.is_running and time.time() < deadline:
             time.sleep(0.05)
         assert not orchestrator.is_running
-        assert [item[0] for item in calls[:3]] == ["A.jpg", "A.jpg", "B.jpg"], calls
+        assert [item[0] for item in calls[:5]] == ["A.jpg", "A.jpg", "B.jpg", "B.jpg", "B.jpg"], calls
         assert calls[1][1:] == (2, 1), calls
+        assert calls[3][1:] == (2, 1), calls
         assert len(orchestrator.recent_results) == 2
-        assert len(orchestrator.display_queue) == 3
+        assert calls[4][1:] == (3, 2), calls
+        assert len(orchestrator.display_queue) == 5
         a_events = [item for item in orchestrator.display_queue if item.get("file_name") == "A.jpg"]
         assert [item.get("pass_index") for item in a_events] == [1, 2]
         assert len({item.get("source_item_id") for item in a_events}) == 1
         assert len({item.get("presentation_id") for item in a_events}) == 2
+        b_events = [item for item in orchestrator.display_queue if item.get("file_name") == "B.jpg"]
+        assert [item.get("pass_index") for item in b_events] == [1, 2, 3]
+        assert "跨照片" in "".join(b_events[0].get("retry_reason") or [])
         assert all(row.get("model") == "S24F332EAC" for row in orchestrator.recent_results)
-        assert all(row.get("ocr_attempt") in {1, 2} for row in orchestrator.recent_results)
+        attempts = {row.get("file_name"): row.get("ocr_attempt") for row in orchestrator.recent_results}
+        assert attempts == {"A.jpg": 2, "B.jpg": 3}, attempts
+        b_result = next(row for row in orchestrator.recent_results if row.get("file_name") == "B.jpg")
+        assert b_result.get("auto_review_required") is True
+        assert b_result.get("auto_verified") is False
 
         success_files = sorted(image_dir.glob("*-OCR成功.json"))
         nonempty_success = [

@@ -10,7 +10,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.14"
+EVIDENCE_GUARD_REVISION = "20260716.16"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -19,6 +19,83 @@ FOLLOWME_CUE_CODES = {
 }
 FOLLOWME_WEAK_CUES = {"screen_content_only", "nearby_signage_only", "unknown"}
 FOLLOWME_INDEPENDENT_STRONG_CUES = {"white_vertical_stand", "round_base", "portrait_display", "attached_price_tray", "attached_followme_product_card"}
+MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
+
+_NARRATED_FOLLOWME_CUE_PATTERNS = {
+    "white_vertical_stand": re.compile(r"(?:白色.{0,4})?(?:垂直支架|直立支架|長直立支架|直桿|立柱)"),
+    "round_base": re.compile(r"(?:白色.{0,4})?(?:圓形(?:落地)?底座|圓盤底座)"),
+    "portrait_display": re.compile(r"(?:直立|直式|縱向)(?:的)?(?:螢幕|顯示器)"),
+    "attached_price_tray": re.compile(r"(?:下方|底部|正下方|連著|附有).{0,12}(?:託盤|托盤)|(?:託盤|托盤).{0,12}(?:價牌|價格牌|規格牌)"),
+    "attached_followme_product_card": re.compile(r"(?:Follow\s*Me|移動式智慧聯網組)[^。；，,\n]{0,10}(?:產品卡|價牌|價格牌|規格牌|牌面)", re.IGNORECASE),
+}
+_LOCAL_NEGATIONS = ("沒有看到", "未看到", "看不到", "沒有", "未見", "不是", "並非", "非")
+
+
+def material_structured_authority_fields(record: Dict[str, Any]) -> List[str]:
+    """Return material prose-rescue attempts that structured authority blocked."""
+    values = record.get("structured_authority_blocked_fields") or []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    return sorted({str(value).strip() for value in values if str(value).strip() in MATERIAL_STRUCTURED_AUTHORITY_FIELDS})
+
+
+def _locally_negated(text: str, start: int) -> bool:
+    clause = text[:start]
+    boundary = max((clause.rfind(mark) for mark in "，,。；;：:\n"), default=-1)
+    local = clause[boundary + 1 :]
+    return any(term in local for term in _LOCAL_NEGATIONS) or bool(re.search(r"無(?!法)", local))
+
+
+def narrated_followme_physical_cues(record: Dict[str, Any]) -> set[str]:
+    """Extract only explicit, non-negated physical cues from readable narration.
+
+    This is a consistency check, not an OCR rescue path.  It never creates a
+    model or changes view_type; it only prevents prose/structure contradictions
+    from being accepted or washed by later passes.
+    """
+    text = str(record.get("thinking") or record.get("narration") or "")
+    found: set[str] = set()
+    for cue, pattern in _NARRATED_FOLLOWME_CUE_PATTERNS.items():
+        for match in pattern.finditer(text):
+            if not _locally_negated(text, match.start()):
+                found.add(cue)
+                break
+    return found
+
+
+def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
+    """Reject material prose/structure gaps without stalling on minor cue omission."""
+    narrated = narrated_followme_physical_cues(record)
+    # One isolated shape word can be incidental. Two independent same-clause
+    # fixture cues are the existing strong-evidence threshold and are material.
+    if len(narrated) < 2:
+        return []
+    structured = {
+        str(item.get("cue") or "").strip()
+        for item in (record.get("followme_physical_evidence") or [])
+        if isinstance(item, dict)
+        and item.get("same_subject") is True
+        and item.get("strength") in {"strong", "direct"}
+    }
+    if narrated.issubset(structured):
+        return []
+    view = str(record.get("view_type") or record.get("category") or "")
+    # The material safety boundary is whether machine evidence can establish
+    # the foreground FollowMe subject at all. Once a single-unit record already
+    # has two independent same-subject strong cues (or direct branding), an
+    # omitted orientation/card detail remains a review-quality issue but must
+    # not repeatedly fuse the whole batch. Distant answers never get this
+    # allowance because any such foreground evidence changes classification.
+    if "遠景" not in view and has_sufficient_followme_physical_evidence(
+        {"followme_physical_evidence": record.get("followme_physical_evidence") or []}
+    ):
+        return []
+    reasons = ["narration_followme_physical_evidence_omitted"]
+    if "遠景" in view:
+        reasons.append("distant_narration_followme_physical_conflict")
+    return reasons
 
 
 def is_followme_model(model: Any) -> bool:
@@ -164,10 +241,19 @@ def _cross_pass_core_signature(record: Dict[str, Any]) -> tuple:
 def evidence_contract_decision(record: Dict[str, Any], previous_results=None) -> Dict[str, Any]:
     valid, errors, normalized = validate_evidence_contract(record)
     reasons = list(errors)
+    reasons.extend(
+        f"structured_authority_conflict:{field}"
+        for field in material_structured_authority_fields(record)
+    )
+    reasons.extend(narration_evidence_consistency_reasons(record))
     if previous_results:
         prior_contracts = [validate_evidence_contract(item) for item in previous_results]
         if any(prior_valid is not True for prior_valid, _, _ in prior_contracts):
             reasons.append("prior_evidence_contract_invalid")
+        if any(material_structured_authority_fields(item) for item in previous_results):
+            reasons.append("prior_structured_authority_conflict")
+        if any(narration_evidence_consistency_reasons(item) for item in previous_results):
+            reasons.append("prior_narration_evidence_conflict")
         core = [_cross_pass_core_signature(r) for r in previous_results]
         current = _cross_pass_core_signature(record)
         if any(item != current for item in core):
@@ -477,6 +563,15 @@ def immediate_retry_decision(
         reasons.append("最終它牌結果與原始 Samsung SKU 衝突")
     if record.get("requires_structured_retry"):
         reasons.append("模型未回傳可信結構化結果")
+    cross_photo_suspected = bool(
+        record.get("cross_photo_duplicate_core_suspected")
+        or any(item.get("cross_photo_duplicate_core_suspected") for item in history)
+    )
+    if cross_photo_suspected:
+        if attempt < max_attempts:
+            reasons.append("跨照片重複核心不得以兩輪相同洗白，必須完成第三輪無記憶複核")
+        else:
+            reasons.append("跨照片污染疑慮經三輪仍不得自動驗證，需人工或異構模型複核")
     if attempt >= 2 and re.search(
         r"(?:您|你).{0,6}指正|先前.{0,10}(?:判斷|答案|型號|價格)|上一輪.{0,10}(?:判斷|答案|型號|價格)|修正.{0,8}(?:先前|前一).{0,8}(?:判斷|答案)",
         thinking,

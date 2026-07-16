@@ -80,9 +80,11 @@ class ImageProcessor:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     def _scene_tile_specs(self, width: int, height: int, attempt: int):
-        """Return bounded overlapping full-height tiles for retry-only evidence."""
-        if attempt == 2:
-            specs = (("scene_left", 0.00, 0.60), ("scene_right", 0.40, 1.00))
+        """Return bounded full-height subject/ownership tiles by evidence pass."""
+        if attempt <= 1:
+            specs = (("scene_center", 0.26, 0.74),)
+        elif attempt == 2:
+            specs = (("scene_left", 0.00, 0.60), ("scene_center", 0.26, 0.74), ("scene_right", 0.40, 1.00))
         elif attempt >= 3:
             specs = (("scene_left", 0.00, 0.48), ("scene_center", 0.26, 0.74), ("scene_right", 0.52, 1.00))
         else:
@@ -271,7 +273,7 @@ class ImageProcessor:
                             bottom_center_b64 = self._encode_crop(center_img)
                             applied_transforms.append(f"bottom_center_zoom_{center_bbox}")
 
-                    if large_scene and attempt >= 2:
+                    if large_scene:
                         for tile_label, (x, y, w, h) in self._scene_tile_specs(img.width, img.height, attempt)[:int(self.config.get("scene_tile_max", 3))]:
                             tile = Image.fromarray(img_array[y:y + h, x:x + w])
                             tile = self._resize_crop_if_needed(tile, applied_transforms, tile_label)

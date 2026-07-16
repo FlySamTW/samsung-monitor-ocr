@@ -18,10 +18,10 @@ from tools.prepare_drive_upload_manifest import (
     load_v1945_trace_names,
 )
 from tools.rerun_questionable_records import is_complete_auto_verified
-from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace
+from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace, cross_photo_duplicate_core
 from skills.runtime_health_gate import review_prompt_leak_reasons
 from skills.model_validation import has_photo_label_model_evidence, unique_known_model_completion
-from samsung_ocr_batch_processor import _merge_v1945_json_objects
+from samsung_ocr_batch_processor import _merge_v1945_json_objects, validate_request_binding, new_request_id
 
 
 def evidence(count, unique, ownership="not_visible", physical=None):
@@ -34,6 +34,64 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_request_id_binds_response_to_current_photo(self):
+        raw = json.dumps({
+            "request_id": "a1b2c3d4",
+            "narration": "我看到當前照片的一台螢幕，所以……",
+            "view_type": "單機", "screen_status": "正常", "quality_issue": "無",
+            "model": "S27D300GAC", "price": "3090", "category": "單機",
+            **evidence(1, True, "matched"),
+        }, ensure_ascii=False)
+        parsed, _, mode, reason = _merge_v1945_json_objects(raw)
+        self.assertEqual(mode, "single_object")
+        self.assertEqual(reason, "")
+        self.assertEqual(validate_request_binding(parsed, "a1b2c3d4"), "")
+        self.assertEqual(validate_request_binding(parsed, "deadbeef"), "request_id_mismatch")
+        parsed.pop("request_id")
+        self.assertEqual(validate_request_binding(parsed, "a1b2c3d4"), "request_id_missing")
+
+    def test_request_id_uses_full_128_bit_space(self):
+        values = {new_request_id() for _ in range(1000)}
+        self.assertEqual(len(values), 1000)
+        self.assertTrue(all(len(value) == 32 for value in values))
+        self.assertTrue(all(all(ch in "0123456789abcdef" for ch in value) for value in values))
+
+    def test_adjacent_duplicate_core_forces_only_first_pass_retry(self):
+        previous = {
+            "auto_verified": True, "source_item_id": "source-a", "label_ownership": "matched",
+            "model": "S27D300GAC", "price": "3090",
+        }
+        current = {
+            "source_item_id": "source-b", "label_ownership": "matched",
+            "model": "S27D300GAC", "price": "3,090",
+        }
+        self.assertTrue(cross_photo_duplicate_core(previous, current))
+        previous["auto_verified"] = False
+        previous["label_ownership"] = "ambiguous"
+        current["label_ownership"] = "not_visible"
+        self.assertTrue(cross_photo_duplicate_core(previous, current))
+        row = {
+            "period": "202601", "view_type": "單機", "category": "單機",
+            "model": "S27D300GAC", "price": "3090",
+            "thinking": "我看到主角價牌標示型號與價格，所以……",
+            "cross_photo_duplicate_core_suspected": True,
+            "independent_pass": True, "prior_answer_exposed": False, "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn("跨照片", "".join(decision["reasons"]))
+        history_row = dict(row)
+        second_row = dict(row)
+        second_row.pop("cross_photo_duplicate_core_suspected")
+        second = immediate_retry_decision(second_row, 2, [history_row], 3)
+        self.assertTrue(second["retry"])
+        self.assertIn("不得以兩輪相同洗白", "".join(second["reasons"]))
+        third = immediate_retry_decision(dict(second_row), 3, [history_row, dict(second_row)], 3)
+        self.assertTrue(third["unresolved"])
+        self.assertFalse(third["verified"])
+
     def test_pipeline_owned_model_markers_survive_postprocess_merge(self):
         target = {
             "view_type": "單機",
@@ -561,7 +619,112 @@ class EvidenceContractTests(unittest.TestCase):
             focus = batch.REVIEW_FOCUS_PROMPTS[attempt]
             self.assertIn("完整台數只有 0、1、2 時絕對不可判遠景", focus)
             self.assertIn("中央主螢幕與其正下方可讀價牌對齊", focus)
+            self.assertIn("白色圓形底座與託盤", focus)
+            self.assertIn("followme_physical_evidence", focus)
+            self.assertIn("同主體有兩項以上強實體線索", focus)
         self.assertIn("complete_screen_count 0, 1, or 2 can never be", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("white round base plus attached tray", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("Every physical fixture cue stated in narration", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("MANDATORY FINAL SELF-CHECK", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("can NEVER negate", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("include portrait_display", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("include attached_followme_product_card", batch.V1945_OUTPUT_CONTRACT)
+
+    def test_screen_promotion_cannot_negate_followme_hardware(self):
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("播放宣傳內容也絕不能反過來否定已看見的實體結構", prompt)
+        self.assertIn("不得抵銷白色直立支架、圓形底座、托盤等強實體線索", prompt)
+        for attempt in (2, 3):
+            self.assertIn("絕不能反向否定", batch.REVIEW_FOCUS_PROMPTS[attempt])
+            self.assertIn("禁止說它不是實機", batch.REVIEW_FOCUS_PROMPTS[attempt])
+            self.assertIn("portrait_display", batch.REVIEW_FOCUS_PROMPTS[attempt])
+            self.assertIn("attached_followme_product_card", batch.REVIEW_FOCUS_PROMPTS[attempt])
+
+    def test_backend_never_rewrites_conflicting_narration_as_final_correction(self):
+        original = "我看到前景 FollowMe 實體，但最後卻說是遠景。"
+        result = {"view_type": "單機", "model": 'FollowMe Pro M7 43"', "price": "17990"}
+        self.assertEqual(batch.build_final_display_thinking(result, original), original)
+        source = Path(batch.__file__).read_text(encoding="utf-8")
+        self.assertIn("先檢查前景唯一主角，再計算背景螢幕", source)
+        self.assertNotIn("最終校正：這張判定為單機，型號 {final_model}", source)
+
+    def test_narrated_followme_fixture_cannot_be_omitted_from_structure(self):
+        row = {
+            "file_name": "M-202601-台中超越-913.jpg",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "quality_issue": "",
+            "thinking": (
+                "中央有一台直立螢幕，下方有白色圓形底座與託盤，但未見白色垂直支架。"
+                "背景雖有多台電視，仍判斷為遠景。"
+            ),
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = evidence_contract_decision(row)
+        self.assertFalse(decision["valid"])
+        self.assertIn("narration_followme_physical_evidence_omitted", decision["reasons"])
+        self.assertIn("distant_narration_followme_physical_conflict", decision["reasons"])
+
+    def test_matching_narrated_followme_fixture_is_machine_readable(self):
+        physical = [
+            {"cue": "portrait_display", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        row = {
+            "file_name": "M-202601-followme.jpg",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "FollowMe Pro M7 43\"",
+            "price": "17990",
+            "thinking": "唯一主角是直立螢幕，下方連著白色圓形底座與託盤。",
+            **evidence(1, True, "matched", physical),
+        }
+        decision = evidence_contract_decision(row)
+        self.assertTrue(decision["valid"])
+        self.assertNotIn("narration_followme_physical_evidence_omitted", decision["reasons"])
+
+    def test_prior_narration_structure_conflict_cannot_be_washed_by_later_passes(self):
+        unsafe = {
+            "file_name": "M-202601-unsafe.jpg",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "thinking": "中央直立螢幕下方有白色圓形底座與託盤，但判斷為遠景。",
+            **evidence(3, False, "not_visible", []),
+        }
+        clean = {
+            "file_name": "M-202601-unsafe.jpg",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "thinking": "整排三台以上螢幕完整入鏡，無法鎖定唯一主角及其自己的規格與價格。",
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(dict(clean), 3, [unsafe, dict(clean)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("prior_narration_evidence_conflict", decision["reasons"])
+
+    def test_material_structured_authority_conflict_cannot_be_accepted(self):
+        row = {
+            "file_name": "M-202601-structured-conflict.jpg",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "thinking": "整排三台螢幕完整入鏡，無法鎖定唯一主角及其自己的規格與價格。",
+            "structured_authority_blocked_fields": ["view_type"],
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertTrue(decision["unresolved"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("structured_authority_conflict:view_type", decision["reasons"])
 
     def test_single_prompt_requires_all_machine_readable_evidence_every_pass(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
@@ -606,6 +769,27 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["verified"])
         self.assertFalse(decision["unresolved"])
         self.assertNotIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
+
+    def test_minor_narrated_cue_omission_does_not_fuse_sufficient_single_evidence(self):
+        current = {
+            "file_name": "M-202601-followme-minor-omission.jpg",
+            "view_type": "單機",
+            "category": "單機",
+            "model": 'FollowMe Pro M7 43"',
+            "price": "17990",
+            "thinking": "我看到直立螢幕連著白色直桿、圓形底座與托盤。",
+            "complete_screen_count": 4,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "followme_physical_evidence": [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ],
+        }
+        decision = evidence_contract_decision(current)
+        self.assertTrue(decision["valid"])
+        self.assertNotIn("narration_followme_physical_evidence_omitted", decision["reasons"])
 
     def test_valid_single_is_auto_verified_without_forcing_extra_passes(self):
         row = {
@@ -755,6 +939,35 @@ class EvidenceContractTests(unittest.TestCase):
             ),
             'FollowMe M7 32"',
         )
+        self.assertEqual(
+            batch.normalize_followme_model(
+                'FollowMe Pro M7 43"',
+                "17990",
+                "中央直立式螢幕下方有白色圓形底座與託盤。",
+                structured_physical_confirmed=True,
+            ),
+            'FollowMe Pro M7 43"',
+        )
+
+    def test_followme_positive_sentence_is_not_negated_by_later_no_unique_main_wording(self):
+        narration = (
+            "中央直立式螢幕下方有白色圓形底座與託盤，符合 FollowMe 實機。"
+            "背景牆有多台電視但無法鎖定背景唯一主角；因此前景符合 FollowMe 判定條件。"
+        )
+        self.assertFalse(batch.has_negative_followme_context(narration))
+        physical = [
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            {"cue": "direct_followme_branding_on_unit", "same_subject": True, "strength": "direct"},
+        ]
+        row = {
+            "view_type": "單機", "category": "單機", "model": 'FollowMe Pro M7 43"',
+            "price": "17990", "thinking": narration,
+            **evidence(3, True, "matched", physical),
+        }
+        decision = evidence_contract_decision(row)
+        self.assertTrue(decision["valid"])
+        self.assertNotIn("narration_followme_physical_evidence_omitted", decision["reasons"])
 
     def test_followme_sku_requires_physical_evidence_and_second_pass(self):
         missing = {

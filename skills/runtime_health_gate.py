@@ -15,13 +15,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from skills.audit_fields import has_sufficient_followme_physical_evidence, is_followme_model
+from skills.audit_fields import (
+    has_sufficient_followme_physical_evidence,
+    is_followme_model,
+    material_structured_authority_fields,
+    narration_evidence_consistency_reasons,
+)
 
 
 BLOCKED_NARRATION = "AI 判讀文字已由健康閘收回；這張照片必須重新獨立判讀。"
 
 RUNTIME_HEALTH_FUSE_FILENAME = "runtime_health_fuse.json"
 RUNTIME_HEALTH_FUSE_SCHEMA = "samsung-ocr-runtime-health-fuse/v1"
+_FIRST_PASS_CONTAINABLE_CONTENT_REASONS = {
+    "distant_followme_strong_evidence_conflict",
+    "structured_authority_material_conflict:view_type",
+    "structured_narration_followme_conflict",
+}
 
 _RAW_FIELD_PATTERN = re.compile(
     r"(?:[\"']?(?:view_type|category|model|price|quality_issue|screen_status|"
@@ -44,6 +54,12 @@ _PRIOR_FIELD_PATTERN = re.compile(
 )
 _PRICE_SPEC_PATTERN = re.compile(
     r"(?:HZ|MS|CM|MM|INCH|吋|月付|月租|分期|頻率|尺寸)", re.IGNORECASE
+)
+_INSTRUCTION_ECHO_PATTERN = re.compile(
+    r"(?:送出前(?:最後)?檢查|必須(?:填|加入|逐項寫入)|禁止(?:輸出|說它)|"
+    r"不得(?:敘述|抄寫)|線索時禁止|followme_physical_evidence\s*不得|"
+    r"(?:最終|重新)?(?:校正|修正|更正)(?:後|結果|為|：|:))",
+    re.IGNORECASE,
 )
 
 
@@ -98,6 +114,7 @@ def trip_runtime_health_fuse(
     source_file: Any = "",
     attempt: Any = 0,
     run_id: Any = "",
+    record_snapshot: Mapping[str, Any] | None = None,
 ) -> Path:
     """Persist an interlock that no supervisor or uploader may bypass."""
     path = runtime_health_fuse_path(audit_dir)
@@ -113,6 +130,21 @@ def trip_runtime_health_fuse(
         "pid": os.getpid(),
         "clearance": "manual_after_fix_and_regression_only",
     }
+    if record_snapshot:
+        source = dict(record_snapshot)
+        bounded = {
+            key: source.get(key)
+            for key in (
+                "view_type", "category", "model", "price", "complete_screen_count",
+                "unique_main", "label_ownership", "followme_physical_evidence",
+                "structured_authority_blocked_fields", "independent_pass",
+                "prior_answer_exposed", "prompt_contamination",
+            )
+            if key in source
+        }
+        bounded["narration"] = str(source.get("thinking") or source.get("narration") or "")[:2000]
+        bounded["raw_model_output"] = str(source.get("raw_model_output") or "")[:8000]
+        payload["record_snapshot"] = bounded
     if path.is_file():
         history_dir = path.parent / "runtime_health_fuse_history"
         history_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +183,12 @@ def narration_contains_raw_structure(value: Any) -> bool:
     if re.search(r"```\s*(?:json)?\s*[\[{]", text, re.IGNORECASE):
         return True
     return bool(_RAW_FIELD_PATTERN.search(text) or _contains_json_object(text))
+
+
+def narration_contains_instruction_echo(value: Any) -> bool:
+    """Reject operator-facing narration that copies prompt/rule instructions."""
+    text = str(value or "").strip()
+    return bool(text and (_INSTRUCTION_ECHO_PATTERN.search(text) or len(text) > 300))
 
 
 def _flatten_content(value: Any) -> str:
@@ -252,6 +290,21 @@ def distant_followme_conflict(record: Mapping[str, Any]) -> bool:
     )
 
 
+def first_pass_content_conflict_can_retry(attempt: int, reasons: Iterable[Any]) -> bool:
+    """Allow one bounded stateless retry for an already-contained view conflict.
+
+    Only the exact FollowMe/distant view inconsistency class is eligible. Model,
+    price, prompt, UI, or other runtime defects still trip the durable fuse on
+    first sight. Repetition on pass 2 is never containable.
+    """
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    return bool(
+        int(attempt or 1) == 1
+        and normalized
+        and normalized.issubset(_FIRST_PASS_CONTAINABLE_CONTENT_REASONS)
+    )
+
+
 def evaluate_runtime_health(
     record: Mapping[str, Any] | None,
     narration: Any,
@@ -267,10 +320,19 @@ def evaluate_runtime_health(
     narration_text = str(narration or "").strip()
     reasons: list[str] = []
 
+    if record.get("request_binding_enforced") is True:
+        if record.get("request_id_verified") is not True:
+            reasons.append("request_binding_unverified")
+        image_hash = str(record.get("input_image_sha256") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", image_hash):
+            reasons.append("input_image_fingerprint_missing")
+
     if not narration_text:
         reasons.append("ui_narration_missing")
     elif narration_contains_raw_structure(narration_text):
         reasons.append("ui_narration_contains_raw_structure")
+    elif narration_contains_instruction_echo(narration_text):
+        reasons.append("ui_narration_instruction_echo")
 
     reasons.extend(
         review_prompt_leak_reasons(
@@ -284,6 +346,13 @@ def evaluate_runtime_health(
         reasons.append(price_reason)
     if distant_followme_conflict(record):
         reasons.append("distant_followme_strong_evidence_conflict")
+    if blocked_fields := material_structured_authority_fields(record):
+        reasons.append("structured_authority_material_conflict:" + ",".join(blocked_fields))
+    consistency_record = dict(record)
+    if narration_text:
+        consistency_record["thinking"] = narration_text
+    if narration_evidence_consistency_reasons(consistency_record):
+        reasons.append("structured_narration_followme_conflict")
 
     reasons = list(dict.fromkeys(reasons))
     healthy = not reasons

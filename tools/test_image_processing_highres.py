@@ -35,7 +35,7 @@ class HighResolutionEvidenceTests(unittest.TestCase):
             self.assertIsNone(result["bottom_label_base64"])
             self.assertIsNone(result["bottom_center_base64"])
 
-    def test_retry_tiles_cover_right_unit_and_drop_redundant_center(self):
+    def test_retry_tiles_cover_left_center_and_right_units(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "large.jpg"
             Image.new("RGB", (4032, 2268), (30, 40, 50)).save(path, quality=100)
@@ -44,14 +44,18 @@ class HighResolutionEvidenceTests(unittest.TestCase):
             second = processor.process(str(path), evidence_attempt=2)
             third = processor.process(str(path), evidence_attempt=3)
             self.assertIsNotNone(first["bottom_center_base64"])
-            self.assertEqual([x["label"] for x in second["scene_tiles"]], ["scene_left", "scene_right"])
+            self.assertEqual([x["label"] for x in first["scene_tiles"]], ["scene_center"])
+            self.assertEqual([x["label"] for x in second["scene_tiles"]], ["scene_left", "scene_center", "scene_right"])
             self.assertEqual([x["label"] for x in third["scene_tiles"]], ["scene_left", "scene_center", "scene_right"])
             self.assertIsNone(second["bottom_center_base64"])
             self.assertIsNone(third["bottom_center_base64"])
-            self.assertEqual(second["scene_tiles"][1]["bbox"], (1612, 0, 2419, 2268))
+            self.assertEqual(first["scene_tiles"][0]["bbox"], (1048, 0, 1935, 2268))
+            self.assertEqual(second["scene_tiles"][1]["bbox"], (1048, 0, 1935, 2268))
+            self.assertEqual(second["scene_tiles"][2]["bbox"], (1612, 0, 2419, 2268))
             self.assertEqual(third["scene_tiles"][2]["bbox"], (2096, 0, 1935, 2268))
+            self.assertLessEqual(len(second["scene_tiles"]), 3)
             self.assertLessEqual(len(third["scene_tiles"]), 3)
-            for tile in third["scene_tiles"]:
+            for tile in first["scene_tiles"] + second["scene_tiles"] + third["scene_tiles"]:
                 self.assertEqual(tile["size"][1], 2268)
                 self.assertNotIn("base64", third["metadata"]["scene_tiles"][0])
 

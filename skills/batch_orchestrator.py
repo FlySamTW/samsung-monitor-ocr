@@ -22,9 +22,33 @@ from skills.model_validation import (
     is_placeholder_model,
     strict_known_model,
 )
-from skills.runtime_health_gate import evaluate_runtime_health, trip_runtime_health_fuse
+from skills.runtime_health_gate import (
+    evaluate_runtime_health,
+    first_pass_content_conflict_can_retry,
+    trip_runtime_health_fuse,
+)
 
 log = logging.getLogger("rich")
+
+
+def cross_photo_duplicate_core(previous: dict | None, current: dict | None) -> bool:
+    """Flag an identical identity answer on two distinct adjacent photos.
+
+    This never changes the answer and never enters the model prompt. It only
+    requires a second stateless look so a semantically stale response cannot be
+    accepted after one internally-consistent pass.
+    """
+    previous = dict(previous or {})
+    current = dict(current or {})
+    prior_source = str(previous.get("source_item_id") or previous.get("input_image_sha256") or "")
+    current_source = str(current.get("source_item_id") or current.get("input_image_sha256") or "")
+    if not prior_source or not current_source or prior_source == current_source:
+        return False
+    normalize_model = lambda value: "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+    normalize_price = lambda value: "".join(ch for ch in str(value or "") if ch.isdigit())
+    prior_model, current_model = normalize_model(previous.get("model")), normalize_model(current.get("model"))
+    prior_price, current_price = normalize_price(previous.get("price")), normalize_price(current.get("price"))
+    return bool(prior_model and prior_price and prior_model == current_model and prior_price == current_price)
 
 
 def _append_v1945_trace(output_dir, result, review_decision, retry_reasons):
@@ -182,7 +206,7 @@ class BatchOrchestrator:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, path)
 
-    def _persist_runtime_health_fuse(self, reasons, source_file="", attempt=0, run_id=""):
+    def _persist_runtime_health_fuse(self, reasons, source_file="", attempt=0, run_id="", record_snapshot=None):
         """Persist content failure before releasing the running state."""
         audit_dir = Path(str(self.config.get("audit_dir") or self.output_dir)).resolve()
         try:
@@ -192,6 +216,7 @@ class BatchOrchestrator:
                 source_file=source_file,
                 attempt=attempt,
                 run_id=run_id,
+                record_snapshot=record_snapshot,
             )
         except Exception as exc:
             # A pre-existing supervisor interlock still keeps the pipeline
@@ -396,6 +421,10 @@ class BatchOrchestrator:
             "unique_main": result.get("unique_main"),
             "label_ownership": result.get("label_ownership"),
             "followme_physical_evidence": result.get("followme_physical_evidence") or [],
+            "cross_photo_duplicate_core_suspected": result.get("cross_photo_duplicate_core_suspected") is True,
+            "request_id_verified": result.get("request_id_verified") is True,
+            "input_image_sha256": result.get("input_image_sha256"),
+            "request_binding_enforced": result.get("request_binding_enforced") is True,
             "thinking": str(result.get("thinking") or "")[:1200],
             "reasons": list(reasons),
         }
@@ -1727,6 +1756,7 @@ class BatchOrchestrator:
                         source_file=fname,
                         attempt=attempt_number,
                         run_id=run_id,
+                        record_snapshot=raw_result,
                     )
                     self.stream_buffer = str(raw_result.get("thinking") or "AI 判讀已由健康閘停止。")
                     self.log_system(
@@ -1782,6 +1812,19 @@ class BatchOrchestrator:
                 norm_result['started_at'] = pass_started_at
                 norm_result = enrich_result_for_review(norm_result)
                 norm_result['ocr_attempt'] = attempt_number
+                norm_result["request_binding_enforced"] = True
+
+                if attempt_number == 1:
+                    previous_final = next(
+                        (item for item in self.recent_results if item.get("file_name") != fname),
+                        None,
+                    )
+                    if cross_photo_duplicate_core(previous_final, norm_result):
+                        norm_result["cross_photo_duplicate_core_suspected"] = True
+                        self.log_system(
+                            "⚠️ [跨照片污染門] 與前一張不同照片出現完全相同型號與價格；"
+                            "本張不准第一輪驗證，必須從原圖無記憶重讀。"
+                        )
 
                 candidate_narration = str(norm_result.get("thinking") or self.stream_buffer or "").strip()
                 runtime_health = evaluate_runtime_health(
@@ -1793,19 +1836,28 @@ class BatchOrchestrator:
                 norm_result["runtime_health"] = runtime_health.to_dict()
                 if not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
-                    self._persist_runtime_health_fuse(
-                        runtime_health.reasons,
-                        source_file=fname,
-                        attempt=attempt_number,
-                        run_id=run_id,
-                    )
-                    norm_result["review_status"] = "內容健康閘停止"
-                    self.stream_buffer = runtime_health.display_narration
-                    self.log_system(
-                        "🛑 [內容健康閘] 已停止 OCR：" + "；".join(runtime_health.reasons)
-                    )
-                    self.stop_event.set()
-                    break
+                    if first_pass_content_conflict_can_retry(attempt_number, runtime_health.reasons):
+                        norm_result["runtime_health"]["contained_for_stateless_retry"] = True
+                        norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
+                        self.log_system(
+                            "⚠️ [內容健康閘] 第一輪 FollowMe／遠景矛盾已隔離；"
+                            "只允許同張照片做一次無記憶第二輪。"
+                        )
+                    else:
+                        self._persist_runtime_health_fuse(
+                            runtime_health.reasons,
+                            source_file=fname,
+                            attempt=attempt_number,
+                            run_id=run_id,
+                            record_snapshot=norm_result,
+                        )
+                        norm_result["review_status"] = "內容健康閘停止"
+                        self.stream_buffer = runtime_health.display_narration
+                        self.log_system(
+                            "🛑 [內容健康閘] 已停止 OCR：" + "；".join(runtime_health.reasons)
+                        )
+                        self.stop_event.set()
+                        break
 
                 review_decision = {"retry": False, "reasons": [], "unresolved": False}
                 if self.result_review_fn:
