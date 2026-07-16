@@ -32,6 +32,7 @@ _FIRST_PASS_CONTAINABLE_CONTENT_REASONS = {
     "distant_followme_strong_evidence_conflict",
     "structured_authority_material_conflict:view_type",
     "structured_narration_followme_conflict",
+    "known_source_expectation_conflict",
 }
 
 _RAW_FIELD_PATTERN = re.compile(
@@ -336,6 +337,8 @@ def first_pass_content_conflict_can_retry(
     current_attempt = int(attempt or 1)
     if _followme_variant_authority_conflict_is_photo_local(normalized, record):
         return current_attempt in {1, 2}
+    if normalized == {"known_source_expectation_conflict"}:
+        return current_attempt in {1, 2}
     if current_attempt == 1:
         return bool(normalized and normalized.issubset(_FIRST_PASS_CONTAINABLE_CONTENT_REASONS))
     return bool(
@@ -352,6 +355,8 @@ def final_content_conflict_can_isolate(
     """End one bounded same-photo conflict as unresolved after pass three."""
     normalized = {str(reason) for reason in reasons if str(reason)}
     if _followme_variant_authority_conflict_is_photo_local(normalized, record):
+        return int(attempt or 1) >= 3
+    if normalized == {"known_source_expectation_conflict"}:
         return int(attempt or 1) >= 3
     return bool(
         int(attempt or 1) >= 3

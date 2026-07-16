@@ -631,6 +631,18 @@ Remote receipt is content-based. `rclone lsjson --hash` must return exactly one 
 
 Required offline regression set for this boundary is `test_rclone_upload_safety_unit`, `tools.test_upload_gate_batch_binding`, current-year finalization, watchdog, supervisor, auto-rerun continuity, questionable-upload guards, and both Drive reconciliation suites, followed by `tools/run_critical_regressions.py`. Parse all edited PowerShell files before commit. These checks use temporary directories only and must not stop OCR, restart the backend, or open/reload a browser tab.
 
+## Complete-screen frame-edge contract (`20260716.28`)
+
+- A complete monitor is a physical bezel whose four outer sides and four outer corners are all inside the first original image. A visible panel, readable screen content, or mostly visible bezel is not sufficient.
+- Before counting, explicitly inspect the physical monitor nearest the original left, right, top, and bottom image edges. If any outer bezel is cut by an original image edge, that monitor contributes zero to `complete_screen_count`.
+- Canonical regression layout `台中旗艦-940`: left monitor exits the original left edge, center monitor is fully inside, and right monitor exits the original right edge. The truthful count is exactly one and the scene is a single-unit candidate. Never describe all three as complete.
+- The inverse canonical regression `中清-1528` is a broad display wall with complete monitors above and below. A single-unit vote with no model, no price, no matched label, and no same-subject FollowMe fixture is weak evidence and may not supply a generic single-view majority. One structurally valid distant pass vetoes two such weak votes.
+- Human-audited pixel authorities for both regressions are bound by the processed full-image SHA-256. `940` may never auto-verify as distant and `1528` may never auto-verify as single. This is an additional regression boundary, not a filename heuristic.
+- A known-source authority conflict is contained to the same photo for at most three pristine stateless calls. It may trigger the next independent pass, but may not stop unrelated photos, create a fourth pass, or enter upload. The third-pass finalizer must either match the pixel authority or fail that photo closed.
+- The main prompt, common output contract, pass-2 focus, pass-3 focus, immediate guard, three-pass finalizer, tests, and handoff must change together. A prompt-only edit is insufficient because a model can make narration and JSON agree on the same visual mistake.
+- On detection, stop only the formal photo batch at a photo boundary. Keep the backend, dashboard, stream uploader, and existing browser tab alive. Run offline regressions, then a fresh isolated smoke containing at least `940`, `1528`, one true distant scene, and one FollowMe scene before replacing the backend and resuming formal work.
+- Permanent live acceptance set `20260716_221131_225238` contains `940 / 939 / 1528 / 1385 / 646`: all five finalized verified in exactly three independent passes, with `prior_answer_exposed=false`, `prompt_contamination=false`, and revision `.28`. The canonical result for `940` is `單機 / complete_screen_count=1 / S32FM803UC / 12900`; `1528` and `1385` are distant; `939` remains FollowMe; `646` remains an ordinary single unit. Isolated acceptance results never count as formal progress or Drive uploads.
+
 ## Compact status and operator-facing metadata contract (2026-07-14)
 
 - `/api/status` is a live monitor transport, not the durable history store. It must report `status_contract_version=compact-v2`, expose at most the bounded recent presentation window, and never include `thumb_b64`, base64 images, raw model output, or full evidence objects.

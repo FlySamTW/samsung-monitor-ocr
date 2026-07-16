@@ -40,6 +40,8 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 
 class EvidenceContractTests(unittest.TestCase):
     RISK_650_SHA = "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549"
+    FRAME_940_SHA = "d69c226c34a43da94bf624b5d1640f6552f0eec22dc2d1e37a6c62a777c6828f"
+    WIDE_1528_SHA = "50b7524736f05c39b2180b3c8240e18fab5a2f737929e73e7dee3b447ee6943f"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -92,6 +94,64 @@ class EvidenceContractTests(unittest.TestCase):
             "敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上",
             decision["reasons"],
         )
+
+    def test_edge_cut_two_sides_wording_cannot_claim_three_complete_monitors(self):
+        row = self._multiscreen_single(
+            thinking=(
+                "我看到中央一台螢幕正下方有價牌，左右兩側螢幕被照片邊界裁切，"
+                "全圖沒有其他完整螢幕，所以……這是一般單機。"
+            )
+        )
+        decision = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+
+    def test_wide_multiscreen_single_without_bound_identity_never_verifies(self):
+        row = self._multiscreen_single(
+            model=None,
+            price=None,
+            label_ownership="ambiguous",
+            complete_screen_count=8,
+            thinking="我看到一整排螢幕陳列，上方與下方均有完整螢幕，所以……這是一般單機。",
+        )
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertFalse(decision["verified"])
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("寬廣多螢幕陳列缺少可歸屬的單機身分證據", decision["reasons"])
+
+    def test_human_audited_940_pixels_can_never_auto_verify_as_distant(self):
+        row = {
+            "period": "202601", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None, "input_image_sha256": self.FRAME_940_SHA,
+            "thinking": "三台螢幕完整入鏡，無法鎖定唯一主角與價格，所以……整體符合遠景條件。",
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertFalse(decision["verified"])
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", decision["reasons"])
+
+    def test_edge_cut_distant_json_is_blocked_by_its_own_narration(self):
+        row = {
+            "period": "202601", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None,
+            "thinking": (
+                "我看到中央一台螢幕正下方有 Samsung S32FM803UC 與 12,900 價牌，"
+                "背景左右兩側各有一台螢幕，但都被照片邊界裁切，所以……整體符合遠景條件。"
+            ),
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+
+    def test_human_audited_1528_pixels_can_never_auto_verify_as_single(self):
+        row = self._multiscreen_single(input_image_sha256=self.WIDE_1528_SHA)
+        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
+        self.assertFalse(decision["verified"])
+        self.assertTrue(decision["unresolved"])
+        self.assertIn("人工確認高風險原圖與模型分類衝突，不得自動驗證", decision["reasons"])
 
     def test_explicit_one_complete_narration_conflicts_with_structured_two(self):
         row = self._multiscreen_single(
@@ -614,10 +674,13 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("其他位置另有完整螢幕，必須全部加總", prompt)
         self.assertIn("只限螢幕外框真的接觸或穿出第一張照片最外側", prompt)
         self.assertIn("緊密近拍例外不得套用到一整排、展示牆、多層貨架或寬廣走道", prompt)
+        self.assertIn("左側不完整 + 中央完整 + 右側不完整 = 完整台數 1", prompt)
         self.assertIn("Supplemental crops are duplicate views", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("one complete centered monitor plus one edge-cut monitor on each side", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("scan the ENTIRE original image region by region", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("no other complete monitors anywhere else", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("the count is exactly 1, never 3", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("MANDATORY LAST FRAME CHECK", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("rendered inside a screen are signal content, not the physical monitor brand", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("不能決定硬體品牌", source)
         for attempt in (2, 3):

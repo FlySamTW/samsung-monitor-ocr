@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.26"
+EVIDENCE_GUARD_REVISION = "20260716.28"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -31,6 +31,18 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "input_image_sha256": "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549",
         "view_type": "遠景",
         "authority": "human_audited_high_risk_source",
+    },
+    "99eaff2cea18a5e49940e39d872728bf19df4c7a54e3c6ba4884062eb25214b7": {
+        "source_file_sha256": "263fbecbe8d39b3a90193fa2788faf4c59df2b61f4f5cf05791dab1209614738",
+        "input_image_sha256": "d69c226c34a43da94bf624b5d1640f6552f0eec22dc2d1e37a6c62a777c6828f",
+        "view_type": "單機",
+        "authority": "human_audited_frame_edge_regression_source",
+    },
+    "829eba65b510d82b9aed72695f3da73ae08fe6a0844e30e49f5fa440ba18d339": {
+        "source_file_sha256": "94d42757a8d6a2e1132ffb6d3a9ff9a6cf7098308e9ff08c810d45e1d4e403f3",
+        "input_image_sha256": "50b7524736f05c39b2180b3c8240e18fab5a2f737929e73e7dee3b447ee6943f",
+        "view_type": "遠景",
+        "authority": "human_audited_wide_multiscreen_regression_source",
     },
 }
 KNOWN_SOURCE_VIEW_EXPECTATIONS = {
@@ -651,15 +663,14 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
     normalized = record.get("normalized_evidence") or record
     count = normalized.get("complete_screen_count")
     if (
-        str(record.get("view_type") or record.get("category") or "").strip() != "單機"
-        or not isinstance(count, int)
+        not isinstance(count, int)
         or isinstance(count, bool)
         or count < 3
     ):
         return False
     central_one = bool(re.search(r"中央.{0,8}(?:一台|1\s*台).{0,8}螢幕|中央螢幕", text))
     paired_neighbors = bool(
-        re.search(r"左右.{0,8}(?:各有|各|各一台).{0,8}螢幕", text)
+        re.search(r"左右(?:兩)?(?:邊|側)?(?:的)?.{0,8}(?:各有|各|各一台|兩台)?.{0,8}螢幕", text)
         or re.search(r"左(?:邊|側).{0,12}右(?:邊|側).{0,12}各有?一台螢幕", text)
     )
     edge_cut = bool(
@@ -857,6 +868,8 @@ def immediate_retry_decision(
 
     if view_type == "單機" and _narration_declares_distant(thinking):
         reasons.append("結構為單機但敘述明確判為遠景")
+    if _weak_single_claim_in_wide_multiscreen_scene(record):
+        reasons.append("寬廣多螢幕陳列缺少可歸屬的單機身分證據")
     if record.get("label_ownership") == "matched" and _label_ownership_conflicts_with_narration(thinking):
         reasons.append("標籤歸屬與敘述衝突")
 
@@ -868,6 +881,19 @@ def immediate_retry_decision(
         large_price_diff = False
     if large_price_diff and not _same_model_price_confirmed(record, history):
         reasons.append("照片價格與官方參考價差異過大，需獨立重讀")
+
+    multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
+    if (
+        _narration_supports_only_one_complete_monitor(record)
+        and isinstance(multiscreen_count, int)
+        and not isinstance(multiscreen_count, bool)
+        and multiscreen_count != 1
+    ):
+        record["frame_count_narration_conflict"] = True
+        reasons.append("敘述明確只有一台完整螢幕，結構完整台數必須為1")
+    if _central_monitor_with_two_edge_cut_neighbors(record):
+        record["frame_count_narration_conflict"] = True
+        reasons.append("敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上")
 
     if "遠景" in view_type:
         if current_year and attempt < max_attempts:
@@ -901,18 +927,6 @@ def immediate_retry_decision(
             reasons.append(f"單機仍有品質疑慮:{quality}")
         if _explicit_three_complete(thinking) and _no_unique_main_evidence(thinking):
             reasons.append("單機結果與三台以上完整陳列衝突")
-        multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
-        if (
-            _narration_supports_only_one_complete_monitor(record)
-            and isinstance(multiscreen_count, int)
-            and not isinstance(multiscreen_count, bool)
-            and multiscreen_count != 1
-        ):
-            record["frame_count_narration_conflict"] = True
-            reasons.append("敘述明確只有一台完整螢幕，結構完整台數必須為1")
-        if _central_monitor_with_two_edge_cut_neighbors(record):
-            record["frame_count_narration_conflict"] = True
-            reasons.append("敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上")
         if isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
             if attempt < max_attempts:
                 reasons.append("三台以上入鏡的單機候選必須完成三輪獨立複核")
@@ -1149,10 +1163,13 @@ def finalize_three_pass_outcome(
         ownership = normalized.get("label_ownership")
         strong_followme = has_sufficient_followme_physical_evidence(normalized)
         if view == "單機":
-            single.append(item)
-            if _central_monitor_with_two_edge_cut_neighbors(item):
+            is_edge_cut_single = _central_monitor_with_two_edge_cut_neighbors(item)
+            is_weak_wide_single = _weak_single_claim_in_wide_multiscreen_scene(item)
+            if not is_weak_wide_single:
+                single.append(item)
+            if is_edge_cut_single:
                 edge_cut_single.append(item)
-            if _weak_single_claim_in_wide_multiscreen_scene(item):
+            if is_weak_wide_single:
                 weak_wide_single.append(item)
         if strong_followme and (is_followme_model(item.get("model")) or view == "單機"):
             followme.append(item)

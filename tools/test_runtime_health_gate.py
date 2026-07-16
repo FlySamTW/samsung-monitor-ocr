@@ -47,6 +47,14 @@ class RuntimeHealthGateTests(unittest.TestCase):
         )
         self.assertNotIn("known_source_expectation_conflict", correct.reasons)
 
+    def test_known_source_conflict_is_bounded_to_three_stateless_calls(self):
+        reasons = ["known_source_expectation_conflict"]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons))
+        self.assertFalse(final_content_conflict_can_isolate(2, reasons))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons))
+
     def test_negated_followme_black_short_stand_and_tray_does_not_trip_fuse(self):
         narration = (
             "我看到前景一台直立螢幕，正下方有黑色短支架與託盤，"

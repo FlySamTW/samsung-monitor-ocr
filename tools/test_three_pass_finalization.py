@@ -294,6 +294,17 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_two_weak_wide_single_votes_without_distant_support_cannot_finalize_single(self):
+        weak = make_pass(
+            "單機", None, None, 8, True, "ambiguous",
+            thinking="我看到一整排螢幕陳列，上方與下方都有完整螢幕，但無型號無價格，所以……這是一般單機。",
+        )
+        current = copy.deepcopy(weak)
+        result = finalize_three_pass_outcome(current, [copy.deepcopy(weak), copy.deepcopy(weak)], unresolved())
+        self.assertFalse(result["verified"])
+        self.assertTrue(result["technical_retry_required"])
+        self.assertEqual(result["technical_retry_reason"], "three_pass_view_majority_missing")
+
     def test_structural_distant_veto_does_not_override_bound_single_identity(self):
         history = [
             make_pass("單機", "S32FM803UC", "12900", 1, True, "matched"),
