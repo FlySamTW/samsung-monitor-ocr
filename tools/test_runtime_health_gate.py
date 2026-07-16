@@ -373,12 +373,12 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(decision.allow_processing)
         self.assertFalse(decision.allow_upload)
 
-    def test_distant_with_followme_sku_also_fails_closed(self):
+    def test_distant_with_bare_smart_monitor_sku_is_not_called_followme(self):
         decision = evaluate_runtime_health(
             record(view_type="遠景", model="S32FM703UC", price=None),
             "三台完整入鏡，沒有唯一主角。",
         )
-        self.assertIn("distant_followme_strong_evidence_conflict", decision.reasons)
+        self.assertNotIn("distant_followme_strong_evidence_conflict", decision.reasons)
 
     def test_material_structured_authority_conflict_trips_runtime_health(self):
         decision = evaluate_runtime_health(

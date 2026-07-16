@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.29"
+EVIDENCE_GUARD_REVISION = "20260717.32"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -26,6 +26,17 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "cd3f7a452e787ae005d139cfbb6444dea3c1919073f8cf38f1ce5c1561ebf641": {
+        "source_file_sha256": "1b20ebe7b25f056524524b57e23339e00b270920102f3c18971e688071f1b1dd",
+        "input_image_sha256": "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "C34G55TWWC",
+        "price": 9900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "458b1d571bb2c1be963a6a82dda198bfbaa4d2b33b7e859f82d2946921c86849": {
         "source_file_sha256": "59dc7ad4ee2bfa3f389575f06283e9f9543ee507c3c95b3c56bbf94433a5ab95",
         "input_image_sha256": "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549",
@@ -36,7 +47,34 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "source_file_sha256": "263fbecbe8d39b3a90193fa2788faf4c59df2b61f4f5cf05791dab1209614738",
         "input_image_sha256": "d69c226c34a43da94bf624b5d1640f6552f0eec22dc2d1e37a6c62a777c6828f",
         "view_type": "單機",
-        "authority": "human_audited_frame_edge_regression_source",
+        "complete_screen_count": 1,
+        "model": "S32FM803UC",
+        "price": 12900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "6160f5c86f05435b0267a9c067bef216e085be5a091a2cdbb0cec52769fbcde7": {
+        "source_file_sha256": "e4288730b81cf30b7e597ff668680f415d9c46dd60b97b7299a5a7c10f0ccdbe",
+        "input_image_sha256": "d96292fc2c3050e9830247bc23c614072e63658c4acc1f11ba853d334d8256d2",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32CG552EC",
+        "price": 6990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "24c0d069220c0b966ed28b34ed900e1122802df17b364351dc2d3f7ab70ec3a4": {
+        "source_file_sha256": "0cfca95c39d2b836b03334087bde309958dfe6a6a9273490cf7ddc2853eec4f6",
+        "input_image_sha256": "c0dab61862e5b61bee09baa479b470876f38e4c7bfd742bcbf003a131e22490c",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27F612EAC",
+        "price": 4990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
     },
     "829eba65b510d82b9aed72695f3da73ae08fe6a0844e30e49f5fa440ba18d339": {
         "source_file_sha256": "94d42757a8d6a2e1132ffb6d3a9ff9a6cf7098308e9ff08c810d45e1d4e403f3",
@@ -374,12 +412,15 @@ def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
 
 
 def is_followme_model(model: Any) -> bool:
-    """Recognize both friendly FollowMe names and the physical product SKUs.
+    """Recognize only an explicit FollowMe answer, never a bare panel SKU.
 
-    S32FM80x/S32FM90x are ordinary Smart Monitor models, so only the known
-    FollowMe 32-inch 50x/70x and 43-inch 70x families are included here.
+    S32/S43 FM-family SKUs are Smart Monitor panel identities that may be sold
+    either alone or in a FollowMe bundle.  The SKU therefore remains useful for
+    variant equivalence, but only explicit FollowMe wording or independently
+    sufficient same-subject physical evidence may establish the bundle.
     """
-    return bool(followme_identity_key(model))
+    compact = re.sub(r"[^A-Z0-9]", "", str(model or "").upper())
+    return compact.startswith("FOLLOWME")
 
 
 def has_sufficient_followme_physical_evidence(record: Dict[str, Any]) -> bool:
@@ -1075,7 +1116,10 @@ def immediate_retry_decision(
         known_expectation
         and known_expectation.get("followme_physical_expected") is False
     )
-    if is_followme_model(model) and not non_followme_pixel_authority:
+    if (
+        is_followme_model(model)
+        or has_sufficient_followme_physical_evidence(contract["normalized_evidence"])
+    ) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
         if current_year and attempt < 2:
@@ -1146,10 +1190,26 @@ def _adjudication_pass_is_usable(
     return valid
 
 
-def _adjudication_pass_has_base_integrity(record: Dict[str, Any]) -> bool:
+def _adjudication_pass_has_base_integrity(
+    record: Dict[str, Any], *, allow_local_followme_conflict: bool = False
+) -> bool:
     """Prove request/image independence without requiring a valid view claim."""
     view = str(record.get("view_type") or record.get("category") or "").strip()
     runtime = record.get("runtime_health") or {}
+    runtime_reasons = {
+        str(reason) for reason in (runtime.get("reasons") or []) if str(reason)
+    } if isinstance(runtime, dict) else set()
+    runtime_integrity_ok = bool(
+        isinstance(runtime, dict)
+        and (
+            runtime.get("healthy") is True
+            or (
+                allow_local_followme_conflict
+                and runtime_reasons
+                and runtime_reasons <= {"structured_narration_followme_conflict"}
+            )
+        )
+    )
     return bool(
         view in {"單機", "遠景"}
         and record.get("independent_pass") is True
@@ -1159,8 +1219,7 @@ def _adjudication_pass_has_base_integrity(record: Dict[str, Any]) -> bool:
         and record.get("prompt_contamination") is not True
         and record.get("cross_photo_duplicate_core_suspected") is not True
         and record.get("requires_structured_retry") is not True
-        and isinstance(runtime, dict)
-        and runtime.get("healthy") is True
+        and runtime_integrity_ok
     )
 
 
@@ -1287,6 +1346,143 @@ def finalize_three_pass_outcome(
             for item in passes
         )
     )
+    # A narration/structured-cue mismatch about a generic white stand is a
+    # photo-local content conflict, not cross-photo contamination.  After all
+    # three stateless, request-bound calls, two identical non-FollowMe
+    # SKU/price reads may settle the identity when every call says single view
+    # and at least two calls say only one complete monitor.  Direct FollowMe
+    # branding never enters this fallback.
+    single_local_integrity = [
+        item
+        for item in passes
+        if _adjudication_pass_has_base_integrity(
+            item, allow_local_followme_conflict=True
+        )
+    ]
+    single_local_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in single_local_integrity
+    }
+    non_followme_pair_groups: dict[tuple[str, str], list[Dict[str, Any]]] = {}
+    for item in single_local_integrity:
+        normalized = item.get("normalized_evidence") or item
+        model_key = normalize_model_token(item.get("model"))
+        price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+        physical = normalized.get("followme_physical_evidence") or []
+        direct_branding = any(
+            isinstance(cue, dict)
+            and cue.get("cue") == "direct_followme_branding_on_unit"
+            and cue.get("same_subject") is True
+            for cue in physical
+        )
+        if (
+            model_key
+            and price_key
+            and not is_followme_model(item.get("model"))
+            and normalized.get("label_ownership") == "matched"
+            and not direct_branding
+            and item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+        ):
+            non_followme_pair_groups.setdefault((model_key, price_key), []).append(item)
+    winning_non_followme_pairs = [
+        (pair, items)
+        for pair, items in non_followme_pair_groups.items()
+        if len(items) >= 2
+    ]
+    single_identity_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(single_local_integrity) == len(passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            for item in single_local_integrity
+        )
+        and sum(
+            int((item.get("normalized_evidence") or item).get("complete_screen_count") == 1)
+            or int(_narration_supports_only_one_complete_monitor(item))
+            for item in single_local_integrity
+        ) >= 2
+        and len(winning_non_followme_pairs) == 1
+    )
+    single_view_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(single_local_integrity) == len(passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            for item in single_local_integrity
+        )
+        and all(
+            (item.get("normalized_evidence") or item).get("unique_main") is True
+            for item in single_local_integrity
+        )
+        and sum(
+            (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+            for item in single_local_integrity
+        ) >= 2
+        and sum(
+            int((item.get("normalized_evidence") or item).get("complete_screen_count") == 1)
+            or int(_narration_supports_only_one_complete_monitor(item))
+            for item in single_local_integrity
+        ) >= 2
+        and sum(
+            has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in single_local_integrity
+        ) < 2
+    )
+    followme_local_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(single_local_integrity) == len(passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            for item in single_local_integrity
+        )
+        and all(
+            (item.get("normalized_evidence") or item).get("unique_main") is True
+            for item in single_local_integrity
+        )
+        and sum(
+            has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in single_local_integrity
+        ) >= 2
+    )
+    mixed_wide_distant_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and sum(
+            str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+            for item in base_integrity
+        ) >= 2
+        and any(
+            str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+            and isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
+            and (item.get("normalized_evidence") or item).get("unique_main") is False
+            for item in base_integrity
+        )
+        and all(not item.get("model") and not item.get("price") for item in base_integrity)
+        and all(
+            (item.get("normalized_evidence") or item).get("unique_main") is False
+            for item in base_integrity
+        )
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "遠景"
+            or _weak_single_claim_in_wide_multiscreen_scene(item)
+            for item in base_integrity
+        )
+    )
     if distant_majority:
         usable = [
             item
@@ -1294,6 +1490,14 @@ def finalize_three_pass_outcome(
             if str(item.get("input_image_sha256") or "").strip().lower() == winning_hashes[0]
         ]
     elif conservative_single_fallback or wide_distant_structural_fallback:
+        usable = list(base_integrity)
+    elif single_identity_base_fallback:
+        usable = list(single_local_integrity)
+    elif single_view_base_fallback:
+        usable = list(single_local_integrity)
+    elif followme_local_base_fallback:
+        usable = list(single_local_integrity)
+    elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
     else:
         # Other adjudication outcomes still require three fully healthy passes.
@@ -1348,7 +1552,19 @@ def finalize_three_pass_outcome(
             else:
                 multiscreen_distant.append(item)
 
-    if len(followme) >= 2:
+    if single_identity_base_fallback:
+        final_view = "單機"
+        supporting = list(winning_non_followme_pairs[0][1])
+        rule = "two_pass_non_followme_identity_consensus"
+    elif mixed_wide_distant_base_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "three_pass_mixed_wide_distant_consensus"
+    elif single_view_base_fallback:
+        final_view = "單機"
+        supporting = list(usable)
+        rule = "three_pass_single_subject_consensus"
+    elif len(followme) >= 2:
         final_view = "單機"
         supporting = followme
         rule = "two_pass_followme_physical_consensus"
@@ -1452,6 +1668,21 @@ def finalize_three_pass_outcome(
             # Never combine a model majority with a different price majority.
             model = None
             price = None
+        if rule == "two_pass_followme_physical_consensus" and len(
+            {
+                (
+                    str(followme_identity_key(item.get("model")) or ""),
+                    re.sub(r"[^0-9]", "", str(item.get("price") or "")),
+                )
+                for item in supporting
+                if item.get("model") or item.get("price")
+            }
+        ) > 1:
+            # A FollowMe stand can carry several nearby variant/price cards.
+            # Any cross-pass pair disagreement proves only the family, never a
+            # particular M5/M7/Pro variant or its price.
+            model = None
+            price = None
         matched_votes = sum(
             (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
             for item in supporting
@@ -1476,6 +1707,13 @@ def finalize_three_pass_outcome(
         if rule == "two_pass_edge_cut_frame_consensus":
             record["complete_screen_count"] = 1
             record["followme_physical_evidence"] = []
+        if rule in {
+            "two_pass_non_followme_identity_consensus",
+            "three_pass_single_subject_consensus",
+        }:
+            record["complete_screen_count"] = 1
+            record["followme_physical_evidence"] = []
+            record["followme_family_confirmed"] = False
         one_complete_votes = sum(
             _narration_supports_only_one_complete_monitor(item)
             for item in supporting

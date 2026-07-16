@@ -320,6 +320,116 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["model"], "S32FM803UC")
         self.assertEqual(current["price"], "12900")
 
+    def test_two_non_followme_identity_reads_override_generic_stand_hallucination(self):
+        generic_fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        first = make_pass(
+            model="S32FM803UC",
+            price="14990",
+            count=1,
+            physical=[],
+            runtime_health={
+                "healthy": False,
+                "reasons": ["structured_narration_followme_conflict"],
+            },
+            thinking="中央一台完整螢幕，左右都被照片邊界裁切。",
+        )
+        second = make_pass(
+            model=None,
+            price="14990",
+            count=1,
+            physical=generic_fixture,
+            thinking="中央一台完整螢幕，左右都被照片邊界裁切。",
+        )
+        current = make_pass(
+            model="S32FM803UC",
+            price="14990",
+            count=2,
+            physical=generic_fixture,
+            thinking="中央一台完整螢幕，另一台被照片邊界裁切。",
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_non_followme_identity_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertEqual(current["model"], "S32FM803UC")
+        self.assertEqual(current["price"], "14990")
+        self.assertEqual(current["followme_physical_evidence"], [])
+        self.assertFalse(current["followme_family_confirmed"])
+
+    def test_three_single_subject_passes_finish_without_inventing_missing_model(self):
+        first = make_pass(
+            model=None,
+            price="3300",
+            count=2,
+            thinking="中央只有一台完整螢幕，左右都被裁切。",
+        )
+        second = make_pass(
+            model=None,
+            price="3300",
+            count=1,
+            runtime_health={
+                "healthy": False,
+                "reasons": ["structured_narration_followme_conflict"],
+            },
+            thinking="中央只有一台完整螢幕，左右都被裁切。",
+        )
+        current = make_pass(
+            model=None,
+            price="3300",
+            count=1,
+            thinking="中央只有一台完整螢幕，左右都被裁切。",
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "three_pass_single_subject_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertEqual(current["price"], "3300")
+
+    def test_one_structural_distant_and_two_wide_scene_votes_finish_distant(self):
+        weak_single = make_pass(
+            view="單機", model=None, price=None, count=5,
+            unique=False, ownership="ambiguous",
+            thinking="我看到一整排螢幕陳列，上下仍有完整螢幕，無法確認唯一主角。",
+        )
+        structural = make_pass(
+            view="遠景", model=None, price=None, count=3,
+            unique=False, ownership="not_visible",
+            thinking="一排多台螢幕陳列，無唯一主角。",
+        )
+        current = make_pass(
+            view="遠景", model=None, price=None, count=1,
+            unique=False, ownership="ambiguous",
+            thinking="一排多台螢幕陳列，無唯一主角。",
+        )
+
+        result = finalize_three_pass_outcome(
+            current, [weak_single, structural], unresolved()
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_mixed_wide_distant_consensus",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_model_and_price_majorities_cannot_form_unsupported_chimera(self):
         history = [
             make_pass(model="S24A", price="100"),
@@ -333,7 +443,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
-    def test_two_strong_followme_passes_finalize_single_without_guessing_variant(self):
+    def test_followme_pair_disagreement_finalizes_family_without_guessing_variant(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -348,8 +458,35 @@ class ThreePassFinalizationTests(unittest.TestCase):
 
         self.assertTrue(result["verified"])
         self.assertEqual(current["view_type"], "單機")
-        self.assertEqual(current["model"], 'FollowMe M7 32"')
-        self.assertEqual(current["price"], "12990")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_followme_local_narration_conflict_finishes_after_three_bound_calls(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(model='FollowMe Pro M7 43"', price="17990", physical=fixture),
+            make_pass(model='FollowMe Pro M7 43"', price="15990", count=2, physical=fixture),
+        ]
+        current = make_pass(
+            model='FollowMe Pro M7 43"', price="15990", count=2, physical=fixture,
+            runtime_health={
+                "healthy": False,
+                "reasons": ["structured_narration_followme_conflict"],
+            },
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
 
     def test_followme_fixture_consensus_survives_variant_disagreement(self):
         fixture = [

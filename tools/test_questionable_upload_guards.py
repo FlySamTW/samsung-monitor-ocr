@@ -68,10 +68,8 @@ class QuestionableUploadGuardTests(unittest.TestCase):
         self.assertFalse(is_complete_auto_verified(row))
         self.assertIn("evidence_guard_revision_missing", reason_for(row))
 
-    def test_followme_physical_sku_cannot_bypass_second_pass_requirement(self):
+    def test_bare_smart_monitor_sku_is_not_followme_without_fixture_evidence(self):
         row={"auto_verified":"true","auto_review_required":"false","ocr_attempt":"1","thinking":"clear same-subject product label","run_id":"new","view_type":"單機","model":"S32FM703UC","period":"202601","evidence_contract_version":"v19.45","evidence_guard_revision":EVIDENCE_GUARD_REVISION,"evidence_contract_valid":"true"}
-        self.assertFalse(is_complete_auto_verified(row))
-        row["ocr_attempt"] = "2"
         self.assertTrue(is_complete_auto_verified(row))
 
     def test_manifest_fails_closed_and_marks_uploaded_risk_stale(self):

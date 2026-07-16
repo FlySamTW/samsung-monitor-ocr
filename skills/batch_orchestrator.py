@@ -1988,38 +1988,52 @@ class BatchOrchestrator:
                         previous_results,
                         self.max_auto_attempts,
                     ) or review_decision
-                if not runtime_health_force_unresolved:
-                    review_decision = finalize_three_pass_outcome(
-                        norm_result,
-                        previous_results,
-                        review_decision,
-                        self.max_auto_attempts,
-                    )
-                    if review_decision.get("three_pass_adjudicated"):
-                        # Adjudication may select the two-pass model/price rather
-                        # than the current pass.  Recompute the comparison badge
-                        # so ↑/↓/✓/? can never belong to a superseded guess.
-                        model_value = str(norm_result.get("model") or "").strip()
-                        price_digits = re.sub(r"\D", "", str(norm_result.get("price") or ""))
-                        if model_value and price_digits:
-                            try:
-                                from skills.official_price import validate_ocr_price
+                review_decision = finalize_three_pass_outcome(
+                    norm_result,
+                    previous_results,
+                    review_decision,
+                    self.max_auto_attempts,
+                )
+                if review_decision.get("three_pass_adjudicated"):
+                    # Adjudication may select the two-pass model/price rather
+                    # than the current pass.  Recompute the comparison badge
+                    # so ↑/↓/✓/? can never belong to a superseded guess.
+                    model_value = str(norm_result.get("model") or "").strip()
+                    price_digits = re.sub(r"\D", "", str(norm_result.get("price") or ""))
+                    if model_value and price_digits:
+                        try:
+                            from skills.official_price import validate_ocr_price
 
-                                price_check = validate_ocr_price(model_value, int(price_digits))
-                                norm_result["price_status"] = price_check.get("status") or "unknown"
-                                norm_result["price_symbol"] = price_check.get("symbol") or "?"
-                                norm_result["official_price"] = price_check.get("official_price") or ""
-                                norm_result["price_diff_percent"] = price_check.get("diff_percent")
-                            except Exception:
-                                norm_result["price_status"] = "unknown"
-                                norm_result["price_symbol"] = "?"
-                                norm_result["official_price"] = ""
-                                norm_result["price_diff_percent"] = None
-                        else:
-                            norm_result["price_status"] = "not_compared"
-                            norm_result["price_symbol"] = ""
+                            price_check = validate_ocr_price(model_value, int(price_digits))
+                            norm_result["price_status"] = price_check.get("status") or "unknown"
+                            norm_result["price_symbol"] = price_check.get("symbol") or "?"
+                            norm_result["official_price"] = price_check.get("official_price") or ""
+                            norm_result["price_diff_percent"] = price_check.get("diff_percent")
+                        except Exception:
+                            norm_result["price_status"] = "unknown"
+                            norm_result["price_symbol"] = "?"
                             norm_result["official_price"] = ""
                             norm_result["price_diff_percent"] = None
+                    else:
+                        norm_result["price_status"] = "not_compared"
+                        norm_result["price_symbol"] = ""
+                        norm_result["official_price"] = ""
+                        norm_result["price_diff_percent"] = None
+                if runtime_health_force_unresolved and review_decision.get("verified") is True:
+                    # The third stateless call may still have a photo-local
+                    # narration/fixture mismatch.  A bounded three-pass
+                    # adjudication can settle that same photo without turning
+                    # it into a permanent backlog or permitting a fourth call.
+                    norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
+                    norm_result["runtime_health"] = {
+                        "healthy": True,
+                        "allow_processing": True,
+                        "allow_upload": True,
+                        "reasons": [],
+                        "display_narration": str(norm_result.get("thinking") or ""),
+                        "resolved_by_bounded_three_pass_adjudication": True,
+                    }
+                    runtime_health_force_unresolved = False
                 if runtime_health_force_unresolved:
                     review_decision["retry"] = False
                     review_decision["unresolved"] = True

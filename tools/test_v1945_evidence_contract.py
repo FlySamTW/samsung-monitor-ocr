@@ -25,6 +25,7 @@ from tools.prepare_drive_upload_manifest import (
     load_v1945_trace_names,
 )
 from tools.rerun_questionable_records import is_complete_auto_verified
+from tools.finalize_existing_three_pass_reviews import _recover_known_authority_after_restart
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace, cross_photo_duplicate_core
 from skills.runtime_health_gate import review_prompt_leak_reasons
 from skills.model_validation import has_photo_label_model_evidence, unique_known_model_completion
@@ -43,11 +44,14 @@ def evidence(count, unique, ownership="not_visible", physical=None):
 class EvidenceContractTests(unittest.TestCase):
     RISK_650_SHA = "9e182f053a3c893a5c6a791d0abfb52e97eb52b945b0beeb962178d49025e549"
     FRAME_940_SHA = "d69c226c34a43da94bf624b5d1640f6552f0eec22dc2d1e37a6c62a777c6828f"
+    FRAME_942_SHA = "d96292fc2c3050e9830247bc23c614072e63658c4acc1f11ba853d334d8256d2"
+    FRAME_943_SHA = "c0dab61862e5b61bee09baa479b470876f38e4c7bfd742bcbf003a131e22490c"
     WIDE_1528_SHA = "50b7524736f05c39b2180b3c8240e18fab5a2f737929e73e7dee3b447ee6943f"
     FRAME_649_SHA = "9bf9e2e855f785d5e091b76c98ac087063413c1bf4bf403ed104b2c393f78ba5"
     FRAME_668_SHA = "17a98b95ebaebf4b7203d4e3fee4721650b5da9a248b77733f77d9594a9db871"
     FRAME_673_SHA = "76e461cddc915c2e3b92bdc942e2c94cf27d013fe0ca9021c95f3c52094d0016"
     FRAME_674_SHA = "c9bbac284fec04529de8991134f14020cd74edebd597405a9a0612670173caf0"
+    FRAME_1257_SHA = "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -211,12 +215,16 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(third["unresolved"])
         self.assertTrue(any("人工確認高風險原圖與模型" in reason for reason in third["reasons"]))
 
-    def test_human_audited_649_668_673_674_require_exact_pixel_evidence(self):
+    def test_human_audited_pixel_sources_require_exact_evidence(self):
         cases = (
+            (self.FRAME_940_SHA, "S32FM803UC", "12900"),
+            (self.FRAME_942_SHA, "S32CG552EC", "6990"),
+            (self.FRAME_943_SHA, "S27F612EAC", "4990"),
             (self.FRAME_649_SHA, "S27CG552EC", "4990"),
             (self.FRAME_668_SHA, "S32FM703UC", "9990"),
             (self.FRAME_673_SHA, "S27FG532EC", "4990"),
             (self.FRAME_674_SHA, "S27D300GAC", "3090"),
+            (self.FRAME_1257_SHA, "C34G55TWWC", "9900"),
         )
         for image_hash, model, price in cases:
             correct = {
@@ -273,6 +281,32 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(third, 3, [first, second], 3)
         self.assertTrue(decision["verified"])
 
+    def test_known_pixel_authority_recovers_missing_first_trace_without_fourth_call(self):
+        calls = [
+            {
+                "ocr_attempt": attempt,
+                "input_image_sha256": self.FRAME_1257_SHA,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+            }
+            for attempt in (2, 3)
+        ]
+        current = dict(calls[-1])
+        recovered = _recover_known_authority_after_restart(
+            current,
+            calls,
+            {"auto_retry_reasons": "known_source_expectation_conflict；three_call_hard_limit_reached"},
+        )
+        self.assertTrue(recovered)
+        self.assertEqual(current["model"], "C34G55TWWC")
+        self.assertEqual(current["price"], 9900)
+        self.assertEqual(
+            current["adjudication_rule"],
+            "three_call_known_pixel_authority_restart_recovery",
+        )
+
     def test_known_650_pixels_require_three_clean_distant_passes(self):
         distant = {
             "period": "202601", "view_type": "遠景", "category": "遠景",
@@ -313,6 +347,8 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S43FM703UC"))
         self.assertFalse(batch.followme_models_equivalent('FollowMe M5 32"', "S32FM703UC"))
         self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S32FM803UC"))
+        self.assertFalse(batch.is_followme_model("S32FM703UC"))
+        self.assertTrue(batch.is_followme_model('FollowMe M7 32"'))
 
     def test_explicit_followme_model_with_same_pass_fixtures_survives_generic_signage_word(self):
         record = {
@@ -1404,7 +1440,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["valid"])
         self.assertNotIn("narration_followme_physical_evidence_omitted", decision["reasons"])
 
-    def test_followme_sku_requires_physical_evidence_and_second_pass(self):
+    def test_smart_monitor_sku_needs_fixture_evidence_to_become_followme(self):
         missing = {
             "file_name": "M-202605-followme-sku.jpg", "view_type": "單機", "category": "單機",
             "model": "S32FM703UC", "price": "12990", "quality_issue": "",
@@ -1412,8 +1448,9 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched"),
         }
         first_missing = immediate_retry_decision(dict(missing), 1, [], 3)
-        self.assertTrue(first_missing["retry"])
-        self.assertIn("followme_physical_evidence_insufficient", first_missing["reasons"])
+        self.assertFalse(first_missing["retry"])
+        self.assertTrue(first_missing["verified"])
+        self.assertNotIn("followme_physical_evidence_insufficient", first_missing["reasons"])
 
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
