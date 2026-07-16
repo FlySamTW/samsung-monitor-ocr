@@ -1869,10 +1869,10 @@ class BatchOrchestrator:
                 if not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
                     can_retry_conflict = first_pass_content_conflict_can_retry(
-                        attempt_number, runtime_health.reasons
+                        attempt_number, runtime_health.reasons, norm_result
                     )
                     can_isolate_conflict = final_content_conflict_can_isolate(
-                        attempt_number, runtime_health.reasons
+                        attempt_number, runtime_health.reasons, norm_result
                     )
                     repeated_across_sources = False
                     if can_retry_conflict or can_isolate_conflict:

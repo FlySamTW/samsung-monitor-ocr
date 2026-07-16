@@ -379,6 +379,54 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(final_content_conflict_can_isolate(3, narration_only))
         self.assertFalse(final_content_conflict_can_isolate(3, reasons))
 
+    def test_followme_variant_authority_conflict_is_bounded_to_one_photo(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        candidate = record(
+            view_type="單機",
+            model=None,
+            price="12990",
+            complete_screen_count=1,
+            unique_main=True,
+            label_ownership="matched",
+            followme_physical_evidence=physical,
+            structured_authority_blocked_fields=["model"],
+        )
+        reasons = ["structured_authority_material_conflict:model"]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, candidate))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, candidate))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons, candidate))
+        self.assertFalse(final_content_conflict_can_isolate(2, reasons, candidate))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, candidate))
+
+    def test_unproven_model_authority_conflict_still_fuses_immediately(self):
+        reasons = ["structured_authority_material_conflict:model"]
+        weak = record(
+            view_type="單機",
+            model=None,
+            price="12990",
+            complete_screen_count=1,
+            unique_main=True,
+            label_ownership="matched",
+            followme_physical_evidence=[],
+        )
+        self.assertFalse(first_pass_content_conflict_can_retry(1, reasons, weak))
+        self.assertFalse(final_content_conflict_can_isolate(3, reasons, weak))
+
+        missing_price = dict(weak)
+        missing_price["price"] = None
+        missing_price["followme_physical_evidence"] = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        self.assertFalse(first_pass_content_conflict_can_retry(1, reasons, missing_price))
+
+        price_conflict = ["structured_authority_material_conflict:price"]
+        self.assertFalse(first_pass_content_conflict_can_retry(1, price_conflict, weak))
+
     def test_runtime_incident_registry_fuses_only_after_a_second_source(self):
         from skills.batch_orchestrator import BatchOrchestrator
 

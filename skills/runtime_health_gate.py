@@ -291,16 +291,51 @@ def distant_followme_conflict(record: Mapping[str, Any]) -> bool:
     )
 
 
-def first_pass_content_conflict_can_retry(attempt: int, reasons: Iterable[Any]) -> bool:
+def _followme_variant_authority_conflict_is_photo_local(
+    reasons: Iterable[Any], record: Mapping[str, Any] | None
+) -> bool:
+    """Return true only for a well-bound FollowMe photo with an unknown variant.
+
+    The structured model remains null: physical fixture evidence can establish
+    the FollowMe product family, but it cannot invent M5/M7/Pro.  This predicate
+    merely keeps that one-photo uncertainty inside the bounded three-pass
+    adjudication path instead of stopping unrelated photos in the batch.
+    """
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    value = dict(record or {})
+    view_type = str(value.get("view_type") or value.get("category") or "").strip()
+    price = value.get("price")
+    return bool(
+        normalized == {"structured_authority_material_conflict:model"}
+        and view_type == "單機"
+        and value.get("model") in (None, "")
+        and price not in (None, "")
+        and not absurd_price_reason(price)
+        and value.get("complete_screen_count") == 1
+        and value.get("unique_main") is True
+        and value.get("label_ownership") == "matched"
+        and has_sufficient_followme_physical_evidence(value)
+    )
+
+
+def first_pass_content_conflict_can_retry(
+    attempt: int,
+    reasons: Iterable[Any],
+    record: Mapping[str, Any] | None = None,
+) -> bool:
     """Allow bounded stateless retries for a containable same-photo conflict.
 
     A first-pass FollowMe/view inconsistency gets one fresh look. A narration-
     only FollowMe evidence conflict may also receive pass 3 because the result
     remains non-verifiable and a later independent pass can safely adjudicate
-    the single photo. Model, price, prompt, UI, and binding defects still fuse.
+    the single photo. A model-authority conflict is also photo-local only when
+    the same pass proves a single FollowMe fixture and leaves the variant null.
+    Other model, price, prompt, UI, and binding defects still fuse.
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
     current_attempt = int(attempt or 1)
+    if _followme_variant_authority_conflict_is_photo_local(normalized, record):
+        return current_attempt in {1, 2}
     if current_attempt == 1:
         return bool(normalized and normalized.issubset(_FIRST_PASS_CONTAINABLE_CONTENT_REASONS))
     return bool(
@@ -309,9 +344,15 @@ def first_pass_content_conflict_can_retry(attempt: int, reasons: Iterable[Any]) 
     )
 
 
-def final_content_conflict_can_isolate(attempt: int, reasons: Iterable[Any]) -> bool:
-    """End one narration-only conflict as unresolved after the third pass."""
+def final_content_conflict_can_isolate(
+    attempt: int,
+    reasons: Iterable[Any],
+    record: Mapping[str, Any] | None = None,
+) -> bool:
+    """End one bounded same-photo conflict as unresolved after pass three."""
     normalized = {str(reason) for reason in reasons if str(reason)}
+    if _followme_variant_authority_conflict_is_photo_local(normalized, record):
+        return int(attempt or 1) >= 3
     return bool(
         int(attempt or 1) >= 3
         and normalized == {"structured_narration_followme_conflict"}
