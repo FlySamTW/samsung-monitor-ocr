@@ -151,7 +151,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.23";
+const CURRENT_GUARD_REVISION = "20260716.26";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -1360,7 +1360,18 @@ const App = () => {
     || (!isRunning ? latestBackendNarration?.fileName : "")
     || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
-  const currentFolderLabel = data.current_relative_dir || data.image_dir || overallProgress.current_folder || "-";
+  const currentFolderPath = activeDirectoryText || String(overallProgress.current_folder || "");
+  const currentFolderBaseName = currentFolderPath
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .at(-1) || "-";
+  // Never expose the long _ocr_staging implementation path as the visible
+  // folder name.  Operators need the complete business folder identity at a
+  // glance; the full technical path remains available in the hover title.
+  const currentFolderLabel = isReviewRun && /^20\d{4}$/.test(String(reviewPeriodLabel))
+    ? `商化照片-${reviewPeriodLabel}`
+    : currentFolderBaseName;
   // The header is part of the same visible presentation contract as the
   // photo and narration.  The backend may advance current_file before the
   // next presentation exists, so never let that early pointer rename the
@@ -1542,7 +1553,7 @@ const App = () => {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: '0.62rem', color: '#8a8a8a', marginBottom: '2px' }}>目前資料匣</div>
-                  <div data-testid="status-current-folder" style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: 800, fontFamily: 'JetBrains Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data.image_dir || currentFolderLabel}>
+                  <div data-testid="status-current-folder" style={{ color: '#fbbf24', fontSize: '0.82rem', fontWeight: 800, fontFamily: 'JetBrains Mono', whiteSpace: 'nowrap' }} title={currentFolderPath || currentFolderLabel}>
                     {currentFolderLabel}
                   </div>
                 </div>

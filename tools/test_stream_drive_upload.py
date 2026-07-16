@@ -130,6 +130,64 @@ class StreamDriveUploadTests(unittest.TestCase):
             self.assertIsNone(rejected)
             self.assertEqual(read_stream_status(output)["pending"], 1)
 
+    def test_old_revision_receipt_never_suppresses_corrected_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-台中市-南區-TK3C-台中旗艦-940.jpg"
+            make_image(source)
+            output = root / "output"
+            receipt_dir = output / "_drive_upload_stream" / "receipts"
+            receipt_dir.mkdir(parents=True)
+            key = "a" * 64
+            stale = {
+                "schema": "samsung-ocr-stream-receipt-v1",
+                "source_item_id": key,
+                "source_sha256": "old-bytes",
+                "file_name": "old-wrong-name.jpg",
+                "evidence_guard_revision": "20260716.21",
+                "remote_path": "samsung_ocr_drive:2026/old-wrong-name.jpg",
+                "drive_file_id": "old-drive-id",
+            }
+            (receipt_dir / f"{key}.json").write_text(
+                json.dumps(stale, ensure_ascii=False), encoding="utf-8"
+            )
+
+            job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            payload = json.loads(job.read_text(encoding="utf-8"))
+
+            self.assertEqual(job.parent.name, "pending")
+            self.assertEqual(payload["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+            self.assertEqual(payload["superseded_receipt"]["drive_file_id"], "old-drive-id")
+            self.assertFalse((receipt_dir / f"{key}.json").exists())
+            archived = list((output / "_drive_upload_stream" / "superseded_receipts").glob("*.json"))
+            self.assertEqual(len(archived), 1)
+
+    def test_current_exact_receipt_remains_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-台中市-南區-TK3C-台中旗艦-940.jpg"
+            make_image(source)
+            output = root / "output"
+            first_job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            payload = json.loads(first_job.read_text(encoding="utf-8"))
+            first_job.unlink()
+            receipt_dir = output / "_drive_upload_stream" / "receipts"
+            receipt_dir.mkdir(parents=True, exist_ok=True)
+            receipt = {
+                "schema": "samsung-ocr-stream-receipt-v1",
+                "source_item_id": "a" * 64,
+                "source_sha256": payload["source_sha256"],
+                "file_name": payload["target_name"],
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+            }
+            receipt_path = receipt_dir / f"{'a' * 64}.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+            existing = enqueue_finalized_result(verified_result(source), output_dir=output)
+
+            self.assertEqual(existing, receipt_path)
+            self.assertFalse(any((output / "_drive_upload_stream" / "pending").glob("*.json")))
+
     def test_distant_is_a_valid_final_upload_job_without_model_or_price(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

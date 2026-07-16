@@ -58,7 +58,7 @@ class EvidenceContractTests(unittest.TestCase):
         first = immediate_retry_decision(dict(row), 1, [], 3)
         self.assertTrue(first["retry"])
         self.assertFalse(first["verified"])
-        self.assertIn("2026 三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
+        self.assertIn("三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
 
         third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
         self.assertTrue(third["verified"])
@@ -70,7 +70,37 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(dict(row), 3, [dict(row), conflicting], 3)
         self.assertFalse(decision["verified"])
         self.assertTrue(decision["unresolved"])
-        self.assertIn("2026 三台以上入鏡的單機候選三輪核心證據不一致", decision["reasons"])
+        self.assertIn("三台以上入鏡的單機候選三輪核心證據不一致", decision["reasons"])
+
+    def test_three_plus_screen_single_guard_applies_to_older_years_too(self):
+        row = self._multiscreen_single(period="201901")
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
+
+    def test_edge_cut_narration_cannot_claim_three_complete_monitors(self):
+        row = self._multiscreen_single(
+            thinking=(
+                "我看到中央一台螢幕，左右各有一台螢幕，但左右鄰機都被照片邊界裁切，"
+                "其他區域沒有額外完整螢幕，所以……這是一般單機。"
+            )
+        )
+        decision = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn(
+            "敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上",
+            decision["reasons"],
+        )
+
+    def test_explicit_one_complete_narration_conflicts_with_structured_two(self):
+        row = self._multiscreen_single(
+            complete_screen_count=2,
+            thinking="我看到前景一台主角，背景其他螢幕均未完整入鏡，所以……這是單機。",
+        )
+        decision = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
 
     def test_known_650_pixels_can_never_auto_verify_as_single(self):
         row = self._multiscreen_single(input_image_sha256=self.RISK_650_SHA)
@@ -557,6 +587,11 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(batch.has_strong_single_unit_evidence(narration))
         self.assertTrue(batch.has_explicit_distant_layout_evidence(narration))
 
+    def test_price_disagreement_is_unsafe_for_physical_sku_not_only_followme_name(self):
+        self.assertTrue(batch.structured_narration_price_conflict("12990", "$12,900"))
+        self.assertFalse(batch.structured_narration_price_conflict("12900", "$12,900"))
+        self.assertFalse(batch.structured_narration_price_conflict(None, "$12,900"))
+
     def test_prompt_has_no_copyable_json_answer_templates(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         objects = batch._extract_balanced_json_objects(prompt)
@@ -569,6 +604,47 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+
+    def test_complete_screen_count_uses_original_frame_and_never_counts_crop_duplicates(self):
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
+        self.assertIn("外框四邊與四個外框角全部位於原圖內", prompt)
+        self.assertIn("中央一台完整、左右各一台被原圖邊界切掉", prompt)
+        self.assertIn("依左／中／右、上／中／下逐區掃完", prompt)
+        self.assertIn("其他位置另有完整螢幕，必須全部加總", prompt)
+        self.assertIn("只限螢幕外框真的接觸或穿出第一張照片最外側", prompt)
+        self.assertIn("緊密近拍例外不得套用到一整排、展示牆、多層貨架或寬廣走道", prompt)
+        self.assertIn("Supplemental crops are duplicate views", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("one complete centered monitor plus one edge-cut monitor on each side", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("scan the ENTIRE original image region by region", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("no other complete monitors anywhere else", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("rendered inside a screen are signal content, not the physical monitor brand", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("不能決定硬體品牌", source)
+        for attempt in (2, 3):
+            focus = batch.REVIEW_FOCUS_PROMPTS[attempt]
+            self.assertIn("第一張全尺寸照片", focus)
+            self.assertIn("禁止重複計數", focus)
+            self.assertIn("左右各一台被照片邊界切掉", focus)
+            self.assertIn("其他區域", focus)
+        self.assertIn("不可把其中物體當成新增螢幕、不可重複計數", source)
+        self.assertIn("完整台數只能回到第一張全尺寸照片檢查", source)
+        self.assertIn("下方偏左中商品價牌區域", source)
+        self.assertIn("此圖不得用來計算螢幕台數", source)
+        self.assertNotIn("補充圖：這是原圖", source)
+
+    def test_full_review_user_prompt_with_label_crop_text_remains_stateless(self):
+        combined = (
+            "這是一張全新的照片，與之前的任何辨識無關。請讀主角型號與價格。"
+            "補充圖：這是全尺寸照片下方整條商品標籤/價牌區域的自動裁切。"
+            "補充圖：這是全尺寸照片下方中間商品價牌區域的自動放大裁切。"
+            "補充圖：這是全尺寸照片下方偏左中商品價牌區域的放大裁切，只用於讀取小字。"
+            + batch.REVIEW_FOCUS_PROMPTS[2]
+        )
+        messages = batch.build_ocr_messages("system", combined, 2, previous_results=[])
+        self.assertEqual(
+            review_prompt_leak_reasons(2, messages, injected_prior_results=[], prior_results_for_leak_check=[]),
+            [],
+        )
 
     def test_runtime_prompt_excludes_superseded_maintenance_changelog(self):
         template = (

@@ -220,6 +220,95 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_two_edge_cut_narrations_correct_structured_three_to_one(self):
+        edge_text = (
+            "我看到中央一台螢幕，左右各有一台螢幕，但左右鄰機都被照片邊界裁切，"
+            "整張照片其他區域沒有額外完整螢幕，所以……這是一般單機。"
+        )
+        history = [
+            make_pass("單機", None, None, 3, True, "not_visible", thinking=edge_text),
+            make_pass("遠景", None, None, 3, False, "not_visible"),
+        ]
+        current = make_pass("單機", None, None, 3, True, "ambiguous", thinking=edge_text)
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_edge_cut_frame_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_edge_cut_rule_does_not_hide_other_complete_display_rows(self):
+        text = (
+            "我看到中央一台螢幕，左右各有一台螢幕且被照片邊界裁切，"
+            "但上方另一排還有三台四邊四角完整螢幕，所以……這是遠景。"
+        )
+        history = [
+            make_pass("單機", None, None, 3, True, "ambiguous", thinking=text),
+            make_pass("遠景", None, None, 3, False, "not_visible"),
+        ]
+        current = make_pass("遠景", None, None, 4, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_distant_structural_consensus")
+        self.assertEqual(current["view_type"], "遠景")
+
+    def test_one_structural_distant_pass_vetoes_two_weak_wide_single_votes(self):
+        weak_one = make_pass(
+            "單機", None, None, 1, True, "ambiguous",
+            thinking=(
+                "我看到一整排螢幕陳列，中央一台完整，左右螢幕被照片邊界裁切，"
+                "上方與遠處也有螢幕，但沒有可歸屬的型號或價格，所以……這是一般單機。"
+            ),
+        )
+        structural_distant = make_pass(
+            "遠景", None, None, 8, False, "not_visible",
+            thinking=(
+                "我看到上方三台、中間三台、下方兩台四邊四角完整的螢幕，"
+                "無法鎖定唯一主角及其自己的規格與價格，整體符合「遠景」條件。"
+            ),
+        )
+        current = make_pass(
+            "單機", None, None, 1, True, "ambiguous",
+            thinking=(
+                "我看到一排螢幕展示架，上方與左右邊緣也有其他螢幕，"
+                "但無型號無價格，所以……這是一般單機。"
+            ),
+        )
+
+        result = finalize_three_pass_outcome(
+            current, [weak_one, structural_distant], unresolved()
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "distant_structural_veto_over_two_weak_wide_single_votes",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_structural_distant_veto_does_not_override_bound_single_identity(self):
+        history = [
+            make_pass("單機", "S32FM803UC", "12900", 1, True, "matched"),
+            make_pass("遠景", None, None, 3, False, "not_visible"),
+        ]
+        current = make_pass("單機", "S32FM803UC", "12900", 1, True, "matched")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_single_view_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], "S32FM803UC")
+        self.assertEqual(current["price"], "12900")
+
     def test_model_and_price_majorities_cannot_form_unsupported_chimera(self):
         history = [
             make_pass(model="S24A", price="100"),
@@ -271,6 +360,35 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+
+    def test_two_followme_narrations_with_incomplete_background_set_count_one(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                model='FollowMe Pro M7 43"', price="17990", count=3,
+                physical=fixture,
+                thinking="前景一台 FollowMe，背景其他螢幕均未完整入鏡，所以……",
+            ),
+            make_pass(
+                model='FollowMe Pro M7 43"', price="17990", count=4,
+                physical=fixture,
+                thinking="前景一台 FollowMe，背景另有三台完整螢幕，所以……",
+            ),
+        ]
+        current = make_pass(
+            model='FollowMe Pro M7 43"', price="17990", count=2,
+            physical=fixture,
+            thinking="全圖掃描確認無其他完整螢幕，所以……",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertEqual(current["complete_screen_count"], 1)
 
     def test_any_technical_failure_requires_another_healthy_pass(self):
         history = [

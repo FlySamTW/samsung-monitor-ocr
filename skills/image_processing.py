@@ -80,16 +80,14 @@ class ImageProcessor:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     def _scene_tile_specs(self, width: int, height: int, attempt: int):
-        """Return bounded full-height subject/ownership tiles by evidence pass."""
-        if attempt <= 1:
-            specs = (("scene_center", 0.26, 0.74),)
-        elif attempt == 2:
-            specs = (("scene_left", 0.00, 0.60), ("scene_center", 0.26, 0.74), ("scene_right", 0.40, 1.00))
-        elif attempt >= 3:
-            specs = (("scene_left", 0.00, 0.48), ("scene_center", 0.26, 0.74), ("scene_right", 0.52, 1.00))
-        else:
-            return []
-        return [(label, (int(width * x1), 0, int(width * (x2 - x1)), height)) for label, x1, x2 in specs]
+        """Do not duplicate physical monitors across scene images.
+
+        The pristine full image is present in every request. Isolated replay of
+        a full-center monitor with edge-cut neighbors proved that even one
+        full-height scene tile can make the vision model count the same unit
+        twice. High-resolution label crops remain available separately.
+        """
+        return []
 
     def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
         """
@@ -122,6 +120,27 @@ class ImageProcessor:
             return zoomed, (x1, y1, x2 - x1, y2 - y1)
         except Exception as e:
             log.warning(f"Bottom center zoom crop failed: {e}")
+            return None, None
+
+    def crop_bottom_left_center_zoom(self, img_array: np.ndarray) -> tuple:
+        """Enlarge the lower-left-center label zone without duplicating screens.
+
+        Retail photos often place the dominant centered monitor's physical card
+        left of the stand rather than at the geometric center.  This crop stays
+        in the lower label band, so it improves small text without adding a
+        second full-height view that could corrupt monitor counting.
+        """
+        try:
+            h, w = img_array.shape[:2]
+            x1 = int(w * 0.14)
+            x2 = int(w * 0.50)
+            y1 = int(h * 0.56)
+            y2 = int(h * 0.94)
+            cropped = img_array[y1:y2, x1:x2]
+            zoomed = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            return zoomed, (x1, y1, x2 - x1, y2 - y1)
+        except Exception as e:
+            log.warning(f"Bottom left-center zoom crop failed: {e}")
             return None, None
 
     def detect_label_card(self, img_array: np.ndarray) -> tuple:
@@ -243,6 +262,7 @@ class ImageProcessor:
                 label_b64 = None
                 bottom_label_b64 = None
                 bottom_center_b64 = None
+                bottom_left_center_b64 = None
                 scene_tiles = []
                 if self.config.get("detect_label_card"):
                     img_array = np.array(img)
@@ -265,13 +285,21 @@ class ImageProcessor:
                             bottom_label_b64 = self._encode_crop(bottom_img)
                             applied_transforms.append(f"bottom_label_strip_{bottom_bbox}")
 
-                    if attempt <= 1 and (self.config.get("bottom_center_zoom") or (self.config.get("auto_high_res_crops") and large_scene)):
+                    if self.config.get("bottom_center_zoom") or (self.config.get("auto_high_res_crops") and large_scene):
                         center_cropped, center_bbox = self.crop_bottom_center_zoom(img_array)
                         if center_cropped is not None:
                             center_img = Image.fromarray(center_cropped)
                             center_img = self._resize_crop_if_needed(center_img, applied_transforms, "bottom_center")
                             bottom_center_b64 = self._encode_crop(center_img)
                             applied_transforms.append(f"bottom_center_zoom_{center_bbox}")
+
+                    if self.config.get("auto_high_res_crops") and large_scene:
+                        left_center_cropped, left_center_bbox = self.crop_bottom_left_center_zoom(img_array)
+                        if left_center_cropped is not None:
+                            left_center_img = Image.fromarray(left_center_cropped)
+                            left_center_img = self._resize_crop_if_needed(left_center_img, applied_transforms, "bottom_left_center")
+                            bottom_left_center_b64 = self._encode_crop(left_center_img)
+                            applied_transforms.append(f"bottom_left_center_zoom_{left_center_bbox}")
 
                     if large_scene:
                         for tile_label, (x, y, w, h) in self._scene_tile_specs(img.width, img.height, attempt)[:int(self.config.get("scene_tile_max", 3))]:
@@ -307,12 +335,14 @@ class ImageProcessor:
                     "label_base64": label_b64,
                     "bottom_label_base64": bottom_label_b64,
                     "bottom_center_base64": bottom_center_b64,
+                    "bottom_left_center_base64": bottom_left_center_b64,
                     "metadata": {
                         "original_size": original_size,
                         "processed_size": full_img.size,
                         "label_found": label_b64 is not None,
                         "bottom_label_strip": bottom_label_b64 is not None,
                         "bottom_center_zoom": bottom_center_b64 is not None,
+                        "bottom_left_center_zoom": bottom_left_center_b64 is not None,
                         "scene_tiles": [{k: v for k, v in tile.items() if k != "base64"} for tile in scene_tiles],
                         "evidence_attempt": attempt,
                         "source_path": str(image_path),

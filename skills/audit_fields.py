@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.23"
+EVIDENCE_GUARD_REVISION = "20260716.26"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -638,6 +638,83 @@ def _all_multiscreen_single_consistent(
     return True
 
 
+def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool:
+    """Detect a same-pass narration/count contradiction for the common 940 layout.
+
+    This is intentionally narrow: the prose must identify one central monitor,
+    exactly one neighbor on each side, and say those side monitors are cut by
+    the photo boundary.  A structured count of three or more then cannot mean
+    three *complete* monitors.  Mentions of other complete rows/fixtures make
+    the rule inapplicable so genuine distant views are not collapsed to one.
+    """
+    text = str(record.get("thinking") or record.get("narration") or "")
+    normalized = record.get("normalized_evidence") or record
+    count = normalized.get("complete_screen_count")
+    if (
+        str(record.get("view_type") or record.get("category") or "").strip() != "單機"
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 3
+    ):
+        return False
+    central_one = bool(re.search(r"中央.{0,8}(?:一台|1\s*台).{0,8}螢幕|中央螢幕", text))
+    paired_neighbors = bool(
+        re.search(r"左右.{0,8}(?:各有|各|各一台).{0,8}螢幕", text)
+        or re.search(r"左(?:邊|側).{0,12}右(?:邊|側).{0,12}各有?一台螢幕", text)
+    )
+    edge_cut = bool(
+        re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:照片|原圖|畫面).{0,8}邊界.{0,8}(?:裁切|截斷|切掉)", text)
+        or re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:被|遭).{0,8}(?:裁切|截斷|切掉)", text)
+    )
+    other_complete_matches = re.finditer(
+        r"(?:上方|下方|遠處|另一(?:排|區|展示架)|其他(?:區域|位置|展示架)).{0,18}(?:完整|四邊四角)",
+        text,
+    )
+    other_complete = any(
+        not re.search(r"(?:沒有|並無|無|未見|看不到|不存在).{0,10}(?:額外|其他)?(?:完整|四邊四角)", match.group(0))
+        for match in other_complete_matches
+    )
+    return central_one and paired_neighbors and edge_cut and not other_complete
+
+
+def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> bool:
+    """Return true only for an explicit same-pass one-complete-frame claim."""
+    text = str(record.get("thinking") or record.get("narration") or "")
+    return bool(
+        re.search(r"(?:完整台數|完整入鏡(?:台數)?).{0,8}(?:為|是|只有)?\s*(?:1|一)\s*台", text)
+        or re.search(r"(?:只有|僅有).{0,16}(?:1|一)\s*台.{0,12}(?:完整|完整入鏡)", text)
+        or re.search(r"(?:沒有|並無|無).{0,10}(?:其他|額外).{0,8}(?:完整|完整入鏡)", text)
+        or re.search(r"背景.{0,24}(?:螢幕|顯示器).{0,16}(?:未完整入鏡|不完整|被.{0,6}(?:裁切|截斷|切掉))", text)
+    )
+
+
+def _weak_single_claim_in_wide_multiscreen_scene(record: Dict[str, Any]) -> bool:
+    """Reject a weak single vote that still describes a broad display wall.
+
+    The edge-cut exception is for a tight composition with one central monitor
+    and cropped neighbours.  A pass that says "整排／展示牆／上方或遠處還有螢幕"
+    but supplies neither a bound label nor FollowMe hardware is not positive
+    single-unit evidence.  This keeps a pair of over-corrected weak answers from
+    defeating one structurally valid distant-view pass (the real 670 failure).
+    """
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    normalized = record.get("normalized_evidence") or record
+    text = str(record.get("thinking") or record.get("narration") or "")
+    if view != "單機":
+        return False
+    if record.get("model") or record.get("price"):
+        return False
+    if normalized.get("label_ownership") == "matched":
+        return False
+    if has_sufficient_followme_physical_evidence(normalized):
+        return False
+    wide_scene = bool(
+        re.search(r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架).{0,16}(?:螢幕|顯示器|面板|陳列)", text)
+        or re.search(r"(?:上方|下方|遠處|另一排|其他展示架).{0,18}(?:螢幕|顯示器|面板)", text)
+    )
+    return wide_scene
+
+
 def _is_samsung_sku_like(value: Any) -> bool:
     text = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
     if not text:
@@ -825,11 +902,22 @@ def immediate_retry_decision(
         if _explicit_three_complete(thinking) and _no_unique_main_evidence(thinking):
             reasons.append("單機結果與三台以上完整陳列衝突")
         multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
-        if current_year and isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
+        if (
+            _narration_supports_only_one_complete_monitor(record)
+            and isinstance(multiscreen_count, int)
+            and not isinstance(multiscreen_count, bool)
+            and multiscreen_count != 1
+        ):
+            record["frame_count_narration_conflict"] = True
+            reasons.append("敘述明確只有一台完整螢幕，結構完整台數必須為1")
+        if _central_monitor_with_two_edge_cut_neighbors(record):
+            record["frame_count_narration_conflict"] = True
+            reasons.append("敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上")
+        if isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
             if attempt < max_attempts:
-                reasons.append("2026 三台以上入鏡的單機候選必須完成三輪獨立複核")
+                reasons.append("三台以上入鏡的單機候選必須完成三輪獨立複核")
             elif not _all_multiscreen_single_consistent(record, history, max_attempts):
-                reasons.append("2026 三台以上入鏡的單機候選三輪核心證據不一致")
+                reasons.append("三台以上入鏡的單機候選三輪核心證據不一致")
 
     if is_followme_model(model):
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
@@ -1052,6 +1140,8 @@ def finalize_three_pass_outcome(
     multiscreen_distant: list[Dict[str, Any]] = []
     single: list[Dict[str, Any]] = []
     followme: list[Dict[str, Any]] = []
+    edge_cut_single: list[Dict[str, Any]] = []
+    weak_wide_single: list[Dict[str, Any]] = []
     for item in usable:
         view = str(item.get("view_type") or item.get("category") or "")
         normalized = item.get("normalized_evidence") or item
@@ -1060,6 +1150,10 @@ def finalize_three_pass_outcome(
         strong_followme = has_sufficient_followme_physical_evidence(normalized)
         if view == "單機":
             single.append(item)
+            if _central_monitor_with_two_edge_cut_neighbors(item):
+                edge_cut_single.append(item)
+            if _weak_single_claim_in_wide_multiscreen_scene(item):
+                weak_wide_single.append(item)
         if strong_followme and (is_followme_model(item.get("model")) or view == "單機"):
             followme.append(item)
         if (
@@ -1081,6 +1175,14 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = followme
         rule = "two_pass_followme_physical_consensus"
+    elif len(multiscreen_distant) >= 1 and len(weak_wide_single) >= 2:
+        final_view = "遠景"
+        supporting = multiscreen_distant + weak_wide_single
+        rule = "distant_structural_veto_over_two_weak_wide_single_votes"
+    elif len(edge_cut_single) >= 2:
+        final_view = "單機"
+        supporting = edge_cut_single
+        rule = "two_pass_edge_cut_frame_consensus"
     elif len(no_screen_distant) >= 2:
         final_view = "遠景"
         supporting = no_screen_distant
@@ -1194,6 +1296,15 @@ def finalize_three_pass_outcome(
             ]
             record["complete_screen_count"] = min(subthree_counts) if subthree_counts else 1
             record["followme_physical_evidence"] = []
+        if rule == "two_pass_edge_cut_frame_consensus":
+            record["complete_screen_count"] = 1
+            record["followme_physical_evidence"] = []
+        one_complete_votes = sum(
+            _narration_supports_only_one_complete_monitor(item)
+            for item in supporting
+        )
+        if one_complete_votes >= 2:
+            record["complete_screen_count"] = 1
         if rule == "two_pass_followme_physical_consensus":
             # Physical consensus proves the FollowMe family even when the
             # three stateless passes disagree on M5/M7/Pro.  Preserve that

@@ -74,6 +74,7 @@ def _stream_dirs(output_dir: Path) -> dict[str, Path]:
         "working": root / "working",
         "failed": root / "failed",
         "receipts": root / "receipts",
+        "superseded_receipts": root / "superseded_receipts",
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -196,7 +197,32 @@ def enqueue_finalized_result(
                 return existing_path
             raise RuntimeError(f"same source_item_id already has a different upload job: {key}")
     if receipt.exists():
-        return receipt
+        previous_receipt = _read_json(receipt)
+        receipt_is_current = bool(
+            previous_receipt.get("schema") == RECEIPT_SCHEMA
+            and previous_receipt.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
+            and previous_receipt.get("source_sha256") == job["source_sha256"]
+            and previous_receipt.get("file_name") == job["target_name"]
+        )
+        if receipt_is_current:
+            return receipt
+        # A receipt proves only the exact revision/name/bytes it recorded.  It
+        # must never suppress a corrected result for the same source identity.
+        # Preserve the old proof for audit, then enqueue the new revision.
+        old_revision = re.sub(
+            r"[^0-9A-Za-z._-]", "_",
+            str(previous_receipt.get("evidence_guard_revision") or "legacy"),
+        )
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archived = dirs["superseded_receipts"] / f"{key}.{old_revision}.{stamp}.json"
+        os.replace(receipt, archived)
+        job["superseded_receipt"] = {
+            "archived_path": str(archived),
+            "evidence_guard_revision": previous_receipt.get("evidence_guard_revision"),
+            "file_name": previous_receipt.get("file_name"),
+            "remote_path": previous_receipt.get("remote_path"),
+            "drive_file_id": previous_receipt.get("drive_file_id"),
+        }
     _atomic_json(pending, job)
     refresh_status(output_dir, last_queued_file=plan["target_name"])
     return pending
