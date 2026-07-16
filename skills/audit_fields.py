@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.22"
+EVIDENCE_GUARD_REVISION = "20260716.23"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -902,6 +902,39 @@ def _adjudication_pass_is_usable(
     return valid
 
 
+def _adjudication_pass_has_base_integrity(record: Dict[str, Any]) -> bool:
+    """Prove request/image independence without requiring a valid view claim."""
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    runtime = record.get("runtime_health") or {}
+    return bool(
+        view in {"單機", "遠景"}
+        and record.get("independent_pass") is True
+        and record.get("request_binding_enforced") is True
+        and record.get("request_id_verified") is True
+        and record.get("prior_answer_exposed") is not True
+        and record.get("prompt_contamination") is not True
+        and record.get("cross_photo_duplicate_core_suspected") is not True
+        and record.get("requires_structured_retry") is not True
+        and isinstance(runtime, dict)
+        and runtime.get("healthy") is True
+    )
+
+
+def _subthree_distant_conflict_only(record: Dict[str, Any]) -> bool:
+    """Allow only the known 1–2-screen false-distant contract failure."""
+    valid, errors, normalized = validate_evidence_contract(record)
+    if valid:
+        return True
+    count = normalized.get("complete_screen_count")
+    return bool(
+        str(record.get("view_type") or record.get("category") or "").strip() == "遠景"
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count in {1, 2}
+        and set(errors) == {"distant_evidence_inconsistent"}
+    )
+
+
 def _technical_retry_outcome(outcome: Dict[str, Any], reason: str) -> Dict[str, Any]:
     return {
         **outcome,
@@ -979,12 +1012,27 @@ def finalize_three_pass_outcome(
     distant_majority = bool(
         len(winning_hashes) == 1 and current_hash == winning_hashes[0]
     )
+    base_integrity = [item for item in passes if _adjudication_pass_has_base_integrity(item)]
+    base_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in base_integrity
+    }
+    conservative_single_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and all(_subthree_distant_conflict_only(item) for item in passes)
+        and any(not validate_evidence_contract(item)[0] for item in passes)
+    )
     if distant_majority:
         usable = [
             item
             for item in distant_candidates
             if str(item.get("input_image_sha256") or "").strip().lower() == winning_hashes[0]
         ]
+    elif conservative_single_fallback:
+        usable = list(base_integrity)
     else:
         # Other adjudication outcomes still require three fully healthy passes.
         if not _adjudication_pass_is_usable(record):
@@ -1045,6 +1093,14 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = single
         rule = "two_pass_single_view_consensus"
+    elif conservative_single_fallback:
+        # One or two complete screens can never be a truthful distant view.
+        # When all three calls are healthy/bound but that exact contract error
+        # prevents a view majority, finish conservatively as a single unit and
+        # leave unsupported identity fields empty.
+        final_view = "單機"
+        supporting = usable
+        rule = "three_pass_subthree_distant_conflict_conservative_single"
     else:
         return _technical_retry_outcome(outcome, "three_pass_view_majority_missing")
 
@@ -1128,6 +1184,16 @@ def finalize_three_pass_outcome(
         record["price"] = price
         record["unique_main"] = True
         record["label_ownership"] = "matched" if matched_votes >= 2 else "ambiguous"
+        if rule == "three_pass_subthree_distant_conflict_conservative_single":
+            subthree_counts = [
+                int((item.get("normalized_evidence") or item).get("complete_screen_count"))
+                for item in supporting
+                if isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+                and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+                and int((item.get("normalized_evidence") or item).get("complete_screen_count")) in {1, 2}
+            ]
+            record["complete_screen_count"] = min(subthree_counts) if subthree_counts else 1
+            record["followme_physical_evidence"] = []
         if rule == "two_pass_followme_physical_consensus":
             # Physical consensus proves the FollowMe family even when the
             # three stateless passes disagree on M5/M7/Pro.  Preserve that

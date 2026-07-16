@@ -303,7 +303,7 @@ class PresentationSoakTests(unittest.TestCase):
 
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('const CURRENT_GUARD_REVISION = "20260716.22"', app)
+        self.assertIn('const CURRENT_GUARD_REVISION = "20260716.23"', app)
         self.assertIn('const isStaleGuardRevision = (item)', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
         self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"', app)
@@ -425,7 +425,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("width: clamp(360px, 23vw, 430px) !important", app)
         self.assertIn("flex: 1 1 0 !important;\n  height: auto !important;", css)
         self.assertNotIn("height: 100% !important;\n  min-height: 0 !important;", css)
-        self.assertIn("gridTemplateColumns: 'minmax(260px, 1fr) auto minmax(520px, 38vw) 118px'", app)
+        self.assertIn("gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 2.35fr) max-content'", app)
+        self.assertNotIn("minmax(520px, 38vw) 118px", app)
         self.assertIn("overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'", app)
         self.assertIn("上傳總數 {formatCount(streamUpload.canonical_uploaded)} · 待上傳 {formatCount(streamUpload.pending)}", app)
         self.assertNotIn("系統技術重試", app)

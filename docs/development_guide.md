@@ -554,7 +554,7 @@ Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `labe
 
 Dashboard API 的 `success` 是歷史相容欄位，語意是「已有非系統失敗的判讀記錄」，可能包含 `review_required`。介面只能稱為 `完成判讀`，並分別顯示 `review_required`；Drive 仍只接受 `auto_verified=true && auto_review_required=false`。`windows_user_launcher.ps1` 在安全邊界啟動時會比較 `dashboard/src` 與 `dashboard/dist/index.html` 時間，來源較新必須先 build，避免新版後端計數配上舊前端文字。
 
-### Current-year per-photo finalization and upload (revision `20260716.22`)
+### Current-year per-photo finalization and upload (revision `20260716.23`)
 
 Formal OCR is a per-photo pipeline.  A photo that passes on round 1 is finalized immediately.  A photo with a FollowMe cue, distant view, missing model/price, large price difference, or core-evidence uncertainty receives independent rounds 2 and 3 from the same pristine image, with no previous answer in the prompt.  **The hard limit is three total model calls per photo, including transport/parser retries.** `max_total_attempts=max_auto_attempts<=3`; configuration, restored retry state, exceptions, or UI metadata may never create a fourth call or a pass index above 3.  The call budget is persisted before the model request so a crash/restart cannot reset it.  After the third call, `finalize_three_pass_outcome` makes one bounded evidence decision or emits one terminal technical failure; it never queues round 4.  The result is valid when it is `遠景`, or a `單機` with only a model, only a price, or neither.  Missing fields are recorded as missing; they are not a reason to isolate or abandon the photo.
 
@@ -566,9 +566,11 @@ Only technical-integrity faults may prevent finalization: wrong request/image bi
 
 FollowMe family evidence is also a final field, not an informal note. Two usable passes with sufficient same-subject physical evidence establish the FollowMe family even when M5/M7/Pro or price disagrees. In that case `.22` writes `FollowMe 型號未細分`, leaves unsupported price/model detail empty, and uploads the photo as a truthful single unit; it must never fall back to `遠景`.
 
+Revision `.23` closes the remaining permanent-hole case: when all three calls are healthy, stateless, request/image-bound and share one image hash, but one or more passes claim `遠景` with only 1–2 complete screens, the invalid distant claim cannot count as distant and cannot turn the photo into a technical failure. If no safe two-pass view consensus remains, finalize conservatively as `單機／無型號／無價格` (or retain only independently supported fields). This prevents false distant uploads and prevents completed content calls from becoming permanent `技術錯誤／該張未上傳` rows.
+
 Photo-local FollowMe narration/structure disagreement is contained inside that photo's three-call budget. Seeing the same local disagreement class on another source is recorded for monitoring but is not proof of cross-photo memory infection and must not stop the batch. Only direct prior-answer leakage, copied cross-photo identity, prompt contamination, request/image binding failure, or another non-local technical fault may trip the batch-wide fuse. This paragraph supersedes older historical notes below that treated a second local conflict as automatic batch-wide drift or mentioned calls 4–6.
 
-### Live-dashboard deployment and header iron rule (revision `20260716.22`)
+### Live-dashboard deployment and header iron rule (revision `20260716.23`)
 
 - A planned repair must not begin by stopping the only live OCR service.  First read this guide and the continuity handoff, finish the code change, run targeted regressions, build `dashboard/dist`, and bring up a hidden green backend on a spare port.  Only after its `/api/status`, asset fingerprint, guard revision, process uniqueness and upload isolation pass may the old OCR loop be paused and the original dashboard address be replaced.  The user's existing tab stays on the same address and reloads through the asset fingerprint; never open a terminal window, browser window, or monitoring tab.
 - The production handoff is incomplete until the original address reports `is_running=true`, the current file/pass advances, exactly one backend listener and one stream worker remain, and the existing page shows the new fingerprint.  `待機中` during an avoidable planned repair is a deployment failure, not an acceptable intermediate state.

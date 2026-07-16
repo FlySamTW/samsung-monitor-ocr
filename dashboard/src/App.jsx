@@ -151,7 +151,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.22";
+const CURRENT_GUARD_REVISION = "20260716.23";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -1478,7 +1478,7 @@ const App = () => {
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       {/* 1. Header */}
-      <header className="app-header" style={{ height: '56px', minHeight: '56px', flexShrink: 0, display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) auto minmax(520px, 38vw) 118px', columnGap: '12px', alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #333', background: '#111', overflow: 'hidden' }}>
+      <header className="app-header" style={{ height: '56px', minHeight: '56px', flexShrink: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 2.35fr) max-content', columnGap: '12px', alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #333', background: '#111', overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <Activity color="#00f5ff" size={24} />
               <h1 style={{ margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '1.2rem', fontWeight: 'bold', color: '#ffffff', background: 'none', WebkitBackgroundClip: 'initial', WebkitTextFillColor: 'initial' }}>
@@ -1486,7 +1486,7 @@ const App = () => {
               </h1>
           </div>
           <div style={{ display: 'contents' }}>
-               <span style={{ fontSize: '0.62rem', color: '#ffffff', fontWeight: 'bold', whiteSpace: 'nowrap', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
+               <span style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.62rem', color: '#ffffff', fontWeight: 'bold', whiteSpace: 'nowrap', border: '1px solid #333', padding: '2px 6px', borderRadius: '4px', background: '#222' }}>
                  {UI_VERSION}
                </span>
                 <div style={{ width: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '3px' }}>
@@ -1497,7 +1497,7 @@ const App = () => {
                   <div style={{ height: '4px', width: '100%', background: '#222', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${overallPercent}%`, background: '#22c55e', transition: 'width 0.3s ease' }} />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, whiteSpace: 'nowrap', fontSize: '0.54rem', color: '#888' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '0.54rem', color: '#888' }}>
                     <span>剩餘 {formatCount(overallProgress.remaining_images)} 張</span>
                     <span aria-hidden="true">·</span>
                     <span>資料匣 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
@@ -1513,7 +1513,7 @@ const App = () => {
                     </span>
                   </div>
                 </div>
-               <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+               <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', justifySelf: 'end' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
                     <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>

@@ -81,6 +81,57 @@ class ThreePassFinalizationTests(unittest.TestCase):
             self.assertFalse(valid)
             self.assertIn("distant_evidence_inconsistent", errors)
 
+    def test_three_bound_subthree_distant_claims_finish_as_conservative_single(self):
+        history = [
+            make_pass("遠景", None, None, 2, False, "not_visible"),
+            make_pass("遠景", None, None, 2, False, "ambiguous"),
+        ]
+        current = make_pass("遠景", None, None, 2, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 2)
+        self.assertTrue(current["unique_main"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_subthree_distant_conflict_conservative_single",
+        )
+
+    def test_one_valid_single_one_invalid_distant_one_valid_distant_finishes_single(self):
+        history = [
+            make_pass("單機", "S32CG552EC", "6990", 2, True, "matched"),
+            make_pass("遠景", None, None, 2, False, "not_visible"),
+        ]
+        current = make_pass("遠景", None, None, 3, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 2)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_subthree_fallback_never_accepts_contaminated_pass(self):
+        history = [
+            make_pass("遠景", None, None, 2, False, "not_visible"),
+            make_pass(
+                "遠景", None, None, 2, False, "not_visible",
+                prior_answer_exposed=True,
+            ),
+        ]
+        current = make_pass("遠景", None, None, 2, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertFalse(result["verified"])
+        self.assertTrue(result["technical_retry_required"])
+
     def test_single_then_two_distant_finalizes_truthful_distant(self):
         history = [
             make_pass("單機", "S27F612EAC", "5990", 3, True, "matched"),
