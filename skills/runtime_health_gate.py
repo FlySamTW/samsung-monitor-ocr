@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from skills.audit_fields import (
+    KNOWN_SOURCE_EXPECTATIONS,
     has_sufficient_followme_physical_evidence,
     is_followme_model,
     material_structured_authority_fields,
@@ -348,6 +349,54 @@ def _followme_variant_authority_conflict_is_photo_local(
     )
 
 
+def _owned_single_model_authority_conflict_is_photo_local(
+    reasons: Iterable[Any], record: Mapping[str, Any] | None
+) -> bool:
+    """Keep one photo's missing structured model inside its three-call budget.
+
+    A narration-only model must never refill an explicitly empty structured
+    field.  When the same response still proves a single-unit candidate with a
+    unique main subject and an owned label, however, the omission is ordinary
+    same-photo content uncertainty rather than evidence
+    of cross-photo memory or request contamination.  Independent calls may
+    therefore settle the photo, or conservatively leave the model empty after
+    call three, without stopping unrelated photos in the batch.
+    """
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    value = dict(record or {})
+    view_type = str(value.get("view_type") or value.get("category") or "").strip()
+    price = value.get("price")
+    complete_screen_count = value.get("complete_screen_count")
+    return bool(
+        normalized == {"structured_authority_material_conflict:model"}
+        and view_type == "單機"
+        and value.get("model") in (None, "")
+        and (price in (None, "") or not absurd_price_reason(price))
+        and isinstance(complete_screen_count, int)
+        and 1 <= complete_screen_count <= 3
+        and value.get("unique_main") is True
+        and value.get("label_ownership") == "matched"
+    )
+
+
+def _known_pixel_content_conflict_is_photo_local(
+    reasons: Iterable[Any], record: Mapping[str, Any] | None
+) -> bool:
+    """Contain only pixel-bound expectation/model conflicts to one photo."""
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    value = dict(record or {})
+    image_hash = str(value.get("input_image_sha256") or "").strip().lower()
+    allowed = {
+        "known_source_expectation_conflict",
+        "structured_authority_material_conflict:model",
+    }
+    return bool(
+        "known_source_expectation_conflict" in normalized
+        and normalized <= allowed
+        and image_hash in KNOWN_SOURCE_EXPECTATIONS
+    )
+
+
 def first_pass_content_conflict_can_retry(
     attempt: int,
     reasons: Iterable[Any],
@@ -358,13 +407,18 @@ def first_pass_content_conflict_can_retry(
     A first-pass FollowMe/view inconsistency gets one fresh look. A narration-
     only FollowMe evidence conflict may also receive pass 3 because the result
     remains non-verifiable and a later independent pass can safely adjudicate
-    the single photo. A model-authority conflict is also photo-local only when
-    the same pass proves a single FollowMe fixture and leaves the variant null.
-    Other model, price, prompt, UI, and binding defects still fuse.
+    the single photo. A model-authority conflict is also photo-local when the
+    same pass proves an owned single-unit price but leaves the structured model
+    null; FollowMe fixture evidence is one supported subset of that rule.
+    Price, prompt, UI, and binding defects still fuse.
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
     current_attempt = int(attempt or 1)
-    if _followme_variant_authority_conflict_is_photo_local(normalized, record):
+    if (
+        _followme_variant_authority_conflict_is_photo_local(normalized, record)
+        or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
+        or _known_pixel_content_conflict_is_photo_local(normalized, record)
+    ):
         return current_attempt in {1, 2}
     if normalized == {"known_source_expectation_conflict"}:
         return current_attempt in {1, 2}
@@ -383,7 +437,11 @@ def final_content_conflict_can_isolate(
 ) -> bool:
     """End one bounded same-photo conflict as unresolved after pass three."""
     normalized = {str(reason) for reason in reasons if str(reason)}
-    if _followme_variant_authority_conflict_is_photo_local(normalized, record):
+    if (
+        _followme_variant_authority_conflict_is_photo_local(normalized, record)
+        or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
+        or _known_pixel_content_conflict_is_photo_local(normalized, record)
+    ):
         return int(attempt or 1) >= 3
     if normalized == {"known_source_expectation_conflict"}:
         return int(attempt or 1) >= 3

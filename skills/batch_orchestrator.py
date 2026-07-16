@@ -484,6 +484,9 @@ class BatchOrchestrator:
             "requires_structured_retry": result.get("requires_structured_retry") is True,
             "model_validation_failed": result.get("model_validation_failed") is True,
             "price_conflict_detected": result.get("price_conflict_detected") is True,
+            "official_price": result.get("official_price"),
+            "price_diff_percent": result.get("price_diff_percent"),
+            "price_status": result.get("price_status"),
             "brand_evidence_conflict": result.get("brand_evidence_conflict") is True,
             "thinking": str(result.get("thinking") or "")[:1200],
             "reasons": list(reasons),
@@ -1935,6 +1938,8 @@ class BatchOrchestrator:
                 )
                 norm_result["runtime_health"] = runtime_health.to_dict()
                 runtime_health_force_unresolved = False
+                can_retry_conflict = False
+                can_isolate_conflict = False
                 if not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
                     can_retry_conflict = first_pass_content_conflict_can_retry(
@@ -1951,8 +1956,8 @@ class BatchOrchestrator:
                         norm_result["runtime_health"]["contained_for_stateless_retry"] = True
                         norm_result["runtime_health_contained_reasons"] = list(runtime_health.reasons)
                         self.log_system(
-                            "⚠️ [內容健康閘] 本張 FollowMe 證據矛盾已隔離；"
-                            "只允許同張照片完成最多三輪無記憶複核。"
+                            "⚠️ [內容健康閘] 本張內容證據矛盾已限制於同一照片；"
+                            "只允許完成最多三輪無記憶複核。"
                         )
                     elif can_isolate_conflict:
                         runtime_health_force_unresolved = True
@@ -1961,8 +1966,8 @@ class BatchOrchestrator:
                         norm_result["thinking"] = runtime_health.display_narration
                         norm_result["narration"] = runtime_health.display_narration
                         self.log_system(
-                            "⚠️ [內容健康閘] 同張照片第三輪仍有敘述／證據矛盾；"
-                            "已固定隔離待最終裁決，主批次繼續。"
+                            "⚠️ [內容健康閘] 同張照片第三輪仍有內容差異；"
+                            "正在依三輪安全證據自動定案，主批次繼續。"
                         )
                     else:
                         self._persist_runtime_health_fuse(
@@ -1988,6 +1993,20 @@ class BatchOrchestrator:
                         previous_results,
                         self.max_auto_attempts,
                     ) or review_decision
+                if can_retry_conflict:
+                    # This is a same-photo content vote, not a transport or
+                    # binding failure. Preserve it in the bounded business-pass
+                    # history so the three-pass finalizer can compare clean,
+                    # stateless evidence instead of losing every prior vote.
+                    review_decision["technical_retry_required"] = False
+                    review_decision["retry"] = True
+                    review_decision["unresolved"] = False
+                    review_decision["verified"] = False
+                elif can_isolate_conflict:
+                    review_decision["technical_retry_required"] = False
+                    review_decision["retry"] = False
+                    review_decision["unresolved"] = True
+                    review_decision["verified"] = False
                 review_decision = finalize_three_pass_outcome(
                     norm_result,
                     previous_results,

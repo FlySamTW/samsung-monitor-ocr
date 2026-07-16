@@ -56,6 +56,34 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(final_content_conflict_can_isolate(2, reasons))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons))
 
+    def test_known_pixel_and_local_model_omission_remain_one_content_event(self):
+        from skills.audit_fields import KNOWN_SOURCE_EXPECTATIONS
+
+        image_hash = next(iter(KNOWN_SOURCE_EXPECTATIONS))
+        candidate = record(
+            view_type="單機",
+            model=None,
+            price="2390",
+            complete_screen_count=1,
+            unique_main=True,
+            label_ownership="matched",
+            input_image_sha256=image_hash,
+        )
+        reasons = [
+            "known_source_expectation_conflict",
+            "structured_authority_material_conflict:model",
+        ]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, candidate))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, candidate))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons, candidate))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, candidate))
+
+        self.assertFalse(
+            first_pass_content_conflict_can_retry(
+                1, reasons + ["prompt_contamination"], candidate
+            )
+        )
+
     def test_negated_followme_black_short_stand_and_tray_does_not_trip_fuse(self):
         narration = (
             "我看到前景一台直立螢幕，正下方有黑色短支架與託盤，"
@@ -437,9 +465,9 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(final_content_conflict_can_isolate(2, reasons, candidate))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons, candidate))
 
-    def test_unproven_model_authority_conflict_still_fuses_immediately(self):
+    def test_owned_single_model_omission_is_bounded_to_one_photo(self):
         reasons = ["structured_authority_material_conflict:model"]
-        weak = record(
+        owned_single = record(
             view_type="單機",
             model=None,
             price="12990",
@@ -448,19 +476,28 @@ class RuntimeHealthGateTests(unittest.TestCase):
             label_ownership="matched",
             followme_physical_evidence=[],
         )
-        self.assertFalse(first_pass_content_conflict_can_retry(1, reasons, weak))
-        self.assertFalse(final_content_conflict_can_isolate(3, reasons, weak))
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, owned_single))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, owned_single))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons, owned_single))
+        self.assertFalse(final_content_conflict_can_isolate(2, reasons, owned_single))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, owned_single))
 
-        missing_price = dict(weak)
+        three_screen_owned_single = dict(owned_single)
+        three_screen_owned_single["complete_screen_count"] = 3
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, three_screen_owned_single))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, three_screen_owned_single))
+
+        missing_price = dict(owned_single)
         missing_price["price"] = None
         missing_price["followme_physical_evidence"] = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
         ]
-        self.assertFalse(first_pass_content_conflict_can_retry(1, reasons, missing_price))
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, missing_price))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, missing_price))
 
         price_conflict = ["structured_authority_material_conflict:price"]
-        self.assertFalse(first_pass_content_conflict_can_retry(1, price_conflict, weak))
+        self.assertFalse(first_pass_content_conflict_can_retry(1, price_conflict, owned_single))
 
     def test_photo_local_runtime_incident_never_fuses_another_source(self):
         from skills.batch_orchestrator import BatchOrchestrator

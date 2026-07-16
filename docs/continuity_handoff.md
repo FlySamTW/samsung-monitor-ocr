@@ -423,3 +423,20 @@
 - `.28` 將原圖四邊接觸清單與 `左不完整 + 中央完整 + 右不完整 = 1` 寫入主提示、共同輸出契約及第二／三輪提示。守門擴充「左右兩側」措辭偵測，寬廣多螢幕但無可歸屬型號／價格／標籤／FollowMe 實體的單機票不得直接驗證，也不得供應一般單機多數。
 - `940` 與 `1528` 已用原始檔及實際模型輸入像素 SHA-256 加入人工回歸權威；前者不可驗證為遠景、後者不可驗證為單機。這只保護已人工確認像素，通用規則仍由提示與守門負責。
 - 針對性 evidence/finalizer/runtime-health 測試 159 項與完整 critical regressions 已通過。隔離實拍 run `20260716_221131_225238` 完成 `940 / 939 / 1528 / 1385 / 646` 五張、全部 verified、每張恰好三輪、revision `.28`、request/image binding 正確、前輪答案暴露與 prompt contamination 均為 0。`940` 最終為 `單機 / complete_screen_count=1 / S32FM803UC / 12900`；`1528`、`1385` 為遠景；`939` 保留 FollowMe；`646` 為普通單機。既有 Chrome 分頁已實際核對 50/50、自然語句與五張卡片；隔離結果未增加 Drive canonical receipt，正式總數仍為 `53,010`。恢復正式 202601 必須用 `restart=true` 丟棄 `.26` 的 37 張舊結果並從 `.28` 乾淨重跑。
+
+## 2026-07-17 04:56 `.33` 正式續跑與上傳恢復
+
+- 正式 636 因單張 model authority omission 被誤升級 fuse；637 是明確整排遠景，也因同類內容理由誤停。已把乾淨同圖 model omission 保存為最多三輪的內容票，不再當傳輸／綁定技術錯誤；真正的 prompt、prior-answer、cross-photo、request/image、price fault 仍 fail closed。
+- 兩次針對性測試與完整 critical regressions 通過；最終五張隔離 `1385/939/940/636/637` 為 5 verified、0 review、0 failed。636 完成三輪像素定案為 `單機/S24F332EAC/2390/count 2`；637 定案 `遠景/無型號/無價格`，無第 4 輪。
+- 正式 636 的跨程序 trace 為同 source/hash 的 call 1 與 3，持久狀態證明總呼叫已達 3；以綁定像素權威修復並於 04:43:48 上傳，沒有再叫模型。修復工具現為 enqueue-first，再原子寫回結果，並排除沒有 canonical period 的 smoke trace。
+- uploader 曾被死 PID 31224 的 stale lock 卡住；已歸檔 lock，只恢復既有 hidden uploader。`uploaded 81→105`、canonical `53,052→53,072`、pending 1，04:55:56 receipt 仍在前進。
+- 正式 OCR 04:56 為 `202601 131/1,500`、verified 131、review 0、failed 0、fuse inactive，正在太平-1099 第 2 輪；總盤仍 `65,331/150,321`、44/136、剩 84,990。複核不回灌初次辨識總盤，所以右上總數不會隨每張複核增加，子進度必須持續增加。
+- 既有 Chrome 分頁未新增；Dashboard asset `a5139e765ffdec30` 已自動同分頁刷新。header/status 在目前視窗寬度換列，總進度、資料匣與目前檔案可讀；主區既定半螢幕比例未改。
+- 完工日期：實測淨產能目標 `2026-09-06`；對長官保守承諾 `2026-10-31`。若再次出現停機日，下一個固定報告點必須用剩餘量／24 小時 verified 與 receipt 增量重新估算。
+
+## 2026-07-17 05:20 `.34` 現場跑歪攔截、修正與續跑
+
+- 內容抽查抓到 `太平-1105` 前兩輪把照片價牌 `7,490` 多插入一位成 `74,990`，舊定案錯用兩票多數。原圖、第三輪 JSON 與第三輪獨白均支持 `7,490`；已加入插入數字守門與完整影像 SHA 像素權威，修正結果為 `S27CG552EC / 7,490 / ↑` 並已重新上傳。
+- `太平-1099` 三輪後曾留下技術狀態；完整三輪證據實為一輪 `5台／無唯一主角` 加兩輪無型號無價格的整排陳列描述。已以 `three_pass_wide_scene_structural_consensus` 結案為遠景、無型號、無價格並排入上傳。
+- 修復工具已修正完整 `[1,2,3]` 被較短 `[2,3]` 尾端覆蓋的缺陷；正式後端在 idle boundary 以 hidden window 單次替換，既有 Chrome 分頁與主版面未改。
+- 續跑起點：202601 `140/1,500`、verified 140、review 0、failed 0、fuse inactive；stream uploaded 115、canonical 53,080、pending 0，最新 receipt 為修正後的 1105。量測日 `2026-09-06`、保守承諾 `2026-10-31` 不變。

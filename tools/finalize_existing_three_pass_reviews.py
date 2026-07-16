@@ -41,6 +41,7 @@ def _review_required(task: dict[str, Any]) -> bool:
 
 def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    source_grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     with trace_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             try:
@@ -51,7 +52,19 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
             run_id = str(row.get("run_id") or "")
             parsed = row.get("parsed_output") or {}
             if name and run_id and isinstance(parsed, dict):
-                grouped[(name, run_id)].append(dict(parsed))
+                item = dict(parsed)
+                item.setdefault("run_id", run_id)
+                item.setdefault("timestamp", row.get("timestamp"))
+                item.setdefault("source_item_id", row.get("source_item_id"))
+                # Finalization is an upload-producing repair. Trial/smoke
+                # traces intentionally have no canonical period and must never
+                # outrank the formal source merely because they are newer.
+                if not re.fullmatch(r"20\d{4}", str(item.get("period") or "")):
+                    continue
+                grouped[(name, run_id)].append(item)
+                source_id = str(item.get("source_item_id") or "")
+                if source_id:
+                    source_grouped[(name, source_id)].append(item)
 
     latest: dict[str, list[dict[str, Any]]] = {}
     for (name, _run_id), rows in grouped.items():
@@ -63,20 +76,45 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
         previous = latest.get(name)
         if previous is None or str(candidate[-1].get("timestamp") or "") >= str(previous[-1].get("timestamp") or ""):
             latest[name] = candidate
+
+    # A durable fuse may end one process after a call is consumed but before
+    # that call's trace append, then resume the exact same source at call 3.
+    # Join only the latest adjacent bound tail ending at call 3
+    # when source identity and full-image hash are identical; this cannot mix a
+    # smoke copy or an older photo revision into the recovery evidence.
+    for (name, _source_id), rows in source_grouped.items():
+        ordered = sorted(rows, key=lambda item: str(item.get("timestamp") or ""))
+        for index in range(len(ordered) - 1, 0, -1):
+            candidate = ordered[index - 1 : index + 1]
+            attempts = [int(item.get("ocr_attempt") or 0) for item in candidate]
+            hashes = {
+                str(item.get("input_image_sha256") or "").strip().lower()
+                for item in candidate
+            }
+            if attempts not in ([1, 3], [2, 3]) or "" in hashes or len(hashes) != 1:
+                continue
+            previous = latest.get(name)
+            if previous is None or (
+                str(candidate[-1].get("timestamp") or "")
+                > str(previous[-1].get("timestamp") or "")
+            ):
+                latest[name] = candidate
+            break
     return latest
 
 
 def _recover_known_authority_after_restart(
     current: dict[str, Any], calls: list[dict[str, Any]], meta: dict[str, Any]
 ) -> bool:
-    """Recover a missing attempt-1 trace without making a fourth model call.
+    """Recover one process-boundary missing trace without a fourth model call.
 
     The scheduler's persisted attempt numbers prove that attempt 1 occurred
     before the process-boundary restart.  Recovery is restricted to an exact
     human-audited image hash, clean bound attempts 2 and 3, and a stored
     three-call hard-limit result.  It never generalizes from a filename.
     """
-    if len(calls) != 2 or [int(item.get("ocr_attempt") or 0) for item in calls] != [2, 3]:
+    attempts = [int(item.get("ocr_attempt") or 0) for item in calls]
+    if len(calls) != 2 or attempts not in ([1, 3], [2, 3]):
         return False
     image_hash = str(current.get("input_image_sha256") or "").strip().lower()
     expected = KNOWN_SOURCE_EXPECTATIONS.get(image_hash)
@@ -94,26 +132,32 @@ def _recover_known_authority_after_restart(
             return False
         if item.get("prior_answer_exposed") is True or item.get("prompt_contamination") is True:
             return False
+    expected_view = expected["view_type"]
+    is_distant = expected_view == "遠景"
     current.update({
-        "view_type": expected["view_type"],
-        "category": expected["view_type"],
+        "view_type": expected_view,
+        "category": expected_view,
         "complete_screen_count": expected.get("complete_screen_count"),
-        "unique_main": expected["view_type"] == "單機",
+        "unique_main": not is_distant,
         "model": expected.get("model"),
         "price": expected.get("price"),
         "label_ownership": expected.get("label_ownership", "matched"),
         "followme_physical_evidence": [],
-        "screen_status": "正常",
+        "screen_status": "" if is_distant else "正常",
         "quality_issue": "無",
         "human_pixel_authority_applied": True,
         "human_pixel_authority_sha256": image_hash,
         "three_pass_adjudicated": True,
         "adjudication_rule": "three_call_known_pixel_authority_restart_recovery",
-        "restart_recovery_missing_attempt_one_trace": True,
+        "restart_recovery_missing_call_trace": True,
         "thinking": (
-            "三次模型呼叫已由持久化輪次計數完成；第 1 輪在停機邊界前未寫入 trace。"
-            f"依人工核對且綁定完整影像雜湊的像素事實定案為 {expected.get('model')}／"
-            f"{expected.get('price')} 元，沒有進行第 4 次呼叫。"
+            "三次模型呼叫已由持久化輪次計數完成；其中一輪在停機邊界前未寫入 trace。"
+            + (
+                "依人工核對且綁定完整影像雜湊的像素事實，定案為遠景、無型號、無價格，"
+                if is_distant
+                else f"依人工核對且綁定完整影像雜湊的像素事實定案為 {expected.get('model')}／{expected.get('price')} 元，"
+            )
+            + "沒有進行第 4 次呼叫。"
         ),
     })
     current["narration"] = current["thinking"]
@@ -227,23 +271,66 @@ def finalize_file(
             and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
             and existing_meta.get("adjudication_rule")
         )
-        if not _review_required(task) and not completed_current_adjudication:
-            continue
         name = _task_file_name(task)
         calls = groups.get(name) or []
+        known_pixel_repair = bool(
+            apply
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
+            and calls
+            and (
+                KNOWN_SOURCE_EXPECTATIONS.get(
+                    str(calls[-1].get("input_image_sha256") or "").strip().lower()
+                )
+                or {}
+            ).get("authority") == "human_audited_pixel_authority"
+        )
+        completed_current_adjudication = completed_current_adjudication or known_pixel_repair
+        if not _review_required(task) and not completed_current_adjudication:
+            continue
         if len(calls) not in {2, 3}:
             report.append({"file": name, "status": "unchanged", "reason": "bounded_call_evidence_missing"})
             continue
         current = dict(calls[-1])
-        recovered_restart_authority = _recover_known_authority_after_restart(
-            current, calls, existing_meta
-        )
-        recovered_clean_tail = False
-        if not recovered_restart_authority:
-            recovered_clean_tail = _recover_clean_single_tail_after_restart(
+        if completed_current_adjudication:
+            for field in (
+                "view_type", "model", "price", "complete_screen_count", "unique_main",
+                "label_ownership", "followme_physical_evidence", "followme_family_confirmed",
+                "three_pass_adjudicated", "adjudication_rule", "adjudication_summary",
+                "price_status", "price_symbol", "official_price", "price_diff_percent",
+                "evidence_guard_revision", "evidence_contract_valid", "ocr_attempt",
+                "auto_verified", "auto_review_required", "review_status", "auto_retry_reasons",
+                "technical_retry_required", "technical_retry_exhausted",
+            ):
+                if field in existing_meta:
+                    current[field] = existing_meta.get(field)
+            current["category"] = current.get("view_type")
+            decision = {
+                "attempt": 3,
+                "retry": False,
+                "unresolved": False,
+                "verified": True,
+                "reasons": [],
+            }
+        else:
+            recovered_restart_authority = _recover_known_authority_after_restart(
                 current, calls, existing_meta
             )
-        if (
+            recovered_clean_tail = False
+            if not recovered_restart_authority:
+                recovered_clean_tail = _recover_clean_single_tail_after_restart(
+                    current, calls, existing_meta
+                )
+        if completed_current_adjudication:
+            if apply_human_audited_pixel_authority(current, calls[:-1], 3):
+                current["three_pass_adjudicated"] = True
+                current["adjudication_rule"] = "three_call_known_pixel_authority_repair"
+                current["adjudication_summary"] = (
+                    "三輪獨立判讀已完成；依人工核對且以完整影像雜湊綁定的像素事實修正，"
+                    "沒有增加第 4 次模型呼叫。"
+                )
+        elif (
             recovered_restart_authority
             or recovered_clean_tail
             or apply_human_audited_pixel_authority(current, calls[:-1], 3)
@@ -336,11 +423,20 @@ def finalize_file(
         })
 
     if apply and finalized_rows:
-        _atomic_json(result_path, tasks)
         for row in finalized_rows:
-            queued = enqueue_finalized_result(row, output_dir=output_dir)
+            try:
+                queued = enqueue_finalized_result(row, output_dir=output_dir)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"finalized row queue failed for {row.get('file_name')}: "
+                    f"view={row.get('view_type')} category={row.get('category')}; {exc}"
+                ) from exc
             if queued is None:
                 raise RuntimeError(f"finalized row was not queued: {row.get('file_name')}")
+        # Queue first, then expose the durable completed result. Enqueue is
+        # idempotent, so a write failure can be retried without a half-complete
+        # verified row that never entered the upload stream.
+        _atomic_json(result_path, tasks)
     return report
 
 

@@ -577,3 +577,19 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - FollowMe: no off-frame base, no shelf rail as tray, no Smart Monitor family name as direct branding, and no white-pole-only proof.
 - When stream-upload pending is nonzero, verify the worker PID exists and receipts advance. Restart only that worker hidden when its status PID is stale; do not restart OCR or open a terminal/browser.
 - `restart=true` must delete/ignore the prior durable retry state and reset attempt/history/incident maps before the first call. A displayed pass number is never proof; audit the trace call sequence as `1,2,3`.
+
+## Revision `.33` local-content completion addendum (2026-07-17)
+
+- A sole structured model-authority omission on a request-bound, uncontaminated `單機` vote with a unique main subject, owned label and 1–3 complete screens is photo-local content uncertainty. Preserve calls 1/2 as business evidence and finish on call 3; do not stop unrelated photos. A missing price is an allowed truthful field, not a fuse.
+- A known-pixel expectation plus that same local model omission remains one photo-local event only when the exact input SHA-256 is in `KNOWN_SOURCE_EXPECTATIONS`. Any prompt, prior-answer, cross-photo, binding, price, or extra runtime reason remains batch-stopping.
+- The three-pass finalizer may use those local votes only for view structure. It never refills an explicit null model from narration. Wide 3+ row/wall evidence may finish distant; supported single identity fields require safe repeated evidence.
+- Process-boundary recovery may join only the latest exact-source/exact-image `1+3` or `2+3` trace tail with durable proof that three total calls were consumed and a matching pixel authority. Trial traces without `YYYYMM` are never upload candidates. No fourth call is permitted.
+- Repair tools enqueue first and write the verified result second. A dead stale upload-lock PID is archived, then only the hidden uploader resumes. Acceptance requires canonical receipts to advance while OCR continues.
+- Dashboard responsive wrapping may affect header/status only. It must keep the established half-screen preview/narration layout and accumulated right rail, while making total progress, folder, file, status and upload counters visible in the existing tab.
+
+## Revision `.34` drift-monitoring addendum (2026-07-17)
+
+- A live monitor must sample content, not only counters: compare the latest source pixels, all stateless pass values, final adjudication, and the actual queued/uploaded filename. Pause only the OCR runner at a safe boundary when a new wrong-result pattern appears; keep the dashboard service online.
+- A final zoom price may defeat an earlier two-pass value only for the bounded inserted-digit case: same model, current JSON and narration agree, ownership is matched, the longer value is one inserted digit away and over five times the official reference, while the photographed shorter value remains within three times. The official reference detects the typo but never replaces the photographed price.
+- One strong wide-scene structural vote (`3+`, no unique subject, no identity) plus two identity-free wide-scene narrations must finish as distant after call three. It must not create a slow-model or human queue.
+- Evidence repair always prefers a complete same-run `[1,2,3]` group over a shorter cross-process tail and may re-enqueue an exact pixel-authority correction idempotently without a fourth call.

@@ -1,7 +1,9 @@
 import copy
+import json
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -57,6 +59,129 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_final_zoom_price_wins_over_one_extra_digit_outlier(self):
+        history = [
+            make_pass("單機", "S27CG552EC", "74990", 1, True, "matched"),
+            make_pass("單機", "S27CG552EC", "74990", 3, True, "matched"),
+        ]
+        current = make_pass(
+            "單機",
+            "S27CG552EC",
+            "7490",
+            1,
+            True,
+            "matched",
+            official_price=4990,
+            price_status="high",
+            thinking="中央價牌清楚顯示價格 7,490 元。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["model"], "S27CG552EC")
+        self.assertEqual(current["price"], "7490")
+
+    def test_one_strong_wide_vote_settles_two_identity_free_weak_single_votes(self):
+        history = [
+            make_pass(
+                "單機", None, None, 5, False, "not_visible",
+                thinking="一整排多台完整螢幕，沒有唯一主角，也沒有可歸屬價牌。",
+            ),
+            make_pass(
+                "單機", None, None, 1, True, "not_visible",
+                thinking="一排螢幕陳列，無法鎖定唯一主角的規格與價格。",
+            ),
+        ]
+        current = make_pass(
+            "單機", None, None, 1, True, "matched",
+            thinking="一整排多台螢幕陳列，沒有自己的型號或價格。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_wide_scene_structural_consensus",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_restart_recovery_joins_exact_bound_calls_one_and_three(self):
+        from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
+
+        with TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.jsonl"
+            rows = []
+            for attempt, run_id, timestamp in (
+                (1, "run-a", "2026-07-17T03:35:00"),
+                (3, "run-b", "2026-07-17T04:00:00"),
+            ):
+                parsed = make_pass("單機", "S24F332EAC", "2390", 2, True, "matched")
+                parsed.update({
+                    "file_name": "sample-636.jpg",
+                    "source_item_id": "same-source",
+                    "period": "202601",
+                    "ocr_attempt": attempt,
+                    "timestamp": timestamp,
+                    "run_id": run_id,
+                })
+                rows.append({
+                    "file_name": "sample-636.jpg",
+                    "source_item_id": "same-source",
+                    "run_id": run_id,
+                    "timestamp": timestamp,
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            groups = _load_three_call_groups(trace)
+
+        self.assertEqual(
+            [item["ocr_attempt"] for item in groups["sample-636.jpg"]],
+            [1, 3],
+        )
+
+    def test_full_same_run_three_call_group_is_not_replaced_by_source_tail(self):
+        from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
+
+        with TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.jsonl"
+            rows = []
+            for attempt in (1, 2, 3):
+                parsed = make_pass("單機", None, None, attempt + 2, attempt == 1, "not_visible")
+                parsed.update({
+                    "file_name": "wide-1099.jpg",
+                    "source_item_id": "same-source",
+                    "period": "202601",
+                    "ocr_attempt": attempt,
+                    "timestamp": f"2026-07-17T05:00:0{attempt}",
+                    "run_id": "formal-run",
+                })
+                rows.append({
+                    "file_name": "wide-1099.jpg",
+                    "source_item_id": "same-source",
+                    "run_id": "formal-run",
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            groups = _load_three_call_groups(trace)
+
+        self.assertEqual(
+            [item["ocr_attempt"] for item in groups["wide-1099.jpg"]],
+            [1, 2, 3],
+        )
+
     def test_two_no_complete_screen_scenes_finalize_truthful_distant(self):
         history = [
             make_pass("遠景", None, None, 0, False, "not_visible"),
@@ -302,6 +427,29 @@ class ThreePassFinalizationTests(unittest.TestCase):
         current = copy.deepcopy(weak)
         result = finalize_three_pass_outcome(current, [copy.deepcopy(weak), copy.deepcopy(weak)], unresolved())
         self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "three_pass_wide_scene_structural_consensus")
+
+    def test_local_model_omissions_still_vote_as_one_wide_scene(self):
+        def local_model_omission():
+            item = make_pass(
+                "單機", None, None, 3, True, "matched", healthy=False
+            )
+            item["thinking"] = "我看到一整排螢幕陳列，但沒有可安全歸屬的型號與價格。"
+            item["runtime_health"]["reasons"] = [
+                "structured_authority_material_conflict:model"
+            ]
+            return item
+
+        history = [local_model_omission(), local_model_omission()]
+        current = local_model_omission()
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
         self.assertEqual(result["adjudication_rule"], "three_pass_wide_scene_structural_consensus")
         self.assertEqual(current["view_type"], "遠景")
         self.assertGreaterEqual(current["complete_screen_count"], 3)

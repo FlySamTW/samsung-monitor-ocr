@@ -147,19 +147,24 @@ Error generating stack: `+i.message+`
             min-width: 380px !important;
           }
         }
-        @media (max-width: 1200px) {
+        @media (max-width: 2400px) {
           .app-header {
             height: auto !important;
-            min-height: 50px;
-            flex-wrap: wrap;
-            gap: 8px;
+            min-height: 82px !important;
+            grid-template-columns: minmax(0, 1fr) max-content !important;
+            column-gap: 12px !important;
+            row-gap: 4px !important;
             padding: 8px 12px !important;
+            box-sizing: border-box !important;
           }
           .status-grid {
             grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
           }
         }
         @media (max-width: 720px) {
+          .app-header {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
           .app-header > div:last-child {
             width: 100%;
             justify-content: space-between;

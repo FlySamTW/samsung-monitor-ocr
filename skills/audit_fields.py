@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.33"
+EVIDENCE_GUARD_REVISION = "20260717.34"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -26,6 +26,17 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "0680a827a5eefbeec760623b95af4168f7a3cabeecbbd308dad555ceb8372aab": {
+        "source_file_sha256": "ed5249e763a344f0f0f5a65b45f86e61a684b3ddcf05e446288a293ce4aca486",
+        "input_image_sha256": "c174354dbc356c7e08513c56bd7ae2e9544dac6b77c2fa3d867b065ecb7f92bb",
+        "view_type": "單機",
+        "complete_screen_count": 2,
+        "model": "S24F332EAC",
+        "price": 2390,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "cd3f7a452e787ae005d139cfbb6444dea3c1919073f8cf38f1ce5c1561ebf641": {
         "source_file_sha256": "1b20ebe7b25f056524524b57e23339e00b270920102f3c18971e688071f1b1dd",
         "input_image_sha256": "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7",
@@ -121,6 +132,28 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "model": "S27D300GAC",
         "price": 3090,
         "label_ownership": "matched",
+        "authority": "human_audited_pixel_authority",
+    },
+    "a3c5119998c265c0410ff70cce805f2e6271664288504f16c400ae7cfa41097b": {
+        "source_file_sha256": "b06ba3f1a2501c2082a71f0829e80dfd22ced9f541ca70006094b7b258e6bdf8",
+        "input_image_sha256": "33b18f2d3b78cf9f795914c3ab88f8dc16a02f304915552170d856852f31e15e",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27CG552EC",
+        "price": 7490,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "2abc20e98d8f0299f7f316bfa4acee46d236df5417ae8634012bcb908dc950c0": {
+        "source_file_sha256": "ee5a0fce4386df761621e2db51919dbf582d24f6aca648210ecf61f1ab5dc70d",
+        "input_image_sha256": "a0babded44bfd832552f4930f58fd41ad16a435d8c3f351bdb28b9c860a40b8a",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
 }
@@ -230,17 +263,37 @@ def apply_human_audited_pixel_authority(
     record["label_ownership"] = expected.get("label_ownership", "matched")
     if expected.get("followme_physical_expected") is False:
         record["followme_physical_evidence"] = []
-    record["screen_status"] = "正常"
+    record["screen_status"] = "" if expected["view_type"] == "遠景" else "正常"
     record["quality_issue"] = "無"
+    expected_count = expected.get("complete_screen_count")
+    if expected["view_type"] == "遠景":
+        record["thinking"] = (
+            "我看到賣場寬景中至少三台完整螢幕與多組不同價牌，沒有唯一主角，"
+            "也沒有可歸屬於同一主體的型號與價格。所以……這張依三次獨立呼叫與"
+            "已綁定原圖像素權威定案為遠景、無型號、無價格。"
+        )
+        record["narration"] = record["thinking"]
+        valid, _errors, normalized = validate_evidence_contract(record)
+        if not valid:
+            return False
+        record["normalized_evidence"] = normalized
+        return True
+    if expected_count == 1:
+        pixel_summary = "原圖中央只有一台完整主角螢幕，其他邊緣螢幕不完整而不計入"
+    else:
+        pixel_summary = (
+            f"原圖共有 {expected_count} 台完整螢幕，中央螢幕仍有自己空間對齊的價牌與唯一商品主角"
+        )
     record["thinking"] = (
-        f"我看到原圖中央只有一台完整主角螢幕，其同主體價牌可讀為 "
-        f"{expected.get('model')} 與 {expected.get('price')} 元，其他邊緣螢幕不完整而不計入。"
+        f"我看到{pixel_summary}；其同主體價牌可讀為 "
+        f"{expected.get('model')} 與 {expected.get('price')} 元。"
         "所以……這張依三次獨立呼叫與已綁定原圖像素權威定案為單機。"
     )
     record["narration"] = record["thinking"]
     for key in (
         "model_validation_failed", "price_conflict_detected", "brand_evidence_conflict",
         "requires_structured_retry", "frame_count_narration_conflict",
+        "structured_authority_blocked_fields",
     ):
         record.pop(key, None)
     record["human_pixel_authority_applied"] = True
@@ -1203,6 +1256,9 @@ def _adjudication_pass_has_base_integrity(
         isinstance(runtime, dict)
         and (
             runtime.get("healthy") is True
+            or runtime_reasons == {
+                "structured_authority_material_conflict:model"
+            }
             or (
                 allow_local_followme_conflict
                 and runtime_reasons
@@ -1267,6 +1323,52 @@ def _consensus_value(
     if votes < 2 or sum(1 for value in counts.values() if value == votes) != 1:
         return None
     return next(value for item_key, value in reversed(keyed) if item_key == key)
+
+
+def _prefer_final_zoom_price_over_extra_digit_outlier(
+    current: Dict[str, Any], consensus_model: Any, consensus_price: Any
+) -> Any:
+    """Use the final zoom read when a prior majority contains one extra digit.
+
+    The third business pass uses the strongest bottom-label crop.  If that pass
+    reads a price in its own narration/JSON, while the earlier majority differs
+    only by one inserted digit and is more than five times the official reference,
+    the longer value is an OCR concatenation, not independent price evidence.
+    This rule never substitutes the official price; it selects a value actually
+    read from the current photo.
+    """
+    current_model = normalize_model_token(current.get("model"))
+    consensus_model_key = normalize_model_token(consensus_model)
+    current_price = re.sub(r"\D", "", str(current.get("price") or ""))
+    majority_price = re.sub(r"\D", "", str(consensus_price or ""))
+    official_price = re.sub(r"\D", "", str(current.get("official_price") or ""))
+    narration_digits = re.sub(
+        r"\D", "", str(current.get("thinking") or current.get("narration") or "")
+    )
+    normalized = current.get("normalized_evidence") or current
+    if not (
+        current_model
+        and current_model == consensus_model_key
+        and current_price
+        and majority_price
+        and official_price
+        and current_price != majority_price
+        and normalized.get("label_ownership") == "matched"
+        and current_price in narration_digits
+        and len(majority_price) == len(current_price) + 1
+    ):
+        return consensus_price
+    if current_price not in {
+        majority_price[:index] + majority_price[index + 1 :]
+        for index in range(len(majority_price))
+    }:
+        return consensus_price
+    official = int(official_price)
+    if official <= 0:
+        return consensus_price
+    if int(majority_price) < official * 5 or int(current_price) > official * 3:
+        return consensus_price
+    return current.get("price")
 
 
 def finalize_three_pass_outcome(
@@ -1494,7 +1596,7 @@ def finalize_three_pass_outcome(
             and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
             and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
             for item in base_integrity
-        ) >= 2
+        ) >= 1
         and all(_weak_single_claim_in_wide_multiscreen_scene(item) for item in base_integrity)
     )
     if distant_majority:
@@ -1688,6 +1790,11 @@ def finalize_three_pass_outcome(
             # Never combine a model majority with a different price majority.
             model = None
             price = None
+        price = _prefer_final_zoom_price_over_extra_digit_outlier(
+            original_record,
+            model,
+            price,
+        )
         if rule == "two_pass_followme_physical_consensus" and len(
             {
                 (

@@ -715,3 +715,23 @@ Staged rerun finalization must fail closed on any `structured_narration_conflict
 ## Cross-photo semantic contamination checkpoint (revision `.16`)
 
 Every model JSON must echo the exact full 128-bit per-call `RequestID` in `request_id`. A missing identifier may receive only one pristine-image transport retry; a mismatched identifier is a runtime-health failure and trips the durable fuse. The final runtime-health gate must itself require `request_id_verified=true` and a 64-hex `input_image_sha256`; upstream code cannot merely claim it performed the check. The pipeline records the SHA-256 of the actual full-image payload so the trace can prove which bytes were sent. Separately, when two adjacent, distinct source identities produce the exact same model and price, regardless of whether the prior photo was verified or already review-required, the later photo can never be verified on pass 1. The suspicion marker must survive pass history, force all three stateless passes, and remain unresolved for human or heterogeneous-model review even when the same wrong core repeats. Two identical answers can never wash it clean. This duplicate-core signal is guard-only and is never exposed to the model. This is a drift detector, not a progress counter.
+
+## 2026-07-17 `.33` 同張內容收斂、斷點修復與持續上傳
+
+- `structured_authority_material_conflict:model` 若是唯一健康理由，且同張回應仍證明 `單機 + unique_main=true + label_ownership=matched + complete_screen_count 1..3`，屬同張內容不確定，不是跨照片記憶污染。第 1、2 次必須保存為同圖無記憶內容票，第 3 次交由三輪定案器；不得升級為整批 fuse。價格可缺，但若存在必須通過荒謬價格檢查。
+- 已綁定人工像素權威時，`known_source_expectation_conflict + structured_authority_material_conflict:model` 可視為同一個照片本地事件，前提是完整影像 SHA-256 精確命中權威。提示污染、前輪答案暴露、request/image 綁定錯誤、價格衝突或任何額外理由仍立即 fail closed。
+- 三輪定案器可把上述本地 model omission 當作結構票，但永遠不得用 narration 回填明示為空的 model。三張寬景結構票若都為 3+、無型號／無價格且敘述為整排／展示牆，可定案為 `遠景／無型號／無價格`；單機只保留至少兩輪安全支持的欄位。
+- 程序邊界若已消耗三次呼叫但遺失其中一筆 trace，只可在相同 `source_item_id`、相同完整影像 SHA-256、最新相鄰 trace 為 `1+3` 或 `2+3`、結果檔保存 `three_call_hard_limit_reached`，且像素權威精確命中時修復；不得第 4 次呼叫。沒有 canonical `YYYYMM` period 的 smoke trace 不得壓過正式 trace。
+- 既有三輪修復必須先以冪等方式排入逐張上傳，再原子寫回 verified 結果；禁止先寫 verified 後因 enqueue 失敗留下半完成狀態。
+- 串流上傳若 pending 增加但 receipt 不動，必須核對 lock PID。PID 已不存在時將 stale lock 歸檔後只恢復 uploader，不重啟 OCR。驗收需看到 `uploaded/canonical/last_uploaded_at` 實際前進。
+- 現行 Chrome 既有分頁在縮放後有效寬度下，header/status 於 `max-width:2400px` 換成兩欄兩列，確保總進度、目前資料匣、目前檔案與執行狀態可見；主預覽、LLM 自言自語與右側累積卡片的既定半螢幕比例不得改動。
+- 2026-07-17 04:56 正式證據：`202601 131/1,500`、verified 131、review 0、failed 0、fuse inactive；逐張上傳 `81→105`、canonical `53,052→53,072`、pending 1，最近上傳時間 04:55:56。636 已定案並上傳為 `單機-S24F332EAC-✓＄2390`，637 已在隔離驗收定案為遠景。
+- 完工估算固定公開兩層：依目前可持續淨產能約 1,666 張／日，84,990 張剩餘量的實測目標日為 `2026-09-06`；對長官保守承諾日為 `2026-10-31`。任何停機日都必須重算，不得只回報「持續執行中」。
+
+## 2026-07-17 `.34` 內容跑歪監控與三輪必結案
+
+- 監控不得只看張數。正式批次每個檢查點都要抽查最新照片、三輪原始價格、結構欄位、最終定案與實際上傳檔名；發現錯誤要在污染更多照片前停在安全邊界，介面服務仍保持在線。
+- 三輪最後一次使用最強價牌放大。若前兩輪價格只因多插入一個數字而形成錯誤多數、第三輪 JSON 與同輪獨白一致、價牌歸屬 matched，且長值相對官方參考價超過五倍而短值仍在三倍內，採第三輪照片實讀值；官方價只用來辨識多字錯誤，不得覆寫照片價格。`太平-1105` 永久回歸為 `S27CG552EC / 7,490 / ↑`，不是 `74,990`。
+- 同圖三輪若一輪明確給出 `3+` 完整螢幕、`unique_main=false`、無可歸屬型號與價格，其餘兩輪也只是描述整排／展示牆且沒有身分欄位，必須在第三輪結案為遠景；不得留下慢模型、人工裁決或技術待辦。`太平-1099` 永久回歸為遠景、無型號、無價格。
+- 修復工具不得用同來源的兩筆 `[2,3]` 尾端覆蓋同一正式 run 已存在的完整 `[1,2,3]` 證據。已完成但被新版像素權威更正的列可冪等重新排入逐張上傳，不增加第 4 次模型呼叫。
+- 續跑證據：`140/1,500`、verified 140、review 0、failed 0、fuse inactive；修正後 `1105` 已以 `↑$7,490` 上傳。完成日基準仍為量測 `2026-09-06`、保守承諾 `2026-10-31`。
