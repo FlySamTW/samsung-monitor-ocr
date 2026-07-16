@@ -90,7 +90,7 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('data-testid="result-card" data-presentation-id={res.presentation_id', app)
         self.assertIn('data-testid="inspection-modal" data-presentation-id={inspectImage.presentation_id', app)
         self.assertIn('data-testid="active-placeholder" data-presentation-id={pendingPanelResult.presentation_id', app)
-        self.assertIn('AI 即時判讀中', app)
+        self.assertIn('LLM 即時判讀中', app)
         self.assertNotIn('pendingPanelResult.model', app)
         self.assertNotIn('pendingPanelResult.price', app)
         for forbidden in (
@@ -203,9 +203,11 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('item.evidence_unresolved === true', unresolved)
         self.assertIn('item.auto_review_required === true', unresolved)
         self.assertIn('item.accepted === false', unresolved)
-        self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isExplicitlyUnresolved(res) ? "pending-review" : "completed"}', rail)
-        self.assertIn('三輪衝突／已隔離', rail)
-        self.assertIn('待慢模型或人工最終裁決', rail)
+        self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isTerminalTechnicalFailure(res) ? "technical-failure" : isExplicitlyUnresolved(res) ? "auto-finalizing" : "completed"}', rail)
+        self.assertIn('技術錯誤／該張未上傳', rail)
+        self.assertIn('系統修復後自動重跑', rail)
+        self.assertIn('第三輪已完成／自動定案中', rail)
+        self.assertIn('完成後立即排入逐張上傳', rail)
         self.assertIn("!isExplicitlyUnresolved(res) && res.view_type !== '遠景'", rail)
         self.assertIn('!isExplicitlyUnresolved(res) && res.view_type &&', rail)
 
@@ -223,9 +225,10 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('"verified": verified', backend)
         self.assertIn('"review_required": review_required', backend)
         self.assertIn('判讀記錄 ({stats.success})', app)
-        self.assertIn('待人工校正 ({stats.review_required ?? 0})', app)
+        self.assertNotIn('待人工校正 ({stats.review_required ?? 0})', app)
+        self.assertIn('自動定案紀錄', app)
         self.assertIn("{l:'完成判讀', v:stats.success", app)
-        self.assertIn("{l:'待裁決', v:stats.review_required ?? 0", app)
+        self.assertIn("{l:'自動定案中', v:stats.review_required ?? 0", app)
         self.assertNotIn('成功記錄 ({stats.success})', app)
 
     def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
@@ -300,10 +303,10 @@ class PresentationSoakTests(unittest.TestCase):
 
     def test_stale_guard_revision_cards_are_never_presented_as_accepted(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('const CURRENT_GUARD_REVISION = "20260716.19"', app)
+        self.assertIn('const CURRENT_GUARD_REVISION = "20260716.21"', app)
         self.assertIn('const isStaleGuardRevision = (item)', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== CURRENT_GUARD_REVISION', app)
-        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : "三輪衝突／已隔離"', app)
+        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"', app)
 
     def test_result_rail_refuses_blank_run_identity(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
@@ -316,9 +319,9 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("const visibleNarrationSnapshot = liveStreamSnapshot", app)
         self.assertIn("const narrationAnimationOwnsDisplay", app)
         self.assertIn('displayTargetKey === visibleNarrationKey', app)
-        self.assertIn('displayedBuffer || "正在接收本張照片的 AI 判讀文字..."', app)
+        self.assertIn('displayedBuffer || "正在接收本張照片的 LLM 判讀文字..."', app)
         self.assertIn('data-narration-source={visibleNarrationKey}', app)
-        self.assertIn("AI 判讀內容 · {narrationStatusLabel}", app)
+        self.assertIn("LLM 判讀內容 · {narrationStatusLabel}", app)
         self.assertIn("!isRunning && visibleNarrationSnapshot?.text", app)
 
     def test_idle_dashboard_uses_latest_completed_history_without_fake_live_state(self):

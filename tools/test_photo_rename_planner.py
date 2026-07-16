@@ -127,8 +127,8 @@ def test_unresolved_three_pass_result_is_blocked():
         row = sample_row()
         row["auto_review_required"] = "true"
         plan = make_plan(image_dir, {image_path.name: row}, "202605", "＄", current_year=2026)
-    assert_equal(plan[0]["status"], "review_required", "三輪未決不得進改名/上傳")
-    if "三輪後" not in plan[0]["reason"]:
+    assert_equal(plan[0]["status"], "review_required", "技術未決不得進改名/上傳")
+    if "尚未完成自動定案" not in plan[0]["reason"]:
         raise AssertionError(plan[0])
 
 

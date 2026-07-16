@@ -1,0 +1,224 @@
+import copy
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from skills.audit_fields import EVIDENCE_GUARD_REVISION, finalize_three_pass_outcome, validate_evidence_contract
+
+
+IMAGE_HASH = "a" * 64
+
+
+def make_pass(
+    view="單機",
+    model=None,
+    price=None,
+    count=1,
+    unique=True,
+    ownership="matched",
+    physical=None,
+    *,
+    healthy=True,
+    image_hash=IMAGE_HASH,
+    **extra,
+):
+    row = {
+        "view_type": view,
+        "category": view,
+        "model": model,
+        "price": price,
+        "complete_screen_count": count,
+        "unique_main": unique,
+        "label_ownership": ownership,
+        "followme_physical_evidence": list(physical or []),
+        "independent_pass": True,
+        "request_binding_enforced": True,
+        "request_id_verified": True,
+        "prior_answer_exposed": False,
+        "prompt_contamination": False,
+        "input_image_sha256": image_hash,
+        "runtime_health": {"healthy": healthy},
+        "thinking": f"模型原始判讀：{view}。",
+    }
+    row.update(extra)
+    return row
+
+
+def unresolved():
+    return {
+        "attempt": 3,
+        "retry": False,
+        "unresolved": True,
+        "verified": False,
+        "reasons": ["core_evidence_disagreement"],
+    }
+
+
+class ThreePassFinalizationTests(unittest.TestCase):
+    def test_two_no_complete_screen_scenes_finalize_truthful_distant(self):
+        history = [
+            make_pass("遠景", None, None, 0, False, "not_visible"),
+            make_pass("單機", None, None, 1, True, "ambiguous"),
+        ]
+        current = make_pass("遠景", None, None, 0, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_no_complete_screen_scene_consensus")
+        self.assertEqual(current["complete_screen_count"], 0)
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_one_or_two_complete_screens_still_cannot_claim_distant(self):
+        for count in (1, 2):
+            valid, errors, _normalized = validate_evidence_contract(
+                make_pass("遠景", None, None, count, False, "not_visible")
+            )
+            self.assertFalse(valid)
+            self.assertIn("distant_evidence_inconsistent", errors)
+
+    def test_single_then_two_distant_finalizes_truthful_distant(self):
+        history = [
+            make_pass("單機", "S27F612EAC", "5990", 3, True, "matched"),
+            make_pass("遠景", None, None, 3, False, "ambiguous"),
+        ]
+        current = make_pass("遠景", None, None, 3, False, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_distant_structural_consensus")
+        self.assertEqual(current["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+
+    def test_single_consensus_keeps_supported_model_price_pair(self):
+        history = [
+            make_pass(model="S27CG552EC", price="4990"),
+            make_pass(model="S27CG552EC", price="4990"),
+        ]
+        current = make_pass(model="S27CG552EC", price="6990")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["model"], "S27CG552EC")
+        self.assertEqual(current["price"], "4990")
+
+    def test_no_field_consensus_finishes_single_with_null_fields(self):
+        history = [
+            make_pass(model="S24A", price="3990"),
+            make_pass(model="S25B", price="4990"),
+        ]
+        current = make_pass(model="S26C", price="5990")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_model_and_price_majorities_cannot_form_unsupported_chimera(self):
+        history = [
+            make_pass(model="S24A", price="100"),
+            make_pass(model="S24A", price="200"),
+        ]
+        current = make_pass(model="S27B", price="200")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_two_strong_followme_passes_finalize_single_without_guessing_variant(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(model='FollowMe M7 32"', price="12990", physical=fixture),
+            make_pass(model='FollowMe M5 32"', price="11990", physical=fixture),
+        ]
+        current = make_pass(model='FollowMe M7 32"', price="12990", physical=fixture)
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], 'FollowMe M7 32"')
+        self.assertEqual(current["price"], "12990")
+
+    def test_any_technical_failure_requires_another_healthy_pass(self):
+        history = [
+            make_pass(healthy=False),
+            make_pass(model="S24A", price="3990"),
+        ]
+        current = make_pass(model="S24A", price="3990")
+        original = copy.deepcopy(current)
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["technical_retry_required"])
+        self.assertTrue(result["unresolved"])
+        self.assertFalse(result["verified"])
+        self.assertEqual(current, original)
+
+    def test_cross_photo_contamination_flag_cannot_be_voted_away(self):
+        history = [
+            make_pass(cross_photo_duplicate_core_suspected=True),
+            make_pass(),
+        ]
+        current = make_pass()
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["technical_retry_required"])
+        self.assertFalse(result["verified"])
+
+    def test_mixed_noncanonical_view_cannot_vote(self):
+        history = [
+            make_pass("單機", None, None, 1, True, "matched"),
+            make_pass("單機遠景", None, None, 3, False, "ambiguous"),
+        ]
+        current = make_pass("遠景", None, None, 3, False, "ambiguous")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["technical_retry_required"])
+        self.assertFalse(result["verified"])
+
+    def test_different_image_hashes_never_vote_together(self):
+        history = [make_pass(image_hash="a" * 64), make_pass(image_hash="b" * 64)]
+        current = make_pass(image_hash="a" * 64)
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["technical_retry_required"])
+        self.assertFalse(result["verified"])
+
+    def test_original_model_self_talk_is_preserved_for_audit(self):
+        history = [
+            make_pass("遠景", None, None, 3, False, "ambiguous"),
+            make_pass("遠景", None, None, 4, False, "not_visible"),
+        ]
+        current = make_pass("單機", "S27X", "5990", 1, True, "matched")
+        original_thinking = current["thinking"]
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["thinking"], original_thinking)
+        self.assertIn("系統", "系統" + current["adjudication_summary"])
+        self.assertIn("遠景", current["adjudication_summary"])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

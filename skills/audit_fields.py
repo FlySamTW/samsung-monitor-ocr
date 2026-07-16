@@ -1,5 +1,6 @@
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
@@ -10,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260716.19"
+EVIDENCE_GUARD_REVISION = "20260716.21"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -314,7 +315,10 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
     if view_type == "遠景":
         if count is None or unique is None:
             errors.append("distant_evidence_missing")
-        elif count < 3 or unique:
+        # A store/environment photo with no complete monitor is still a
+        # truthful no-model/no-price scene result.  Counts 1-2 remain unsafe
+        # as distant because they may contain a partially missed main unit.
+        elif (count != 0 and count < 3) or unique:
             errors.append("distant_evidence_inconsistent")
         if ownership == "matched":
             errors.append("distant_owned_label_conflict")
@@ -720,10 +724,11 @@ def immediate_retry_decision(
     if not contract["valid"]:
         reasons.extend(contract["reasons"])
     if "遠景" in view_type and contract["valid"]:
-        if not _distant_count_supported_by_narration(
+        zero_screen_scene = contract["normalized_evidence"].get("complete_screen_count") == 0
+        if (not zero_screen_scene and not _distant_count_supported_by_narration(
             thinking,
             contract["normalized_evidence"].get("complete_screen_count"),
-        ) or not _no_unique_main_evidence(thinking):
+        )) or not _no_unique_main_evidence(thinking):
             reasons.append("evidence_thinking_conflict")
 
     if view_type == "失敗" or str(record.get("category") or "") == "失敗":
@@ -857,4 +862,265 @@ def immediate_retry_decision(
         "evidence_contract_version": EVIDENCE_CONTRACT_VERSION,
         "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
         "normalized_evidence": contract["normalized_evidence"],
+    }
+
+
+def _adjudication_pass_is_usable(record: Dict[str, Any]) -> bool:
+    """Accept only independently bound, image-grounded passes for final voting."""
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    if view not in {"單機", "遠景"}:
+        return False
+    if record.get("independent_pass") is not True:
+        return False
+    if record.get("request_binding_enforced") is not True:
+        return False
+    if record.get("request_id_verified") is not True:
+        return False
+    if record.get("prior_answer_exposed") is True or record.get("prompt_contamination") is True:
+        return False
+    if record.get("cross_photo_duplicate_core_suspected") is True:
+        return False
+    if record.get("requires_structured_retry") is True:
+        return False
+    runtime = record.get("runtime_health") or {}
+    if not isinstance(runtime, dict) or runtime.get("healthy") is not True:
+        return False
+    valid, _errors, _normalized = validate_evidence_contract(record)
+    return valid
+
+
+def _technical_retry_outcome(outcome: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    return {
+        **outcome,
+        "retry": False,
+        "unresolved": True,
+        "verified": False,
+        "technical_retry_required": True,
+        "technical_retry_reason": reason,
+        "reasons": list(dict.fromkeys(list(outcome.get("reasons") or []) + [reason])),
+    }
+
+
+def _consensus_value(
+    records: List[Dict[str, Any]], field: str, normalizer
+) -> Any:
+    """Return a value only when at least two usable passes independently agree."""
+    keyed: list[tuple[str, Any]] = []
+    for item in records:
+        value = item.get(field)
+        key = str(normalizer(value) or "").strip()
+        if key:
+            keyed.append((key, value))
+    counts = Counter(key for key, _value in keyed)
+    if not counts:
+        return None
+    key, votes = counts.most_common(1)[0]
+    if votes < 2 or sum(1 for value in counts.values() if value == votes) != 1:
+        return None
+    return next(value for item_key, value in reversed(keyed) if item_key == key)
+
+
+def finalize_three_pass_outcome(
+    record: Dict[str, Any],
+    history: List[Dict[str, Any]] | None,
+    decision: Dict[str, Any] | None,
+    max_attempts: int = 3,
+) -> Dict[str, Any]:
+    """Turn a completed three-pass content disagreement into a truthful result.
+
+    Three passes are evidence collection, not a permanent discard bucket.  A
+    technical-integrity failure still remains blocked, but two or more healthy,
+    stateless, image-bound passes may establish the final view.  Model and price
+    are retained only with two-pass consensus; otherwise the truthful final value
+    is null.  This never invents an SKU or price and every original pass remains
+    in the evidence trace.
+    """
+    outcome = dict(decision or {})
+    attempt = int(outcome.get("attempt") or record.get("ocr_attempt") or 1)
+    if attempt < int(max_attempts or 3) or outcome.get("unresolved") is not True:
+        return outcome
+
+    # The third/current pass must itself be healthy.  Two older healthy answers
+    # never get to outvote a broken, unbound, or contaminated current request;
+    # that is a technical retry, not a content adjudication.
+    if not _adjudication_pass_is_usable(record):
+        return _technical_retry_outcome(outcome, "three_pass_current_integrity_invalid")
+
+    passes = (list(history or []) + [record])[-int(max_attempts or 3):]
+    usable = [item for item in passes if _adjudication_pass_is_usable(item)]
+    if len(passes) < int(max_attempts or 3) or len(usable) != len(passes):
+        return _technical_retry_outcome(outcome, "three_healthy_bound_passes_required")
+    image_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in usable
+    }
+    if "" in image_hashes or len(image_hashes) != 1:
+        return _technical_retry_outcome(outcome, "three_pass_input_hash_mismatch")
+
+    distant: list[Dict[str, Any]] = []
+    no_screen_distant: list[Dict[str, Any]] = []
+    multiscreen_distant: list[Dict[str, Any]] = []
+    single: list[Dict[str, Any]] = []
+    followme: list[Dict[str, Any]] = []
+    for item in usable:
+        view = str(item.get("view_type") or item.get("category") or "")
+        normalized = item.get("normalized_evidence") or item
+        count = normalized.get("complete_screen_count")
+        ownership = normalized.get("label_ownership")
+        strong_followme = has_sufficient_followme_physical_evidence(normalized)
+        if view == "單機":
+            single.append(item)
+        if strong_followme and (is_followme_model(item.get("model")) or view == "單機"):
+            followme.append(item)
+        if (
+            view == "遠景"
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and (count == 0 or count >= 3)
+            and normalized.get("unique_main") is False
+            and ownership != "matched"
+            and not strong_followme
+        ):
+            distant.append(item)
+            if count == 0:
+                no_screen_distant.append(item)
+            else:
+                multiscreen_distant.append(item)
+
+    if len(followme) >= 2:
+        final_view = "單機"
+        supporting = followme
+        rule = "two_pass_followme_physical_consensus"
+    elif len(no_screen_distant) >= 2:
+        final_view = "遠景"
+        supporting = no_screen_distant
+        rule = "two_pass_no_complete_screen_scene_consensus"
+    elif len(multiscreen_distant) >= 2:
+        final_view = "遠景"
+        supporting = multiscreen_distant
+        rule = "two_pass_distant_structural_consensus"
+    elif len(single) >= 2:
+        final_view = "單機"
+        supporting = single
+        rule = "two_pass_single_view_consensus"
+    else:
+        return _technical_retry_outcome(outcome, "three_pass_view_majority_missing")
+
+    original_record = dict(record)
+    original = {
+        "view_type": record.get("view_type"),
+        "model": record.get("model"),
+        "price": record.get("price"),
+        "thinking": str(record.get("thinking") or record.get("narration") or ""),
+    }
+    pass_summaries = [
+        {
+            "attempt": index + 1,
+            "view_type": item.get("view_type") or item.get("category"),
+            "model": item.get("model"),
+            "price": item.get("price"),
+            "complete_screen_count": (item.get("normalized_evidence") or item).get("complete_screen_count"),
+            "unique_main": (item.get("normalized_evidence") or item).get("unique_main"),
+            "label_ownership": (item.get("normalized_evidence") or item).get("label_ownership"),
+        }
+        for index, item in enumerate(passes)
+    ]
+
+    record["view_type"] = final_view
+    record["category"] = final_view
+    if final_view == "遠景":
+        counts = [
+            int((item.get("normalized_evidence") or item).get("complete_screen_count"))
+            for item in supporting
+            if isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
+            and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
+        ]
+        record["model"] = None
+        record["price"] = None
+        record["complete_screen_count"] = 0 if rule == "two_pass_no_complete_screen_scene_consensus" else max(3, min(counts) if counts else 3)
+        record["unique_main"] = False
+        record["label_ownership"] = "ambiguous"
+        record["followme_physical_evidence"] = []
+        result_text = "遠景，無型號，無價格"
+    else:
+        field_safe = [
+            item for item in supporting
+            if item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+        ]
+        model = _consensus_value(
+            field_safe,
+            "model",
+            lambda value: followme_identity_key(value) or normalize_model_token(value),
+        )
+        price = _consensus_value(
+            field_safe,
+            "price",
+            lambda value: re.sub(r"[^0-9]", "", str(value or "")),
+        )
+        pair_votes: list[tuple[str, str]] = []
+        for item in field_safe:
+            model_key = followme_identity_key(item.get("model")) or normalize_model_token(item.get("model"))
+            price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+            pair_votes.append((str(model_key or ""), price_key))
+        pair_counts = Counter(pair_votes)
+        exact_pair_supported = any(
+            count >= 2
+            and model_key == str((followme_identity_key(model) or normalize_model_token(model)) or "")
+            and price_key == re.sub(r"[^0-9]", "", str(price or ""))
+            for (model_key, price_key), count in pair_counts.items()
+        )
+        if model and price and not exact_pair_supported:
+            # Never combine a model majority with a different price majority.
+            model = None
+            price = None
+        matched_votes = sum(
+            (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+            for item in supporting
+        )
+        if matched_votes < 2:
+            model = None
+            price = None
+        record["model"] = model
+        record["price"] = price
+        record["unique_main"] = True
+        record["label_ownership"] = "matched" if matched_votes >= 2 else "ambiguous"
+        if rule == "two_pass_followme_physical_consensus":
+            record["followme_physical_evidence"] = list(
+                (supporting[-1].get("normalized_evidence") or supporting[-1]).get(
+                    "followme_physical_evidence"
+                )
+                or []
+            )
+        result_text = f"單機，{model or '無型號'}，{price or '無價格'}"
+
+    record["three_pass_adjudicated"] = True
+    record["adjudication_rule"] = rule
+    record["adjudication_original_current"] = original
+    record["adjudication_pass_summaries"] = pass_summaries
+    record["adjudication_summary"] = (
+        f"三輪證據已完成交叉核對，依固定實體證據規則定案為：{result_text}。"
+        "型號或價格若沒有至少兩輪一致證據，維持無型號／無價格，不做猜測。"
+    )
+    record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+    final_valid, _final_errors, normalized = validate_evidence_contract(record)
+    if not final_valid:
+        record.clear()
+        record.update(original_record)
+        return _technical_retry_outcome(outcome, "adjudicated_result_contract_invalid")
+    record["normalized_evidence"] = normalized
+
+    return {
+        **outcome,
+        "retry": False,
+        "unresolved": False,
+        "verified": True,
+        "reasons": [],
+        "recommended_model": "",
+        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+        "normalized_evidence": record["normalized_evidence"],
+        "three_pass_adjudicated": True,
+        "adjudication_rule": rule,
+        "superseded_reasons": list(outcome.get("reasons") or []),
     }

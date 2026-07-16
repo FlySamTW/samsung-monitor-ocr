@@ -4,6 +4,17 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 
 # SAMSUNG_OCR_EXPERIENCE (Project Bible)
 
+## Revision `.21` per-photo completion rule (2026-07-16, supersedes older review-isolation text)
+
+- Every content photo finishes with one truthful result: `遠景`, or `單機` with model+price, model only, price only, or neither.  Missing model/price is data, not a reason to abandon the photo.
+- A no-complete-screen scene (`count=0`, no unique main, no owned label, no strong FollowMe fixture) may finalize as `遠景／無型號／無價格` with two usable votes.  Counts 1-2 remain unsafe as distant because they may hide a partial main unit.
+- Round 2 and round 3 must receive only the fixed rules and the current pristine image.  Never expose a prior answer, correction, prior model/price, retry prose, or a previous photo to the model.
+- After three usable, independently bound same-image passes, `finalize_three_pass_outcome` makes the bounded evidence decision.  View needs two usable votes.  Model and price each need two field-safe votes; never construct a model/price pair that no two passes jointly supported.  FollowMe requires two passes with sufficient same-subject physical evidence and may not guess an unsupported variant.
+- Content uncertainty never becomes `三輪衝突／已隔離`, never waits for a slow model or unspecified person, and never blocks upload.  Only request/image binding failure, prior-answer or prompt contamination, cross-photo drift, invalid runtime/evidence output, changed source bytes, or failed Drive readback is a technical stop for that photo.
+- On every finalized result, atomically enqueue one `_drive_upload_stream` job.  The hidden single worker uploads that photo while OCR continues.  Exact same-name stale remote content is replaced in place, `_2` is forbidden, and no receipt is written until unique size+MD5 readback succeeds.
+- Price symbols compare the observed store price with the reliable Samsung/PChome reference: `↑` higher, `↓` lower, `✓` equal, `?` no reliable reference.  Preserve that symbol in the deterministic output name.
+- Dashboard copy is fixed: `第三輪已完成／自動定案中` and `完成後立即排入逐張上傳`.  Never show slow-model, manual-adjudication, isolation, or "will not upload" wording for ordinary content results.
+
 ## Presentation identity iron rules
 
 Dashboard asset freshness is also a presentation invariant: `/api/status`
@@ -30,7 +41,7 @@ file, recent results, index, or filename joins.
   `recent_results` nor `current_file` may enter presentation as fallback.
 - Keep the previous image until the next image is loaded; never blank the main
   preview during a normal transition.
-- Visible copy uses `AI`, never `LLM` or `自言自語`.
+- The fixed operator label is `LLM 判讀內容`; the visible body must be the current model's readable narration, never bare JSON, mojibake, backend-generated fake thinking, or another photo's text.
 - Every presentation change requires the 500-item soak, dashboard build, and
   live 3-transition browser verification. Preserve `logs/ui_sync_v1944_live.*`.
 
@@ -289,13 +300,13 @@ Use this section when taking over the Samsung OCR overnight job.
 
 - Upload destination is the user's shared Drive folder. Use year-only child folders (`2026`, `2025`, ...); do not create month folders.
 - Run `tools/prepare_drive_upload_manifest.py` against `D:\00_商化\00_已OCR照片` before each upload batch.
-- Upload only `ready` rows staged under `_drive_upload\staging`. Rows in `_drive_upload\drive_upload_review_required.csv` must be rerun or reviewed first; filenames containing `無型號` are not safe for Drive.
+- Legacy bulk upload accepts only `ready` rows staged under `_drive_upload\staging`.  The `.21` per-photo stream separately accepts every verified truthful result, including `遠景` and filenames containing `無型號` or `無價格`.
 - Upload manifests are newest-period first, so the unattended uploader should send `2026` before `2025` before `2024`.
 - After each successful upload, append the exact Drive-returned file name and ID to `_drive_upload\drive_upload_uploaded.csv`, then rerun the manifest. This is the resume guard and prevents duplicate uploads.
 
 ### Manual review panel rule
 
-- The dashboard `待人工校正` drawer reads `_drive_upload\drive_upload_review_required.csv` and is the user-facing inbox for blocked Drive rows.
+- The old manual-correction drawer is not part of the `.21` operator workflow and must not appear in the dashboard.  Technical failures are shown explicitly and retried after repair.
 - Do not place this queue inside the normal boss-facing monitor. It should stay behind the toolbar button so the live OCR view remains clean.
 - `記錄` writes `_ocr_audit\manual_corrections.csv`; `學規則` writes `_ocr_audit\manual_learning_rules.csv`; `標記重跑需求` records that another safe candidate CSV must be generated before rerun.
 - Treat `manual_corrections.csv` as authoritative human feedback for later repair/export scripts. Do not upload a row that is still only in review unless a follow-up script has rebuilt a safe filename and the manifest marks it `ready`.
@@ -421,7 +432,7 @@ The sample CSV is not a rerun list. It includes high-risk rows and a determinist
 - Resume 2026 before older years. v19.36 pass3 completed `202605`; continue `202604`, `202603`, `202602`, then `202601` from `_ocr_audit\current_year_distant_and_risk_v1936_pass3_selected_20260709_1605.csv`.
 - Current-year `遠景` is not automatically trusted. Re-audit with `tools\audit_distant_followme_risk.py`, rebuild upload manifest, and upload only ready rows.
 - `tools\rerun_staged_candidates.py` is disk-safe by default and should not create huge flat-output backups unless `--keep-flat-output-backup` is explicitly requested.
-- Never upload `review_required` rows. Last pause snapshot: `ready_pending=0`, `uploaded_skipped=52122`, `review_required=13424`.
+- Never upload a technical-integrity failure.  Ordinary three-pass content uncertainty is finalized conservatively by `.21`, not converted into a permanent `review_required` row.
 
 ## 2026-07-08 FollowMe Risk Rerun Waiter
 
@@ -459,7 +470,7 @@ Benchmark manifest 必須是 v2：它固定 labels、每張原圖、case ID/tag/
 採用候選模型前，先要求整體 exact/field accuracy 改善或至少不退步；遠景、FollowMe、型號幻覺等危險錯誤率全部不得退步。latency 只作 accuracy 通過後的次順位，不得用速度掩蓋辨識退化。InternVL 只有在本機下載完成並通過完整性檢查後才列入執行候選。
 ## v19.45 Evidence Contract
 
-The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Missing, contradictory, or cross-pass disagreement is `review_required`; prose keywords never rescue a result. Current-year upload readiness requires the v19.45 trace, while historical rows remain governed by their existing gates.
+The machine-readable evidence contract is authoritative for acceptance: screen count, unique main subject, label ownership, and same-subject FollowMe physical evidence. Prose keywords never rescue a result. Missing content fields remain empty; usable cross-pass evidence is finalized by `.21`. Technical contract or binding failures retry and never enter the stream outbox.
 
 The contract version and guard implementation identity are separate authorities. Every result and trace produced by the complete three-layer rules must carry `evidence_guard_revision=20260716.19`. A legacy `v19.45 verified` trace without that revision is unverified under the current rules and must be emitted by the backfill builder. Revision `.15` includes `.5` stateless pass 2/3 and runtime health fuse, `.6` discontinued/unlisted SKU photo consensus, `.8` short-SKU completion, `.9` complete distant evidence with semantic cross-pass comparison, `.10` narration support without integer duplication, `.11` explicit FollowMe negation handling, `.12` common-schema evidence fields, `.13` sub-three distant rejection, `.14` pre-rescue structured authority, and `.15` material structured-authority/runtime-health checks plus narration/physical-evidence consistency that cannot be washed by later passes. Revision `.16` binds the current request and full image and blocks adjacent cross-photo core repetition. Revision `.17` requires same-photo Pro/43/S43FM/17,990 evidence before Pro 43 can be accepted, prevents generic signage language from erasing an explicit FollowMe model backed by sufficient same-pass structured fixtures, and requires every 2026 FollowMe pass to agree on model and price. Revision `.18` recognizes only the established same-variant friendly-name/physical-SKU aliases and narrows the narration fuse to non-negated FollowMe identity or unmistakable white mobile-stand fixtures; a black short stand plus tray explicitly described as non-FollowMe is not a batch-stopping conflict. Revision `.19` forces three independent identical passes for any current-year single-unit candidate reporting three or more complete screens and binds human-audited risk pixels to the expected view by full-image SHA-256; an expectation conflict is an immediate durable-fuse condition. An explicitly present `model` or `price` field, including null, may never be refilled from narration; prose rescue is legacy-only when that field is absent. A dominant foreground portrait display with a same-subject white round base and attached tray remains a FollowMe single-unit candidate even with three or more background televisions. Large scenes receive a central full-height tile in pass 1 and left/center/right tiles on retries. Screen advertising cannot negate physical fixtures. Narration that exposes two or more positive fixture cues while structured evidence is still insufficient invalidates the pass; a single-unit record already carrying direct branding or two independent same-subject strong cues does not fuse merely for one omitted orientation/card detail, while distant answers never receive this allowance. Prompt/rule echo, overlong narration, and `最終校正` correction prose are runtime-health failures; the backend preserves raw narration and never rewrites it to conceal conflict. The durable fuse stores a bounded record snapshot. Only a contained first-pass FollowMe/view conflict gets one stateless retry; a repeat on pass 2 or a model/price/prompt/UI fault stops immediately. Any material `structured_authority_blocked_fields` value in `view_type`, `model`, or `price` invalidates the pass. Cross-pass core disagreement stays review-required; a two-to-one majority is not silently promoted. Missing markers, prior-answer exposure, ambiguous completion, or failed consensus keeps upload closed. The `.16` 15-photo smoke is a failed semantic trial, not production proof.
 
@@ -486,7 +497,7 @@ Anti-bypass invariants are part of that contract:
 - FollowMe friendly names and physical SKUs are equivalent for gating. `S32FM50x`, `S32FM70x`, and `S43FM70x` families require same-subject physical evidence and a current-year second pass; ordinary `S32FM80x/S32FM90x` Smart Monitor SKUs do not.
 - Screen content is not hardware brand evidence. Text such as `螢幕顯示 ASUS Demo 畫面` must never replace a valid Samsung SKU with `它牌(ASUS)`.
 - A photographed price at least 20% away from the official reference requires one independent reread. If a later pass independently confirms the same model, same photographed price, and matched label ownership, preserve the photographed store price; the external reference is not allowed to overwrite it.
-- Dashboard `完成判讀` means a non-system-failure result exists, not that quality passed. Show `待複核` separately; upload readiness still requires `auto_verified=true` and `auto_review_required=false`.
+- Dashboard `完成判讀` means `.21` has produced a truthful finalized result.  The stream outbox still requires `auto_verified=true` and `auto_review_required=false`; technical failures remain visibly unuploaded.
 
 ## v19.45 Three-Layer Accuracy Gate
 
@@ -496,7 +507,7 @@ Anti-bypass invariants are part of that contract:
 - Pass 2 receives pass 1 only as a falsifiable hypothesis and must actively seek counter-evidence with the lower label strip. Current-year FollowMe requires at least this pass; a poster or screen content alone is never physical proof.
 - Pass 3 receives no prior answer in model messages, uses the stronger lower-center crop, and produces an independent observation before the guard compares all passes. A newer answer cannot overwrite a prior unresolved core conflict.
 - Current-year distant view requires three consistent passes proving at least three complete displays, no unique main subject, no owned main-subject model/price, and no unresolved FollowMe physical evidence.
-- `verified`, `retry`, and `unresolved` are guard decisions, not model opinions. Intermediate guesses never enter formal success output; `review_required` never enters the ready upload manifest.
+- `verified`, `retry`, and technical failure are guard decisions, not model opinions. Intermediate guesses never enter formal output; only the `.21` finalized result enters the stream outbox.
 
 Any change to `build_ocr_messages()`, `immediate_retry_decision()`, the retry queue, v19.45 trace, presentation history, or upload manifest must preserve the validation matrix in the authoritative document and run `tools/test_v1945_evidence_contract.py`, `tools/test_immediate_retry_queue.py`, and `tools/run_critical_regressions.py`.
 
@@ -532,7 +543,7 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 
 - Monitoring is not progress polling. Sample the actual structured evidence, readable narration, final guard decision, prior-answer exposure, prompt contamination, UI identity, process uniqueness, and upload isolation.
 - An uncontained structured/narration contradiction is a batch-stopping defect.
-- A contradiction already marked `auto_review_required=true`, `evidence_unresolved=true`, or a recognized manual-review status remains fail-closed for that photo, is counted as `contained_review_conflicts`, and must not stop later photos. It can never be exported as verified or uploaded.
+- Legacy contradiction rows remain stale and must be reprocessed from the pristine image under `.21`; they are never carried forward as current verified results.  The new finalizer converts usable content evidence to a truthful result while preserving technical failures as fail-closed.
 - The `.11` reference smoke must remain exactly four verified true distant views and three unresolved counterexamples, with zero prior-answer exposure and zero prompt contamination across all 21 passes.
 - The `.12` single-unit prompt smoke must keep all four evidence fields in every raw JSON response for photos 665/666/667. Expected model passes are 2/1/2 respectively; a third pass caused by omitted schema fields is a stop-worthy prompt regression.
 - Before and after every operational or code change, re-read the current development-guide checkpoint and latest continuity handoff, then verify content, UI, unique hidden processes, and upload isolation. Old regressions are permanent tests.

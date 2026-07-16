@@ -5,6 +5,7 @@ import csv
 import logging
 import hashlib
 import gzip
+import re
 from datetime import datetime
 from pathlib import Path
 from threading import Thread, Event, RLock, current_thread
@@ -16,7 +17,7 @@ from skills.image_processing import ImageProcessor
 from skills.model_matching import ModelMatcher
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
-from skills.audit_fields import enrich_result_for_review
+from skills.audit_fields import enrich_result_for_review, finalize_three_pass_outcome
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
@@ -175,7 +176,12 @@ class BatchOrchestrator:
         # Processor Function (Dependency Injection)
         self.processor_fn = None 
         self.result_review_fn = None
+        self.finalized_result_sink = config.get("finalized_result_sink")
         self.max_auto_attempts = max(1, int(config.get("max_auto_attempts", 3)))
+        self.max_total_attempts = max(
+            self.max_auto_attempts,
+            int(config.get("max_total_attempts", self.max_auto_attempts + 3)),
+        )
         self.auto_attempts = {}
         self.auto_result_history = {}
         self.runtime_health_incident_sources = {}
@@ -455,6 +461,15 @@ class BatchOrchestrator:
             "request_id_verified": result.get("request_id_verified") is True,
             "input_image_sha256": result.get("input_image_sha256"),
             "request_binding_enforced": result.get("request_binding_enforced") is True,
+            "independent_pass": result.get("independent_pass") is True,
+            "prior_answer_exposed": result.get("prior_answer_exposed") is True,
+            "prompt_contamination": result.get("prompt_contamination") is True,
+            "runtime_health": dict(result.get("runtime_health") or {}),
+            "normalized_evidence": dict(result.get("normalized_evidence") or {}),
+            "requires_structured_retry": result.get("requires_structured_retry") is True,
+            "model_validation_failed": result.get("model_validation_failed") is True,
+            "price_conflict_detected": result.get("price_conflict_detected") is True,
+            "brand_evidence_conflict": result.get("brand_evidence_conflict") is True,
             "thinking": str(result.get("thinking") or "")[:1200],
             "reasons": list(reasons),
         }
@@ -506,17 +521,12 @@ class BatchOrchestrator:
         }
 
     def _pass_metadata(self, attempt: int) -> tuple[int, str]:
-        role = str(self.config.get("presentation_role") or "auto").strip().lower()
-        model_id = str(self.config.get("model_id") or getattr(self, "last_model_name", "") or "")
-        slow_models = ("qwen3.5", "qwen2.5", "gemma", "internvl", "minicpm", "paddleocr")
-        if role == "slow_model" or (role == "auto" and any(token in model_id.lower() for token in slow_models)):
-            return 4, "慢模型仲裁"
         attempt = max(1, int(attempt or 1))
         return attempt, {
             1: "初次辨識",
             2: "第二輪複核",
             3: "第三輪獨立判讀",
-        }.get(attempt, f"第 {attempt} 輪複核")
+        }.get(attempt, f"第 {attempt} 輪技術重試")
 
     @staticmethod
     def _previous_result_summary(previous_results: list[dict]) -> dict:
@@ -637,8 +647,8 @@ class BatchOrchestrator:
         raw_output = str(result.get("raw_model_output") or "").strip()
         raw_narration = raw_output.split("\n\n{", 1)[0].strip() if raw_output else ""
         narration_candidates = (
-            str(result.get("thinking") or "").strip(),
             str(narration or "").strip(),
+            str(result.get("thinking") or "").strip(),
             raw_narration,
         )
         detailed_narration = next(
@@ -653,6 +663,8 @@ class BatchOrchestrator:
             "evidence_contract_version", "evidence_guard_revision",
             "evidence_contract_valid", "evidence_contract_errors",
             "auto_verified", "auto_review_required", "review_status",
+            "technical_retry_exhausted", "three_pass_adjudicated",
+            "adjudication_rule", "adjudication_summary",
         )
         structured = {key: result.get(key) for key in structured_keys if key in result}
         processing_source_path = str(result.get("source_path") or "")
@@ -698,6 +710,8 @@ class BatchOrchestrator:
                         "category", "price_symbol", "price_status", "official_price",
                         "price_diff_percent", "auto_review_required", "review_status",
                         "auto_verified",
+                        "technical_retry_exhausted", "three_pass_adjudicated",
+                        "adjudication_rule", "adjudication_summary",
                     )
                 },
             }
@@ -1933,15 +1947,56 @@ class BatchOrchestrator:
                         previous_results,
                         self.max_auto_attempts,
                     ) or review_decision
+                if not runtime_health_force_unresolved:
+                    review_decision = finalize_three_pass_outcome(
+                        norm_result,
+                        previous_results,
+                        review_decision,
+                        self.max_auto_attempts,
+                    )
+                    if review_decision.get("three_pass_adjudicated"):
+                        # Adjudication may select the two-pass model/price rather
+                        # than the current pass.  Recompute the comparison badge
+                        # so ↑/↓/✓/? can never belong to a superseded guess.
+                        model_value = str(norm_result.get("model") or "").strip()
+                        price_digits = re.sub(r"\D", "", str(norm_result.get("price") or ""))
+                        if model_value and price_digits:
+                            try:
+                                from skills.official_price import validate_ocr_price
+
+                                price_check = validate_ocr_price(model_value, int(price_digits))
+                                norm_result["price_status"] = price_check.get("status") or "unknown"
+                                norm_result["price_symbol"] = price_check.get("symbol") or "?"
+                                norm_result["official_price"] = price_check.get("official_price") or ""
+                                norm_result["price_diff_percent"] = price_check.get("diff_percent")
+                            except Exception:
+                                norm_result["price_status"] = "unknown"
+                                norm_result["price_symbol"] = "?"
+                                norm_result["official_price"] = ""
+                                norm_result["price_diff_percent"] = None
+                        else:
+                            norm_result["price_status"] = "not_compared"
+                            norm_result["price_symbol"] = ""
+                            norm_result["official_price"] = ""
+                            norm_result["price_diff_percent"] = None
                 if runtime_health_force_unresolved:
                     review_decision["retry"] = False
                     review_decision["unresolved"] = True
                     review_decision["verified"] = False
+                    review_decision["technical_retry_required"] = True
+                    review_decision["technical_retry_reason"] = "same_photo_runtime_conflict"
                     review_decision["reasons"] = list(dict.fromkeys(
                         list(review_decision.get("reasons") or [])
                         + list(runtime_health.reasons)
                         + ["same_photo_runtime_conflict_isolated_after_three_passes"]
                     ))
+                if (
+                    review_decision.get("technical_retry_required")
+                    and attempt_number < self.max_total_attempts
+                ):
+                    review_decision["retry"] = True
+                    review_decision["unresolved"] = False
+                    review_decision["verified"] = False
                 norm_result['evidence_guard_revision'] = str(
                     review_decision.get('evidence_guard_revision') or ''
                 )
@@ -1959,6 +2014,13 @@ class BatchOrchestrator:
                 norm_result['thumb_b64'] = self.img_proc.create_thumbnail(img_path, max_size=400)
                 thinking_text = str(norm_result.get("thinking") or "")
                 display_text = thinking_text if thinking_text else str(self.stream_buffer or "")
+                adjudication_summary = str(norm_result.get("adjudication_summary") or "").strip()
+                if adjudication_summary:
+                    display_text = (
+                        f"{display_text}\n🧭 [系統自動定案] {adjudication_summary}"
+                        if display_text.strip()
+                        else f"🧭 [系統自動定案] {adjudication_summary}"
+                    )
                 if not display_text.strip():
                     display_text = (
                         f"這張已完成辨識：{norm_result.get('view_type') or '單機'}，"
@@ -1966,7 +2028,7 @@ class BatchOrchestrator:
                         f"{norm_result.get('price') or '無價格'}。"
                     )
 
-                if review_decision.get("retry") and attempt_number < self.max_auto_attempts:
+                if review_decision.get("retry") and attempt_number < self.max_total_attempts:
                     self.queue_presentation_event(
                         result=norm_result,
                         attempt=attempt_number,
@@ -1998,14 +2060,21 @@ class BatchOrchestrator:
 
                 if review_decision.get("unresolved"):
                     norm_result['auto_review_required'] = True
-                    norm_result['review_status'] = "需慢模型或人工校正"
+                    norm_result['technical_retry_exhausted'] = bool(
+                        review_decision.get("technical_retry_required")
+                    )
+                    norm_result['review_status'] = "技術錯誤／已停止該張上傳"
                     norm_result['rerun_priority'] = "P1"
                     norm_result['rerun_reason'] = norm_result['auto_retry_reasons'] or "三輪後仍有疑慮"
                 else:
                     norm_result['auto_review_required'] = False
 
                 # D. Update Stats (v16.24 Robust)
-                is_success = norm_result.get('view_type') != '失敗' and norm_result.get('category') != '失敗'
+                is_success = (
+                    not review_decision.get("unresolved")
+                    and norm_result.get('view_type') != '失敗'
+                    and norm_result.get('category') != '失敗'
+                )
                 
                 if is_success:
                     # If it was a failure before, remove from failure list
@@ -2057,6 +2126,22 @@ class BatchOrchestrator:
                 # [v11.2] Save to DYNAMIC Session File
                 # UI recent_results is capped; session_results preserves the full batch for rename/export.
                 self.evaluator.export_to_label_studio_json(self.session_results, self.current_success_file)
+
+                if (
+                    is_success
+                    and norm_result.get("auto_verified") is True
+                    and callable(self.finalized_result_sink)
+                ):
+                    try:
+                        queued_path = self.finalized_result_sink(dict(norm_result))
+                        if queued_path:
+                            norm_result["stream_upload_queued"] = True
+                            norm_result["stream_upload_job"] = str(queued_path)
+                            self.log_system(f"☁️ 已排入逐張上傳：{fname}")
+                    except Exception as exc:
+                        norm_result["stream_upload_queued"] = False
+                        norm_result["stream_upload_enqueue_error"] = str(exc)
+                        self.log_system(f"⚠️ 逐張上傳排隊失敗，已保留 OCR 結果：{fname}；{exc}")
 
                 # [v17.15 Fix] Save Thinking Process to Single Session TXT file
                 if 'thinking' in norm_result and norm_result['thinking']:
@@ -2110,7 +2195,7 @@ class BatchOrchestrator:
                     "Image preprocessing failed" in error_msg or "cannot identify image" in error_msg
                 )
 
-                if not is_permanent_failure and not is_missing_runtime and attempt_number < self.max_auto_attempts:
+                if not is_permanent_failure and not is_missing_runtime and attempt_number < self.max_total_attempts:
                     error_completed_at = datetime.now().isoformat()
                     error_result = {
                         "file_name": fname,

@@ -55,7 +55,7 @@ const buildLivePendingNarration = ({ fileName, passIndex, reviewMode }) => {
     1: "初次辨識",
     2: "第二輪複核",
     3: "第三輪獨立判讀",
-    4: "慢模型仲裁"
+    4: "系統技術重試"
   })[normalizedPass] || `第 ${normalizedPass} 輪複核`;
   const task = reviewMode === "current_year_review"
     ? "核對遠景、單機與 FollowMe 實體線索，並重新檢查型號及價格標籤"
@@ -152,7 +152,7 @@ const ResultThumbnail = ({ res, onClick }) => {
 };
 
 const UI_VERSION = "v19.45 (accuracy-first evidence contract)";
-const CURRENT_GUARD_REVISION = "20260716.19";
+const CURRENT_GUARD_REVISION = "20260716.21";
 console.log(`[Dashboard-Init] Version: ${UI_VERSION} | Timestamp: ${new Date().toLocaleTimeString()}`);
 
 const COMPACT_STATUS_CONTRACT = "compact-v2";
@@ -449,6 +449,10 @@ const App = () => {
       accepted: item.accepted ?? result.accepted,
       auto_review_required: item.auto_review_required ?? result.auto_review_required,
       auto_verified: item.auto_verified ?? result.auto_verified,
+      technical_retry_exhausted: item.technical_retry_exhausted ?? result.technical_retry_exhausted,
+      three_pass_adjudicated: item.three_pass_adjudicated ?? result.three_pass_adjudicated,
+      adjudication_rule: item.adjudication_rule || result.adjudication_rule || "",
+      adjudication_summary: item.adjudication_summary || result.adjudication_summary || "",
       _queueKey: key,
       _isCurrent: false
     };
@@ -563,7 +567,7 @@ const App = () => {
     1: "初次辨識",
     2: "第二輪複核",
     3: "第三輪獨立判讀",
-    4: "慢模型仲裁"
+    4: "系統技術重試"
   }[Number(item?.pass_index)] || "未提供");
 
   const formatMetaValue = (value) => {
@@ -578,7 +582,7 @@ const App = () => {
   const formatDecision = (value) => ({
     retry_scheduled: "已安排下一輪",
     accepted: "已通過自動守門",
-    review_required: "需慢模型或人工校正"
+    review_required: "自動定案中"
   }[String(value || "")] || formatMetaValue(value));
   const isStaleGuardRevision = (item) => Boolean(
     item
@@ -601,6 +605,10 @@ const App = () => {
       || item.auto_review_required === true
       || item.accepted === false;
   };
+  const isTerminalTechnicalFailure = (item) => Boolean(
+    item?.technical_retry_exhausted === true
+    || String(item?.review_status || "").includes("技術錯誤")
+  );
   const hasPassMetadata = (item) => Boolean(item && (item.pass_index || item.pass_label));
   const getPassHeading = (item) => {
     if (!hasPassMetadata(item)) return "";
@@ -1280,6 +1288,7 @@ const App = () => {
   const folderTotal = Number(overallProgress.total_folders || 0);
   const folderDone = Number(overallProgress.completed_folders || 0);
   const reviewProgress = data.review_progress || {};
+  const streamUpload = data.stream_upload || {};
   const completedPassCount = Math.max(0, Number(data.presentation_sequence || 0));
   const completedPassLabel = data.presentation_sequence_durable === true
     ? '累計判讀'
@@ -1373,7 +1382,7 @@ const App = () => {
   const visibleNarration = !isRunning && visibleNarrationSnapshot?.text
     ? visibleNarrationSnapshot.text
     : narrationAnimationOwnsDisplay
-    ? (displayedBuffer || "正在接收本張照片的 AI 判讀文字...")
+    ? (displayedBuffer || "正在接收本張照片的 LLM 判讀文字...")
     : (visibleNarrationSnapshot?.text
       || narrationDisplay.text
       || displayedBuffer
@@ -1393,11 +1402,11 @@ const App = () => {
   const narrationStatusLabel = !isRunning && visibleNarration
     ? "最新完成判讀"
     : visibleNarrationKey.startsWith("live:")
-    ? "AI 即時判讀中"
+    ? "LLM 即時判讀中"
     : visibleNarrationKey.startsWith("latest:")
       ? "最新完成判讀"
       : narrationPhase === "typing"
-        ? "AI 判讀內容播放中"
+        ? "LLM 判讀內容播放中"
     : narrationPhase === "revealed"
       ? "本張摘要完成 · 右側結果已揭露"
       : narrationPhase === "warming"
@@ -1496,13 +1505,22 @@ const App = () => {
                     <span data-testid="review-pass-progress">
                       {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
                       {isReviewRun && completedPassCount ? ` · ${completedPassLabel} ${formatCount(completedPassCount)} 次` : ''}
-                      {isReviewRun && reviewProgress.current_pass ? ` · 本張第 ${reviewProgress.current_pass}/3 輪` : ''}
+                      {isReviewRun && reviewProgress.current_pass
+                        ? Number(reviewProgress.current_pass) <= 3
+                          ? ` · 本張第 ${reviewProgress.current_pass}/3 輪`
+                          : ` · 本張第 ${reviewProgress.current_pass} 輪技術重試`
+                        : ''}
                     </span>
                   </div>
                 </div>
-               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
-                  <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>
+               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : 'none' }}></div>
+                    <span style={{ fontSize: '0.7rem', color: '#888' }}>{isRunning ? '正在執行' : '待機中'}</span>
+                  </div>
+                  <span data-testid="stream-upload-progress" style={{ fontSize: '0.56rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                    上傳總數 {formatCount(streamUpload.canonical_uploaded)} · 待上傳 {formatCount(streamUpload.pending)}
+                  </span>
                </div>
           </div>
       </header>
@@ -1575,10 +1593,6 @@ const App = () => {
                  <button onClick={() => window.open(`/success_records.html?v=${Date.now()}`, '_blank')}
                      style={{ background: '#10b981', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                       <CheckCircle2 size={12} /> 判讀記錄 ({stats.success})
-                 </button>
-                 <button onClick={openReviewPanel}
-                     style={{ background: '#f59e0b', color: '#111', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
-                      <AlertCircle size={12} /> 待人工校正 ({stats.review_required ?? 0})
                  </button>
                  {controlMsg && <span style={{fontSize:'0.7rem', marginLeft:'5px'}}>{controlMsg}</span>}
                </div>
@@ -1657,7 +1671,7 @@ const App = () => {
                                         background: isHeldNarration ? '#64748b' : '#22d3ee',
                                         boxShadow: isHeldNarration ? 'none' : '0 0 8px #22d3ee'
                                       }} />
-                                      AI 判讀內容 · {narrationStatusLabel}
+                                      LLM 判讀內容 · {narrationStatusLabel}
                                    </div>
                                    {false && isHeldNarration && (
                                       <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>
@@ -1739,7 +1753,7 @@ const App = () => {
               <div className="result-sidebar" style={{ width: 'clamp(360px, 23vw, 430px)', minWidth: '360px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
-                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'待裁決', v:stats.review_required ?? 0, c:'#f59e0b'},
+                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'自動定案中', v:stats.review_required ?? 0, c:'#f59e0b'},
                         {l:'失敗', v:stats.failed, c:'#ef4444'}, {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'},
                         {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
                         {l:'近期平均', v:recentAverageDuration || data.metrics?.last_duration || '-', c:'#a855f7', title:'最近 5 張實際耗時平均；不讓先前的逾時永久扭曲目前速度'}
@@ -1782,7 +1796,7 @@ const App = () => {
                                   <div data-testid="active-placeholder-file" title={pendingPanelResult.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingPanelResult.file_name}</div>
                                   <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center' }}>
                                     <span data-testid="active-placeholder-badge" style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>處理中</span>
-                                    <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>AI 即時判讀中</span>
+                                    <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>LLM 即時判讀中</span>
                                   </div>
                                   {hasPassMetadata(pendingPanelResult) && <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>{getPassHeading(pendingPanelResult)}</div>}
                                 </div>
@@ -1790,7 +1804,7 @@ const App = () => {
                             </div>
                           )}
                           {rightPanelItems.map((res, i) => (
-                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isExplicitlyUnresolved(res) ? "pending-review" : "completed"} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
+                             <div data-testid="result-card" data-presentation-id={res.presentation_id || ""} data-presentation-sequence={res.presentation_sequence ?? ""} data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isTerminalTechnicalFailure(res) ? "technical-failure" : isExplicitlyUnresolved(res) ? "auto-finalizing" : "completed"} key={res._queueKey || res.presentation_id} style={{ background: res._isCurrent ? '#1e293b' : '#161616', border: res._isCurrent ? '1px solid #00f5ff' : '1px solid #222', borderRadius: '5px', padding: '8px', marginBottom:'8px', transition: 'background 0.2s' }} onMouseEnter={(e)=>e.currentTarget.style.background='#222'} onMouseLeave={(e)=>e.currentTarget.style.background=res._isCurrent ? '#1e293b' : '#161616'}>
                                   <div style={{ display: 'flex', gap: '8px' }}>
                                       <ResultThumbnail res={res} onClick={() => { if (!res._pendingReveal) setInspectImage(res); }} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1802,14 +1816,14 @@ const App = () => {
                                                     處理中
                                                 </span>
                                                 <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>
-                                                    AI 即時判讀中
+                                                    LLM 即時判讀中
                                                 </span>
                                             </div>
                                           )}
                                           {!res._pendingReveal && isExplicitlyUnresolved(res) && (
                                             <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : "三輪衝突／已隔離"}</span>
-                                              {!isStaleGuardRevision(res) && <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: '700' }}>待慢模型或人工最終裁決</span>}
+                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: isTerminalTechnicalFailure(res) ? '#b91c1c' : '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"}</span>
+                                              {!isStaleGuardRevision(res) && <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: '700' }}>{isTerminalTechnicalFailure(res) ? "系統修復後自動重跑" : "完成後立即排入逐張上傳"}</span>}
                                             </div>
                                           )}
                                           {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && (
@@ -1844,7 +1858,7 @@ const App = () => {
                                              {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && res.price && res.price_symbol && res.price_status && res.price_status !== 'not_compared' && (
                                                 <span
                                                     title={
-                                                        res.price_status === 'unknown' ? '官網/PChome 查無價格；需人工確認或重跑' :
+                                                        res.price_status === 'unknown' ? '官網/PChome 查無可靠參考價；以 ? 如實記錄' :
                                                         res.official_price ? `官方 $${res.official_price.toLocaleString()} (${res.price_diff_percent > 0 ? '+' : ''}${res.price_diff_percent}%)` : ''
                                                     }
                                                     style={{
@@ -1932,9 +1946,9 @@ const App = () => {
                      <div style={{ padding: '14px 16px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: '10px' }}>
                          <AlertCircle size={18} color="#f59e0b" />
                          <div style={{ flex: 1 }}>
-                             <div style={{ color: '#fff', fontWeight: 'bold', fontSize: '1rem' }}>待人工校正</div>
+                             <div style={{ color: '#fff', fontWeight: 'bold', fontSize: '1rem' }}>自動定案紀錄</div>
                              <div style={{ color: '#888', fontSize: '0.72rem' }}>
-                                 上傳前被擋住的照片；先校正或標記重跑，避免錯檔先進雲端。
+                                 顯示系統曾重新判讀的照片；照片由三輪獨立證據自動定案，完成一張即排入上傳。
                              </div>
                          </div>
                          <select

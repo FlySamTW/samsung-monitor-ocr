@@ -73,6 +73,7 @@ from skills.runtime_health_gate import (
     read_runtime_health_fuse,
     BLOCKED_NARRATION,
 )
+from tools.stream_drive_upload import enqueue_finalized_result, read_stream_status
 
 
 def finalize_evidence_contract(result, raw_output=""):
@@ -146,6 +147,8 @@ _STATUS_RESULT_FIELDS = (
     "file_name", "source_path", "view_type", "category", "model", "price", "screen_status",
     "quality_issue", "price_symbol", "price_status", "official_price", "price_diff_percent",
     "auto_verified", "auto_review_required", "review_status", "duration", "timestamp",
+    "technical_retry_exhausted", "three_pass_adjudicated", "adjudication_rule",
+    "adjudication_summary",
 )
 
 
@@ -4260,6 +4263,7 @@ def get_status():
             "overall_progress": overall_progress,
             "review_progress": review_progress,
             "runtime_health_fuse": read_runtime_health_fuse(AUDIT_DIR),
+            "stream_upload": read_stream_status(OUTPUT_ROOT),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
@@ -5100,7 +5104,11 @@ def main():
         "max_dimensions": (2560, 1440),
         "bottom_label_strip": args.bottom_label_strip,
         "bottom_center_zoom": args.bottom_center_zoom,
-        "clean_config": str(args)
+        "clean_config": str(args),
+        "finalized_result_sink": lambda result: enqueue_finalized_result(
+            result,
+            output_dir=OUTPUT_ROOT,
+        )
     }
 
     orchestrator = BatchOrchestrator(config)

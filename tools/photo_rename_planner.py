@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import os
 import re
 import shutil
@@ -223,6 +224,52 @@ def build_target_name(
     return "-".join(safe_segments) + source_path.suffix.lower()
 
 
+def plan_single_image(
+    source_path: Path,
+    row: Dict[str, str],
+    period: str,
+    price_symbol: str = "＄",
+    current_year: Optional[int] = None,
+) -> Dict[str, str]:
+    """Build one deterministic final-name plan without scanning a whole folder."""
+    source_path = Path(source_path)
+    if not source_path.is_file():
+        return {
+            "status": MISSING_SOURCE_STATUS,
+            "reason": "找不到來源照片",
+            "period": period,
+            "original_name": source_path.name,
+            "target_name": "",
+            "category": display_category(row),
+            "model": model_segment(row),
+            "price": price_segment(row, price_symbol, period, current_year),
+            "original_path": str(source_path),
+            "target_path": "",
+        }
+    review_flags = []
+    for field, label in (
+        ("auto_review_required", "尚未完成自動定案"),
+        ("model_validation_failed", "型號未通過正式清單驗證"),
+        ("price_conflict_detected", "價格欄位互相衝突"),
+    ):
+        value = str(row.get(field) or "").strip().lower()
+        if value in {"1", "true", "yes", "y"}:
+            review_flags.append(label)
+    target_name = build_target_name(source_path, row, period, price_symbol, current_year)
+    return {
+        "status": REVIEW_REQUIRED_STATUS if review_flags else READY_STATUS,
+        "reason": "；".join(review_flags),
+        "period": period,
+        "original_name": source_path.name,
+        "target_name": target_name,
+        "category": display_category(row),
+        "model": model_segment(row),
+        "price": price_segment(row, price_symbol, period, current_year),
+        "original_path": str(source_path),
+        "target_path": "",
+    }
+
+
 def make_plan(
     image_dir: Path,
     results: Dict[str, Dict[str, str]],
@@ -252,22 +299,13 @@ def make_plan(
             )
             continue
 
-        target_name = build_target_name(image_path, row, period, price_symbol, current_year)
+        single = plan_single_image(image_path, row, period, price_symbol, current_year)
+        target_name = single["target_name"]
         target_path = image_dir / target_name
         status = NO_CHANGE_STATUS if target_name == image_name else READY_STATUS
-        reason = ""
-        review_flags = []
-        for field, label in (
-            ("auto_review_required", "三輪後仍需慢模型或人工校正"),
-            ("model_validation_failed", "型號未通過正式清單驗證"),
-            ("price_conflict_detected", "價格欄位互相衝突"),
-        ):
-            value = str(row.get(field) or "").strip().lower()
-            if value in {"1", "true", "yes", "y"}:
-                review_flags.append(label)
-        if review_flags:
+        reason = single["reason"]
+        if single["status"] == REVIEW_REQUIRED_STATUS:
             status = REVIEW_REQUIRED_STATUS
-            reason = "；".join(review_flags)
         if target_path.exists() and target_name != image_name:
             status = CONFLICT_STATUS
             reason = "目標檔名已存在"
@@ -279,9 +317,9 @@ def make_plan(
                 "period": period,
                 "original_name": image_name,
                 "target_name": target_name,
-                "category": display_category(row),
-                "model": model_segment(row),
-                "price": price_segment(row, price_symbol, period, current_year),
+                "category": single["category"],
+                "model": single["model"],
+                "price": single["price"],
                 "original_path": str(image_path),
                 "target_path": str(target_path),
             }
@@ -404,6 +442,50 @@ def copy_image_for_flat_output(source: Path, target: Path) -> None:
                 shutil.copy2(source, target)
     except Exception:
         shutil.copy2(source, target)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def copy_planned_image_idempotent(plan_row: Dict[str, str], output_dir: Path) -> Dict[str, str]:
+    """Publish exactly one deterministic file; never invent a ``_2`` target."""
+    if plan_row.get("status") not in {READY_STATUS, NO_CHANGE_STATUS}:
+        raise RuntimeError(plan_row.get("reason") or "照片尚未完成自動定案")
+    source = Path(plan_row["original_path"]).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    target_name = str(plan_row.get("target_name") or "").strip()
+    if not target_name or Path(target_name).name != target_name:
+        raise RuntimeError("無效的確定性目標檔名")
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / target_name
+    temp = output_dir / f".{target.stem}.{os.getpid()}.tmp{target.suffix}"
+    temp.unlink(missing_ok=True)
+    try:
+        copy_image_for_flat_output(source, temp)
+        published_hash = _sha256_file(temp)
+        if target.exists():
+            if _sha256_file(target) != published_hash:
+                raise RuntimeError(f"確定性目標已存在但內容不同: {target.name}")
+            temp.unlink(missing_ok=True)
+            status = "existing_same_bytes"
+        else:
+            os.replace(temp, target)
+            status = "published"
+        return {
+            **plan_row,
+            "status": status,
+            "target_path": str(target),
+            "content_sha256": published_hash,
+        }
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def copy_plan_to_flat_output(plan: List[Dict[str, str]], output_dir: Path) -> List[Dict[str, str]]:
