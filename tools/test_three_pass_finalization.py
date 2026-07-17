@@ -982,6 +982,42 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_first_distant_then_two_followme_fixture_votes_finalize_without_fourth_call(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_followme_product_card", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                "遠景", None, None, 3, False, "not_visible",
+                runtime_health={
+                    "healthy": False,
+                    "reasons": ["structured_narration_followme_conflict"],
+                },
+                thinking="前景看見白色垂直支架與圓形底座，但結構輸出漏列。",
+            ),
+            make_pass(
+                "單機", None, None, 4, True, "not_visible", fixture,
+                thinking="前景同一主體有白色支架、圓形底座與產品卡。",
+            ),
+        ]
+        current = make_pass(
+            "單機", None, None, 1, True, "not_visible", fixture,
+            thinking="同一主體再次確認白色支架、圓形底座與 FollowMe 產品卡。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertFalse(result.get("technical_retry_required", False))
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_followme_fixture_consensus_survives_variant_disagreement(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},

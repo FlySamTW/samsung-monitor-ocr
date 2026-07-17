@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.41"
+EVIDENCE_GUARD_REVISION = "20260717.42"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -1926,6 +1926,26 @@ def finalize_three_pass_outcome(
             for item in single_local_integrity
         ) >= 2
     )
+    # A first-pass distant claim may omit FollowMe cues that its own narration
+    # saw.  That is a contained photo-local content conflict, not a transport,
+    # binding, memory, or cross-photo failure.  When the next two stateless
+    # passes independently bind to the same image and both see sufficient
+    # same-subject FollowMe fixture evidence, finish the photo as a FollowMe
+    # family single.  Unsupported model and price fields remain null.
+    mixed_followme_local_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(single_local_integrity) == len(passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and sum(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main") is True
+            and has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in single_local_integrity
+        ) >= 2
+    )
     mixed_wide_distant_base_fallback = bool(
         len(passes) == max_attempts
         and len(base_integrity) == len(passes)
@@ -2056,6 +2076,8 @@ def finalize_three_pass_outcome(
     elif single_view_base_fallback:
         usable = list(single_local_integrity)
     elif followme_local_base_fallback:
+        usable = list(single_local_integrity)
+    elif mixed_followme_local_base_fallback:
         usable = list(single_local_integrity)
     elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
