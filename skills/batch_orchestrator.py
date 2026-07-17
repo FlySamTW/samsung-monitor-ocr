@@ -461,13 +461,15 @@ class BatchOrchestrator:
         return False
 
     def _request_binding_incident_repeated_across_sources(self, reasons, result) -> bool:
-        """Contain one bad request echo, but fuse if it recurs on another photo.
+        """Contain incomplete echoes; fuse only recurring explicit mismatches.
 
-        A mismatched/missing echo is never usable evidence and still consumes
-        one of the absolute three model-call slots.  One isolated occurrence
-        can therefore move to the next stateless call for the same photo
-        without stopping the whole queue.  Recurrence on a different source is
-        a system-level binding fault and retains the durable global fuse.
+        Every unbound response is unusable evidence and still consumes one of
+        the absolute three model-call slots.  Missing/unverified echoes commonly
+        accompany a truncated or repetitive model response; they remain local
+        to that photo even if another photo later has the same transport
+        failure.  Only an explicit non-empty request-ID mismatch recurring on a
+        different source proves cross-request crosstalk and retains the durable
+        global fuse.
         """
         source_id = str(
             result.get("file_name")
@@ -478,15 +480,15 @@ class BatchOrchestrator:
         ).strip()
         if not source_id:
             return True
-        repeated = False
+        repeated_mismatch = False
         for reason in sorted({str(item) for item in reasons if str(item)}):
             prior = set(self.runtime_health_incident_sources.get(reason, []))
-            if prior and source_id not in prior:
-                repeated = True
+            if reason == "request_id_mismatch" and prior and source_id not in prior:
+                repeated_mismatch = True
             prior.add(source_id)
             self.runtime_health_incident_sources[reason] = sorted(prior)
         self._persist_retry_state()
-        return repeated
+        return repeated_mismatch
 
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:

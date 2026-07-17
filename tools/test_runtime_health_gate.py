@@ -634,6 +634,36 @@ class RuntimeHealthGateTests(unittest.TestCase):
             ["source-a", "source-b"],
         )
 
+    def test_incomplete_request_echo_is_local_but_explicit_mismatch_recurs_globally(self):
+        from skills.batch_orchestrator import BatchOrchestrator
+
+        orchestrator = object.__new__(BatchOrchestrator)
+        orchestrator.runtime_health_incident_sources = {}
+        orchestrator._persist_retry_state = lambda: None
+
+        for reason in ("request_id_missing", "request_binding_unverified"):
+            self.assertFalse(
+                orchestrator._request_binding_incident_repeated_across_sources(
+                    [reason], {"file_name": "first.jpg"}
+                )
+            )
+            self.assertFalse(
+                orchestrator._request_binding_incident_repeated_across_sources(
+                    [reason], {"file_name": "second.jpg"}
+                )
+            )
+
+        self.assertFalse(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["request_id_mismatch"], {"file_name": "first.jpg"}
+            )
+        )
+        self.assertTrue(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["request_id_mismatch"], {"file_name": "second.jpg"}
+            )
+        )
+
     def test_narrated_followme_fixture_omission_trips_runtime_health(self):
         decision = evaluate_runtime_health(
             record(view_type="遠景", model=None, price=None, followme_physical_evidence=[]),

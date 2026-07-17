@@ -80,6 +80,14 @@ def assert_request_binding_fault_scope() -> None:
         reasons, {"file_name": "second.jpg"}
     ) is True
 
+    for reason in ("request_id_missing", "request_binding_unverified"):
+        assert orchestrator._request_binding_incident_repeated_across_sources(
+            [reason], {"file_name": "third.jpg"}
+        ) is False
+        assert orchestrator._request_binding_incident_repeated_across_sources(
+            [reason], {"file_name": "fourth.jpg"}
+        ) is False
+
 
 def main() -> None:
     try:

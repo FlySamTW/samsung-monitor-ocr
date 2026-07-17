@@ -52,9 +52,12 @@ DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 _YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # .50 excludes only transport metadata (filename, RequestID and bbox
-    # coordinates) from prior-answer leak detection.  It does not change any
-    # result that .49 had already finalized and durably queued.
+    # coordinates) from prior-answer leak detection. .51 changes only how an
+    # unusable missing/unverified request echo is contained before a result can
+    # exist. Neither revision changes a result that .49/.50 already finalized
+    # and durably queued.
     "20260718.49": EVIDENCE_GUARD_REVISION,
+    "20260718.50": EVIDENCE_GUARD_REVISION,
 }
 
 

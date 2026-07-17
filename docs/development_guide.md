@@ -900,3 +900,10 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 前輪答案污染檢查仍必須保留，但比對特定前輪型號／價格前，先排除固定格式的 `圖片:` 行、`RequestID:` 行與 `bbox=[...]`。提示正文其他位置若出現前輪型號、價格、理由、修正語句或 assistant 歷史，仍照常熔斷。
 - 這是「模型尚未被呼叫」的假陽性，不能把第 3 輪永久吃掉，也不能允許第 4 輪。`recover_review_metadata_false_fuse.py` 只接受唯一理由 `review_prior_value_present`、attempt=3、空 raw model output、失敗空結果、同 run 的 trace 恰有第 1／2 輪、相同 source identity 與完整影像 SHA，且兩輪都健康、request-bound、無記憶。
 - 通過上述證據後，只把該張持久化 attempt 從 3 回復到 2，保留前兩輪 history，封存原 fuse 並寫 clearance receipt；新版 `.50` 再執行真正的第 3 輪。任何已有模型輸出、不同理由、不同圖、缺 trace 或不健康輪次均不得使用此恢復。
+
+## 2026-07-18 `.51` 缺漏回覆綁定只隔離單張、不得卡住整批
+
+- 模型跳針、截斷或不完整 JSON 可能使回覆缺少 request echo／完整結構。這種回覆一律作廢，仍消耗一次實際模型呼叫，但它只證明該次輸出無效，不等於另一張照片的答案串入；`request_id_missing` 與 `request_binding_unverified` 即使出現在不同照片，也只能限制在各自照片最多三次呼叫內，不得建立全域 fuse。
+- 只有模型明確帶回「非空、但不是本次」的 request ID，形成 `request_id_mismatch`，且同類錯誤再發生於另一來源，才是跨請求串線的系統性證據並保留全域 fail-closed。任何未綁定回覆都不得參與 view／model／price 投票或上傳。
+- `tools/recover_contained_request_binding_fuse.py` 只接受第 1 或第 2 次的 missing／unverified fuse；它不回退已消耗次數，只把同一照片放回 durable retry queue 最前方，保留總上限三次、封存 fuse 並寫 recovery receipt。明確 mismatch、提示污染、前輪答案暴露、第三次失敗或狀態不一致全部拒絕。
+- 此規則落實「單張異常不得阻塞整批」：該張用完三次仍無有效證據時留下保守終局技術結果並前進下一張，禁止第 4 次；介面、照片、判讀卡與逐張上傳仍須依同一 durable 狀態同步。
