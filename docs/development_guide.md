@@ -863,3 +863,10 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 此否決不依賴型號或附近價牌：多螢幕陳列中的單輪可讀價牌不等於唯一主角歸屬。結案規則為 `distant_structural_veto_over_wide_geometry_single_votes`；只使用既有三輪，不得加跑第 4 輪。
 - `中和-1333` 的實際第三輪為 `遠景/count=6/unique_main=false/label_ownership=not_visible`，正確否決前兩輪 `單機/count=7`。舊 `.47` 已做到不再全域熔斷，但定案器仍留下技術待處理；`.48` 補齊終局結果與逐張上傳，不把「繼續跑」誤當成「該張已完成」。
 - 若照片邊界換版造成已消耗的第 2 輪在 fuse 落盤後、evidence trace 追加前停止，只能由 `runtime_health_fuse_clearance` 收據與對應的 archived fuse 重建該輪。收據、archive 所在目錄、來源 identity、完整影像 SHA、舊／新 run 的相鄰輪次、request ID 與唯一 model-only 理由必須全部一致；`finalize_existing_three_pass_reviews.py` 才可把跨重啟的 `1/2/3` 輪組合起來離線定案。這是證據重建，不是新模型呼叫。
+
+### `.47` → `.48` 逐張上傳佇列換版契約
+
+- OCR 後端與逐張 uploader 必須使用同一 evidence revision；但安全換版時，舊 uploader 可能仍有已由 `.47` 正式驗證、尚未完成網路傳輸的持久化工作。禁止刪除、略過、直接改字串或讓新版 uploader 把它們當失敗件。
+- `stream_drive_upload.py` 只允許明列的相鄰版本遷移，目前唯一允許的是 `.47` → `.48`。啟動新版單一 uploader 時，先把中斷於 `working` 的工作原子退回 `pending`，再逐張核對 schema、64 位 source identity、來源檔仍存在、完整來源 SHA-256 未變、年月一致，以及依 immutable final result 重新計算出的完整目標檔名完全相同。
+- 遷移前的完整 JSON 必須存入 `_drive_upload_stream/revision_migrations`；新工作必須記錄舊／新 revision、原始工作 canonical SHA-256、來源 SHA-256、目標檔名、archive 路徑與時間。任何未明列版本、來源變更、身分不符、檔名重算不同或宣稱來自 `.48` 新規則的 `.47` 工作都要 fail closed。
+- 遷移只處理尚未上傳的 durable outbox，不改寫既有 Drive receipt，也不降低 remote 守門。正式傳輸仍必須逐張檢查同名重複、唯一 size+MD5 readback 與 Drive ID；若舊 uploader 在網路傳輸途中被同步切換，新 uploader 會先恢復該工作，再以遠端精確查核決定是否需要 copy，不可因沒有 receipt 就盲目重傳。

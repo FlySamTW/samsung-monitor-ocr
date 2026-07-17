@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,11 @@ from tools.rclone_drive_upload import (
 
 STREAM_SCHEMA = "samsung-ocr-stream-upload-v1"
 RECEIPT_SCHEMA = "samsung-ocr-stream-receipt-v1"
+COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
+    # .48 only adds a conservative three-pass wide-geometry finalizer.  It does
+    # not invalidate jobs that .47 had already finalized and durably queued.
+    "20260718.47": EVIDENCE_GUARD_REVISION,
+}
 
 
 def _truthy(value: object) -> bool:
@@ -75,6 +81,7 @@ def _stream_dirs(output_dir: Path) -> dict[str, Path]:
         "failed": root / "failed",
         "receipts": root / "receipts",
         "superseded_receipts": root / "superseded_receipts",
+        "revision_migrations": root / "revision_migrations",
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -469,6 +476,75 @@ def recover_working_jobs(output_dir: Path) -> int:
     return count
 
 
+def migrate_compatible_pending_jobs(output_dir: Path) -> int:
+    """Upgrade explicitly compatible queued jobs without weakening the gate.
+
+    A synchronized backend/uploader deployment may happen while the durable
+    outbox still contains jobs written by the immediately preceding evidence
+    revision.  Only revisions listed above may migrate.  Every job is rebound
+    to unchanged source bytes and a freshly recomputed deterministic filename;
+    the exact original JSON is archived before the atomic replacement.
+    """
+    dirs = _stream_dirs(output_dir)
+    migrated = 0
+    for path in sorted(dirs["pending"].glob("*.json")):
+        job = _read_json(path)
+        old_revision = str(job.get("evidence_guard_revision") or "")
+        if old_revision == EVIDENCE_GUARD_REVISION:
+            continue
+        if COMPATIBLE_PENDING_REVISION_MIGRATIONS.get(old_revision) != EVIDENCE_GUARD_REVISION:
+            raise RuntimeError(f"unapproved pending upload revision: {old_revision or 'missing'}")
+        if job.get("schema") != STREAM_SCHEMA:
+            raise RuntimeError("stale or invalid stream upload job")
+        source_item_id = str(job.get("source_item_id") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", source_item_id) or path.stem != source_item_id:
+            raise RuntimeError("pending upload source identity mismatch")
+        source = Path(str(job.get("original_source_path") or "")).resolve()
+        if not source.is_file() or sha256_file(source) != str(job.get("source_sha256") or ""):
+            raise RuntimeError("source bytes changed before upload revision migration")
+        period = str(job.get("period") or "")
+        if not re.fullmatch(r"20\d{4}", period) or str(job.get("year") or "") != period[:4]:
+            raise RuntimeError("pending upload period mismatch")
+        final_result = job.get("final_result")
+        if not isinstance(final_result, dict):
+            raise RuntimeError("pending upload has no final result")
+        if final_result.get("adjudication_rule") == "distant_structural_veto_over_wide_geometry_single_votes":
+            raise RuntimeError("new .48 adjudication cannot originate from a .47 upload job")
+        recomputed = plan_single_image(
+            source,
+            final_result,
+            period,
+            "＄",
+            current_year=datetime.now().year,
+        )
+        if (
+            recomputed.get("status") != READY_STATUS
+            or recomputed.get("target_name") != job.get("target_name")
+            or (job.get("plan") or {}).get("target_name") != job.get("target_name")
+        ):
+            raise RuntimeError("pending upload filename changed during revision migration")
+
+        canonical = json.dumps(job, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        original_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archived = dirs["revision_migrations"] / f"{source_item_id}.{old_revision}.{stamp}.json"
+        _atomic_json(archived, job)
+        upgraded = dict(job)
+        upgraded["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+        upgraded["revision_migration"] = {
+            "from": old_revision,
+            "to": EVIDENCE_GUARD_REVISION,
+            "original_job_sha256": original_sha256,
+            "archived_path": str(archived),
+            "source_sha256": job["source_sha256"],
+            "target_name": job["target_name"],
+            "migrated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        _atomic_json(path, upgraded)
+        migrated += 1
+    return migrated
+
+
 def claim_next_job(output_dir: Path) -> Path | None:
     dirs = _stream_dirs(output_dir)
     pending = sorted(dirs["pending"].glob("*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
@@ -521,7 +597,13 @@ def run_worker(
     completed = 0
     with worker_lock(output_dir):
         recover_working_jobs(output_dir)
-        refresh_status(output_dir, worker_state="running", worker_pid=os.getpid())
+        migrated = migrate_compatible_pending_jobs(output_dir)
+        refresh_status(
+            output_dir,
+            worker_state="running",
+            worker_pid=os.getpid(),
+            revision_migrated=migrated,
+        )
         while True:
             job_path = claim_next_job(output_dir)
             if job_path is None:

@@ -15,6 +15,7 @@ from tools.rclone_drive_upload import md5_file, read_csv
 from tools.stream_drive_upload import (
     _append_uploaded_atomic,
     enqueue_finalized_result,
+    migrate_compatible_pending_jobs,
     process_one_job,
     read_stream_status,
 )
@@ -87,6 +88,60 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_immediately_previous_pending_revision_migrates_with_durable_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-新北市-中和區-TK3C-中和-1333.jpg"
+            make_image(source)
+            output = root / "output"
+            job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            original = json.loads(job.read_text(encoding="utf-8"))
+            original["evidence_guard_revision"] = "20260718.47"
+            job.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+
+            migrated = migrate_compatible_pending_jobs(output)
+            upgraded = json.loads(job.read_text(encoding="utf-8"))
+
+            self.assertEqual(migrated, 1)
+            self.assertEqual(upgraded["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+            self.assertEqual(upgraded["revision_migration"]["from"], "20260718.47")
+            self.assertEqual(upgraded["revision_migration"]["target_name"], original["target_name"])
+            archives = list(
+                (output / "_drive_upload_stream" / "revision_migrations").glob("*.json")
+            )
+            self.assertEqual(len(archives), 1)
+            archived = json.loads(archives[0].read_text(encoding="utf-8"))
+            self.assertEqual(archived, original)
+
+    def test_unapproved_pending_revision_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-新北市-中和區-TK3C-中和-1332.jpg"
+            make_image(source)
+            output = root / "output"
+            job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            payload = json.loads(job.read_text(encoding="utf-8"))
+            payload["evidence_guard_revision"] = "20260718.46"
+            job.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "unapproved pending upload revision"):
+                migrate_compatible_pending_jobs(output)
+
+    def test_pending_revision_migration_rejects_filename_tampering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-新北市-中和區-TK3C-中和-1331.jpg"
+            make_image(source)
+            output = root / "output"
+            job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            payload = json.loads(job.read_text(encoding="utf-8"))
+            payload["evidence_guard_revision"] = "20260718.47"
+            payload["target_name"] = "tampered.jpg"
+            job.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "filename changed"):
+                migrate_compatible_pending_jobs(output)
+
     def test_fresh_receipt_refreshes_stale_matching_legacy_ledger_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "drive_upload_uploaded.csv"
