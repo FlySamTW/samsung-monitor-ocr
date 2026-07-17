@@ -416,6 +416,7 @@ def finalize_file(
     output_dir: Path,
     *,
     apply: bool,
+    only_file_names: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     tasks = json.loads(result_path.read_text(encoding="utf-8"))
     if not isinstance(tasks, list):
@@ -427,6 +428,9 @@ def finalize_file(
     for task in tasks:
         if not isinstance(task, dict):
             continue
+        name = _task_file_name(task)
+        if only_file_names is not None and name not in only_file_names:
+            continue
         existing_meta = (task.get("data") or {}).get("ocr_meta") or {}
         completed_current_adjudication = bool(
             apply
@@ -435,7 +439,6 @@ def finalize_file(
             and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
             and existing_meta.get("adjudication_rule")
         )
-        name = _task_file_name(task)
         calls = groups.get(name) or []
         known_pixel_repair = bool(
             apply
@@ -608,6 +611,12 @@ def main() -> int:
     parser.add_argument("--result-file", type=Path, required=True)
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--file-name",
+        action="append",
+        default=[],
+        help="Only finalize this exact source filename; may be repeated.",
+    )
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     report = finalize_file(
@@ -615,6 +624,7 @@ def main() -> int:
         args.trace.resolve(),
         args.output_dir.resolve(),
         apply=args.apply,
+        only_file_names=set(args.file_name) if args.file_name else None,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

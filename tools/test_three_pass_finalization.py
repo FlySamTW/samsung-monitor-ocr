@@ -356,6 +356,41 @@ class ThreePassFinalizationTests(unittest.TestCase):
             }],
         )
 
+    def test_targeted_finalizer_never_changes_an_unselected_task(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            trace = root / "trace.jsonl"
+            trace.write_text("", encoding="utf-8")
+            result_file = root / "result.json"
+            original = [{
+                "data": {
+                    "image": str(root / "do-not-touch.jpg"),
+                    "ocr_meta": {
+                        "auto_verified": False,
+                        "auto_review_required": True,
+                        "view_type": "單機",
+                    },
+                }
+            }]
+            result_file.write_text(
+                json.dumps(original, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            report = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=True,
+                only_file_names={"selected.jpg"},
+            )
+            saved = json.loads(result_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(report, [])
+        self.assertEqual(saved, original)
+
     def test_full_same_run_three_call_group_is_not_replaced_by_source_tail(self):
         from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
 
