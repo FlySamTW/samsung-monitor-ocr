@@ -808,3 +808,12 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 實例 `M-台中市-西屯區-TK3C-新大雅-1178.jpg`：前兩次有效結果皆為 `單機／S32CG552EC／6,990`，第三次 request binding 失敗。離線 recovery 以兩次有效共識結案、沒有第 4 次呼叫，result、retry state、fuse history、recovery receipt 與逐張 upload job 依序原子落盤；Google Drive exact readback receipt 已於 `2026-07-17 19:34:38` 取得。
 - evidence revision 變更後，backend 與 `stream_drive_upload.py` 必須在同一照片邊界同步換版。只換 backend 會讓舊 uploader 把新 revision job 判為 `stale or invalid stream upload job`。本次 `.43` 邊界曾產生 32 個可證明的同版本失敗 job；只把 `revision=.43` 且 error 完全相符的 32 個 job 移回 pending，舊有 95 個其他失敗紀錄不動，換版後 uploader 已開始取得新收據。
 - Dashboard 視覺驗收必須直接在既有 Chrome 分頁完成，不得新開分頁：精確總數、資料夾子進度、目前圖片／檔名、LLM 自然敘述、右側累積卡片及上傳 pending／總數都要同時核對。`.43` 驗收看到 `65,578/151,714`、202606 `247/1,393`、LLM 即時文字與圖片同步、右側卡片累積、近期平均 `13.39 秒`；修復上傳程序後精確總數續增至 `65,589`，新收據也由 `53,516` 增至 `53,517`。
+
+## 2026-07-17 單張內容衝突不得停批與 Drive 新根目錄（`.45`）
+
+- 持續運轉鐵律的判斷邊界：單張照片的 `view_type/model/price/FollowMe` 內容矛盾是 photo-local；只允許同一照片最多三次獨立、request-bound、無前輪答案的判讀，之後使用三輪共識或已綁定的人工像素權威如實定案。它不得建立 active 全域 fuse、不得呼叫第 4 次，也不得阻塞下一張。請求綁定、跨照片記憶、提示詞污染、版本整體失配等能影響多張照片的系統性技術錯誤，仍維持全域 fail-closed。
+- `微風南山-742` 在三次呼叫後，模型把寬廣 Samsung 展示牆誤帶入唯一型號／價格；第三輪同時留下 model 與 narration FollowMe 衝突，舊規則誤停整批。原圖人工像素權威固定為 `遠景／complete_screen_count=5／無型號／無價格／無 FollowMe 實體證據`。`tools/recover_photo_local_content_fuse.py` 驗證三個不同 RequestID、同一 input SHA、同一來源原圖 SHA、三次獨立性與 source identity 後離線結案；第四次呼叫為 false。
+- 人工像素權威在遠景分支套用後，必須清除第三輪模型留下的 `structured_authority_blocked_fields` 等暫時衝突旗標，再以權威後的結構與自然敘述重跑證據契約；否則正確結果仍會被舊旗標二次阻擋。
+- `.45` 恢復證據：正式進度由 202606 `356/1,393` 增至至少 `369/1,393`，總盤到 `65,700/151,714`；runtime fuse 不存在；Dashboard 實際顯示正在執行、LLM 自然語言、同步照片／檔名、右側累積卡片與上傳數。742 以遠景檔名立即上傳，Drive ID `1x5naroxGTEOgrScGsbIrMf7PsG7Z-y-W`，exact readback receipt revision 為 `.45`。
+- Google Drive 正式根目錄改為 `00_商化照片`（ID `16X5qALC3zRYc7PpnexXLYprorBzBtT_f`）。`2022`、`2023`、`2024`、`2025`、`2026` 直接位於該根目錄，不再有 `已整理` 中介層；舊來源資料夾 ID `1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK` 已搬空但保留。`202607` 明確不在本次搬移範圍。
+- rclone remote `samsung_ocr_drive` 的 `root_folder_id` 必須是新根 ID。逐張 uploader 只寫 `年份/完整新檔名`，每張完成即進持久化佇列；網路慢只允許 pending 累積與續傳，不能讓 OCR 等待整年或整批才開始上傳。

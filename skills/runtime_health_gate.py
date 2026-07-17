@@ -337,7 +337,12 @@ def _followme_variant_authority_conflict_is_photo_local(
     view_type = str(value.get("view_type") or value.get("category") or "").strip()
     price = value.get("price")
     return bool(
-        normalized == {"structured_authority_material_conflict:model"}
+        normalized
+        and normalized <= {
+            "structured_authority_material_conflict:model",
+            "structured_narration_followme_conflict",
+        }
+        and "structured_authority_material_conflict:model" in normalized
         and view_type == "單機"
         and value.get("model") in (None, "")
         and price not in (None, "")
@@ -368,12 +373,17 @@ def _owned_single_model_authority_conflict_is_photo_local(
     price = value.get("price")
     complete_screen_count = value.get("complete_screen_count")
     return bool(
-        normalized == {"structured_authority_material_conflict:model"}
+        normalized
+        and normalized <= {
+            "structured_authority_material_conflict:model",
+            "structured_narration_followme_conflict",
+        }
+        and "structured_authority_material_conflict:model" in normalized
         and view_type == "單機"
         and value.get("model") in (None, "")
         and (price in (None, "") or not absurd_price_reason(price))
         and isinstance(complete_screen_count, int)
-        and 1 <= complete_screen_count <= 3
+        and complete_screen_count >= 1
         and value.get("unique_main") is True
         and value.get("label_ownership") == "matched"
     )

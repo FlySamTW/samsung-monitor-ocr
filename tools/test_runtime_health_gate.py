@@ -538,6 +538,31 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, three_screen_owned_single))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons, three_screen_owned_single))
 
+        wide_store_owned_single = dict(owned_single)
+        wide_store_owned_single["complete_screen_count"] = 4
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, wide_store_owned_single))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons, wide_store_owned_single))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons, wide_store_owned_single))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons, wide_store_owned_single))
+        combined_content_reasons = reasons + ["structured_narration_followme_conflict"]
+        self.assertTrue(
+            first_pass_content_conflict_can_retry(
+                2, combined_content_reasons, wide_store_owned_single
+            )
+        )
+        self.assertTrue(
+            final_content_conflict_can_isolate(
+                3, combined_content_reasons, wide_store_owned_single
+            )
+        )
+        self.assertFalse(
+            final_content_conflict_can_isolate(
+                3,
+                combined_content_reasons + ["request_binding_unverified"],
+                wide_store_owned_single,
+            )
+        )
+
         missing_price = dict(owned_single)
         missing_price["price"] = None
         missing_price["followme_physical_evidence"] = [

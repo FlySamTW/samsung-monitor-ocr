@@ -486,3 +486,11 @@
 - 110 項 targeted tests 與語法編譯通過。port 5002 backend 在照片邊界 hidden 換版，既有 Chrome 分頁未新增；正式批次以 `restart=false` 從 202606 原位續跑。唯一 `continue_after_period_priority.py` monitor PID `30480` 已恢復，仍負責 202606 完成後接回 rev19 保存的 202601–202605 staging。
 - 視覺驗收顯示總盤 `65,578/151,714`、202606 `247/1,393`，圖片／檔名／LLM 即時自然文字／右欄卡片同步，近期平均 `13.39 秒`。之後總盤續增至 `65,589`。
 - 換 `.43` 後發現 uploader 尚載入 `.42`，32 個 `.43` job 被精確標為 `stale or invalid stream upload job`；正式 OCR 未停。已只重排這 32 個可證明同版本 job、保留舊 95 個失敗檔，將 uploader hidden 換到 `.43`。新收據已由 canonical `53,516` 增至 `53,517`，pending 正在依序排空；後續監控必須同時看 processed 與 canonical uploaded，禁止只看 OCR 數字。
+
+## 2026-07-17 `.45` 單張內容衝突恢復與 Drive 根目錄遷移
+
+- 最高鐵律：Dashboard、正式 OCR 與逐張上傳持續正常運作。單張照片內容衝突不得停止整批；最多三次獨立無記憶呼叫後，以共識或綁定原圖像素權威如實結案並立即排入上傳。只有會影響後續多張的系統性技術污染才可全域停止。
+- `M-台北市-信義區-秀翔培芝-微風南山-742.jpg` 在第 3 次呼叫後被舊規則誤設 active fuse。三次呼叫已證明 RequestID 皆不同、input SHA 相同、沒有前輪答案或提示污染；人工原圖權威為 `遠景／5 台完整螢幕／無型號／無價格`。已用窄範圍 recovery 結案、清除該張 retry state、排入上傳並保存 fuse history，沒有第 4 次呼叫。
+- backend 與 uploader 已同步 hidden 換到 revision `20260717.45`，正式 202606 由 `356/1,393` 恢復後持續增加；畫面實測總盤 `65,700/151,714`、202606 `369/1,393`、狀態正在執行，LLM 自然語言、照片／檔名、右欄卡片及上傳數同步。742 的 Drive exact receipt：ID `1x5naroxGTEOgrScGsbIrMf7PsG7Z-y-W`，revision `.45`。
+- `continue_after_period_priority.py` 已重新以單例背景模式啟動，監看唯一 202606 leaf；202606 完成後接回保留的 202601 staging，再依固定 CSV 接續 202602–202605。不得開第二套 OCR 或可見終端機。
+- Google Drive 年份資料夾 `2022`–`2026` 已從舊 `00_商化照片(已整理)`（ID `1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK`）直接移到 `00_商化照片`（ID `16X5qALC3zRYc7PpnexXLYprorBzBtT_f`）之下；沒有 `已整理` 中介層。舊資料夾已空但保留，`202607` 未移動也不得處理。rclone `samsung_ocr_drive` 已改指向新根 ID。

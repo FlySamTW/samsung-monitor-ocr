@@ -251,12 +251,12 @@ Next recommended order:
 7. Update docs/tests, then commit/push.
 
 Google Drive upload handoff:
-- Target parent folder: `https://drive.google.com/drive/folders/1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK`
-- Folder policy: year folders only (`2026`, `2025`, ...), no month folders. Cross-month search relies on the full renamed filename.
+- Target parent folder: `https://drive.google.com/drive/folders/16X5qALC3zRYc7PpnexXLYprorBzBtT_f` (`00_商化照片`).
+- Folder policy: completed year folders (`2022`–`2026`, then future completed years) sit directly under `00_商化照片`; there is no intermediate `已整理` layer and no month folders. `202607` is explicitly outside this migration and must not be touched.
 - Prepare upload manifests with: `python tools/prepare_drive_upload_manifest.py --output-dir D:\00_商化\00_已OCR照片 --limit-ready 25`
 - The script writes `_drive_upload\drive_upload_ready.csv`, `_drive_upload\drive_upload_review_required.csv`, `_drive_upload\drive_upload_next_batch.csv`, `_drive_upload\staging_map.csv`, and `_drive_upload\drive_upload_summary.json`.
 - Only upload rows from `drive_upload_next_batch.csv` / `staging_map.csv`. Do not upload `review_required` rows; they need rerun or manual review first.
-- Current-year upload is globally closed until the full-year v19.45 finalization proof, risk audit input SHA-256, manifest gate, and exact next-batch SHA-256 all match. The uploader rechecks this after every manifest rebuild and before staging/rclone; an empty candidate CSV alone is never completion proof.
+- Upload is per-photo and continuous: every finalized photo is atomically queued immediately, uploaded to its year folder, and considered complete only after an exact Drive ID/size/MD5 readback receipt. A slow or disconnected network may accumulate durable pending jobs, but it must not stop OCR or wait for the whole year to finish. Only that photo is blocked when its evidence or upload job is technically invalid.
 - Upload batches are newest-period first (`2026` before `2025` before `2024`). `遠景／無型號／無價格` and a verified single-unit result with a truthfully empty field are valid final outcomes; upload authority comes from the current guard revision, bound evidence and `auto_verified=true`, never from whether the filename contains `無型號`. Only technical-integrity or unresolved rows stay blocked.
 - Record completed uploads in `_drive_upload\drive_upload_uploaded.csv`; the next manifest run skips those files so uploads can resume safely on another machine.
 - Stale uploaded corrections are never deleted directly from the manifest. After the 2026 evidence backfill and a fresh manifest, rebuild the UTF-8 replacement ledger with `python tools/build_drive_correction_reconciliation.py --output-dir D:\00_商化\00_已OCR照片` (dry-run first). `--execute` may write a structurally valid local ledger for read-only discovery, but `safe_to_upload_new` and `safe_to_replace` remain separate closed gates. Missing historical Drive IDs use `reconcile_drive_corrections.py --execute --phase discover-old`; `upload-new` requires `new_ready`, and upload/readback must verify ID, size, and MD5 before the separate recoverable-trash phase.

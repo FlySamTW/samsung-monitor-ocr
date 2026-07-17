@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.43"
+EVIDENCE_GUARD_REVISION = "20260717.45"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -26,6 +26,17 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "31b4dbfc5e726c11a6f104698a1ec9fc63db20716313d3b2c14b6335f30575a0": {
+        "source_file_sha256": "141c4e015e2c0dc11b2c9edae87286b7e89771c65d38eeee64d38511408f84f9",
+        "input_image_sha256": "4bd2c2a1b609c0042f379129a83a06a9cb3af4b91838013a5a063c6b2a9473df",
+        "view_type": "遠景",
+        "complete_screen_count": 5,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "311ee33794d5af8e01fb9d320a2820459ac6fcbd40d2197c319e91cffddb958b": {
         "source_file_sha256": "85fee1eaf291b63cddbf935b7e2aef47a8ca792e95d14225c240759329924d50",
         "input_image_sha256": "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c",
@@ -503,6 +514,18 @@ def apply_human_audited_pixel_authority(
             "已綁定原圖像素權威定案為遠景、無型號、無價格，所以……"
         )
         record["narration"] = record["thinking"]
+        # The audited pixels are the final authority after exactly three
+        # independent request-bound calls.  Do not let stale conflict flags
+        # from the third model response re-block the corrected distant result.
+        for key in (
+            "model_validation_failed",
+            "price_conflict_detected",
+            "brand_evidence_conflict",
+            "requires_structured_retry",
+            "frame_count_narration_conflict",
+            "structured_authority_blocked_fields",
+        ):
+            record.pop(key, None)
         valid, _errors, normalized = validate_evidence_contract(record)
         if not valid:
             return False
