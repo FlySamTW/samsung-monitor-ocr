@@ -4,11 +4,18 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image, ImageOps
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from skills.model_catalog_rules import FOLLOWME_UNRESOLVED, normalize_followme_family
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
@@ -112,16 +119,9 @@ def display_category(row: Dict[str, str]) -> str:
 
 
 def canonical_followme_model(model: str) -> Optional[str]:
-    upper = model.upper()
-    if "FOLLOW" not in upper:
+    if "FOLLOW" not in str(model or "").upper():
         return None
-    if "PRO" in upper or "43" in upper or "S43FM" in upper:
-        return 'FollowMe Pro M7 43"'
-    if "M5" in upper or "FHD" in upper or "S32FM50" in upper:
-        return 'FollowMe M5 32"'
-    if "M7" in upper or "4K" in upper or "S32FM70" in upper or "S32DM70" in upper:
-        return 'FollowMe M7 32"'
-    return "FollowMe 型號未細分"
+    return normalize_followme_family(model) or FOLLOWME_UNRESOLVED
 
 
 def model_segment(row: Dict[str, str]) -> str:

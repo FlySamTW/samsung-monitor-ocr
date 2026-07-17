@@ -21,9 +21,12 @@
 螢幕播放 FollowMe 廣告、海報上有 FollowMe 字樣，都不算 FollowMe 實機。
 FollowMe 標籤通常沒有 S 開頭型號。
 型號推導：
-- FollowMe Pro + 價格 15000 以上：FollowMe Pro M7 43"
-- FollowMe + 價格 12900 到 13000：FollowMe M7 32"
-- FollowMe + 價格 9900：FollowMe M5 32"
+- 只採同一台實機或其附著牌面可讀到的 M5/M7、27/32/43、Pro 與面板 SKU
+- 價格不能決定 M5、M7、尺寸或 Pro
+- 面板 SKU 可核對系列與尺寸，但同一 SKU 可能同時用於一般與 Pro 套裝
+- 只有同一台實機明確看到 Pro 才可輸出 Pro；否則不得用尺寸或價格升級
+- 已確認 FollowMe、但系列或尺寸仍不明時：FollowMe 型號未細分
+所有 FollowMe 都是 Smart 系列，不需要用 OSD 畫面證明。
 價格必須照標籤實際讀到的數字，不可用推導表改價格。
 
 3. 一般單機

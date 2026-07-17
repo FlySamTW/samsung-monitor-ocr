@@ -20,7 +20,11 @@ except AttributeError:
     pass
 
 from skills.image_processing import ImageProcessor
-from skills.followme_reference import build_followme_prompt_section, get_followme_products
+from skills.followme_reference import build_followme_prompt_section
+from skills.model_catalog_rules import (
+    FOLLOWME_UNRESOLVED,
+    resolve_followme_model,
+)
 
 
 DEFAULT_CASES = "tools/qwen_vl_regression_cases.json"
@@ -68,8 +72,7 @@ def judge(parsed, expected):
 
 
 def normalize_followme_model(raw_model, price=None, context_text=""):
-    raw_model_text = str(raw_model or "").upper()
-    context_upper = str(context_text or "").upper()
+    del price
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
     if has_negative_followme_context(text):
         return None
@@ -78,46 +81,8 @@ def normalize_followme_model(raw_model, price=None, context_text=""):
     if any(token in text for token in ["LG", "STANBYME", "MYVIEW", "27ART10", "27LX5", "43SQ700", "32SR83"]):
         return None
 
-    price_int = None
-    digits = "".join(c for c in str(price or "") if c.isdigit())
-    if digits:
-        try:
-            price_int = int(digits)
-        except ValueError:
-            price_int = None
-
-    products = get_followme_products()
-    price_name = match_followme_by_price(price_int, products)
-    code_name = match_followme_by_code(text, products)
-
-    if (
-        "FOLLOWME PRO" in text
-        or "S43FM" in text
-        or "PRO" in raw_model_text
-        or (price_int and price_int >= 15000 and ("FOLLOWME" in text or "FOLLOW ME" in text))
-    ):
-        return 'FollowMe Pro M7 43"'
-    if code_name:
-        return code_name
-    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
-        return 'FollowMe M5 32"'
-    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
-        return 'FollowMe M7 32"'
-    if price_int and 12000 <= price_int <= 14000 and any(token in text for token in ["32", "M7", "S32FM70", "S32DM70", "4K"]):
-        return 'FollowMe M7 32"'
-    if "PRO" in context_upper or "43" in context_upper or "S43FM" in context_upper or "PRO" in raw_model_text:
-        return 'FollowMe Pro M7 43"'
-    if "M5" in context_upper or "S32FM50" in context_upper:
-        return 'FollowMe M5 32"'
-    if "M7" in context_upper or "S32FM70" in context_upper or "S32DM70" in context_upper or "4K" in context_upper:
-        return 'FollowMe M7 32"'
-    if price_name:
-        return price_name
-    if price_int and price_int >= 15000:
-        return 'FollowMe Pro M7 43"'
-    if price_int and 9900 <= price_int <= 11000:
-        return 'FollowMe M5 32"'
-    return 'FollowMe M7 32"'
+    family = resolve_followme_model(raw_model, context_text, unresolved=True)
+    return family or FOLLOWME_UNRESOLVED
 
 
 def infer_followme_from_physical_clues(price=None, context_text=""):
@@ -136,42 +101,9 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     if not has_followme_word and not (has_stand and has_tray):
         return None
 
-    digits = "".join(c for c in str(price or "") if c.isdigit())
-    price_int = int(digits) if digits else None
-    price_name = match_followme_by_price(price_int, get_followme_products())
-    if price_name:
-        return price_name
-    if price_int and price_int >= 15000:
-        return 'FollowMe Pro M7 43"'
-    if price_int and 9900 <= price_int <= 11000:
-        return 'FollowMe M5 32"'
-    if price_int and 12000 <= price_int <= 14000:
-        return 'FollowMe M7 32"'
-    if price_int:
-        return None
+    del price
     if has_followme_word:
-        return normalize_followme_model(None, price, context_text)
-    return None
-
-
-def match_followme_by_price(price_int, products):
-    if not price_int:
-        return None
-    candidates = []
-    for product in products:
-        price_info = product.get("price", {})
-        low, high = price_info.get("range_twd") or price_info.get("expected_range_twd") or [None, None]
-        if low is not None and high is not None and low <= price_int <= high:
-            candidates.append(product.get("name"))
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def match_followme_by_code(text, products):
-    for product in products:
-        for code in product.get("model_codes", []):
-            compact = code.upper().replace("LS", "").replace("XZW", "")
-            if compact and compact in text:
-                return product.get("name")
+        return normalize_followme_model(None, None, context_text)
     return None
 
 
@@ -225,12 +157,7 @@ def should_block_rescue_from_distant_view(view_type, context_text=""):
 
 
 def normalize_followme_price(model, price=None, context_text=""):
-    text = " ".join(str(part or "") for part in [model, context_text]).upper()
-    if "FOLLOWME PRO M7 43" not in text and not ("FOLLOWME" in text and "43" in text):
-        return None
-    digits = "".join(c for c in str(price or "") if c.isdigit())
-    if digits == "11990":
-        return "17990"
+    """A photographed price is evidence and must never be rewritten."""
     return None
 
 
@@ -318,28 +245,7 @@ def infer_odyssey_ark_model(context_text=""):
 
 
 def correct_common_model_price_conflict(model, price, context_text=""):
-    model_text = str(model or "").upper()
-    cleaned_price = clean_monitor_price(price)
-    text = str(context_text or "").upper()
-    has_g5_series_word = bool(re.search(r"(?<![A-Z0-9])G5(?![A-Z0-9])", text))
-    common_ocr_model_fixes = {
-        "S27CG552": "S27CG552EC",
-        "S27CG552ZK": "S27CG552EC",
-        "S27FQ532EC": "S27FG532EC",
-        "S27D500GAC": "S27D300GAC",
-    }
-    if model_text in common_ocr_model_fixes:
-        return common_ocr_model_fixes[model_text]
-    if model_text == "S32FGS02EC" and (cleaned_price == "26900" or "OLED" in text):
-        return "S32DG802SC"
-    if not model_text and cleaned_price in {"3090", "3290"} and ("SAMSUNG" in text or "三星" in text) and ("27" in text or "27型" in text) and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price == "3090" and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price == "3290" and not has_g5_series_word and "ODYSSEY" not in text:
-        return "S27D300GAC"
-    if model_text == "S27CG552EC" and cleaned_price and int(cleaned_price) >= 9000 and not has_g5_series_word and "ODYSSEY" not in text:
-        return None
+    """Match the production backend: price never manufactures a model."""
     return model
 
 

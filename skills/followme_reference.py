@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+from skills.model_catalog_rules import FOLLOWME_BUNDLES, FOLLOWME_MODELS
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REFERENCE_PATH = PROJECT_ROOT / "data" / "followme_reference.json"
@@ -25,39 +27,31 @@ def get_followme_products() -> List[Dict[str, Any]]:
 
 def build_followme_prompt_section(path: Path = DEFAULT_REFERENCE_PATH) -> str:
     data = load_followme_reference(path)
-    products = data.get("products", [])
-    if not products:
-        return ""
-
     updated_at = data.get("updated_at") or "未知"
     lines = [
         "",
         "---",
-        "## 每日更新 FollowMe 型號規格價格表",
+        "## FollowMe 套裝型號與每日價格參考",
         f"資料更新時間：{updated_at}",
-        "用途：只用於 FollowMe 分支的型號輔助判斷；照片價牌仍是最高優先，禁止用此表覆蓋清楚可見的標籤價格。",
+        "身分鐵律：價格只能檢查讀值合理性，絕對不能用價格決定 M5、M7、尺寸或 Pro。",
+        "必須先確認同一台實機的 FollowMe 字樣或移動式長直架／圓形落地底座／附著托盤；旁邊文宣、螢幕廣告與裸面板型號都不能單獨成立 FollowMe。",
+        "所有 FollowMe 都是 Smart 系列，不需要用 OSD 畫面證明。",
+        "Pro 必須在同一台實機或其附著牌面清楚看到 Pro；同一面板 SKU 可能同時用於一般與 Pro 套裝，不得只靠 SKU 升級成 Pro。",
+        "若已確認 FollowMe 實機但 M5／M7／尺寸／Pro 仍無法確認，輸出 FollowMe 型號未細分，不得猜最常見款。",
+        "可用標準名稱：" + "、".join(FOLLOWME_MODELS) + "。",
+        "面板對照（只在 FollowMe 實機身分先成立後使用）：",
     ]
-    for item in products:
-        name = item.get("name", "")
-        aliases = " / ".join(item.get("aliases", []))
-        model_codes = ", ".join(item.get("model_codes", []))
-        specs = item.get("specs", {})
-        price = item.get("price", {})
-        price_range = price.get("range_twd", [])
-        observed = ", ".join(str(p) for p in price.get("observed_twd", []))
-        spec_text = (
-            f"{specs.get('size_inch', '')}吋、"
-            f"{specs.get('resolution_label', '')} {specs.get('resolution', '')}、"
-            f"{specs.get('panel', '')}、"
-            f"{specs.get('refresh_rate', '')}、"
-            f"{specs.get('response_time', '')}"
-        )
-        lines.append(f"- {name}：{aliases}；型號碼 {model_codes}；規格 {spec_text}；常見售價 {price_range}；觀測價 {observed}。")
+    grouped: dict[str, list[str]] = {}
+    for bundle in FOLLOWME_BUNDLES:
+        grouped.setdefault(bundle.family_model, [])
+        if bundle.panel_model not in grouped[bundle.family_model]:
+            grouped[bundle.family_model].append(bundle.panel_model)
+    for family, panel_models in grouped.items():
+        lines.append(f"- {family}：{', '.join(panel_models)}。")
+    lines.append(
+        f"後端價格參考更新時間：{updated_at}；價格資料不放進型號判定提示，避免模型用常見價猜系列。"
+    )
     lines.extend([
-        "FollowMe 判斷提醒：",
-        "- 32吋 FHD / M5 / S32FM50x / 價格約 9,999-10,990，多半是 FollowMe M5 32\"。",
-        "- 32吋 4K / M7 / M70F / S32FM70x / 價格約 12,990-15,990，多半是 FollowMe M7 32\"。",
-        "- 43吋 4K / FollowMe Pro / S43FM70x / 價格約 16,888-17,990，多半是 FollowMe Pro M7 43\"。",
         "---",
     ])
     return "\n".join(lines)

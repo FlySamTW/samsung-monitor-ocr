@@ -25,6 +25,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from skills.model_catalog_rules import (  # noqa: E402
+    FOLLOWME_UNRESOLVED,
+    normalize_followme_family,
+    resolve_followme_model,
+)
 
 from photo_rename_planner import (  # noqa: E402
     CONFLICT_STATUS,
@@ -387,34 +395,17 @@ def followme_distant_risk(records: list[dict[str, object]], candidate_names: set
     return risky
 
 
-def _price_int(value: object) -> int | None:
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    if not digits:
-        return None
-    try:
-        return int(digits)
-    except ValueError:
-        return None
-
-
 def infer_followme_model_from_evidence(evidence: str, price: object = None) -> str:
-    upper = evidence.upper().replace("FOLLOW ME", "FOLLOWME")
-    price_int = _price_int(price)
-    if "FOLLOWME PRO" in upper or "S43FM" in upper or "PRO" in upper or "43" in upper:
-        return 'FollowMe Pro M7 43"'
-    if price_int and price_int >= 15000:
-        return 'FollowMe Pro M7 43"'
-    if "M5" in upper or "S32FM50" in upper or "FM501" in upper or "FHD" in upper:
-        return 'FollowMe M5 32"'
-    if price_int and 9900 <= price_int <= 11000:
-        return 'FollowMe M5 32"'
-    return 'FollowMe M7 32"'
+    """Resolve only same-photo identity evidence; price never selects a family."""
+    del price
+    return resolve_followme_model(evidence, unresolved=True) or FOLLOWME_UNRESOLVED
 
 
 def build_rescued_followme_thinking(record: dict[str, object], evidence: str) -> str:
-    model = str(record.get("model") or "").strip() or infer_followme_model_from_evidence(
-        evidence,
-        record.get("price") or record.get("human_price"),
+    existing_model = str(record.get("model") or "").strip()
+    model = (
+        normalize_followme_family(existing_model)
+        or infer_followme_model_from_evidence(evidence)
     )
     price = str(record.get("price") or record.get("human_price") or "").strip() or NO_PRICE_TEXT
     return (

@@ -17,6 +17,14 @@ import requests
 from typing import Optional, Tuple, Dict, Callable, List
 from rich.console import Console
 
+from skills.model_catalog_rules import (
+    FOLLOWME_BUNDLES,
+    FOLLOWME_UNRESOLVED,
+    compact_model,
+    normalize_followme_family,
+    normalize_samsung_model,
+)
+
 console = Console()
 
 # 三星產品頁 URL 模板 (使用完整型號)
@@ -197,21 +205,10 @@ class OfficialPriceManager:
         - 加上 L 前綴
         - 加上 XZW 後綴 (不是 CXZW！因為型號本身可能已有 C 結尾)
         """
-        model_clean = model.upper().strip()
-        
-        # 如果已經是完整型號
-        if model_clean.startswith('L') and model_clean.endswith('XZW'):
-            return model_clean
-        
-        # 加上 L 前綴
-        if not model_clean.startswith('L'):
-            model_clean = 'L' + model_clean
-        
-        # 加上 XZW 後綴
-        if not model_clean.endswith('XZW'):
-            model_clean = model_clean + 'XZW'
-        
-        return model_clean
+        short_model = normalize_samsung_model(model)
+        if not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,12}", short_model):
+            return compact_model(model)
+        return f"L{short_model}XZW"
     
     def _fetch_from_all_monitors(self, model: str) -> Optional[int]:
         """
@@ -491,17 +488,18 @@ class OfficialPriceManager:
         queries = [model_clean]
         is_followme = "FOLLOW" in model_clean
         if is_followme:
-            if "PRO" in model_clean or "43" in model_clean:
-                queries.insert(0, "S43FM703UC")
-                queries.append("FollowMe Pro M7 43")
-                queries.append("FollowMe Pro 43")
-            elif "M5" in model_clean or "FHD" in model_clean:
-                queries.insert(0, "S32FM501EC")
-                queries.append("FollowMe M5 32")
-            else:
-                queries.insert(0, "S32FM702UC")
-                queries.insert(1, "S32FM703UC")
-                queries.append("FollowMe M7 32")
+            family = normalize_followme_family(model_clean)
+            if not family or family == FOLLOWME_UNRESOLVED:
+                _log_price_status(
+                    f"[yellow]FollowMe 型號未細分，略過特定型號價格查詢：{model_clean}[/yellow]"
+                )
+                return None
+            panel_models = list(dict.fromkeys(
+                bundle.panel_model
+                for bundle in FOLLOWME_BUNDLES
+                if bundle.family_model == family
+            ))
+            queries = panel_models + [family.replace('"', ""), model_clean]
         else:
             short_model = re.sub(r'[A-Z]$', '', model_clean)
             if len(short_model) >= 6 and short_model != model_clean:
@@ -720,52 +718,14 @@ class OfficialPriceManager:
 
     def _extract_best_short_model(self, full_code: str) -> Optional[str]:
         """
-        從 URL 中的完整型號碼提取最可能的短型號。
+        從完整官網型號碼提取短型號。
         例如 LS27D362GACXZW -> S27D362GAC；LC34G55TWWCXZW -> C34G55TWW。
-        利用現有型號表的 2 字母結尾來決定最佳候選，避免過度碎片。
+        只移除官方前導 L 與區域尾碼 XZW，保留型號本身的完整結尾。
         """
-        code = full_code.upper().strip()
-        if not code:
-            return None
-
-        # 去掉 L 前綴（Samsung 台灣官網通常會加 L 在型號前面）
-        no_l = code[1:] if code.startswith('L') else code
-
-        # 常見後綴，由長到短移除
-        suffixes = ['ECXZW', 'UCXZW', 'SCXZW', 'ACXZW', 'CXZW', 'XZW']
-        candidates = []
-        for suffix in suffixes:
-            if no_l.endswith(suffix):
-                short = no_l[:-len(suffix)]
-                if re.match(r'^[SC][0-9]{2}[A-Z0-9]+[A-Z]{2,3}$', short) and 8 <= len(short) <= 13:
-                    candidates.append(short)
-
-        if not candidates:
-            return None
-        if len(candidates) == 1:
-            return candidates[0]
-
-        # 多個候選時，用現有型號表來評分：完全吻合 > 結尾吻合 > 長度
-        existing = set(m.upper() for m in self._load_model_list())
-        known_endings = {m[-2:].upper() for m in existing if len(m) >= 2}
-
-        def score(c: str) -> int:
-            s = 0
-            cu = c.upper()
-            if cu in existing:
-                s += 1000
-            ending = cu[-2:]
-            if ending in known_endings:
-                s += 100
-            # 結尾是 C 的通常更常見
-            if ending.endswith('C'):
-                s += 10
-            # 偏好較長的候選
-            s += len(cu)
-            return s
-
-        candidates.sort(key=score, reverse=True)
-        return candidates[0]
+        short = normalize_samsung_model(full_code)
+        if re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,12}", short):
+            return short
+        return None
 
     def _bulk_fetch_prices_from_searchapi(self) -> Dict[str, int]:
         """
@@ -799,8 +759,8 @@ class OfficialPriceManager:
 
             for product in product_list:
                 for model in product.get('modelList', []):
-                    short = model.get('modelName', '').upper().strip()
-                    full = model.get('modelCode', '').upper().strip()
+                    full = compact_model(model.get('modelCode', ''))
+                    short = normalize_samsung_model(model.get('modelName') or full)
                     if not short or not full:
                         continue
 

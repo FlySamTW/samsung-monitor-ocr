@@ -51,13 +51,11 @@ APPROVED_DRIVE_ROOT_ID = "16X5qALC3zRYc7PpnexXLYprorBzBtT_f"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 _YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
-    # .50 excludes only transport metadata (filename, RequestID and bbox
-    # coordinates) from prior-answer leak detection. .51 changes only how an
-    # unusable missing/unverified request echo is contained before a result can
-    # exist. Neither revision changes a result that .49/.50 already finalized
-    # and durably queued.
-    "20260718.49": EVIDENCE_GUARD_REVISION,
-    "20260718.50": EVIDENCE_GUARD_REVISION,
+    # Historical .49/.50 jobs were compatible with .51 because those revisions
+    # changed transport containment only. .52 changes model identity and
+    # FollowMe finalization, so no earlier queued result may migrate to .52.
+    "20260718.49": "20260718.51",
+    "20260718.50": "20260718.51",
 }
 
 

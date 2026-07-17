@@ -2,7 +2,17 @@
 
 > 使用 Qwen3-VL 視覺模型自動批次辨識三星螢幕照片的型號與價格
 
-## 2026-07-16 現行正式規則（`.26`）
+## 2026-07-18 型號取得規則同步（`.36`）
+
+- `skills/model_catalog_rules.py` 是型號正規化與 FollowMe 系列的共用權威；批次主程式、提示詞、型號比對、價格查詢、補跑工具與改名工具都必須呼叫同一份規則。
+- 官網完整碼只移除開頭 `L` 與結尾 `XZW`。例如 `LS27HG806EFXZW` 只能正規化為 `S27HG806EF`，不得任意刪除中間或尾碼。
+- OCR 型號先做精確比對，再允許唯一的 1–3 字元尾碼補全，或同尺寸、同系列且唯一的有限近似校正；多個候選時保留人工確認，不得硬選一款不存在或錯誤的型號。
+- FollowMe 正式名稱共六款：M5 27、M5 32、M7 32、Pro M7 32、M7 43、Pro M7 43；只能確認 FollowMe 家族時使用 `FollowMe 型號未細分`。
+- 面板 SKU 可核對一般版的系列與尺寸，但同一 SKU 可能用於一般版與 Pro 套裝。Pro 必須由同一台實機或其附著牌面明確寫出 `Pro`；43 吋、價格或共用 SKU 都不能證明 Pro。
+- 所有 FollowMe 都是 Smart 系列，不要求 OSD。價格只記錄現場價與官網價，不得反推型號。
+- 本次 Git 更新不會自行重啟正在執行的 OCR；`.36` 規則會在下次安全重啟程式後生效。
+
+## 2026-07-16 批次流程基線（`.26`）
 
 - 每張照片最多三次模型呼叫，包含技術失敗；不得再產生第 4–6 輪。
 - 第一輪判為單機，且自己的型號、店內價格、價牌歸屬與結構證據完整一致時立即定案；證據完整的 FollowMe 也適用。只有遠景／疑似 FollowMe、缺型號或價格、核心證據矛盾或技術完整性錯誤才升級第二、第三輪，且判官只看同一張原圖，不得收到前輪答案。
@@ -77,7 +87,7 @@ M-202603-台中市-大甲區-SF-大甲-單機-FollowMe_Pro_M7_43吋-？＄17990-
 
 - `年月` 優先從資料夾名稱推得，例如 `商化照片-202603` 會產生 `202603`。
 - `FollowMe` 是型號，不是另一個檔名分類；類別仍以 `單機` 或 `遠景` 表示。
-- `FollowMe` 型號有兩輪一致證據時細分為 `FollowMe_M5_32吋`、`FollowMe_M7_32吋`、`FollowMe_Pro_M7_43吋`；只有產品家族共識時使用 `FollowMe_型號未細分`。
+- `FollowMe` 型號有足夠同機證據時可細分為 M5 27、M5 32、M7 32、Pro M7 32、M7 43、Pro M7 43；只有產品家族共識時使用 `FollowMe_型號未細分`。
 - 價格預設使用全形 `＄`，可用工具參數改成半形 `$`。
 - 當年度照片若有官網比價，價格前要保留比價符號：`↑` 店內高於官網、`↓` 店內低於官網、`✓` 相同、`？` 官網未知。
 - 正式改名以前，必須先產生 `rename_plan.csv`、`conflicts.csv`、`rollback.csv`。
@@ -233,7 +243,7 @@ Completed/partial output:
 
 Critical unresolved issues (updated 2026-07-03):
 - Current-year price `?`: For 2026 and future folders, if OCR has a store price but Samsung/PChome reference is unknown, the export stops and writes `price_review_required.csv`; use `--allow-no-symbol-for-unknown` only when the business rule accepts outputting 2026 records without a price symbol.
-- PChome fallback: `skills/official_price.py` now tries PChome 24h Shopping after Samsung. FollowMe generic names are mapped to product codes (`FollowMe Pro M7 43"` -> `S43FM703UC`). Verify this before trusting old `？` filenames such as `FollowMe_Pro_M7_43吋-？＄12990`.
+- PChome fallback：`skills/official_price.py` 會在 Samsung 之後查 PChome 24h。只有已由照片證據確認的 FollowMe 系列，才可使用對應面板 SKU 查價；價格查詢結果不得反過來決定系列或 Pro。舊的 `？` 檔名仍需依照片證據複核。
 - Low price bug: The old 3000 cutoff wrongly erased real prices like `S24F332EAC / 2390`. Code was changed to allow prices >= 2000 when a Samsung monitor label is clear. Handwritten clearance/sale tags are a narrow exception: if the physical card clearly says `促銷價` / `展示出清` / `出清` / `展示機` / `福利品` / `清倉` / `特賣`, a handwritten 4-digit price such as `1999` is valid. Existing completed rows with `(無價格)` may still need rerun or thinking-text rescue.
 - UI: Main preview no longer stays on the blurred 400 px thumbnail; source path now shows live backend folder. The right panel is intentionally delayed: it must not show a thumbnail's parsed result until that photo's AI 即時判讀 has finished playing.
 - Distant-view classification: A stronger guard was added (`samsung_ocr_batch_processor.py`): no Samsung model + no price + thinking mentions distant-view keywords => force `view_type=遠景` and clear model/price. Already-processed misclassified rows still need repair or rerun.

@@ -39,6 +39,8 @@ def force_reload_skills():
         'skills.evaluation',
         'skills.official_price',  # [v18.67] 官方價格驗證
         'skills.followme_reference',
+        'skills.model_catalog_rules',
+        'skills.model_validation',
         'skills.runtime_health_gate',
     ]
 
@@ -53,10 +55,17 @@ force_reload_skills()
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
-from skills.followme_reference import build_followme_prompt_section, get_followme_products, reference_is_stale
+from skills.followme_reference import build_followme_prompt_section, reference_is_stale
+from skills.model_catalog_rules import (
+    FOLLOWME_UNRESOLVED,
+    normalize_confirmed_followme_model,
+    normalize_followme_family,
+    resolve_followme_model as resolve_catalog_followme_model,
+)
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
+    safe_known_model_correction,
     strict_known_model,
     unique_known_model_completion,
 )
@@ -515,9 +524,9 @@ def extract_natural_monologue(text):
 
 
 def normalize_followme_model(raw_model, price=None, context_text="", structured_physical_confirmed=False):
-    """Standardize Samsung FollowMe names when the model already detected FollowMe."""
+    """Standardize a confirmed FollowMe without using price as identity."""
+    del price
     raw_model_text = str(raw_model or "").upper()
-    context_upper = str(context_text or "").upper()
     text = " ".join(str(part or "") for part in [raw_model, context_text]).upper()
     if has_negative_followme_context(context_text) and not structured_physical_confirmed and not has_strong_followme_physical_signature(context_text) and not has_followme_display_fixture_clue(context_text):
         return None
@@ -535,50 +544,46 @@ def normalize_followme_model(raw_model, price=None, context_text="", structured_
         # price band cannot establish that the photographed unit is FollowMe.
         return None
 
-    price_int = None
-    if price is not None:
-        digits = "".join(c for c in str(price) if c.isdigit())
-        if digits:
-            try:
-                price_int = int(digits)
-            except ValueError:
-                price_int = None
+    explicit_family = normalize_followme_family(raw_model)
+    if explicit_family and explicit_family != FOLLOWME_UNRESOLVED:
+        return explicit_family
 
-    products = get_followme_products()
-    code_name = match_followme_by_code(text, products)
+    borrowed_identity = should_block_borrowed_model_rescue(context_text)
+    if borrowed_identity and not structured_physical_confirmed:
+        return None
 
-    if code_name:
-        return code_name
-    if (
-        "FOLLOWME PRO" in raw_model_text
-        or "FOLLOW ME PRO" in raw_model_text
-        or "S43FM" in raw_model_text
-        or re.search(r"(?:^|\D)43(?:\D|$)", raw_model_text)
-    ):
-        return 'FollowMe Pro M7 43"'
     pro_label_evidence = bool(
         re.search(
-            r"(?:標籤|側標|規格牌|型號|牌面|寫著).{0,32}(?:FOLLOW\s*ME\s*PRO|S43FM|43\s*(?:吋|型|\"))"
-            r"|(?:FOLLOW\s*ME\s*PRO|S43FM|43\s*(?:吋|型|\")).{0,32}(?:標籤|側標|規格牌|型號|牌面|寫著)",
+            r"(?:標籤|側標|規格牌|型號|牌面|寫著).{0,32}(?:FOLLOW\s*ME\s*PRO|(?<![A-Z])PRO(?![A-Z]))"
+            r"|(?:FOLLOW\s*ME\s*PRO|(?<![A-Z])PRO(?![A-Z])).{0,32}(?:標籤|側標|規格牌|型號|牌面|寫著)",
             str(context_text or ""),
             re.IGNORECASE,
         )
     )
-    if pro_label_evidence:
-        return 'FollowMe Pro M7 43"'
-    if "M5" in raw_model_text or "S32FM50" in raw_model_text:
-        return 'FollowMe M5 32"'
-    if "M7" in raw_model_text or "S32FM70" in raw_model_text or "S32DM70" in raw_model_text:
-        return 'FollowMe M7 32"'
-    if price_int and 12000 <= price_int <= 14000 and any(token in text for token in ["32", "M7", "S32FM70", "S32DM70", "4K"]):
-        return 'FollowMe M7 32"'
-    if "M5" in context_upper or "S32FM50" in context_upper:
-        return 'FollowMe M5 32"'
-    if "M7" in context_upper or "S32FM70" in context_upper or "S32DM70" in context_upper or "4K" in context_upper:
-        return 'FollowMe M7 32"'
-    # Price is not identity evidence.  Store signs, unrelated promotions and
-    # OCR hallucinations must never turn a 32-inch FollowMe into Pro 43.
-    return 'FollowMe M7 32"'
+    context_has_owned_identity = bool(
+        re.search(
+            r"(?:同一台|同一主體|自己的|附著|機身|標籤|側標|規格牌|型號|牌面|寫著)"
+            r".{0,40}(?:M5|M7|S(?:27|32|43)(?:DM|FM)\d{3}[A-Z]{2}|27\s*(?:吋|型)|32\s*(?:吋|型)|43\s*(?:吋|型))"
+            r"|(?:M5|M7|S(?:27|32|43)(?:DM|FM)\d{3}[A-Z]{2}|27\s*(?:吋|型)|32\s*(?:吋|型)|43\s*(?:吋|型))"
+            r".{0,40}(?:同一台|同一主體|自己的|附著|機身|標籤|側標|規格牌|型號|牌面|寫著)",
+            str(context_text or ""),
+            re.IGNORECASE,
+        )
+    )
+    if context_has_owned_identity or pro_label_evidence:
+        family = resolve_catalog_followme_model(raw_model, context_text)
+        if family:
+            if pro_label_evidence and family in {'FollowMe M7 32"', 'FollowMe M7 43"'}:
+                return family.replace("FollowMe M7", "FollowMe Pro M7")
+            return family
+
+    raw_panel_family = normalize_confirmed_followme_model(raw_model)
+    if raw_panel_family and raw_panel_family != FOLLOWME_UNRESOLVED:
+        return raw_panel_family
+
+    # FollowMe identity is confirmed, but its family is not.  Keep the truthful
+    # unresolved family instead of defaulting to the most common M7 bundle.
+    return FOLLOWME_UNRESOLVED
 
 
 def explicit_followme_model_has_same_pass_physical_evidence(raw_model, record):
@@ -613,57 +618,26 @@ def infer_followme_from_physical_clues(price=None, context_text=""):
     if not has_followme_word or followme_physical_signature_score(raw_text) < 2:
         return None
 
-    digits = "".join(c for c in str(price or "") if c.isdigit())
-    price_int = int(digits) if digits else None
-    code_name = match_followme_by_code(text, get_followme_products())
-    if code_name:
-        return code_name
     normalized = normalize_followme_model("FollowMe", price, raw_text)
     if normalized:
         return normalized
-    if "M5" in text or "S32FM50" in text:
-        return 'FollowMe M5 32"'
-    if "M7" in text or "S32FM70" in text or "S32DM70" in text or "4K" in text:
-        return 'FollowMe M7 32"'
     if has_followme_word or positive_followme_evidence:
-        return normalize_followme_model(None, price, context_text)
+        return FOLLOWME_UNRESOLVED
     return None
 
 
 def rescue_followme_32_from_side_label(context_text=""):
-    """Rescue FollowMe 32 when a side spec label and M7 price are clearly described."""
+    """Rescue a FollowMe only when the same-unit label identifies its family."""
     raw_text = str(context_text or "")
     text = raw_text.upper()
     if not has_positive_followme_word(raw_text) or followme_physical_signature_score(raw_text) < 2:
         return None
-    has_product = "4K" in text or "移動式智慧聯網組" in raw_text
-    has_32 = bool(re.search(r'(?:32\s*(?:吋|型)|32\s*["”]|[(（]\s*32\s*["”]?\s*[)）])', raw_text, re.IGNORECASE))
+    has_product = "FOLLOWME" in text or "FOLLOW ME" in text or "移動式智慧聯網組" in raw_text
     has_side_label = any(token in raw_text for token in ["側標", "規格側標", "右側", "黑色規格", "3840x2160", "HDR10", "Type-C", "HDMI"])
     prices = [int(value.replace(",", "")) for value in re.findall(r'(?<!\d)(1[23],?9[09]0)(?!\d)', raw_text)]
-    has_m7_price = any(price in {12900, 12990, 13900, 13990} for price in prices)
-    if has_product and has_32 and has_side_label and has_m7_price:
-        return {"model": 'FollowMe M7 32"', "price": str(next(price for price in prices if price in {12900, 12990, 13900, 13990}))}
-    return None
-
-
-def match_followme_by_price(price_int, products):
-    if not price_int:
-        return None
-    candidates = []
-    for product in products:
-        price_info = product.get("price", {})
-        low, high = price_info.get("range_twd") or price_info.get("expected_range_twd") or [None, None]
-        if low is not None and high is not None and low <= price_int <= high:
-            candidates.append(product.get("name"))
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def match_followme_by_code(text, products):
-    for product in products:
-        for code in product.get("model_codes", []):
-            compact = code.upper().replace("LS", "").replace("XZW", "")
-            if compact and compact in text:
-                return product.get("name")
+    family = resolve_catalog_followme_model(raw_text)
+    if has_product and has_side_label and family and family != FOLLOWME_UNRESOLVED:
+        return {"model": family, "price": str(prices[0]) if prices else None}
     return None
 
 
@@ -3482,8 +3456,7 @@ def process_single_image(
         ):
             data_obj.pop(internal_key, None)
 
-        # 2. Strict Model Check -> Fuzzy Recovery [v18.04]
-        import difflib # Ensure import available (inline is safe)
+        # 2. Catalog-bound model check and unique OCR correction.
         raw_model = data_obj.get("model")
         raw_other_brand_model = infer_other_brand_model(thinking_text, raw_model)
         if raw_other_brand_model and is_samsung_model_like(raw_model):
@@ -3516,7 +3489,7 @@ def process_single_image(
             in_list = clean_model in valid_models_list
             console.print(f"[dim]🔍 [比對追蹤] Raw='{raw_model}' -> Clean='{clean_model}' -> InList={in_list}[/dim]")
 
-            # [v18.15] FollowMe Logic (Price-Based Manual Mapping)
+            # FollowMe mapping uses only same-unit identity and fixture evidence.
             is_followme_bypass = False # [v18.44] Flag to pass strict checking
 
             # [v18.99] 修復：如果 AI 已識別出有效的 S 型號 (如 S32M703UC)，就不要強制覆蓋為 FollowMe
@@ -3575,6 +3548,7 @@ def process_single_image(
             elif valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
                 exact_model = strict_known_model(clean_model, valid_models_list)
                 prefix_completion = unique_known_model_completion(clean_model, valid_models_list)
+                safe_correction = safe_known_model_correction(clean_model, valid_models_list)
                 if exact_model:
                     data_obj["model"] = exact_model
                 elif prefix_completion:
@@ -3583,6 +3557,11 @@ def process_single_image(
                     data_obj["model_prefix_completion_from"] = clean_model
                     console.print(
                         f"[yellow]⚠️ [Model Guard] 價牌短碼唯一補全，要求第二輪獨立確認: {clean_model} → {prefix_completion}[/yellow]"
+                    )
+                elif safe_correction:
+                    data_obj["model"] = safe_correction
+                    console.print(
+                        f"[yellow]⚠️ [Model Guard] 依同尺寸家族唯一校正 OCR 型號: {clean_model} → {safe_correction}[/yellow]"
                     )
                 elif should_compare_official_price(fname) and is_samsung_model_like(clean_model) and try_discover_model(clean_model):
                     console.print(f"[bold green]✨ [Auto-Discover] 官網驗證成功：{clean_model}[/bold green]")
@@ -3610,11 +3589,6 @@ def process_single_image(
                 data_obj["price"] = None
                 final_model = None
                 model_rescue_blocked = True
-
-            corrected_followme_price = normalize_followme_price(final_model, data_obj.get("price"), thinking_text)
-            if corrected_followme_price:
-                console.print(f"[yellow]⚠️ [FollowMe Pro 價格校正] {data_obj.get('price')} → {corrected_followme_price}[/yellow]")
-                data_obj["price"] = corrected_followme_price
 
             # 從思考文字中抓取尺寸描述（如「43型」、「32型」、「27型」）
             size_in_desc = re.search(r'(\d{2})型', thinking_text)
@@ -3819,7 +3793,7 @@ def process_single_image(
             and narration_model_fill_allowed
             and narration_price_fill_allowed
         ):
-            console.print("[yellow]⚠️ [FollowMe 側標救援] 讀到 FollowMe 4K/32 側標與 12,900-13,990 價牌，覆蓋遠景誤判[/yellow]")
+            console.print("[yellow]⚠️ [FollowMe 側標救援] 同一實機側標已確認 FollowMe 家族，覆蓋遠景誤判[/yellow]")
             data_obj["view_type"] = "單機"
             data_obj["category"] = "單機"
             data_obj["screen_status"] = data_obj.get("screen_status") or "正常"

@@ -2,7 +2,7 @@
 
 > **GitHub Copilot 必讀！每次修改前先讀這份文件！**
 >
-> 最後更新：2026-02-04
+> 最後更新：2026-07-18
 
 ---
 
@@ -18,10 +18,13 @@
 
 ### 錯誤案例 2：擅自編造型號
 
-- 用戶有型號表（型號表.txt），FollowMe 型號是：
-  - `FollowMe M7 32"`
-  - `FollowMe Pro M7 43"`
+- 用戶有型號表（型號表.txt），FollowMe 正式系列是：
+  - `FollowMe M5 27"`
   - `FollowMe M5 32"`
+  - `FollowMe M7 32"`
+  - `FollowMe Pro M7 32"`
+  - `FollowMe M7 43"`
+  - `FollowMe Pro M7 43"`
 - 我亂寫成：`LS32CM801UCXZW`、`LS27CM801UCXZW`
 - **這是錯誤！必須查看型號表！**
 
@@ -111,11 +114,15 @@ with open(image_path, 'rb') as f:
 
 ## 1. 型號表（型號表.txt）
 
-### FollowMe 系列（3 個型號）
+### FollowMe 系列（6 個正式名稱）
 
-- `FollowMe M7 32"`（4K 版）
-- `FollowMe Pro M7 43"`（43吋版）
-- `FollowMe M5 32"`（FHD 版）
+- `FollowMe M5 27"`
+- `FollowMe M5 32"`
+- `FollowMe M7 32"`
+- `FollowMe Pro M7 32"`
+- `FollowMe M7 43"`
+- `FollowMe Pro M7 43"`
+- 已確認是 FollowMe、但照片無法分出 M5／M7／Pro／尺寸時，保留 `FollowMe 型號未細分`，不可猜測。
 
 ### 型號格式規則
 
@@ -133,10 +140,12 @@ with open(image_path, 'rb') as f:
 - 處理雜訊輸入（如 `24SAMSUNG S24F532EAC`）
 - 用正則提取：`([SFC][0-9]{2}[A-Z0-9]+)`
 
-### v18.61 Single-Digit Tolerance
+### 現行安全校正
 
-- 允許單一數字差異（OCR 把 7 讀成 1）
-- 會自動修正到型號表中的正確型號
+- 官網完整碼只移除開頭 `L` 與結尾 `XZW`，中間與尾碼不得任意截短。
+- 先做完整型號精確比對，再做唯一的尾碼補全。
+- 近似校正只允許同尺寸、同系列且唯一的有限候選；多個候選時必須保留人工確認，不得用低門檻模糊比對硬選一款。
+- 例如 `LS27HG806EFXZW` 正規化為 `S27HG806EF`，不可變成較短或不存在的型號。
 
 ---
 
@@ -150,7 +159,10 @@ with open(image_path, 'rb') as f:
 - [ ] **第零步：FollowMe 優先檢查**（最高優先級！）
 - [ ] 第一步：遠景判定（4 項條件）
 - [ ] 第二步：型號價格提取
-- [ ] FollowMe 三個型號：M7 32"、Pro M7 43"、M5 32"
+- [ ] FollowMe 六個正式名稱與 `FollowMe 型號未細分`
+- [ ] 所有 FollowMe 都是 Smart 系列，不要求 OSD
+- [ ] Pro 只可由同一台實機或附著牌面明確寫出 `Pro`
+- [ ] 價格、尺寸與共用面板 SKU 不得用來推導 Pro
 - [ ] 型號辨識公式：S/C/F + 2位數字 + 1位英文 + 後續字元
 - [ ] 價格辨識規則（需要 $ 或千分號）
 - [ ] 輸出格式：**80-100 字**描述 + JSON
@@ -179,9 +191,12 @@ with open(image_path, 'rb') as f:
 
 ## FollowMe 型號判斷
 
-- 看到「FollowMe 4K」→ **FollowMe M7 32"**
-- 看到 43 吋大螢幕 → **FollowMe Pro M7 43"**
-- 看到「FollowMe FHD」→ **FollowMe M5 32"**
+- 必須先確認同一台螢幕具有 FollowMe 實機結構或附著標示；旁邊文宣不能代替實機證據。
+- 再讀同一台實機或附著牌面的 `M5／M7`、`27／32／43`、`Pro`，面板 SKU 只用來核對系列與尺寸。
+- `S32FM703UC`、`S43FM703UC` 都可能出現在一般版或 Pro 套裝；只有明確看到同機 `Pro` 才能選 Pro。
+- 43 吋不等於 Pro，價格也不代表型號。
+- 所有 FollowMe 都是 Smart 系列，不需要 OSD 畫面。
+- 證據不足時輸出 `FollowMe 型號未細分`，不可用價格、尺寸或猜測補齊。
 
 ---
 

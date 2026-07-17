@@ -178,6 +178,7 @@ def main() -> None:
         "同一台螢幕連著白色垂直支架、圓形落地底座與自己的托盤。"
     )
     assert ocr.normalize_followme_model("FollowMe", 17990, explicit_pro) == 'FollowMe Pro M7 43"'
+    assert ocr.normalize_followme_model("S43FM703UC", 17990, explicit_pro) == 'FollowMe Pro M7 43"'
 
     assert is_placeholder_model("SXXTEST001")
     assert strict_known_model("S24F332EAC", ["S24F332EAC"]) == "S24F332EAC"

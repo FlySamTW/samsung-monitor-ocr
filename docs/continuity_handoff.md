@@ -494,3 +494,12 @@
 - backend 與 uploader 已同步 hidden 換到 revision `20260717.45`，正式 202606 由 `356/1,393` 恢復後持續增加；畫面實測總盤 `65,700/151,714`、202606 `369/1,393`、狀態正在執行，LLM 自然語言、照片／檔名、右欄卡片及上傳數同步。742 的 Drive exact receipt：ID `1x5naroxGTEOgrScGsbIrMf7PsG7Z-y-W`，revision `.45`。
 - `continue_after_period_priority.py` 已重新以單例背景模式啟動，監看唯一 202606 leaf；202606 完成後接回保留的 202601 staging，再依固定 CSV 接續 202602–202605。不得開第二套 OCR 或可見終端機。
 - Google Drive 年份資料夾 `2022`–`2026` 已從舊 `00_商化照片(已整理)`（ID `1xBaWDRjlcP-gMV-bM0K1S4gOJZ0QJJHK`）直接移到 `00_商化照片`（ID `16X5qALC3zRYc7PpnexXLYprorBzBtT_f`）之下；沒有 `已整理` 中介層。舊資料夾已空但保留，`202607` 未移動也不得處理。rclone `samsung_ocr_drive` 已改指向新根 ID。
+
+## 2026-07-18 `.52` 與線上回報表同步型號規則
+
+- 新增 `skills/model_catalog_rules.py`，集中管理完整型號正規化、六款 FollowMe 名稱、13 組面板／套裝對照與 `FollowMe 型號未細分`。主程式、型號比對、官網查價、補跑、回歸與改名工具已改用同一份權威。
+- 官網碼只移除前導 `L` 與結尾 `XZW`；安全修正限於精確命中、唯一 1–3 字元尾碼補全，或同尺寸同系列內唯一的有限近似候選。多候選時不得自動填入不存在或不確定的型號。
+- FollowMe 正式名稱為 M5 27、M5 32、M7 32、Pro M7 32、M7 43、Pro M7 43。面板 SKU 只核對一般版系列與尺寸；Pro 必須有同一台實機或附著牌面的明確 `Pro`。價格、43 吋與共用 SKU 都不得推導 Pro。
+- 所有 FollowMe 都是 Smart 系列，不要求 OSD。價格只保存與比對現場價／官網價，不參與型號身分判斷。
+- 本次只更新程式、提示詞、測試與 Git，不重啟目前可能執行中的 OCR、不碰照片及雲端資料；`.52` 會在下一次安全重啟後載入。
+- 原工作目錄內既有的 Dashboard 暫存檔及其他未追蹤工具不屬於本次提交，必須原樣保留。

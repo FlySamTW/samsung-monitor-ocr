@@ -554,8 +554,9 @@ class EvidenceContractTests(unittest.TestCase):
 
     def test_followme_friendly_names_equal_only_their_established_physical_sku_family(self):
         self.assertTrue(batch.followme_models_equivalent('FollowMe M7 32"', "S32FM703UC"))
-        self.assertTrue(batch.followme_models_equivalent('FollowMe M5 32"', "LS32FM503UCXZW"))
-        self.assertTrue(batch.followme_models_equivalent('FollowMe Pro M7 43"', "S43FM703UC"))
+        self.assertTrue(batch.followme_models_equivalent('FollowMe M5 32"', "LS32FM501ECXZW"))
+        self.assertTrue(batch.followme_models_equivalent('FollowMe M7 43"', "S43FM703UC"))
+        self.assertFalse(batch.followme_models_equivalent('FollowMe Pro M7 43"', "S43FM703UC"))
         self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S43FM703UC"))
         self.assertFalse(batch.followme_models_equivalent('FollowMe M5 32"', "S32FM703UC"))
         self.assertFalse(batch.followme_models_equivalent('FollowMe M7 32"', "S32FM803UC"))
@@ -620,6 +621,13 @@ class EvidenceContractTests(unittest.TestCase):
         decision = evidence_contract_decision(generic_m7)
         self.assertFalse(decision["valid"])
         self.assertIn("followme_pro_identity_evidence_missing", decision["reasons"])
+
+        price_only_pro = dict(generic_m7)
+        price_only_pro["price"] = "17990"
+        self.assertEqual(
+            followme_variant_evidence_reasons(price_only_pro),
+            ["followme_pro_identity_evidence_missing"],
+        )
 
         explicit_pro = dict(generic_m7)
         explicit_pro["price"] = "17990"
@@ -1337,7 +1345,7 @@ class EvidenceContractTests(unittest.TestCase):
             "file_name": "M-202601-followme.jpg",
             "view_type": "單機",
             "category": "單機",
-            "model": "FollowMe Pro M7 43\"",
+            "model": "FollowMe M7 43\"",
             "price": "17990",
             "thinking": "唯一主角是直立螢幕，下方連著白色圓形底座與託盤。",
             **evidence(1, True, "matched", physical),
@@ -1435,7 +1443,7 @@ class EvidenceContractTests(unittest.TestCase):
             "file_name": "M-202601-followme-minor-omission.jpg",
             "view_type": "單機",
             "category": "單機",
-            "model": 'FollowMe Pro M7 43"',
+            "model": 'FollowMe M7 43"',
             "price": "17990",
             "thinking": "我看到直立螢幕連著白色直桿、圓形底座與托盤。",
             "complete_screen_count": 4,
@@ -1646,7 +1654,7 @@ class EvidenceContractTests(unittest.TestCase):
             {"cue": "direct_followme_branding_on_unit", "same_subject": True, "strength": "direct"},
         ]
         row = {
-            "view_type": "單機", "category": "單機", "model": 'FollowMe Pro M7 43"',
+            "view_type": "單機", "category": "單機", "model": 'FollowMe M7 43"',
             "price": "17990", "thinking": narration,
             **evidence(3, True, "matched", physical),
         }

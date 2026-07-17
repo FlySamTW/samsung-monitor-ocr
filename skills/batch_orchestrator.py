@@ -15,6 +15,11 @@ from typing import List, Optional, Callable
 from skills.prompt_versioning import PromptManager
 from skills.image_processing import ImageProcessor
 from skills.model_matching import ModelMatcher
+from skills.model_catalog_rules import (
+    FOLLOWME_UNRESOLVED,
+    normalize_confirmed_followme_model,
+    normalize_followme_family,
+)
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import (
@@ -261,11 +266,8 @@ class BatchOrchestrator:
         if not compact.startswith("FOLLOWME"):
             return model
 
-        if "PRO" in compact or "43" in compact or "S43FM" in compact:
-            return 'FollowMe Pro M7 43"'
-        if "M5" in compact or "S32FM50" in compact or "FM501" in compact:
-            return 'FollowMe M5 32"'
-        return 'FollowMe M7 32"'
+        family = normalize_followme_family(text) or normalize_confirmed_followme_model(text)
+        return family or FOLLOWME_UNRESOLVED
 
     def _standardize_followme_result(self, result: dict) -> dict:
         standard_model = self._standardize_followme_model(result.get("model"))

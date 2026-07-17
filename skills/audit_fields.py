@@ -4,6 +4,11 @@ from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
+from skills.model_catalog_rules import (
+    FOLLOWME_UNRESOLVED,
+    normalize_confirmed_followme_model,
+    normalize_followme_family,
+)
 from skills.model_validation import is_placeholder_model, normalize_model_token
 
 
@@ -11,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260718.51"
+EVIDENCE_GUARD_REVISION = "20260718.52"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -647,24 +652,16 @@ def narration_has_unmistakable_followme_fixture(text: str) -> bool:
 
 def followme_identity_key(model: Any) -> str:
     """Map only established friendly names and physical SKUs to one variant."""
-    text = re.sub(r"[^A-Z0-9]", "", str(model or "").upper())
-    if not text:
-        return ""
-    if text.startswith("FOLLOWME"):
-        if "PRO" in text or "43" in text:
-            return "PRO_M7_43"
-        if "M5" in text:
-            return "M5_32"
-        if "M7" in text:
-            return "M7_32"
-        return ""
-    if re.fullmatch(r"(?:LS|S)?43FM70\d[A-Z0-9]*", text):
-        return "PRO_M7_43"
-    if re.fullmatch(r"(?:LS|S)?32FM50\d[A-Z0-9]*", text):
-        return "M5_32"
-    if re.fullmatch(r"(?:LS|S)?32FM70\d[A-Z0-9]*", text):
-        return "M7_32"
-    return ""
+    family = normalize_followme_family(model) or normalize_confirmed_followme_model(model)
+    return {
+        'FollowMe M5 27"': "M5_27",
+        'FollowMe M5 32"': "M5_32",
+        'FollowMe M7 32"': "M7_32",
+        'FollowMe Pro M7 32"': "PRO_M7_32",
+        'FollowMe M7 43"': "M7_43",
+        'FollowMe Pro M7 43"': "PRO_M7_43",
+        FOLLOWME_UNRESOLVED: "UNRESOLVED",
+    }.get(family, "")
 
 
 def followme_models_equivalent(first: Any, second: Any) -> bool:
@@ -673,29 +670,26 @@ def followme_models_equivalent(first: Any, second: Any) -> bool:
 
 
 def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
-    """Require observable identity evidence before accepting FollowMe Pro 43.
+    """Require explicit same-unit ``Pro`` evidence for every Pro bundle.
 
-    Generic ``Follow Me 4K`` branding, a white mobile stand, and a 12,990
-    price describe the 32-inch M7 bundle as well.  A structured Pro/43 answer
-    may therefore be accepted only when narration cites Pro, 43-inch/S43FM,
-    or the established 17,990 price band from the same photographed product.
-    This is a rejection-only check and never rewrites the model from price.
+    Size, price and panel SKU can all be shared with a regular bundle.  They
+    may validate other fields, but none of them can upgrade a model to Pro.
     """
-    if followme_identity_key(record.get("model")) != "PRO_M7_43":
+    if followme_identity_key(record.get("model")) not in {"PRO_M7_32", "PRO_M7_43"}:
         return []
 
     narration = str(record.get("thinking") or record.get("narration") or "")
-    upper = narration.upper()
-    explicit_identity = bool(
-        "FOLLOWME PRO" in upper
-        or "FOLLOW ME PRO" in upper
-        or "S43FM" in upper
-        or re.search(r"(?<!\d)43\s*(?:吋|型|INCH|\")", upper)
+    same_unit_pro_label = bool(
+        re.search(
+            r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)"
+            r".{0,40}(?<![A-Z])PRO(?![A-Z])"
+            r"|(?<![A-Z])PRO(?![A-Z]).{0,40}"
+            r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)",
+            narration,
+            re.IGNORECASE,
+        )
     )
-    digits = re.sub(r"\D", "", str(record.get("price") or ""))
-    price = int(digits) if digits else None
-    established_pro_price = price is not None and 16000 <= price <= 20000
-    if explicit_identity or established_pro_price:
+    if same_unit_pro_label:
         return []
     return ["followme_pro_identity_evidence_missing"]
 
@@ -974,12 +968,6 @@ def build_rerun_decision(record: Dict[str, Any]) -> Tuple[str, str, str]:
 
     if ("遠景" in category or view_type == "遠景") and _text_has_any(combined, SINGLE_UNIT_CLUES):
         reasons.append("遠景判斷與單機線索衝突")
-
-    if "FollowMe" in model_text or "FollowMe" in combined or "FOLLOW ME" in combined.upper():
-        if price_int and price_int >= 15000 and "Pro M7 43" not in model_text:
-            reasons.append("FollowMe 高價但型號不像 Pro 43")
-        if price_int and 9900 <= price_int <= 11000 and "M5 32" not in model_text and "M7 32" in model_text:
-            reasons.append("FollowMe 10990 區間疑似 M5/M7 混淆")
 
     if price_status in ("high", "low", "missing", "unknown", "abnormal"):
         reasons.append(f"價格狀態異常:{price_status}")

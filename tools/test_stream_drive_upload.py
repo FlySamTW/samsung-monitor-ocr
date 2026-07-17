@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -13,6 +14,7 @@ from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.photo_rename_planner import copy_planned_image_idempotent, plan_single_image
 from tools.rclone_drive_upload import md5_file, read_csv
 from tools.stream_drive_upload import (
+    COMPATIBLE_PENDING_REVISION_MIGRATIONS,
     _YEAR_FOLDER_ID_CACHE,
     _append_uploaded_atomic,
     enqueue_finalized_result,
@@ -110,7 +112,7 @@ class StreamDriveUploadTests(unittest.TestCase):
     def setUp(self):
         _YEAR_FOLDER_ID_CACHE.clear()
 
-    def test_immediately_previous_pending_revision_migrates_with_durable_proof(self):
+    def test_explicitly_approved_pending_revision_migrates_with_durable_proof(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "M-新北市-中和區-TK3C-中和-1333.jpg"
@@ -121,7 +123,12 @@ class StreamDriveUploadTests(unittest.TestCase):
             original["evidence_guard_revision"] = "20260718.49"
             job.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
 
-            migrated = migrate_compatible_pending_jobs(output)
+            with patch.dict(
+                COMPATIBLE_PENDING_REVISION_MIGRATIONS,
+                {"20260718.49": EVIDENCE_GUARD_REVISION},
+                clear=True,
+            ):
+                migrated = migrate_compatible_pending_jobs(output)
             upgraded = json.loads(job.read_text(encoding="utf-8"))
 
             self.assertEqual(migrated, 1)
@@ -134,6 +141,20 @@ class StreamDriveUploadTests(unittest.TestCase):
             self.assertEqual(len(archives), 1)
             archived = json.loads(archives[0].read_text(encoding="utf-8"))
             self.assertEqual(archived, original)
+
+    def test_previous_model_rule_revision_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-新北市-中和區-TK3C-中和-1334.jpg"
+            make_image(source)
+            output = root / "output"
+            job = enqueue_finalized_result(verified_result(source), output_dir=output)
+            payload = json.loads(job.read_text(encoding="utf-8"))
+            payload["evidence_guard_revision"] = "20260718.51"
+            job.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "unapproved pending upload revision"):
+                migrate_compatible_pending_jobs(output)
 
     def test_unapproved_pending_revision_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,8 +182,13 @@ class StreamDriveUploadTests(unittest.TestCase):
             payload["target_name"] = "tampered.jpg"
             job.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-            with self.assertRaisesRegex(RuntimeError, "filename changed"):
-                migrate_compatible_pending_jobs(output)
+            with patch.dict(
+                COMPATIBLE_PENDING_REVISION_MIGRATIONS,
+                {"20260718.49": EVIDENCE_GUARD_REVISION},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "filename changed"):
+                    migrate_compatible_pending_jobs(output)
 
     def test_exact_drive_query_returns_every_duplicate_name_with_hash_and_id(self):
         calls = []

@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import re
 
+from skills.model_catalog_rules import (
+    compact_model,
+    normalize_followme_family,
+    normalize_samsung_model,
+    samsung_model_family,
+    unique_normalized_models,
+)
+
 
 PLACEHOLDER_MODEL_RE = re.compile(
     r"^(?:S?XXTEST\d*|TEST(?:MODEL)?\d*|MODEL\d*|UNKNOWN|NONE|NULL|N/?A|TBD|PLACEHOLDER)$",
@@ -27,14 +35,12 @@ def is_placeholder_model(value: object) -> bool:
 
 
 def strict_known_model(value: object, valid_models: list[str]) -> str | None:
-    """Return a known model only when normalization yields an exact match."""
-    target = normalize_model_token(value)
+    """Return a catalog model only when an official/retailer alias matches."""
+    family = normalize_followme_family(value)
+    target = compact_model(family) if family else normalize_samsung_model(value)
     if not target or is_placeholder_model(target):
         return None
-    for model in valid_models or []:
-        if normalize_model_token(model) == target:
-            return model
-    return None
+    return unique_normalized_models(valid_models or []).get(target)
 
 
 def unique_embedded_known_model(value: object, valid_models: list[str]) -> str | None:
@@ -64,18 +70,98 @@ def unique_embedded_known_model(value: object, valid_models: list[str]) -> str |
 
 def unique_known_model_completion(value: object, valid_models: list[str]) -> str | None:
     """Complete only a unique short retailer SKU with a trailing catalog suffix."""
-    target = re.sub(r"[^A-Z0-9]", "", normalize_model_token(value))
-    if len(target) < 8 or not re.fullmatch(r"S\d{2}[A-Z0-9]+", target) or is_placeholder_model(target):
+    target = normalize_samsung_model(value)
+    if len(target) < 6 or not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]+", target) or is_placeholder_model(target):
         return None
     matches: dict[str, str] = {}
-    for model in valid_models or []:
-        normalized = re.sub(r"[^A-Z0-9]", "", normalize_model_token(model))
+    for normalized, model in unique_normalized_models(valid_models or []).items():
         missing = len(normalized) - len(target)
         if normalized.startswith(target) and 1 <= missing <= 3:
             matches.setdefault(normalized, model)
     if len(matches) != 1:
         return None
     return next(iter(matches.values()))
+
+
+def _damerau_levenshtein(left: str, right: str) -> int:
+    rows = len(left) + 1
+    columns = len(right) + 1
+    matrix = [[0] * columns for _ in range(rows)]
+    for row in range(rows):
+        matrix[row][0] = row
+    for column in range(columns):
+        matrix[0][column] = column
+    for row in range(1, rows):
+        for column in range(1, columns):
+            substitution = 0 if left[row - 1] == right[column - 1] else 1
+            value = min(
+                matrix[row - 1][column] + 1,
+                matrix[row][column - 1] + 1,
+                matrix[row - 1][column - 1] + substitution,
+            )
+            if (
+                row > 1
+                and column > 1
+                and left[row - 1] == right[column - 2]
+                and left[row - 2] == right[column - 1]
+            ):
+                value = min(value, matrix[row - 2][column - 2] + 1)
+            matrix[row][column] = value
+    return matrix[-1][-1]
+
+
+def known_model_suggestions(
+    value: object,
+    valid_models: list[str],
+    *,
+    limit: int = 4,
+) -> list[str]:
+    """Return same-size/family suggestions without authorizing a correction."""
+    target = normalize_samsung_model(value)
+    family = samsung_model_family(target)
+    if len(target) < 6 or not family:
+        return []
+    scored = []
+    for normalized, model in unique_normalized_models(valid_models or []).items():
+        if samsung_model_family(normalized) != family or abs(len(normalized) - len(target)) > 2:
+            continue
+        scored.append((_damerau_levenshtein(target, normalized), normalized, model))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [model for _, _, model in scored[: max(0, limit)]]
+
+
+def safe_known_model_correction(value: object, valid_models: list[str]) -> str | None:
+    """Apply the live form's bounded unique-nearest correction rule.
+
+    The model family/size must match.  One edit is allowed for eight-character
+    inputs; two edits require at least nine characters.  A tied nearest result
+    is ambiguous and therefore not corrected automatically.
+    """
+    exact = strict_known_model(value, valid_models)
+    if exact:
+        return exact
+    completed = unique_known_model_completion(value, valid_models)
+    if completed:
+        return completed
+
+    target = normalize_samsung_model(value)
+    family = samsung_model_family(target)
+    if len(target) < 8 or not family:
+        return None
+    allowed_distance = 2 if len(target) >= 9 else 1
+    scored = []
+    for normalized, model in unique_normalized_models(valid_models or []).items():
+        if samsung_model_family(normalized) != family or abs(len(normalized) - len(target)) > 2:
+            continue
+        scored.append((_damerau_levenshtein(target, normalized), normalized, model))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]))
+    best_distance = scored[0][0]
+    nearest = [item for item in scored if item[0] == best_distance]
+    if best_distance > allowed_distance or len(nearest) != 1:
+        return None
+    return nearest[0][2]
 
 
 def has_photo_label_model_evidence(
@@ -91,8 +177,8 @@ def has_photo_label_model_evidence(
     SKU to the main subject's readable physical label.  This helper does not
     authorize upload; the accuracy gate still requires independent consensus.
     """
-    token = re.sub(r"[^A-Z0-9]", "", normalize_model_token(value))
-    if not re.fullmatch(r"S\d{2}[A-Z0-9]{5,}", token) or is_placeholder_model(token):
+    token = normalize_samsung_model(value)
+    if not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,}", token) or is_placeholder_model(token):
         return False
 
     payload = record if isinstance(record, dict) else {}
