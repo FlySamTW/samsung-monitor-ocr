@@ -826,6 +826,58 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertFalse(result["unresolved"])
         self.assertFalse(result["retry"])
 
+    def test_xinzhuang_1458_pixel_authority_overrides_false_single_majority(self):
+        image_hash = "66901c0a7a233affd6654e53a9a273a6e0b52803a219e869b6d430852fccf116"
+        passes = [
+            make_pass(
+                "單機",
+                "S32FM703UC",
+                "12900",
+                3,
+                True,
+                "matched",
+                [],
+                image_hash=image_hash,
+            ),
+            make_pass(
+                "單機",
+                "S32FM703UC",
+                "12990",
+                4,
+                True,
+                "matched",
+                [],
+                image_hash=image_hash,
+            ),
+            make_pass(
+                "遠景",
+                None,
+                None,
+                3,
+                False,
+                "not_visible",
+                [],
+                image_hash=image_hash,
+            ),
+        ]
+        passes[-1]["ocr_attempt"] = 3
+
+        applied = apply_human_audited_pixel_authority(
+            passes[-1], passes[:-1], max_attempts=3
+        )
+        result = finalize_three_pass_outcome(
+            passes[-1], passes[:-1], unresolved(), max_attempts=3
+        )
+
+        self.assertTrue(applied)
+        self.assertTrue(result["verified"])
+        self.assertEqual(passes[-1]["view_type"], "遠景")
+        self.assertEqual(passes[-1]["complete_screen_count"], 3)
+        self.assertFalse(passes[-1]["unique_main"])
+        self.assertEqual(passes[-1]["label_ownership"], "not_visible")
+        self.assertIsNone(passes[-1]["model"])
+        self.assertIsNone(passes[-1]["price"])
+
     def test_audited_g8_and_crowded_label_pixels_override_fixture_and_label_drift(self):
         cases = [
             (

@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260718.48"
+EVIDENCE_GUARD_REVISION = "20260718.49"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -332,6 +332,24 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
                 "strength": "strong",
             },
         ],
+        "authority": "human_audited_pixel_authority",
+    },
+    # 新莊 1458 is a wide display wall: the two complete upper monitors and
+    # the complete lower foreground monitor make three complete screens.  The
+    # first two model calls attached one nearby card to a supposed unique
+    # subject, while the third call correctly described the full-frame
+    # geometry as distant.  Bind the correction to both the immutable source
+    # bytes and the exact full-image inference bytes so no filename-only rule
+    # can affect another photo.
+    "30b54aecec4e96e1e30ed17e48cf8038834254ccbb44186d55a13ce93eced1b9": {
+        "source_file_sha256": "2b8c65940d8d63a1dd4d6acda9acf584a7d44034cf7068d760107c781afd82a5",
+        "input_image_sha256": "66901c0a7a233affd6654e53a9a273a6e0b52803a219e869b6d430852fccf116",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_visible",
+        "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
 }

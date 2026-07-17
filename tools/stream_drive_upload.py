@@ -51,9 +51,9 @@ APPROVED_DRIVE_ROOT_ID = "16X5qALC3zRYc7PpnexXLYprorBzBtT_f"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 _YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
-    # .48 only adds a conservative three-pass wide-geometry finalizer.  It does
-    # not invalidate jobs that .47 had already finalized and durably queued.
-    "20260718.47": EVIDENCE_GUARD_REVISION,
+    # .49 adds one full-image/source-hash-bound correction for 新莊-1458.
+    # No other .48 result changes, so already queued .48 jobs remain valid.
+    "20260718.48": EVIDENCE_GUARD_REVISION,
 }
 
 
