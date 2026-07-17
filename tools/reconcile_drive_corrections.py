@@ -24,7 +24,14 @@ def digest(path: Path, algorithm: str) -> str:
 
 def remote_md5(item: dict) -> str:
     hashes = item.get("Hashes") if isinstance(item.get("Hashes"), dict) else {}
-    return str(hashes.get("MD5") or item.get("MD5") or item.get("Hash") or "").strip().lower()
+    normalized_hashes = {str(key).lower(): value for key, value in hashes.items()}
+    return str(
+        normalized_hashes.get("md5")
+        or item.get("MD5")
+        or item.get("md5")
+        or item.get("Hash")
+        or ""
+    ).strip().lower()
 
 def remote_matches_receipt(item: dict, *, file_id: str, size: int, md5: str) -> bool:
     try: remote_size = int(item.get("Size", -1))
@@ -62,11 +69,19 @@ class Reconciler:
     def call(self, args: list[str]) -> tuple[int, str, str]:
         return self.runner(self.rclone, args)
 
-    def ls(self, remote_path: str) -> list[dict]:
+    def ls(self, remote_path: str, *, missing_ok: bool = False) -> list[dict]:
         rc, out, err = self.call([
             "lsjson", f"{self.remote}:{remote_path}", "--files-only", "--hash-type", "MD5"
         ])
-        if rc: raise RuntimeError(f"lsjson failed: {err.strip()}")
+        if rc:
+            missing_text = str(err or "").lower()
+            if missing_ok and (
+                "directory not found" in missing_text
+                or "object not found" in missing_text
+                or "file not found" in missing_text
+            ):
+                return []
+            raise RuntimeError(f"lsjson failed: {err.strip()}")
         try: value = json.loads(out or "[]")
         except json.JSONDecodeError as exc: raise RuntimeError(f"invalid lsjson: {exc}") from exc
         return value if isinstance(value, list) else []
@@ -128,7 +143,7 @@ class Reconciler:
         if not old_id or not old_path or old_path == new_path: self.set_error(row, "old ID/path missing or paths equal"); return
         if dry_plan:
             row["planned_command"] = ["lsjson", f"{self.remote}:{old_path}", "then deletefile --drive-use-trash and readback"]; return
-        try: old = self.ls(old_path)
+        try: old = self.ls(old_path, missing_ok=pending)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
         if pending and not old:
             try: new_after = self.ls(new_path)
@@ -141,13 +156,16 @@ class Reconciler:
             ):
                 self.set_error(row, "pending trash recovery could not verify surviving new file"); return
             row.update(status="old_trashed_verified", old_disposal_receipt="readback_old_absent_after_pending")
+            row.pop("last_error", None)
+            row.pop("last_error_at", None)
+            row.pop("planned_command", None)
             return
         if len(old) != 1 or str(old[0].get("ID", "")) != old_id: self.set_error(row, "old remote ID/path mismatch"); return
         if not pending:
             row["status"] = "old_trash_pending"; self.save()
         rc, out, err = self.call(["deletefile", f"{self.remote}:{old_path}", "--drive-use-trash"])
         if rc: self.set_error(row, f"trash failed: {err.strip()}"); return
-        try: old_after, new_after = self.ls(old_path), self.ls(new_path)
+        try: old_after, new_after = self.ls(old_path, missing_ok=True), self.ls(new_path)
         except RuntimeError as exc: self.set_error(row, str(exc)); return
         if old_after or len(new_after) != 1 or not remote_matches_receipt(
             new_after[0],
@@ -157,6 +175,9 @@ class Reconciler:
         ):
             self.set_error(row, "trash/readback verification failed"); return
         row.update(status="old_trashed_verified", old_disposal_receipt=out[-1000:])
+        row.pop("last_error", None)
+        row.pop("last_error_at", None)
+        row.pop("planned_command", None)
 
 def main() -> int:
     ap=argparse.ArgumentParser(); ap.add_argument("--output-dir",required=True); ap.add_argument("--ledger",default=""); ap.add_argument("--remote",default="samsung_ocr_drive"); ap.add_argument("--rclone",default="rclone"); ap.add_argument("--execute",action="store_true"); ap.add_argument("--phase",choices=("discover-old","upload-new","trash-old"),default="")

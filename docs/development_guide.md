@@ -907,3 +907,4 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 只有模型明確帶回「非空、但不是本次」的 request ID，形成 `request_id_mismatch`，且同類錯誤再發生於另一來源，才是跨請求串線的系統性證據並保留全域 fail-closed。任何未綁定回覆都不得參與 view／model／price 投票或上傳。
 - `tools/recover_contained_request_binding_fuse.py` 只接受第 1 或第 2 次的 missing／unverified fuse；它不回退已消耗次數，只把同一照片放回 durable retry queue 最前方，保留總上限三次、封存 fuse 並寫 recovery receipt。明確 mismatch、提示污染、前輪答案暴露、第三次失敗或狀態不一致全部拒絕。
 - 此規則落實「單張異常不得阻塞整批」：該張用完三次仍無有效證據時留下保守終局技術結果並前進下一張，禁止第 4 次；介面、照片、判讀卡與逐張上傳仍須依同一 durable 狀態同步。
+- 已確認錯名的 Drive 物件只能在新版逐張 receipt 已取得唯一 Drive ID、size、MD5 後汰換。`reconcile_drive_corrections.py` 對舊路徑送入垃圾桶後，rclone 可能以 `directory not found` 表示物件已不存在，readback 必須把這個特定狀態視為空集合，再以新物件 ID／size／MD5 驗證存活；`Hashes.md5` 與 `Hashes.MD5` 均須接受。其他 rclone 錯誤仍 fail closed，成功後清除帳本中的舊錯誤與 dry-run 指令。

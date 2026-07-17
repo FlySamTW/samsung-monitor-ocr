@@ -16,6 +16,16 @@ class FakeRclone:
             path=args[1].split(':',1)[1]; self.listings[path]=[]; return 0, 'trashed', ''
         return 1, '', 'unexpected'
 
+class MissingPathErrorsRclone(FakeRclone):
+    def __call__(self, _exe, args):
+        self.calls.append(args)
+        if args[0] == 'lsjson':
+            path=args[1].split(':',1)[1]
+            if path not in self.listings:
+                return 3, '', 'ERROR : error listing: directory not found'
+            return 0, json.dumps(self.listings[path]), ''
+        return super().__call__(_exe, args)
+
 class ReconcileDriveTests(unittest.TestCase):
     def make(self, root, status='new_ready', **extra):
         p=root/'new.jpg'; p.write_bytes(b'new')
@@ -45,6 +55,25 @@ class ReconcileDriveTests(unittest.TestCase):
             rec=self.rec(root,[row],fake); rec.trash_old(rec.rows[0])
             self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
             self.assertEqual([call[0] for call in fake.calls],['lsjson','lsjson'])
+
+    def test_pending_trash_treats_rclone_missing_path_as_absent_then_verifies_new(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
+            fake=MissingPathErrorsRclone({'2026/new.jpg':[{'ID':'new-id','Size':3,'Hashes':{'MD5':md5}}]})
+            row=self.make(root,status='old_trash_pending',new_remote_path='2026/new.jpg',new_drive_file_id='new-id',new_remote_size=3,new_remote_md5=md5)
+            rec=self.rec(root,[row],fake); rec.trash_old(rec.rows[0])
+            self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
+            self.assertEqual([call[0] for call in fake.calls],['lsjson','lsjson'])
+
+    def test_lowercase_rclone_md5_key_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
+            fake=MissingPathErrorsRclone({'2026/new.jpg':[{'ID':'new-id','Size':3,'Hashes':{'md5':md5}}]})
+            row=self.make(root,status='old_trash_pending',new_remote_path='2026/new.jpg',new_drive_file_id='new-id',new_remote_size=3,new_remote_md5=md5,last_error='stale',last_error_at='old',planned_command=['old'])
+            rec=self.rec(root,[row],fake); rec.trash_old(rec.rows[0])
+            self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
+            self.assertNotIn('last_error',rec.rows[0])
+            self.assertNotIn('planned_command',rec.rows[0])
 
     def test_discover_old_is_read_only_and_unchanged_name_never_trashes_itself(self):
         with tempfile.TemporaryDirectory() as d:
