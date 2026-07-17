@@ -789,4 +789,13 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 
 正式切換只能在照片邊界：先停止目前資料夾並保存 processed/verified/upload 斷點，維持同一個 Dashboard 分頁與 port 5002；再把工作目錄指向唯一的 202606 staging leaf，以 `restart=false` 啟動。每張通過守門後立即進逐張上傳；202601 的斷點保留，202606 完成後接續，不得整批重跑。
 
+### 202606 完成後的唯一接續方式
+
+- `tools/continue_after_period_priority.py` 是新月份插入後的窄範圍交接守門。它不擁有後端、不重載模型、不另開 Dashboard，也不建立第二套 OCR；只監看明確指定的 202606 staging leaf。
+- 202606 若意外變成 idle 且 `processed < total`，守門只對同一 leaf 呼叫 `restart=false` 的 Continue。若資料夾不是明確指定的 202606 或保留中的 202601、runtime fuse 存在、後端 contract／accuracy profile／evidence revision 不符，必須失敗封閉，不猜測下一個資料夾。
+- 只有 202606 的每一張都已成為唯一 `auto_verified=true`、`auto_review_required=false`、`stream_upload_queued=true` 的終局記錄，且每個 source_item_id 都同時通過兩層像素綁定：終局記錄的 `input_image_sha256` 必須等於 staging 實際檔案 SHA，Drive receipt 的 `source_sha256` 必須等於 `original_source_path` 原圖實際 SHA；receipt 另須具有相同 run、revision、非空 Drive ID、遠端路徑及正確發布檔 SHA，failed 目錄沒有同一 source_item_id。最後還必須滿足 `processed=success=verified=total`、failed/review/unknown 全為 0、後端 idle、唯一 uploader 存活、逐張上傳 `pending=0/working=0`，才可把同一後端切回保留的 202601 staging leaf。不得假設 staging 複本與原始來源檔的位元 SHA 必然相同。
+- 切換前必須先證明候選 CSV 第一群組與 202601 staging 的 period、來源資料匣 SHA-1 短碼、照片數完全相符；202606 不得混入候選群組。切換後再次讀回 `/api/status`，證明同一後端真的在指定 leaf 以 `restart=false` 運行。
+- 接回 202601 後，只能有一個 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging`；它依候選 CSV 固定順序完成 202601、202602、202603、202604、202605。monitor 的單例鎖保留到 runner 以 exit 0 結束；summary 必須晚於本次啟動，且五個月份的來源 digest、staging、queued/staged/processed 數均完全相符。任何舊 summary 或其他 staged runner 都會阻止第二個 runner 啟動。
+- monitor 與 runner 都使用背景無視窗模式，stdout/stderr 寫入 `logs/`。成功交接證據寫入 `_ocr_audit/period_priority_continuation_receipt.json`；異常、90 分鐘無進度或整體逾時寫入 alert 並失敗封閉，不得用反覆彈出的終端機重試。
+
 Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json` 映回原始資料夾後再合併 live stats；不能直接拿 staging 路徑和 `folder_discovery.csv` 的來源路徑比較。新增月份處理第 1 張後，`overall_progress.processed_images` 就必須增加，不能等整個月份完成才跳數。永久測試為 `test_staging_progress_maps_to_original_folder_and_moves_total_counter`。

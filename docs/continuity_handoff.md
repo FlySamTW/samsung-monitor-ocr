@@ -469,3 +469,11 @@
 - `南投-530` 三輪均為同一原圖 SHA、request binding 正確、無前輪答案、無提示污染；第一輪遠景、後兩輪皆獨立看到同主體白色立架／圓底座／FollowMe 產品卡。舊邏輯誤把內容分歧標成技術錯誤；`.42` 改為兩輪 FollowMe 實體共識定案，型號／價格沒有兩輪一致就維持空白。530 已用既有三輪證據離線結案，沒有第 4 次呼叫，並於 15:48:46 以 `FollowMe_型號未細分-無價格` 確認取得逐張上傳收據。
 - 47 項三輪定案測試與完整 critical regressions 全通過。正式 backend 與 uploader 在照片邊界、舊上傳佇列歸零後以 hidden window 換至 `.42`；既有 Chrome 分頁未新開。Dashboard 已實際看到 `65,356/151,714`、202606 `25/1,393`、自然 LLM 判讀、同步圖片／檔名／右欄卡片、上傳總數 53,385 持續增加。
 - 邊界停止前 `草屯-541` 的第一輪模型已回應但尚未寫入 evidence trace；換版後只允許剩餘兩次呼叫，因此留下真正的 `three_healthy_bound_passes_required` 技術例外，沒有冒充內容成功，也沒有第 4 輪。原圖人工檢視為明確多排多層螢幕遠景；後續只可用相同完整像素 SHA 的人工稽核權威結案，不可再叫模型。
+
+## 2026-07-17 202606 → 202601 自動交接守門
+
+- 新月份優先批次不再依賴人工在完成後按「繼續」。`tools/continue_after_period_priority.py` 只監看唯一的 202606 staging leaf；若它在未完成時意外 idle，只對原 leaf 做 `restart=false` 原位續跑，不重啟模型、不重跑已完成照片。
+- 交接條件固定為：202606 每張都有唯一 verified 且 upload-queued 的終局記錄；記錄的 input SHA 必須逐檔匹配 staging 實體檔，Drive receipt 的 source SHA 必須逐檔匹配 original source 實體檔，不得假定兩者位元 SHA 相同；`processed=success=verified=total`，failed/review/unknown 全為 0，後端 idle、逐張上傳 pending/working 為 0、唯一 uploader 存活、runtime fuse 不存在、正式 backend contract 為 v19.45 strict 且 evidence revision 不低於 `.42`。任一不符即 fail closed。
+- 切換前會先驗證候選 CSV 第一群組與保留的 `202601_商化照片-202601_6403a632` 在 period、來源資料匣 SHA-1 短碼與照片數均完全一致。條件成立後才把同一個 port 5002 backend 切回 202601，並再次讀回 API 證明以 `restart=false` 運行。
+- 後續由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 原位接續；CSV 固定順序為 202601（1,500）、202602（1,598）、202603（357）、202604（1,587）、202605（905）。monitor 的單例鎖保留到 runner 結束，其他 staged runner、90 分鐘無進度或整體逾時都會寫 alert，不會開第二套程序或可見終端機。
+- 十項單元測試與正式路徑唯讀 preflight 已通過；除交接流程外，也覆蓋缺少 Drive 收據與舊 summary 冒充新成功。preflight 證明目前 CSV 順序與 202601 staging 身分相符。正式 monitor 必須由 `Start-Process -WindowStyle Hidden` 啟動，日誌在 `logs/`，完成 receipt／失敗 alert 在 `_ocr_audit/`。
