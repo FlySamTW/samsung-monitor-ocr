@@ -862,3 +862,4 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 若三輪都是同一 input SHA、request-bound、獨立、無前輪答案，三輪結構皆為 `complete_screen_count>=3`、敘述皆明確是整排／多層螢幕陳列、沒有 FollowMe 強實體證據，且至少一輪正確輸出 `遠景`，則該結構遠景必須否決另外兩輪的寬景單機錯標，定案為 `遠景／無型號／無價格`。
 - 此否決不依賴型號或附近價牌：多螢幕陳列中的單輪可讀價牌不等於唯一主角歸屬。結案規則為 `distant_structural_veto_over_wide_geometry_single_votes`；只使用既有三輪，不得加跑第 4 輪。
 - `中和-1333` 的實際第三輪為 `遠景/count=6/unique_main=false/label_ownership=not_visible`，正確否決前兩輪 `單機/count=7`。舊 `.47` 已做到不再全域熔斷，但定案器仍留下技術待處理；`.48` 補齊終局結果與逐張上傳，不把「繼續跑」誤當成「該張已完成」。
+- 若照片邊界換版造成已消耗的第 2 輪在 fuse 落盤後、evidence trace 追加前停止，只能由 `runtime_health_fuse_clearance` 收據與對應的 archived fuse 重建該輪。收據、archive 所在目錄、來源 identity、完整影像 SHA、舊／新 run 的相鄰輪次、request ID 與唯一 model-only 理由必須全部一致；`finalize_existing_three_pass_reviews.py` 才可把跨重啟的 `1/2/3` 輪組合起來離線定案。這是證據重建，不是新模型呼叫。

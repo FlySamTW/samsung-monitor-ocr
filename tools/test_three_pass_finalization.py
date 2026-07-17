@@ -391,6 +391,148 @@ class ThreePassFinalizationTests(unittest.TestCase):
             [1, 2, 3],
         )
 
+    def test_archived_photo_local_fuse_restores_consumed_second_call(self):
+        from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
+
+        with TemporaryDirectory() as temp_dir:
+            audit = Path(temp_dir)
+            trace = audit / "trace.jsonl"
+            history = audit / "runtime_health_fuse_history"
+            clearance = audit / "runtime_health_fuse_clearance"
+            history.mkdir()
+            clearance.mkdir()
+            source_id = "b" * 64
+            image_hash = "c" * 64
+            run_id = "run-wide"
+            name = "wide-1333.jpg"
+
+            def trace_row(attempt, view, count, unique, ownership, narration):
+                row_run_id = "resume-run" if attempt == 3 else run_id
+                parsed = make_pass(
+                    view=view,
+                    model=None,
+                    price="2988" if attempt == 1 else None,
+                    count=count,
+                    unique=unique,
+                    ownership=ownership,
+                    image_hash=image_hash,
+                    thinking=narration,
+                    file_name=name,
+                    source_item_id=source_id,
+                    source_path=str(audit / name),
+                    original_source_path=str(audit / "original" / name),
+                    period="202606",
+                    run_id=row_run_id,
+                    ocr_attempt=attempt,
+                    timestamp=f"2026-07-18T00:00:0{attempt}",
+                )
+                return {
+                    "file_name": name,
+                    "run_id": row_run_id,
+                    "timestamp": parsed["timestamp"],
+                    "source_item_id": source_id,
+                    "parsed_output": parsed,
+                }
+
+            trace.write_text(
+                "\n".join(
+                    json.dumps(row, ensure_ascii=False)
+                    for row in (
+                        trace_row(
+                            1,
+                            "單機",
+                            7,
+                            True,
+                            "matched",
+                            "我看到上方與中間層一整排螢幕陳列，共七台完整入鏡。",
+                        ),
+                        trace_row(
+                            3,
+                            "遠景",
+                            6,
+                            False,
+                            "not_visible",
+                            "我看到一整排螢幕陳列，上方與下方都有多台完整螢幕。",
+                        ),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            request_id = "d" * 32
+            archive = history / "fuse.json"
+            archive.write_text(
+                json.dumps(
+                    {
+                        "source_file": name,
+                        "attempt": 2,
+                        "run_id": run_id,
+                        "tripped_at": "2026-07-18T00:00:02",
+                        "reasons": [
+                            "structured_authority_material_conflict:model"
+                        ],
+                        "record_snapshot": {
+                            "view_type": "單機",
+                            "category": "單機",
+                            "model": None,
+                            "price": None,
+                            "complete_screen_count": 7,
+                            "unique_main": True,
+                            "label_ownership": "not_visible",
+                            "followme_physical_evidence": [],
+                            "structured_authority_blocked_fields": ["model"],
+                            "narration": (
+                                "我看到一整排螢幕陳列，上方與中間層各有多台螢幕。"
+                            ),
+                            "raw_model_output": json.dumps(
+                                {
+                                    "request_id": request_id,
+                                    "screen_status": "正常",
+                                    "quality_issue": "無",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (clearance / "receipt.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "samsung-ocr-runtime-fuse-clearance/v1",
+                        "recovery": (
+                            "persist_fused_bound_pass_as_photo_local_history_then_resume_call_3"
+                        ),
+                        "source_file": name,
+                        "source_item_id": source_id,
+                        "input_image_sha256": image_hash,
+                        "recovered_request_id": request_id,
+                        "archived_fuse": str(archive),
+                        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            calls = _load_three_call_groups(trace)[name]
+
+            self.assertEqual(
+                [int(item["ocr_attempt"]) for item in calls], [1, 2, 3]
+            )
+            self.assertTrue(calls[1]["recovered_from_archived_photo_local_fuse"])
+            outcome = finalize_three_pass_outcome(
+                calls[-1], calls[:-1], unresolved()
+            )
+            self.assertTrue(outcome["verified"])
+            self.assertEqual(calls[-1]["view_type"], "遠景")
+            self.assertEqual(
+                outcome["adjudication_rule"],
+                "distant_structural_veto_over_wide_geometry_single_votes",
+            )
+
     def test_two_no_complete_screen_scenes_finalize_truthful_distant(self):
         history = [
             make_pass("遠景", None, None, 0, False, "not_visible"),

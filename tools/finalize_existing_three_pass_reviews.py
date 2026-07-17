@@ -39,6 +39,141 @@ def _review_required(task: dict[str, Any]) -> bool:
     return meta.get("auto_review_required") is True or meta.get("auto_verified") is not True
 
 
+def _inject_cleared_photo_local_fuse_calls(
+    trace_path: Path,
+    grouped: dict[tuple[str, str], list[dict[str, Any]]],
+    source_grouped: dict[tuple[str, str], list[dict[str, Any]]],
+) -> None:
+    """Restore a consumed bound call archived before its trace append.
+
+    Only an explicit clearance receipt created after code/test verification may
+    bridge the missing trace.  The receipt, archived fuse, neighboring trace
+    rows, source identity, full-image hash, run, attempt and request ID must all
+    agree.  This reconstructs audit evidence; it never performs another model
+    call.
+    """
+    audit_dir = trace_path.parent.resolve()
+    clearance_dir = audit_dir / "runtime_health_fuse_clearance"
+    history_dir = (audit_dir / "runtime_health_fuse_history").resolve()
+    if not clearance_dir.is_dir() or not history_dir.is_dir():
+        return
+
+    for receipt_path in sorted(clearance_dir.glob("*.json")):
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+            if receipt.get("schema") != "samsung-ocr-runtime-fuse-clearance/v1":
+                continue
+            if receipt.get("recovery") != (
+                "persist_fused_bound_pass_as_photo_local_history_then_resume_call_3"
+            ):
+                continue
+            name = str(receipt.get("source_file") or "")
+            source_id = str(receipt.get("source_item_id") or "")
+            image_hash = str(receipt.get("input_image_sha256") or "").strip().lower()
+            request_id = str(receipt.get("recovered_request_id") or "")
+            archive = Path(str(receipt.get("archived_fuse") or "")).resolve()
+            if (
+                not name
+                or not re.fullmatch(r"[0-9a-f]{64}", source_id)
+                or not re.fullmatch(r"[0-9a-f]{64}", image_hash)
+                or not re.fullmatch(r"[0-9a-f]{32}", request_id)
+                or archive.parent != history_dir
+                or not archive.is_file()
+            ):
+                continue
+            fuse = json.loads(archive.read_text(encoding="utf-8-sig"))
+            attempt = int(fuse.get("attempt") or 0)
+            run_id = str(fuse.get("run_id") or "")
+            reasons = [str(item) for item in fuse.get("reasons") or [] if str(item)]
+            snapshot = fuse.get("record_snapshot") or {}
+            raw = json.loads(str(snapshot.get("raw_model_output") or ""))
+            if (
+                fuse.get("source_file") != name
+                or attempt not in {1, 2}
+                or reasons != ["structured_authority_material_conflict:model"]
+                or not run_id
+                or str(raw.get("request_id") or "") != request_id
+            ):
+                continue
+
+            anchors = [
+                item
+                for item in grouped.get((name, run_id), [])
+                if str(item.get("source_item_id") or "") == source_id
+                and str(item.get("input_image_sha256") or "").strip().lower()
+                == image_hash
+            ]
+            if not anchors or any(
+                int(item.get("ocr_attempt") or 0) == attempt for item in anchors
+            ):
+                continue
+            anchor = anchors[-1]
+            narration = str(snapshot.get("narration") or "")
+            call = {
+                "view_type": snapshot.get("view_type"),
+                "category": snapshot.get("category") or snapshot.get("view_type"),
+                "model": snapshot.get("model"),
+                "price": snapshot.get("price"),
+                "screen_status": raw.get("screen_status"),
+                "quality_issue": raw.get("quality_issue"),
+                "complete_screen_count": snapshot.get("complete_screen_count"),
+                "unique_main": snapshot.get("unique_main"),
+                "label_ownership": snapshot.get("label_ownership"),
+                "followme_physical_evidence": (
+                    snapshot.get("followme_physical_evidence") or []
+                ),
+                "structured_authority_blocked_fields": (
+                    snapshot.get("structured_authority_blocked_fields") or []
+                ),
+                "normalized_evidence": {
+                    "complete_screen_count": snapshot.get("complete_screen_count"),
+                    "unique_main": snapshot.get("unique_main"),
+                    "label_ownership": snapshot.get("label_ownership"),
+                    "followme_physical_evidence": (
+                        snapshot.get("followme_physical_evidence") or []
+                    ),
+                },
+                "thinking": narration,
+                "narration": narration,
+                "raw_model_output": snapshot.get("raw_model_output"),
+                "run_id": run_id,
+                "timestamp": fuse.get("tripped_at"),
+                "file_name": name,
+                "source_item_id": source_id,
+                "source_path": anchor.get("source_path"),
+                "original_source_path": anchor.get("original_source_path"),
+                "period": anchor.get("period"),
+                "ocr_attempt": attempt,
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "requires_structured_retry": False,
+                "runtime_health": {
+                    "healthy": False,
+                    "allow_processing": True,
+                    "allow_upload": False,
+                    "reasons": reasons,
+                    "contained_for_stateless_retry": True,
+                },
+                "recovered_from_archived_photo_local_fuse": True,
+                "runtime_fuse_clearance_receipt": str(receipt_path),
+                "evidence_guard_revision": receipt.get(
+                    "evidence_guard_revision"
+                ),
+            }
+            valid, _errors, normalized = validate_evidence_contract(call)
+            if not valid:
+                continue
+            call["normalized_evidence"] = normalized
+            grouped[(name, run_id)].append(call)
+            source_grouped[(name, source_id)].append(call)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+
 def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     source_grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -66,8 +201,17 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
                 if source_id:
                     source_grouped[(name, source_id)].append(item)
 
+    _inject_cleared_photo_local_fuse_calls(trace_path, grouped, source_grouped)
+
     latest: dict[str, list[dict[str, Any]]] = {}
     for (name, _run_id), rows in grouped.items():
+        rows = sorted(
+            rows,
+            key=lambda item: (
+                str(item.get("timestamp") or ""),
+                int(item.get("ocr_attempt") or 0),
+            ),
+        )
         if len(rows) < 2:
             continue
         candidate = rows[-3:]
@@ -84,6 +228,26 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
     # smoke copy or an older photo revision into the recovery evidence.
     for (name, _source_id), rows in source_grouped.items():
         ordered = sorted(rows, key=lambda item: str(item.get("timestamp") or ""))
+        recovered_three_call_group = False
+        for index in range(len(ordered) - 1, 1, -1):
+            candidate = ordered[index - 2 : index + 1]
+            attempts = [int(item.get("ocr_attempt") or 0) for item in candidate]
+            hashes = {
+                str(item.get("input_image_sha256") or "").strip().lower()
+                for item in candidate
+            }
+            if attempts != [1, 2, 3] or "" in hashes or len(hashes) != 1:
+                continue
+            previous = latest.get(name)
+            if previous is None or (
+                str(candidate[-1].get("timestamp") or "")
+                > str(previous[-1].get("timestamp") or "")
+            ):
+                latest[name] = candidate
+            recovered_three_call_group = True
+            break
+        if recovered_three_call_group:
+            continue
         for index in range(len(ordered) - 1, 0, -1):
             candidate = ordered[index - 1 : index + 1]
             attempts = [int(item.get("ocr_attempt") or 0) for item in candidate]
