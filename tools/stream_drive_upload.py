@@ -51,9 +51,10 @@ APPROVED_DRIVE_ROOT_ID = "16X5qALC3zRYc7PpnexXLYprorBzBtT_f"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 _YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
-    # .49 adds one full-image/source-hash-bound correction for 新莊-1458.
-    # No other .48 result changes, so already queued .48 jobs remain valid.
-    "20260718.48": EVIDENCE_GUARD_REVISION,
+    # .50 excludes only transport metadata (filename, RequestID and bbox
+    # coordinates) from prior-answer leak detection.  It does not change any
+    # result that .49 had already finalized and durably queued.
+    "20260718.49": EVIDENCE_GUARD_REVISION,
 }
 
 

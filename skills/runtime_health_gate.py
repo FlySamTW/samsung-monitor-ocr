@@ -273,7 +273,28 @@ def review_prompt_leak_reasons(
         reasons.append("review_conversational_correction_present")
     if _PRIOR_FIELD_PATTERN.search(review_text):
         reasons.append("review_prior_fields_present")
-    compact_review = re.sub(r"\s+", "", review_text).casefold()
+    # Request IDs, source filenames and deterministic crop coordinates are
+    # transport metadata, not prior OCR answers.  A four-digit price can
+    # naturally reappear inside a bbox coordinate (the real 經國-639 false
+    # fuse was price 4990 versus `bbox=[...,4990,...]`).  Remove only these
+    # fixed technical fields before comparing specific prior model/price
+    # values; unlabelled values elsewhere in the prompt remain detectable.
+    prior_value_scan = re.sub(
+        r"(?im)^\s*(?:圖片|image)\s*:[^\r\n]*$",
+        "",
+        review_text,
+    )
+    prior_value_scan = re.sub(
+        r"(?im)^\s*request\s*id\s*:[^\r\n]*$|^\s*requestid\s*:[^\r\n]*$",
+        "",
+        prior_value_scan,
+    )
+    prior_value_scan = re.sub(
+        r"(?i)\bbbox\s*=\s*[\[(][^\])\r\n]*[\])]",
+        "",
+        prior_value_scan,
+    )
+    compact_review = re.sub(r"\s+", "", prior_value_scan).casefold()
     for prior in list(prior_results_for_leak_check or []):
         # Generic class words such as 單機/遠景 necessarily appear in every
         # neutral review prompt.  Only specific model/price values can prove

@@ -118,7 +118,7 @@ class StreamDriveUploadTests(unittest.TestCase):
             output = root / "output"
             job = enqueue_finalized_result(verified_result(source), output_dir=output)
             original = json.loads(job.read_text(encoding="utf-8"))
-            original["evidence_guard_revision"] = "20260718.48"
+            original["evidence_guard_revision"] = "20260718.49"
             job.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
 
             migrated = migrate_compatible_pending_jobs(output)
@@ -126,7 +126,7 @@ class StreamDriveUploadTests(unittest.TestCase):
 
             self.assertEqual(migrated, 1)
             self.assertEqual(upgraded["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
-            self.assertEqual(upgraded["revision_migration"]["from"], "20260718.48")
+            self.assertEqual(upgraded["revision_migration"]["from"], "20260718.49")
             self.assertEqual(upgraded["revision_migration"]["target_name"], original["target_name"])
             archives = list(
                 (output / "_drive_upload_stream" / "revision_migrations").glob("*.json")
@@ -157,7 +157,7 @@ class StreamDriveUploadTests(unittest.TestCase):
             output = root / "output"
             job = enqueue_finalized_result(verified_result(source), output_dir=output)
             payload = json.loads(job.read_text(encoding="utf-8"))
-            payload["evidence_guard_revision"] = "20260718.48"
+            payload["evidence_guard_revision"] = "20260718.49"
             payload["target_name"] = "tampered.jpg"
             job.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 

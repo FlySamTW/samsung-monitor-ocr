@@ -893,3 +893,10 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 「完整螢幕」必須外框四邊四角都可見；被前景遮住底邊、被原圖裁切或只看到面板局部者不得計數。
 - `汐止遠雄-262` 的第一次低功耗抽查誤報「至少八台完整」；第二次按四邊四角規則逐台核對後確認背景設備均被遮擋或裁切。此類互相矛盾的抽查不得直接改結果、不得觸發全批規則變更。
 - 只有「原圖事實 + 三輪 trace + source identity + 完整影像雜湊」一致時，才能做照片級修正；否則維持現行結果並列入下一次抽查，不得因監控本身製造新錯誤。
+
+## 2026-07-18 `.50` 複核提示中繼資料誤熔斷修正
+
+- 正式事故 `M-新竹市-東　區-SF-新竹經國-639.jpg` 已有第 1、2 輪健康、同圖、request-bound、無前輪答案的證據；第 3 輪尚未呼叫模型，就因前輪價格 `4990` 恰巧出現在 RequestID、來源檔名或裁切座標等技術中繼資料而觸發 `review_prior_value_present`。
+- 前輪答案污染檢查仍必須保留，但比對特定前輪型號／價格前，先排除固定格式的 `圖片:` 行、`RequestID:` 行與 `bbox=[...]`。提示正文其他位置若出現前輪型號、價格、理由、修正語句或 assistant 歷史，仍照常熔斷。
+- 這是「模型尚未被呼叫」的假陽性，不能把第 3 輪永久吃掉，也不能允許第 4 輪。`recover_review_metadata_false_fuse.py` 只接受唯一理由 `review_prior_value_present`、attempt=3、空 raw model output、失敗空結果、同 run 的 trace 恰有第 1／2 輪、相同 source identity 與完整影像 SHA，且兩輪都健康、request-bound、無記憶。
+- 通過上述證據後，只把該張持久化 attempt 從 3 回復到 2，保留前兩輪 history，封存原 fuse 並寫 clearance receipt；新版 `.50` 再執行真正的第 3 輪。任何已有模型輸出、不同理由、不同圖、缺 trace 或不健康輪次均不得使用此恢復。

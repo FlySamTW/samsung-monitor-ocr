@@ -415,6 +415,28 @@ class RuntimeHealthGateTests(unittest.TestCase):
         )
         self.assertTrue(decision.healthy)
 
+    def test_review_transport_metadata_cannot_mimic_a_prior_price(self):
+        decision = evaluate_runtime_health(
+            record(),
+            "獨立判讀完成。",
+            attempt=3,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "這是全新照片，請只根據當前影像獨立判讀。\n"
+                    "圖片: M-新竹市-東區-SF-新竹經國-4990.jpg\n"
+                    "RequestID: 4990e6b66c301ccd751db4490d03d2dd\n"
+                    "補充圖是定位裁切，bbox=[120, 4990, 1800, 6200]。"
+                ),
+            }],
+            prior_results_for_leak_check=[{
+                "view_type": "單機",
+                "model": None,
+                "price": "4990",
+            }],
+        )
+        self.assertTrue(decision.healthy)
+
     def test_generic_prior_class_word_does_not_make_neutral_prompt_contaminated(self):
         decision = evaluate_runtime_health(
             record(),
