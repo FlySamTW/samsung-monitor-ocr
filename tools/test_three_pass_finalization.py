@@ -1066,6 +1066,56 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_one_distant_call_vetoes_two_seven_screen_single_calls(self):
+        first = make_pass(
+            view="單機",
+            model=None,
+            price="2988",
+            count=7,
+            unique=True,
+            ownership="matched",
+            thinking="我看到前景、上方與中間層一整排螢幕陳列，所有七台完整入鏡。",
+        )
+        second = make_pass(
+            view="單機",
+            model=None,
+            price=None,
+            count=7,
+            unique=True,
+            ownership="not_visible",
+            healthy=False,
+            thinking="我看到一整排螢幕陳列，上方與中間層各有多台螢幕。",
+            runtime_health={
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": ["structured_authority_material_conflict:model"],
+                "contained_for_stateless_retry": True,
+            },
+        )
+        current = make_pass(
+            view="遠景",
+            model=None,
+            price=None,
+            count=6,
+            unique=False,
+            ownership="not_visible",
+            thinking="我看到一整排螢幕陳列，上方與下方都有多台完整螢幕，無法鎖定唯一主角。",
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "distant_structural_veto_over_wide_geometry_single_votes",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertEqual(current["complete_screen_count"], 6)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_model_and_price_majorities_cannot_form_unsupported_chimera(self):
         history = [
             make_pass(model="S24A", price="100"),

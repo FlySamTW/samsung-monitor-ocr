@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260718.47"
+EVIDENCE_GUARD_REVISION = "20260718.48"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -2126,6 +2126,25 @@ def finalize_three_pass_outcome(
             )
         )
     )
+    wide_geometry_distant_veto_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and any(
+            str(item.get("view_type") or item.get("category") or "").strip()
+            == "遠景"
+            for item in base_integrity
+        )
+        and all(
+            _wide_multiscreen_geometry_claim(item) for item in base_integrity
+        )
+        and sum(
+            _weak_single_claim_in_wide_multiscreen_scene(item)
+            for item in base_integrity
+        )
+        < 2
+    )
     # One structurally valid wide view must veto two weak "single" votes when
     # every pass still sees 3+ complete monitors and the two alleged subjects
     # disagree on their model identity.  Treating the shared nearby price as
@@ -2282,6 +2301,8 @@ def finalize_three_pass_outcome(
         usable = list(base_integrity)
     elif wide_scene_structural_base_fallback:
         usable = list(base_integrity)
+    elif wide_geometry_distant_veto_fallback:
+        usable = list(base_integrity)
     elif wide_identity_conflict_distant_fallback:
         usable = list(base_integrity)
     elif identity_free_single_majority_fallback:
@@ -2355,6 +2376,10 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = list(usable)
         rule = "three_pass_wide_scene_structural_consensus"
+    elif wide_geometry_distant_veto_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "distant_structural_veto_over_wide_geometry_single_votes"
     elif wide_identity_conflict_distant_fallback:
         final_view = "遠景"
         supporting = list(usable)
