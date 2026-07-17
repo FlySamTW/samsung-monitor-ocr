@@ -47,6 +47,9 @@ from tools.rclone_drive_upload import (
 
 STREAM_SCHEMA = "samsung-ocr-stream-upload-v1"
 RECEIPT_SCHEMA = "samsung-ocr-stream-receipt-v1"
+APPROVED_DRIVE_ROOT_ID = "16X5qALC3zRYc7PpnexXLYprorBzBtT_f"
+DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+_YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # .48 only adds a conservative three-pass wide-geometry finalizer.  It does
     # not invalidate jobs that .47 had already finalized and durably queued.
@@ -252,38 +255,89 @@ def remote_stat_exact(
 ) -> list[dict[str, Any]]:
     if not re.fullmatch(r"20\d{2}", str(year)) or Path(file_name).name != file_name:
         raise RuntimeError("unsafe remote target")
-    # List the year folder and filter the exact name ourselves.  Google Drive
-    # permits duplicate display names, while `lsjson path --stat` may return
-    # only one arbitrarily selected object and can briefly lag after update.
-    command = [str(rclone), "lsjson", f"{remote}:{year}", "--files-only", "--hash", "--max-depth", "1"]
-    try:
-        completed = runner(
-            command,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("exact remote readback timed out") from exc
-    if completed.returncode != 0:
-        combined = f"{completed.stdout or ''}\n{completed.stderr or ''}".lower()
-        if any(token in combined for token in ("not found", "object not found", "directory not found")):
+    if any(char in file_name for char in ("\r", "\n", "\x00")):
+        raise RuntimeError("unsafe remote filename")
+
+    def query_literal(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
+    def drive_query(query: str) -> list[dict[str, Any]]:
+        command = [str(rclone), "backend", "query", f"{remote}:", query]
+        try:
+            completed = runner(
+                command,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                capture_output=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("exact remote readback timed out") from exc
+        if completed.returncode != 0:
+            raise RuntimeError(f"exact remote readback failed: rc={completed.returncode}")
+        try:
+            payload = json.loads(completed.stdout or "null")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("exact remote readback returned invalid JSON") from exc
+        if payload in (None, []):
             return []
-        raise RuntimeError(f"exact remote readback failed: rc={completed.returncode}")
-    try:
-        payload = json.loads(completed.stdout or "null")
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("exact remote readback returned invalid JSON") from exc
-    if payload in (None, []):
-        return []
-    entries = payload if isinstance(payload, list) else [payload]
-    return [
-        item for item in entries
-        if isinstance(item, dict) and str(item.get("Name") or item.get("Path") or "") == file_name
-    ]
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise RuntimeError("exact remote readback returned invalid objects")
+        return payload
+
+    cache_key = (str(Path(rclone)), remote, str(year))
+    year_folder_id = _YEAR_FOLDER_ID_CACHE.get(cache_key)
+    if not year_folder_id:
+        year_query = (
+            f"'{APPROVED_DRIVE_ROOT_ID}' in parents "
+            f"and name = '{query_literal(str(year))}' "
+            f"and mimeType = '{DRIVE_FOLDER_MIME}' and trashed = false"
+        )
+        folders = drive_query(year_query)
+        exact_folders = [
+            item for item in folders
+            if str(item.get("name") or "") == str(year)
+            and str(item.get("mimeType") or "") == DRIVE_FOLDER_MIME
+            and APPROVED_DRIVE_ROOT_ID in list(item.get("parents") or [])
+            and str(item.get("id") or "")
+        ]
+        if len(exact_folders) != 1:
+            raise RuntimeError("year folder is missing or duplicated under approved Drive root")
+        year_folder_id = str(exact_folders[0]["id"])
+        _YEAR_FOLDER_ID_CACHE[cache_key] = year_folder_id
+
+    # Drive permits duplicate display names.  The backend query returns every
+    # exact-name object under the immutable year-folder ID, unlike
+    # `lsjson path --stat`, which may select one arbitrary duplicate.  This
+    # avoids scanning the entire year folder for every photo while retaining
+    # duplicate detection, size, MD5 and Drive ID.
+    file_query = (
+        f"'{query_literal(year_folder_id)}' in parents "
+        f"and name = '{query_literal(file_name)}' and trashed = false"
+    )
+    payload = drive_query(file_query)
+    entries: list[dict[str, Any]] = []
+    for item in payload:
+        if (
+            str(item.get("name") or "") != file_name
+            or year_folder_id not in list(item.get("parents") or [])
+            or str(item.get("mimeType") or "") == DRIVE_FOLDER_MIME
+        ):
+            continue
+        try:
+            size = int(item.get("size"))
+        except (TypeError, ValueError):
+            raise RuntimeError("exact remote object has no valid size")
+        entries.append({
+            "Name": file_name,
+            "Path": file_name,
+            "Size": size,
+            "Hashes": {"MD5": str(item.get("md5Checksum") or "")},
+            "ID": str(item.get("id") or ""),
+        })
+    return entries
 
 
 def _append_uploaded_atomic(path: Path, row: dict[str, str]) -> int:

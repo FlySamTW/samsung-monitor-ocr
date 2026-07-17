@@ -870,3 +870,10 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `stream_drive_upload.py` 只允許明列的相鄰版本遷移，目前唯一允許的是 `.47` → `.48`。啟動新版單一 uploader 時，先把中斷於 `working` 的工作原子退回 `pending`，再逐張核對 schema、64 位 source identity、來源檔仍存在、完整來源 SHA-256 未變、年月一致，以及依 immutable final result 重新計算出的完整目標檔名完全相同。
 - 遷移前的完整 JSON 必須存入 `_drive_upload_stream/revision_migrations`；新工作必須記錄舊／新 revision、原始工作 canonical SHA-256、來源 SHA-256、目標檔名、archive 路徑與時間。任何未明列版本、來源變更、身分不符、檔名重算不同或宣稱來自 `.48` 新規則的 `.47` 工作都要 fail closed。
 - 遷移只處理尚未上傳的 durable outbox，不改寫既有 Drive receipt，也不降低 remote 守門。正式傳輸仍必須逐張檢查同名重複、唯一 size+MD5 readback 與 Drive ID；若舊 uploader 在網路傳輸途中被同步切換，新 uploader 會先恢復該工作，再以遠端精確查核決定是否需要 copy，不可因沒有 receipt 就盲目重傳。
+
+### Drive 精確查核效能契約
+
+- 禁止為了查核單一照片而每次完整列出年份資料夾；2026 逐張 uploader 曾因此每張耗用約一分鐘，pending 增長速度高於 OCR。也禁止改用 `lsjson <exact-path> --stat`，因 Google Drive 允許同名物件，該作法可能只選到其中一個而漏掉重複檔。
+- 使用 rclone 官方 Google Drive `backend query`，先以正式根 ID `16X5qALC3zRYc7PpnexXLYprorBzBtT_f`、年份名稱、folder MIME type 與 `trashed=false` 唯一解析年份資料夾 ID；同一 worker 生命週期可快取該 immutable ID。缺少或重複年份資料夾必須 fail closed。
+- 每張照片以 `'<year-folder-id>' in parents and name = '<exact escaped filename>' and trashed = false` 查詢；必須保留所有同名回傳，不可只取第一筆。查核結果仍要轉成並驗證 `Drive ID + size + MD5`，同名超過一筆仍停止該張上傳等待 ID 級處理。
+- 正式 read-only 實測：同一 2026 檔案第一次含年份解析約 `1.406s`，快取年份 ID 後約 `0.671s`，兩次都回傳同一唯一 Drive ID；這是查詢縮小，不是降低 remote readback 標準。官方依據：[rclone Google Drive backend query](https://rclone.org/drive/#query)。

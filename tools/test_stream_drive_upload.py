@@ -13,11 +13,13 @@ from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.photo_rename_planner import copy_planned_image_idempotent, plan_single_image
 from tools.rclone_drive_upload import md5_file, read_csv
 from tools.stream_drive_upload import (
+    _YEAR_FOLDER_ID_CACHE,
     _append_uploaded_atomic,
     enqueue_finalized_result,
     migrate_compatible_pending_jobs,
     process_one_job,
     read_stream_status,
+    remote_stat_exact,
 )
 
 
@@ -80,14 +82,34 @@ class FakeRclone:
                 "ID": "drive-test-id",
             }
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        if action == "lsjson":
-            if self.remote is None:
-                return subprocess.CompletedProcess(command, 1, stdout="", stderr="object not found")
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self.remote), stderr="")
+        if action == "backend":
+            query = command[4]
+            if "mimeType = 'application/vnd.google-apps.folder'" in query:
+                payload = [{
+                    "id": "drive-year-2026",
+                    "name": "2026",
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": ["16X5qALC3zRYc7PpnexXLYprorBzBtT_f"],
+                }]
+            elif self.remote is None:
+                payload = []
+            else:
+                payload = [{
+                    "id": self.remote["ID"],
+                    "name": self.remote["Name"],
+                    "mimeType": "image/jpeg",
+                    "parents": ["drive-year-2026"],
+                    "size": str(self.remote["Size"]),
+                    "md5Checksum": self.remote["Hashes"]["MD5"],
+                }]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
         raise AssertionError(command)
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def setUp(self):
+        _YEAR_FOLDER_ID_CACHE.clear()
+
     def test_immediately_previous_pending_revision_migrates_with_durable_proof(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -141,6 +163,99 @@ class StreamDriveUploadTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "filename changed"):
                 migrate_compatible_pending_jobs(output)
+
+    def test_exact_drive_query_returns_every_duplicate_name_with_hash_and_id(self):
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            query = command[4]
+            if "mimeType = 'application/vnd.google-apps.folder'" in query:
+                payload = [{
+                    "id": "year-id",
+                    "name": "2026",
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": ["16X5qALC3zRYc7PpnexXLYprorBzBtT_f"],
+                }]
+            else:
+                payload = [
+                    {
+                        "id": "duplicate-a",
+                        "name": "same.jpg",
+                        "mimeType": "image/jpeg",
+                        "parents": ["year-id"],
+                        "size": "123",
+                        "md5Checksum": "a" * 32,
+                    },
+                    {
+                        "id": "duplicate-b",
+                        "name": "same.jpg",
+                        "mimeType": "image/jpeg",
+                        "parents": ["year-id"],
+                        "size": "456",
+                        "md5Checksum": "b" * 32,
+                    },
+                ]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+        entries = remote_stat_exact(
+            Path("rclone.exe"),
+            "samsung_ocr_drive",
+            "2026",
+            "same.jpg",
+            runner=runner,
+        )
+
+        self.assertEqual([item["ID"] for item in entries], ["duplicate-a", "duplicate-b"])
+        self.assertEqual(entries[0]["Size"], 123)
+        self.assertEqual(entries[1]["Hashes"]["MD5"], "b" * 32)
+        self.assertTrue(all(command[1:3] == ["backend", "query"] for command in calls))
+
+    def test_exact_drive_query_escapes_quote_in_filename(self):
+        queries = []
+
+        def runner(command, **_kwargs):
+            query = command[4]
+            queries.append(query)
+            payload = [{
+                "id": "year-id",
+                "name": "2026",
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": ["16X5qALC3zRYc7PpnexXLYprorBzBtT_f"],
+            }] if "mimeType = 'application/vnd.google-apps.folder'" in query else []
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+        remote_stat_exact(
+            Path("rclone.exe"),
+            "samsung_ocr_drive",
+            "2026",
+            "店'名照片.jpg",
+            runner=runner,
+        )
+
+        self.assertIn("name = '店\\'名照片.jpg'", queries[-1])
+
+    def test_duplicate_year_folder_fails_closed(self):
+        def runner(command, **_kwargs):
+            payload = [
+                {
+                    "id": suffix,
+                    "name": "2026",
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": ["16X5qALC3zRYc7PpnexXLYprorBzBtT_f"],
+                }
+                for suffix in ("year-a", "year-b")
+            ]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+        with self.assertRaisesRegex(RuntimeError, "missing or duplicated"):
+            remote_stat_exact(
+                Path("rclone.exe"),
+                "samsung_ocr_drive",
+                "2026",
+                "same.jpg",
+                runner=runner,
+            )
 
     def test_fresh_receipt_refreshes_stale_matching_legacy_ledger_row(self):
         with tempfile.TemporaryDirectory() as tmp:
