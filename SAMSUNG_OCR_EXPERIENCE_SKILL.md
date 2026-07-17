@@ -512,7 +512,7 @@ Anti-bypass invariants are part of that contract:
 `docs/three_layer_accuracy_gate.md` is the authoritative design and verification specification. The mechanism is conditional escalation, not three-pass voting:
 
 - Pass 1 establishes the baseline structured evidence. A complete ordinary single-unit photo may be accepted immediately.
-- Pass 2 receives pass 1 only as a falsifiable hypothesis and must actively seek counter-evidence with the lower label strip. Current-year FollowMe requires at least this pass; a poster or screen content alone is never physical proof.
+- Pass 2 is used only when pass 1 is incomplete or risky and receives no prior answer, summary, reason, or conversation history. A complete current-year FollowMe single may finish on pass 1 only when the owned model and store price are clear and the same physical unit carries direct branding or sufficient strong fixture evidence; a poster or screen content alone is never physical proof.
 - Pass 3 receives no prior answer in model messages, uses the stronger lower-center crop, and produces an independent observation before the guard compares all passes. A newer answer cannot overwrite a prior unresolved core conflict. It is also the absolute final model-call boundary.
 - Current-year distant view requires bounded same-image structural evidence: ordinarily the conditional second/third pass, while two independently bound zero-screen or structural distant results may settle `遠景／無型號／無價格`. No result may trigger a fourth call.
 - `verified`, `retry`, and technical failure are guard decisions, not model opinions. Intermediate guesses never enter formal output; only the `.22` finalized result enters the stream outbox.

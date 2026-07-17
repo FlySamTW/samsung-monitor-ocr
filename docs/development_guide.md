@@ -552,7 +552,7 @@ Raw rows use `candidate_model` for the tested VLM and keep `model` for the predi
 
 Every OCR pass must emit validated `complete_screen_count`, `unique_main`, `label_ownership`, and `followme_physical_evidence`. Natural-language thinking can raise review risk but cannot supply missing evidence. Current-year rows without a v19.45 evidence trace carrying the current `evidence_guard_revision` remain review/rerun candidates and are excluded from ready manifests; historical rows through 2025 are not subject to this current-year trace gate. The contract version identifies the evidence schema; the guard revision identifies the exact rule implementation that evaluated it. Never stamp a migrated legacy trace with a new guard revision unless the image was actually evaluated by that revision.
 
-守門不得只檢查欄位是否存在。`view_type/category`、單機結構／明示遠景敘述、`label_ownership=matched`／鄰機價牌敘述任一矛盾都必須 retry/fail closed。裸露的 `S32FM...`／`S43FM...` 是 Smart Monitor 面板 SKU，不是 FollowMe 組合的直接證明；只有同一實機的 FollowMe 品牌或充分白色移動支架／圓底座／附著託盤證據成立後，SKU 才可用來比較家族版本。遠景不得攜帶同主體 FollowMe 強實體線索。畫面播放 ASUS/LG Demo 是內容，不是硬體品牌證據，不可覆蓋正式 Samsung SKU。官方參考價差達 20% 時獨立重讀一次；兩輪同型號、同照片價格、同價牌歸屬後保留照片實價。
+守門不得只檢查欄位是否存在。`view_type/category`、單機結構／明示遠景敘述、`label_ownership=matched`／鄰機價牌敘述任一矛盾都必須 retry/fail closed。裸露的 `S32FM...`／`S43FM...` 是 Smart Monitor 面板 SKU，不是 FollowMe 組合的直接證明；只有同一實機的 FollowMe 品牌或充分白色移動支架／圓底座／附著託盤證據成立後，SKU 才可用來比較家族版本。遠景不得攜帶同主體 FollowMe 強實體線索。畫面播放 ASUS/LG Demo 是內容，不是硬體品牌證據，不可覆蓋正式 Samsung SKU。官方參考價只負責產生 `↑`／`↓`／`✓`；價差本身不得觸發 VLM 重讀，只有照片價牌模糊、荒謬數值或型號／價格歸屬矛盾才升級。
 
 Dashboard API 的 `success` 是歷史相容欄位，語意是「已有非系統失敗的判讀記錄」，可能包含 `review_required`。介面只能稱為 `完成判讀`，並分別顯示 `review_required`；Drive 仍只接受 `auto_verified=true && auto_review_required=false`。`windows_user_launcher.ps1` 在安全邊界啟動時會比較 `dashboard/src` 與 `dashboard/dist/index.html` 時間，來源較新必須先 build，避免新版後端計數配上舊前端文字。
 
@@ -768,10 +768,11 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 大量照片必須使用「快速首輪、風險照片才升級」的級聯流程，不能讓每張照片無條件跑滿三輪。
 
 1. 第一輪由 production `qwen/qwen3-vl-8b` 讀取原圖與既有 deterministic crops。若結構、型號、價格與標籤歸屬完整且互不矛盾，第一輪即可結案並逐張上傳。
+   - 這條也適用於 FollowMe：同一實機的直接品牌或充分強實體線索、自己的型號與店內價格都完整一致時，不強制浪費第二輪。
 2. 只有下列照片升級第二輪／判官：
    - 遠景或多螢幕場景，需要排除被誤判的 FollowMe。
    - 單機缺型號或缺價格。
-   - FollowMe 實體證據、完整螢幕數、唯一主角、價牌歸屬或敘述與結構互相矛盾。
+   - FollowMe 身分只有弱宣傳線索、實體證據不足，或完整螢幕數、唯一主角、價牌歸屬、敘述與結構互相矛盾。
    - request/image 綁定、輸出結構或跨照片污染偵測失敗。
 3. 官方參考價的 `↑`、`↓`、`✓` 是首輪 OCR 完成後的 deterministic comparison。照片價格與官方價不同本身不是 OCR 錯誤，不得只因價差而額外呼叫 VLM；只有價牌文字模糊或型號／價格歸屬衝突才升級。
 4. 2026 以前的照片不做即時官方價格查詢；只完成照片內容辨識與必要的風險複核。
@@ -779,3 +780,9 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 6. 在單張串行 OCR 工作負載下，LM Studio production model 固定以 `--parallel 1` 載入；`parallel 4` 是並行請求吞吐設定，不適合這條逐張管線。context 先維持 32768，只有固定盲測證明 16384 不截斷影像／prompt 且準確率不退步後才能調低。
 7. 異質判官不得直接換上 production。先用固定 50 張盲測與永久回歸照片比較完整正確率、遠景／FollowMe 危險誤判率、型號／價格欄位準確率與 latency。16GB GPU 不允許逐張 load/unload 27B 判官；若無第二張 GPU，優先評估可常駐或可在維護窗測試的 7B–12B VLM。
 8. 效能監控同時報告每次推論 median/P90、每張平均模型呼叫數、首輪結案率與升級率。只看「每輪秒數」或只看「處理張數」都不足以判斷是否跑歪。
+
+## 2026-07-17 新月份優先插入（202606）
+
+`tools/prepare_period_priority.py` 只負責在不中斷正式 OCR 的情況下，為新到月份建立固定 staging、逐張原始來源對照、候選 CSV 與稽核目錄，並以原子方式加入資料夾清單；它不會自行切換後端或重啟批次。`--execute` 前先 dry-run，執行後必須核對照片數、source-map 筆數、manifest `complete=true` 與來源位元雜湊。
+
+正式切換只能在照片邊界：先停止目前資料夾並保存 processed/verified/upload 斷點，維持同一個 Dashboard 分頁與 port 5002；再把工作目錄指向唯一的 202606 staging leaf，以 `restart=false` 啟動。每張通過守門後立即進逐張上傳；202601 的斷點保留，202606 完成後接續，不得整批重跑。

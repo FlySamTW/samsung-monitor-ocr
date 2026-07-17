@@ -1393,14 +1393,11 @@ def immediate_retry_decision(
     if _narration_model_family_conflicts(record):
         reasons.append("敘述借用了與主角型號不相容的背景產品系列")
 
-    price_status = str(record.get("price_status") or "").strip().lower()
-    diff_percent = record.get("price_diff_percent")
-    try:
-        large_price_diff = price_status in {"high", "low"} and abs(float(diff_percent)) >= 20.0
-    except (TypeError, ValueError):
-        large_price_diff = False
-    if large_price_diff and not _same_model_price_confirmed(record, history):
-        reasons.append("照片價格與官方參考價差異過大，需獨立重讀")
+    # The official reference is a deterministic post-OCR annotation, not
+    # evidence that the photo OCR is wrong.  Preserve ↑/↓/✓ on the record, but
+    # escalate only when the image evidence itself is ambiguous (for example,
+    # model/price ownership conflict or an unreadable label).  A legitimate
+    # store promotion can differ substantially from today's reference price.
 
     multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
     if (
@@ -1463,9 +1460,12 @@ def immediate_retry_decision(
     ) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
-        if current_year and attempt < 2:
-            reasons.append("2026 FollowMe 必須完成第二輪實體證據複核")
-        elif current_year and not _all_followme_identity_consistent(record, history):
+        # A complete, internally consistent FollowMe single is not inherently
+        # uncertain.  It may finish on pass 1 when the same-subject fixture,
+        # owned model label and store price are all present.  If another rule
+        # already escalated the photo, however, every observed FollowMe pass
+        # must still agree; a later majority may never wash out a conflict.
+        if current_year and history and not _all_followme_identity_consistent(record, history):
             reasons.append("2026 FollowMe 各輪型號與價格不一致，不得自動驗證")
 
     reasons = list(dict.fromkeys(reasons))

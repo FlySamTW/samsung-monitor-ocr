@@ -1456,7 +1456,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("最終它牌結果與原始 Samsung SKU 衝突", decision["reasons"])
         self.assertEqual(decision["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
-    def test_large_official_price_difference_requires_independent_confirmation(self):
+    def test_large_official_price_difference_is_annotation_not_retry(self):
         row = {
             "file_name": "M-202605-price-diff.jpg", "view_type": "單機", "category": "單機",
             "model": "S27D392GAC", "price": "4290", "quality_issue": "",
@@ -1465,13 +1465,13 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched"),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertIn("照片價格與官方參考價差異過大，需獨立重讀", first["reasons"])
-        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn("照片價格與官方參考價差異過大，需獨立重讀", first["reasons"])
+        self.assertEqual(row["price_status"], "high")
+        self.assertEqual(row["price_diff_percent"], 36.7)
 
-    def test_current_year_followme_requires_second_consistent_pass(self):
+    def test_complete_current_year_followme_can_finish_on_first_pass(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -1483,10 +1483,9 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertEqual(first["reasons"], [])
 
     def test_current_year_followme_identity_disagreement_never_becomes_majority_success(self):
         physical = [
@@ -1528,10 +1527,9 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertEqual(first["reasons"], ["2026 FollowMe 必須完成第二輪實體證據複核"])
-        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
-        self.assertTrue(second["verified"])
-        self.assertNotIn("FollowMe 缺少同一實機的物理支架證據", second["reasons"])
+        self.assertTrue(first["verified"])
+        self.assertEqual(first["reasons"], [])
+        self.assertNotIn("FollowMe 缺少同一實機的物理支架證據", first["reasons"])
 
     def test_structured_evidence_allows_friendly_followme_normalization(self):
         narration_without_physical_keywords = "主角規格牌可讀。"
@@ -1596,11 +1594,9 @@ class EvidenceContractTests(unittest.TestCase):
             "followme_physical_evidence": physical,
         })
         first = immediate_retry_decision(dict(valid), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertIn("2026 FollowMe 必須完成第二輪實體證據複核", first["reasons"])
-        second = immediate_retry_decision(dict(valid), 2, [dict(valid)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertEqual(first["reasons"], [])
 
     def test_distant_structured_evidence_still_requires_supporting_narration(self):
         row = {
