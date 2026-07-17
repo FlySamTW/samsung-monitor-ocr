@@ -877,3 +877,4 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 使用 rclone 官方 Google Drive `backend query`，先以正式根 ID `16X5qALC3zRYc7PpnexXLYprorBzBtT_f`、年份名稱、folder MIME type 與 `trashed=false` 唯一解析年份資料夾 ID；同一 worker 生命週期可快取該 immutable ID。缺少或重複年份資料夾必須 fail closed。
 - 每張照片以 `'<year-folder-id>' in parents and name = '<exact escaped filename>' and trashed = false` 查詢；必須保留所有同名回傳，不可只取第一筆。查核結果仍要轉成並驗證 `Drive ID + size + MD5`，同名超過一筆仍停止該張上傳等待 ID 級處理。
 - 正式 read-only 實測：同一 2026 檔案第一次含年份解析約 `1.406s`，快取年份 ID 後約 `0.671s`，兩次都回傳同一唯一 Drive ID；這是查詢縮小，不是降低 remote readback 標準。官方依據：[rclone Google Drive backend query](https://rclone.org/drive/#query)。
+- 上傳鎖必須記錄 owner PID。若鎖存在且 PID 仍存活，絕對不得取代；若鎖內容損壞或沒有可驗證 PID，也必須 fail closed。只有 PID 已確定不存在時，才可先把原鎖原子改名封存為 `.stale.<pid>.<timestamp>`，再以 `O_EXCL` 重新取得；若中途被其他 worker 搶先取得就停止。這可讓照片邊界同步換版後自動恢復，但不允許兩個 uploader 同時運作。

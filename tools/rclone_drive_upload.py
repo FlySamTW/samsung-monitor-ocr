@@ -13,6 +13,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -168,13 +169,35 @@ def resolve_rclone(explicit: str) -> Path:
 def single_instance_lock(lock_path: Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = None
+    stale_archive = None
     try:
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        handle = os.open(str(lock_path), flags)
+        try:
+            handle = os.open(str(lock_path), flags)
+        except FileExistsError:
+            try:
+                text = lock_path.read_text(encoding="utf-8")
+                match = re.search(r"(?m)^pid=(\d+)\s*$", text)
+                owner_pid = int(match.group(1)) if match else 0
+            except (OSError, UnicodeError, ValueError):
+                owner_pid = 0
+            if not owner_pid:
+                raise SystemExit(f"upload lock has no verifiable owner; refusing recovery: {lock_path}")
+            if psutil.pid_exists(owner_pid):
+                raise SystemExit(f"upload already appears to be running; lock exists: {lock_path}")
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            stale_archive = lock_path.with_name(
+                f"{lock_path.name}.stale.{owner_pid}.{stamp}"
+            )
+            try:
+                os.replace(lock_path, stale_archive)
+                handle = os.open(str(lock_path), flags)
+            except FileExistsError:
+                raise SystemExit(f"upload lock was reacquired during stale recovery: {lock_path}")
+            except FileNotFoundError:
+                raise SystemExit(f"upload lock changed during stale recovery: {lock_path}")
         os.write(handle, f"pid={os.getpid()}\nstarted={datetime.now().isoformat(timespec='seconds')}\n".encode("utf-8"))
         yield
-    except FileExistsError:
-        raise SystemExit(f"upload already appears to be running; lock exists: {lock_path}")
     finally:
         if handle is not None:
             os.close(handle)

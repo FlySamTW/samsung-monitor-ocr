@@ -169,6 +169,39 @@ class UploadSafetyTests(unittest.TestCase):
         self.no_runner.stop()
         self.backend_idle.stop()
 
+    def test_single_instance_lock_recovers_only_dead_pid_with_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / "upload.lock"
+            lock.write_text("pid=424242\nstarted=2026-07-18T04:50:00\n", encoding="utf-8")
+            with patch.object(uploader.psutil, "pid_exists", return_value=False):
+                with uploader.single_instance_lock(lock):
+                    self.assertTrue(lock.exists())
+                    self.assertIn(f"pid={uploader.os.getpid()}", lock.read_text(encoding="utf-8"))
+            self.assertFalse(lock.exists())
+            archives = list(Path(temp).glob("upload.lock.stale.424242.*"))
+            self.assertEqual(len(archives), 1)
+            self.assertIn("pid=424242", archives[0].read_text(encoding="utf-8"))
+
+    def test_single_instance_lock_never_replaces_live_owner(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / "upload.lock"
+            original = "pid=424242\nstarted=2026-07-18T04:50:00\n"
+            lock.write_text(original, encoding="utf-8")
+            with patch.object(uploader.psutil, "pid_exists", return_value=True):
+                with self.assertRaisesRegex(SystemExit, "already appears to be running"):
+                    with uploader.single_instance_lock(lock):
+                        pass
+            self.assertEqual(lock.read_text(encoding="utf-8"), original)
+
+    def test_single_instance_lock_fails_closed_without_owner_pid(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / "upload.lock"
+            lock.write_text("corrupt", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "no verifiable owner"):
+                with uploader.single_instance_lock(lock):
+                    pass
+            self.assertEqual(lock.read_text(encoding="utf-8"), "corrupt")
+
     def test_staged_paths_reject_files_outside_staging(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -250,7 +283,7 @@ class UploadSafetyTests(unittest.TestCase):
                 continue_on_timeout=True,
                 log_path=manifest / "upload.log",
                 uploaded_log=manifest / "drive_upload_uploaded.csv",
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 years="",
             )
             with (
@@ -323,7 +356,7 @@ class UploadSafetyTests(unittest.TestCase):
     def test_backend_idle_check_fails_closed_when_status_unreachable(self):
         with patch.object(uploader, "urlopen", side_effect=uploader.URLError("offline")):
             with self.assertRaisesRegex(SystemExit, "cannot be proven"):
-                ORIGINAL_ENSURE_BACKEND_IDLE("http://127.0.0.1:5000")
+                ORIGINAL_ENSURE_BACKEND_IDLE("http://127.0.0.1:5002")
 
     def test_backend_idle_check_rejects_actual_running_status_payload(self):
         class Response:
@@ -338,7 +371,7 @@ class UploadSafetyTests(unittest.TestCase):
 
         with patch.object(uploader, "urlopen", return_value=Response()):
             with self.assertRaisesRegex(SystemExit, "backend reports OCR running"):
-                ORIGINAL_ENSURE_BACKEND_IDLE("http://127.0.0.1:5000")
+                ORIGINAL_ENSURE_BACKEND_IDLE("http://127.0.0.1:5002")
 
     def test_owned_active_runner_blocks_even_when_api_could_be_idle(self):
         process = SimpleNamespace(
@@ -736,7 +769,7 @@ class UploadSafetyTests(unittest.TestCase):
             continue_on_timeout=True,
             log_path=manifest / "upload.log",
             uploaded_log=manifest / "drive_upload_uploaded.csv",
-            backend_url="http://127.0.0.1:5000",
+            backend_url="http://127.0.0.1:5002",
             years="",
         )
 
