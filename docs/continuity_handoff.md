@@ -478,3 +478,11 @@
 - 後續由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 原位接續；CSV 固定順序為 202601（1,500）、202602（1,598）、202603（357）、202604（1,587）、202605（905）。monitor 的單例鎖保留到 runner 結束，其他 staged runner、90 分鐘無進度或整體逾時都會寫 alert，不會開第二套程序或可見終端機。
 - 十項單元測試與正式路徑唯讀 preflight 已通過；除交接流程外，也覆蓋缺少 Drive 收據與舊 summary 冒充新成功。preflight 證明目前 CSV 順序與 202601 staging 身分相符。正式 monitor 必須由 `Start-Process -WindowStyle Hidden` 啟動，日誌在 `logs/`，完成 receipt／失敗 alert 在 `_ocr_audit/`。
 - 內容監控另抓到 `台中LalaportSES-301` 三輪後把清楚的 Follow Me 4K 展示誤細分成 `Pro M7 43"`。主代理已直接檢視完整原圖：同一前景主體具品牌字樣、白色直立移動架、托盤與圓底座，但無足夠型號／價格像素。已把 source/input SHA 綁定的安全真值加入像素權威與永久測試；離線三輪定案只能輸出 `單機／FollowMe（型號未細分）／無價格`，不可第 4 次呼叫或保留猜測版本。
+
+## 2026-07-17 `.43` request binding fuse 修復與正式恢復
+
+- 正式 202606 在 `218/1,393`、總盤 `65,549/151,714` 時，`新大雅-1178` 的第三次呼叫逾時且無法驗證 request binding，舊流程把正規化後的 `request_binding_unverified` 漏出單張 containment，錯誤熔斷整批。不是內容判錯，也不是需要第 4 輪。
+- `.43` 將 raw 與 normalized request-binding 同義錯誤統一限制於單張；若前兩次同 SHA、完全獨立且綁定成功，並一致讀到同一非 FollowMe SKU／價格，可丟棄第三次未綁定回覆後結案。`新大雅-1178` 前兩次均為 `S32CG552EC／6,990`，已用 recovery receipt 證明兩次有效、第三次作廢、第四次未呼叫，並取得 Drive receipt。
+- 110 項 targeted tests 與語法編譯通過。port 5002 backend 在照片邊界 hidden 換版，既有 Chrome 分頁未新增；正式批次以 `restart=false` 從 202606 原位續跑。唯一 `continue_after_period_priority.py` monitor PID `30480` 已恢復，仍負責 202606 完成後接回 rev19 保存的 202601–202605 staging。
+- 視覺驗收顯示總盤 `65,578/151,714`、202606 `247/1,393`，圖片／檔名／LLM 即時自然文字／右欄卡片同步，近期平均 `13.39 秒`。之後總盤續增至 `65,589`。
+- 換 `.43` 後發現 uploader 尚載入 `.42`，32 個 `.43` job 被精確標為 `stale or invalid stream upload job`；正式 OCR 未停。已只重排這 32 個可證明同版本 job、保留舊 95 個失敗檔，將 uploader hidden 換到 `.43`。新收據已由 canonical `53,516` 增至 `53,517`，pending 正在依序排空；後續監控必須同時看 processed 與 canonical uploaded，禁止只看 OCR 數字。

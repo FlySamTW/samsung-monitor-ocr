@@ -1999,6 +1999,41 @@ class BatchOrchestrator:
                     attempt=1,  # prompt isolation was proven before the model call
                     upstream_upload_authorized=False,
                 )
+                normalized_binding_reasons = {
+                    str(reason)
+                    for reason in runtime_health.reasons
+                    if str(reason)
+                }
+                if (
+                    not contained_request_binding_failure
+                    and not runtime_health.allow_processing
+                    and normalized_binding_reasons
+                    and normalized_binding_reasons <= {"request_binding_unverified"}
+                    and re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        str(norm_result.get("input_image_sha256") or "").strip().lower(),
+                    )
+                    and not self._request_binding_incident_repeated_across_sources(
+                        normalized_binding_reasons,
+                        norm_result,
+                    )
+                ):
+                    # evaluate_runtime_health normalizes a missing/mismatched
+                    # request echo to request_binding_unverified.  Keep that
+                    # synonym on the same per-photo containment path as the
+                    # raw transport errors so one invalid response cannot stop
+                    # the entire folder.
+                    contained_request_binding_failure = True
+                    norm_result["request_binding_enforced"] = True
+                    norm_result["request_id_verified"] = False
+                    norm_result["independent_pass"] = True
+                    norm_result["prior_answer_exposed"] = False
+                    norm_result["prompt_contamination"] = False
+                    raw_result = dict(raw_result)
+                    raw_result["runtime_health_reasons"] = sorted(
+                        normalized_binding_reasons
+                    )
+                    raw_result["contained_request_binding_failure"] = True
                 norm_result["runtime_health"] = runtime_health.to_dict()
                 runtime_health_force_unresolved = False
                 can_retry_conflict = False

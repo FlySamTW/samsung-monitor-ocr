@@ -65,6 +65,98 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_two_bound_identity_votes_discard_unbound_third_without_fourth_call(self):
+        history = [
+            make_pass("單機", "S32CG552EC", "6990", 2, True, "matched"),
+            make_pass("單機", "S32CG552EC", "6990", 1, True, "matched"),
+        ]
+        current = make_pass(
+            "單機",
+            "WRONG",
+            "99999",
+            1,
+            True,
+            "matched",
+            healthy=False,
+            request_id_verified=False,
+            runtime_health={
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": ["request_binding_unverified"],
+            },
+        )
+
+        result = finalize_three_pass_outcome(
+            current,
+            history,
+            {
+                "attempt": 3,
+                "retry": False,
+                "unresolved": True,
+                "verified": False,
+                "technical_retry_required": True,
+                "reasons": ["request_binding_unverified"],
+            },
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_bound_pass_consensus_discarded_unbound_third",
+        )
+        self.assertEqual(current["model"], "S32CG552EC")
+        self.assertEqual(current["price"], "6990")
+        self.assertTrue(current["request_id_verified"])
+        self.assertTrue(current["runtime_health"]["healthy"])
+        self.assertEqual(
+            current["discarded_unbound_call"]["reasons"],
+            ["request_binding_unverified"],
+        )
+
+    def test_unbound_third_cannot_settle_disagreeing_bound_identity_votes(self):
+        history = [
+            make_pass("單機", "S32CG552EC", "6990", 1, True, "matched"),
+            make_pass("單機", "S27CG552EC", "4990", 1, True, "matched"),
+        ]
+        current = make_pass(
+            "單機",
+            "S32CG552EC",
+            "6990",
+            1,
+            True,
+            "matched",
+            healthy=False,
+            request_id_verified=False,
+            runtime_health={
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": ["request_binding_unverified"],
+            },
+        )
+
+        result = finalize_three_pass_outcome(
+            current,
+            history,
+            {
+                "attempt": 3,
+                "retry": False,
+                "unresolved": True,
+                "verified": False,
+                "technical_retry_required": True,
+                "reasons": ["request_binding_unverified"],
+            },
+        )
+
+        self.assertFalse(result["verified"])
+        self.assertTrue(result["unresolved"])
+        self.assertEqual(
+            result["technical_retry_reason"],
+            "three_pass_current_integrity_invalid",
+        )
+
     def test_final_zoom_price_wins_over_one_extra_digit_outlier(self):
         history = [
             make_pass("單機", "S27CG552EC", "74990", 1, True, "matched"),

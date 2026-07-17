@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.42"
+EVIDENCE_GUARD_REVISION = "20260717.43"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -2103,7 +2103,67 @@ def finalize_three_pass_outcome(
         and len(fully_usable_hashes) == 1
         and len(identity_free_winning_counts) == 1
     )
-    if distant_majority:
+    # A transport-level request-binding failure in the third and final call
+    # invalidates only that response; it must never erase two earlier,
+    # independently bound calls.  Finish without a fourth model call only when
+    # those two valid calls agree on the exact non-FollowMe SKU/price identity
+    # and the same single-subject geometry.
+    discarded_binding_reasons = {
+        str(reason)
+        for reason in (
+            (record.get("runtime_health") or {}).get("reasons")
+            or outcome.get("reasons")
+            or []
+        )
+        if str(reason)
+    }
+    prior_bound_passes = list(passes[:-1])
+    prior_bound_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in prior_bound_passes
+    }
+    prior_identity_pairs = {
+        (
+            normalize_model_token(item.get("model")),
+            re.sub(r"[^0-9]", "", str(item.get("price") or "")),
+        )
+        for item in prior_bound_passes
+    }
+    binding_discarded_head_fallback = bool(
+        len(passes) == max_attempts
+        and len(prior_bound_passes) == 2
+        and all(_adjudication_pass_is_usable(item) for item in prior_bound_passes)
+        and "" not in prior_bound_hashes
+        and len(prior_bound_hashes) == 1
+        and current_hash in prior_bound_hashes
+        and record.get("request_binding_enforced") is True
+        and record.get("request_id_verified") is not True
+        and record.get("independent_pass") is True
+        and record.get("prior_answer_exposed") is not True
+        and record.get("prompt_contamination") is not True
+        and discarded_binding_reasons
+        and discarded_binding_reasons <= {
+            "request_binding_unverified",
+            "request_id_missing",
+            "request_id_mismatch",
+        }
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main") is True
+            and (item.get("normalized_evidence") or item).get("complete_screen_count") in {1, 2}
+            and (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+            and not is_followme_model(item.get("model"))
+            and item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+            for item in prior_bound_passes
+        )
+        and len(prior_identity_pairs) == 1
+        and all(model_key and price_key for model_key, price_key in prior_identity_pairs)
+    )
+    if binding_discarded_head_fallback:
+        usable = prior_bound_passes
+    elif distant_majority:
         usable = [
             item
             for item in distant_candidates
@@ -2180,7 +2240,11 @@ def finalize_three_pass_outcome(
             else:
                 multiscreen_distant.append(item)
 
-    if single_identity_base_fallback:
+    if binding_discarded_head_fallback:
+        final_view = "單機"
+        supporting = list(prior_bound_passes)
+        rule = "two_bound_pass_consensus_discarded_unbound_third"
+    elif single_identity_base_fallback:
         final_view = "單機"
         supporting = list(winning_non_followme_pairs[0][1])
         rule = "two_pass_non_followme_identity_consensus"
@@ -2403,6 +2467,29 @@ def finalize_three_pass_outcome(
     record["adjudication_rule"] = rule
     record["adjudication_original_current"] = original
     record["adjudication_pass_summaries"] = pass_summaries
+    if binding_discarded_head_fallback:
+        record["discarded_unbound_call"] = {
+            "attempt": attempt,
+            "request_id_verified": False,
+            "reasons": sorted(discarded_binding_reasons),
+        }
+        # These fields describe the evidence selected for the final result,
+        # namely the two independently request-bound calls.  The rejected
+        # third call remains explicitly preserved above and in the trace.
+        record["request_binding_enforced"] = True
+        record["request_id_verified"] = True
+        record["independent_pass"] = True
+        record["prior_answer_exposed"] = False
+        record["prompt_contamination"] = False
+        record["runtime_health_contained_reasons"] = sorted(discarded_binding_reasons)
+        record["runtime_health"] = {
+            "healthy": True,
+            "allow_processing": True,
+            "allow_upload": True,
+            "reasons": [],
+            "display_narration": "",
+            "resolved_by_bound_consensus_after_discard": True,
+        }
     record["adjudication_summary"] = (
         f"三輪證據已完成交叉核對，依固定實體證據規則定案為：{result_text}。"
         "型號或價格若沒有至少兩輪一致證據，維持無型號／無價格，不做猜測。"

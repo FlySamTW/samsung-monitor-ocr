@@ -800,3 +800,11 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 - `台中LalaportSES-301` 的完整原圖清楚顯示 Samsung Follow Me 4K 品牌、同一前景主體的白色直立移動架、托盤與圓形底座，但沒有足夠像素證據安全細分 M5/M7/Pro 或價格。其 full-image SHA 已加入人工稽核像素權威：三次獨立、request-bound、無記憶污染的呼叫完成後，必須降階結案為 `單機／FollowMe（型號未細分）／無價格` 並逐張上傳，不得保留模型猜測的 `Pro M7 43"`，也不得呼叫第 4 次模型。
 
 Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json` 映回原始資料夾後再合併 live stats；不能直接拿 staging 路徑和 `folder_discovery.csv` 的來源路徑比較。新增月份處理第 1 張後，`overall_progress.processed_images` 就必須增加，不能等整個月份完成才跳數。永久測試為 `test_staging_progress_maps_to_original_folder_and_moves_total_counter`。
+
+## 2026-07-17 request binding 單張隔離與上傳版本同步（`.43`）
+
+- 第三次模型呼叫若因逾時／回傳缺少 request echo 而得到 `request_binding_unverified`，該次內容一律作廢，不可參與分類、型號或價格投票；但這個單張傳輸錯誤也不得停止整個資料夾。`request_id_missing`、`request_id_mismatch` 與正規化後的 `request_binding_unverified` 必須走同一條單張 containment 路徑。
+- 每張仍維持最多三次模型呼叫，禁止第 4 輪。只有在前兩次都是同一 input SHA、獨立、無前輪答案、request-bound、runtime healthy、且完全同意同一個非 FollowMe 單機 SKU／價格與主體歸屬時，才可用 `two_bound_pass_consensus_discarded_unbound_third` 結案；第三次未綁定回覆要保存在 `discarded_unbound_call` 稽核欄位，不得冒充有效票。
+- 實例 `M-台中市-西屯區-TK3C-新大雅-1178.jpg`：前兩次有效結果皆為 `單機／S32CG552EC／6,990`，第三次 request binding 失敗。離線 recovery 以兩次有效共識結案、沒有第 4 次呼叫，result、retry state、fuse history、recovery receipt 與逐張 upload job 依序原子落盤；Google Drive exact readback receipt 已於 `2026-07-17 19:34:38` 取得。
+- evidence revision 變更後，backend 與 `stream_drive_upload.py` 必須在同一照片邊界同步換版。只換 backend 會讓舊 uploader 把新 revision job 判為 `stale or invalid stream upload job`。本次 `.43` 邊界曾產生 32 個可證明的同版本失敗 job；只把 `revision=.43` 且 error 完全相符的 32 個 job 移回 pending，舊有 95 個其他失敗紀錄不動，換版後 uploader 已開始取得新收據。
+- Dashboard 視覺驗收必須直接在既有 Chrome 分頁完成，不得新開分頁：精確總數、資料夾子進度、目前圖片／檔名、LLM 自然敘述、右側累積卡片及上傳 pending／總數都要同時核對。`.43` 驗收看到 `65,578/151,714`、202606 `247/1,393`、LLM 即時文字與圖片同步、右側卡片累積、近期平均 `13.39 秒`；修復上傳程序後精確總數續增至 `65,589`，新收據也由 `53,516` 增至 `53,517`。
