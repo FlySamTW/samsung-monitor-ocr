@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,74 @@ from tools.rerun_staged_candidates import stage_images
 
 
 class PresentationHistoryTests(unittest.TestCase):
+    def test_staging_progress_maps_to_original_folder_and_moves_total_counter(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_root = root / "source"
+            old_source = source_root / "商化照片-202605"
+            new_source = source_root / "商化照片-202606"
+            staging = root / "output" / "_ocr_staging" / "period_priority" / "run" / "202606_stage"
+            audit = root / "output" / "_ocr_audit"
+            old_source.mkdir(parents=True)
+            new_source.mkdir(parents=True)
+            staging.mkdir(parents=True)
+            audit.mkdir(parents=True)
+            source_image = new_source / "M-new-1.jpg"
+            source_image.write_bytes(b"image")
+            (staging / ".ocr_source_map.json").write_text(json.dumps({
+                "version": 1,
+                "items": {
+                    source_image.name: {
+                        "original_source_path": str(source_image),
+                        "period": "202606",
+                    }
+                },
+            }), encoding="utf-8")
+            with (audit / "folder_discovery.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["folder", "period", "image_count"])
+                writer.writeheader()
+                writer.writerows([
+                    {"folder": str(old_source), "period": "202605", "image_count": 10},
+                    {"folder": str(new_source), "period": "202606", "image_count": 5},
+                ])
+            with (audit / "folder_summary.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["folder", "period", "image_count", "processed", "ready", "status"],
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "folder": str(old_source),
+                    "period": "202605",
+                    "image_count": 10,
+                    "processed": 10,
+                    "ready": 10,
+                    "status": "copied",
+                })
+
+            fake = type("FakeOrchestrator", (), {"is_running": True})()
+            with (
+                patch.object(backend, "AUDIT_DIR", audit),
+                patch.object(backend, "SOURCE_ROOT", source_root),
+                patch.object(backend, "orchestrator", fake),
+                patch.object(backend, "OVERALL_PROGRESS_CACHE", {"mtime": None, "data": None}),
+                patch.object(
+                    backend,
+                    "SOURCE_MAP_COUNT_CACHE",
+                    {"path": None, "signature": None, "count": 0, "original_folder": ""},
+                ),
+            ):
+                result = backend.build_overall_progress(
+                    current_folder=staging,
+                    current_stats={"total": 5, "processed": 2, "success": 2},
+                )
+
+            self.assertEqual(result["total_images"], 15)
+            self.assertEqual(result["processed_images"], 12)
+            self.assertEqual(result["remaining_images"], 3)
+            self.assertEqual(result["current_folder"]["folder"], str(new_source))
+            self.assertEqual(result["current_folder"]["processed"], 2)
+
     def test_queue_event_prefers_same_result_detailed_narration(self):
         orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
         orchestrator.config = {"model_id": "local-model", "accuracy_profile": "strict"}

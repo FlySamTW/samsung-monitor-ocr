@@ -786,3 +786,5 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 `tools/prepare_period_priority.py` 只負責在不中斷正式 OCR 的情況下，為新到月份建立固定 staging、逐張原始來源對照、候選 CSV 與稽核目錄，並以原子方式加入資料夾清單；它不會自行切換後端或重啟批次。`--execute` 前先 dry-run，執行後必須核對照片數、source-map 筆數、manifest `complete=true` 與來源位元雜湊。
 
 正式切換只能在照片邊界：先停止目前資料夾並保存 processed/verified/upload 斷點，維持同一個 Dashboard 分頁與 port 5002；再把工作目錄指向唯一的 202606 staging leaf，以 `restart=false` 啟動。每張通過守門後立即進逐張上傳；202601 的斷點保留，202606 完成後接續，不得整批重跑。
+
+Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json` 映回原始資料夾後再合併 live stats；不能直接拿 staging 路徑和 `folder_discovery.csv` 的來源路徑比較。新增月份處理第 1 張後，`overall_progress.processed_images` 就必須增加，不能等整個月份完成才跳數。永久測試為 `test_staging_progress_maps_to_original_folder_and_moves_total_counter`。

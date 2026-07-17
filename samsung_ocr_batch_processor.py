@@ -1529,34 +1529,66 @@ MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
 MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
 OVERALL_PROGRESS_CACHE = {"mtime": None, "data": None}
-SOURCE_MAP_COUNT_CACHE = {"path": None, "signature": None, "count": 0}
+SOURCE_MAP_COUNT_CACHE = {
+    "path": None,
+    "signature": None,
+    "count": 0,
+    "original_folder": "",
+}
 
 
-def _staging_source_count(image_dir) -> int:
-    """Return the durable staging denominator without rereading it every poll."""
+def _staging_source_metadata(image_dir) -> tuple[int, str]:
+    """Return staging count and original source folder with one cached read."""
     if not image_dir:
-        return 0
+        return 0, ""
     source_map = Path(str(image_dir)) / ".ocr_source_map.json"
     try:
         stat = source_map.stat()
     except OSError:
-        return 0
+        return 0, ""
     signature = (stat.st_mtime_ns, stat.st_size)
     if (
         SOURCE_MAP_COUNT_CACHE.get("path") == str(source_map)
         and SOURCE_MAP_COUNT_CACHE.get("signature") == signature
     ):
-        return int(SOURCE_MAP_COUNT_CACHE.get("count") or 0)
+        return (
+            int(SOURCE_MAP_COUNT_CACHE.get("count") or 0),
+            str(SOURCE_MAP_COUNT_CACHE.get("original_folder") or ""),
+        )
     try:
         payload = json.loads(source_map.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return 0
+        return 0, ""
     items = payload.get("items") if isinstance(payload, dict) else payload
     count = len(items) if isinstance(items, (dict, list)) else 0
+    first = {}
+    if isinstance(items, dict) and items:
+        first = next(iter(items.values()))
+    elif isinstance(items, list) and items:
+        first = items[0]
+    original = ""
+    if isinstance(first, dict):
+        original = str(first.get("original_source_path") or first.get("source_path") or "").strip()
+    original_folder = str(Path(original).resolve().parent) if original else ""
     SOURCE_MAP_COUNT_CACHE.update(
-        {"path": str(source_map), "signature": signature, "count": count}
+        {
+            "path": str(source_map),
+            "signature": signature,
+            "count": count,
+            "original_folder": original_folder,
+        }
     )
-    return int(count)
+    return int(count), original_folder
+
+
+def _staging_source_count(image_dir) -> int:
+    """Return the durable staging denominator without rereading it every poll."""
+    return _staging_source_metadata(image_dir)[0]
+
+
+def _staging_original_folder(image_dir) -> str:
+    """Map an active staging leaf back to the folder used by overall progress."""
+    return _staging_source_metadata(image_dir)[1]
 
 def should_save_manual_learning_rule(data: dict) -> bool:
     """Only an explicit checkbox plus a non-empty reusable hint creates a rule."""
@@ -1788,7 +1820,8 @@ def _load_base_overall_progress() -> dict:
 def build_overall_progress(current_folder=None, current_stats=None) -> dict:
     progress = _load_base_overall_progress()
     folders = progress.pop("folders", [])
-    current_key = _folder_key(current_folder)
+    current_source_folder = _staging_original_folder(current_folder)
+    current_key = _folder_key(current_source_folder or current_folder)
     current_stats = current_stats or {}
 
     for item in folders:
