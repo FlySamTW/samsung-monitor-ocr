@@ -2,7 +2,7 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$SourceRoot = "",
     [string]$OutputDir = "D:\00_商化\00_已OCR照片",
-    [string]$BackendUrl = "http://127.0.0.1:5000",
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [string]$ExpectedFolder = "",
     [int]$PollSeconds = 30,
     [int]$WaitTimeoutSeconds = 21600,
@@ -19,6 +19,8 @@ New-Item -ItemType Directory -Force -Path $auditDir,$logDir | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $logDir "safe_backend_boundary_upgrade_$stamp.jsonl"
 $script:lockOwned = $false
+try { $script:BackendPort = ([uri]$BackendUrl).Port } catch { throw "BackendUrl must be an absolute URL: $BackendUrl" }
+if ($script:BackendPort -lt 1) { throw "BackendUrl must include a TCP port: $BackendUrl" }
 
 function Log([string]$Event, [hashtable]$Data = @{}) {
     $row = [ordered]@{ timestamp=(Get-Date).ToString("o"); event=$Event; repo_root=$RepoRoot }
@@ -68,14 +70,14 @@ function Test-QuietBoundary($status) {
 }
 function Get-BackendProcessTree {
     $all = @(Get-CimInstance Win32_Process)
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction Stop)
-    if ($listeners.Count -ne 1) { throw "expected exactly one port 5000 listener, found $($listeners.Count)" }
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $script:BackendPort -ErrorAction Stop)
+    if ($listeners.Count -ne 1) { throw "expected exactly one port $($script:BackendPort) listener, found $($listeners.Count)" }
     $listenerId = [int]$listeners[0].OwningProcess
     $byId = @{}
     foreach ($proc in $all) { $byId[[int]$proc.ProcessId] = $proc }
-    if (-not $byId.ContainsKey($listenerId)) { throw "port 5000 listener process was not found" }
+    if (-not $byId.ContainsKey($listenerId)) { throw "port $($script:BackendPort) listener process was not found" }
     if ([string]$byId[$listenerId].CommandLine -notmatch "samsung_ocr_batch_processor\.py") {
-        throw "port 5000 is not owned by the Samsung OCR backend"
+        throw "port $($script:BackendPort) is not owned by the Samsung OCR backend"
     }
 
     $tree = @()
@@ -94,7 +96,7 @@ function Get-BackendProcessTree {
 }
 function Stop-BackendGracefully {
     $procs = @(Get-BackendProcessTree)
-    $listenerId = [int](Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)
+    $listenerId = [int](Get-NetTCPConnection -State Listen -LocalPort $script:BackendPort -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)
     $orderedIds = @($listenerId) + @($procs | ForEach-Object { [int]$_.ProcessId } | Where-Object { $_ -ne $listenerId })
     Log "backend_stop_requested" @{ listener_pid=$listenerId; process_ids=$orderedIds }
     foreach ($processId in $orderedIds) {
@@ -103,7 +105,7 @@ function Stop-BackendGracefully {
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
         $remaining = @($orderedIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-        if ($remaining.Count -eq 0 -and -not (Get-NetTCPConnection -State Listen -LocalPort 5000 -ErrorAction SilentlyContinue)) {
+        if ($remaining.Count -eq 0 -and -not (Get-NetTCPConnection -State Listen -LocalPort $script:BackendPort -ErrorAction SilentlyContinue)) {
             Log "backend_stopped" @{ process_ids=$orderedIds }
             return
         }

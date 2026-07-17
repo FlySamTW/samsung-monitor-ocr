@@ -75,7 +75,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=self.idle_status,
             )
             self.assertTrue(result["valid"])
@@ -84,7 +84,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
             )
             self.assertIsNotNone(receipt)
             self.assertEqual(errors, [])
@@ -97,25 +97,25 @@ class HistoricalContinuationGateTests(unittest.TestCase):
             (source / "2025" / "a.jpg").write_bytes(b"photo")
             result = write_receipt(
                 source, output, current_year=2026,
-                backend_url="http://127.0.0.1:5000", status_reader=self.idle_status,
+                backend_url="http://127.0.0.1:5002", status_reader=self.idle_status,
             )
             self.assertTrue(result["valid"])
             receipt, errors = validate_receipt(
                 audit / RECEIPT_NAME, source, output, current_year=2026,
-                backend_url="http://127.0.0.1:5000", require_source_inventory=True,
+                backend_url="http://127.0.0.1:5002", require_source_inventory=True,
             )
             self.assertIsNone(receipt)
             self.assertIn("source_inventory_binding_missing", errors)
             ensure_frozen_snapshot(audit, source)
             bound = bind_source_inventory(
                 audit / RECEIPT_NAME, source, output, current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
             )
             self.assertTrue(bound["valid"])
             (audit / "source_inventory_v1.csv").write_text("tampered", encoding="utf-8")
             receipt, errors = validate_receipt(
                 audit / RECEIPT_NAME, source, output, current_year=2026,
-                backend_url="http://127.0.0.1:5000", require_source_inventory=True,
+                backend_url="http://127.0.0.1:5002", require_source_inventory=True,
             )
             self.assertIsNone(receipt)
             self.assertTrue(any("source_inventory_csv_sha256" in item for item in errors))
@@ -129,7 +129,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=self.idle_status,
             )
             self.assertFalse(result["valid"])
@@ -143,7 +143,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=self.idle_status,
             )
             self.assertFalse(locked["valid"])
@@ -153,7 +153,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=lambda _url: {"running": True, "worker_alive": True, "processed": 1, "total": 2},
             )
             self.assertFalse(busy["valid"])
@@ -168,7 +168,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
             proof_path.write_text(json.dumps(proof), encoding="utf-8")
             result = write_receipt(
                 source, output, current_year=2026,
-                backend_url="http://127.0.0.1:5000", status_reader=self.idle_status,
+                backend_url="http://127.0.0.1:5002", status_reader=self.idle_status,
             )
             self.assertFalse(result["valid"])
             self.assertTrue(any("upload_gate_proof_stale" in item for item in result["errors"]))
@@ -180,7 +180,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=self.idle_status,
             )
             self.assertTrue(result["valid"])
@@ -193,7 +193,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
             )
             self.assertIsNone(receipt)
             self.assertTrue(any("current_year_marker_backfill_run_id_mismatch" in item for item in errors))
@@ -207,7 +207,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
                 status_reader=self.idle_status,
             )
             self.assertFalse(rejected["valid"])
@@ -219,7 +219,7 @@ class HistoricalContinuationGateTests(unittest.TestCase):
                 source,
                 output,
                 current_year=2026,
-                backend_url="http://127.0.0.1:5000",
+                backend_url="http://127.0.0.1:5002",
             )
             self.assertIsNone(receipt)
             self.assertIn("receipt_path_not_canonical", errors)

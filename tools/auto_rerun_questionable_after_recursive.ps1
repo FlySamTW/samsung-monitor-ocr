@@ -2,7 +2,7 @@ param(
     [string]$RepoRoot = "",
     [string]$SourceRoot = "",
     [string]$OutputDir = "",
-    [string]$BackendUrl = "http://127.0.0.1:5000",
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [int]$PollSeconds = 300,
     [int]$PrimaryPasses = 3,
     [string]$PrimaryModel = "qwen/qwen3-vl-8b",

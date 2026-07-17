@@ -2,7 +2,7 @@ param(
     [string]$RepoRoot,
     [string]$SourceRoot,
     [string]$OutputDir,
-    [string]$BackendUrl = "http://127.0.0.1:5000",
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
     [int]$ContextLength = 32768,

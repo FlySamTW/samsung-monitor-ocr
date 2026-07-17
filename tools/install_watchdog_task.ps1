@@ -2,6 +2,7 @@ param(
     [string]$RepoRoot,
     [string]$SourceRoot,
     [string]$OutputDir,
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [string]$TaskName = "SamsungOCR_PipelineWatchdog",
     [int]$IntervalHours = 4,
     [int]$StartDelayMinutes = 5
@@ -34,10 +35,11 @@ $taskArgs = @(
     "-File", ('"{0}"' -f $Watchdog),
     "-RepoRoot", ('"{0}"' -f $RepoRoot),
     "-SourceRoot", ('"{0}"' -f $SourceRoot),
-    "-OutputDir", ('"{0}"' -f $OutputDir)
+    "-OutputDir", ('"{0}"' -f $OutputDir),
+    "-BackendUrl", ('"{0}"' -f $BackendUrl)
 ) -join " "
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs -WorkingDirectory $RepoRoot
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ("-WindowStyle Hidden " + $taskArgs) -WorkingDirectory $RepoRoot
 $start = (Get-Date).AddMinutes([math]::Max(1, $StartDelayMinutes))
 $triggers = @(
     (New-ScheduledTaskTrigger -AtStartup),

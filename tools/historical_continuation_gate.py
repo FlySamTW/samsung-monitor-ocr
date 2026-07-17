@@ -30,7 +30,7 @@ from tools.source_inventory_snapshot import SUMMARY_NAME as INVENTORY_SUMMARY_NA
 
 REQUEST_SCHEMA = "samsung-ocr-full-project-continuation-request/v1"
 RECEIPT_SCHEMA = "samsung-ocr-historical-continuation-receipt/v1"
-CANONICAL_BACKEND_URL = "http://127.0.0.1:5000"
+CANONICAL_BACKEND_URL = "http://127.0.0.1:5002"
 REQUEST_NAME = "full_project_continuation_requested.json"
 RECEIPT_NAME = "historical_continuation_receipt.json"
 MARKER_NAME = "current_year_rerun_cycle_complete.json"

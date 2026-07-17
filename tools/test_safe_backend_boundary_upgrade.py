@@ -28,8 +28,8 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('$quietCount -ge 2', self.script)
 
     def test_backend_stop_targets_verified_port_listener_and_process_tree(self):
-        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort 5000', self.script)
-        self.assertIn('port 5000 is not owned by the Samsung OCR backend', self.script)
+        self.assertIn('Get-NetTCPConnection -State Listen -LocalPort $script:BackendPort', self.script)
+        self.assertIn('port $($script:BackendPort) is not owned by the Samsung OCR backend', self.script)
         self.assertIn('backend listener ancestry is not owned by repo', self.script)
         self.assertIn('listener_pid=$listenerId; process_ids=$orderedIds', self.script)
 

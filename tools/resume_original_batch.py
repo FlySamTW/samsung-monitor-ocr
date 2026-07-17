@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = Path(r"D:\00_商化\00_未整理商化照片")
 OUTPUT_DIR = Path(r"D:\00_商化\00_已OCR照片")
-BACKEND_URL = "http://127.0.0.1:5000"
+BACKEND_URL = "http://127.0.0.1:5002"
 API_BASE = "http://127.0.0.1:1234/v1"
 API_KEY = "lm-studio"
 MODEL = "qwen/qwen3-vl-8b"

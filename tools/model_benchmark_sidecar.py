@@ -467,7 +467,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Fail-closed local LM Studio benchmark sidecar")
     p.add_argument("--execute", action="store_true", help="required to load models and infer")
     p.add_argument("--api-base", default="http://127.0.0.1:1234/v1")
-    p.add_argument("--backend-url", default="http://127.0.0.1:5000")
+    p.add_argument("--backend-url", default="http://127.0.0.1:5002")
     p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     p.add_argument("--prompt", type=Path, default=ROOT / "samsung_ocr_prompt.txt")
     p.add_argument("--output", type=Path, default=DEFAULT_OUT)

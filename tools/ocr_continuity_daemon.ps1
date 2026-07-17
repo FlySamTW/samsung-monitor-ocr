@@ -3,6 +3,7 @@ param(
     [string]$RepoRoot,
     [string]$SourceRoot,
     [string]$OutputDir,
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [int]$IntervalSeconds = 300,
     [int]$ChildTimeoutSeconds = 240
 )
@@ -29,7 +30,7 @@ try {
     while($true) {
         $stamp=Get-Date -Format yyyyMMdd_HHmmss
         $out=Join-Path $logDir "daemon_supervisor_$stamp.out.log"; $err=Join-Path $logDir "daemon_supervisor_$stamp.err.log"
-        $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$supervisor,'-RepoRoot',$RepoRoot,'-SourceRoot',$SourceRoot,'-OutputDir',$OutputDir)
+        $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$supervisor,'-RepoRoot',$RepoRoot,'-SourceRoot',$SourceRoot,'-OutputDir',$OutputDir,'-BackendUrl',$BackendUrl)
         $child=Start-Process powershell.exe -ArgumentList $args -WorkingDirectory $RepoRoot -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
         $child.WaitForExit($ChildTimeoutSeconds*1000)
         if(-not $child.HasExited){Event "child_timeout" @{child_pid=$child.Id}; Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue} else {Event "supervisor_complete" @{child_pid=$child.Id;exit_code=$child.ExitCode}}

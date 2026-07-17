@@ -1,6 +1,7 @@
 param(
     [ValidateSet("setup", "start", "recursive", "status")]
-    [string]$Action = "start"
+    [string]$Action = "start",
+    [string]$BackendUrl = "http://127.0.0.1:5002"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,16 @@ try {
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
+try {
+    $BackendUri = [uri]$BackendUrl
+} catch {
+    throw "BackendUrl must be an absolute URL: $BackendUrl"
+}
+$BackendPort = $BackendUri.Port
+$BackendBase = $BackendUrl.TrimEnd("/")
+if ($BackendPort -lt 1) {
+    throw "BackendUrl must include a TCP port: $BackendUrl"
+}
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
@@ -255,7 +266,7 @@ function Ensure-Dashboard {
 
 function Get-BackendStatus {
     try {
-        return Invoke-RestMethod -Uri "http://127.0.0.1:5000/api/status" -TimeoutSec 3
+        return Invoke-RestMethod -Uri "$BackendBase/api/status" -TimeoutSec 3
     } catch {
         return $null
     }
@@ -341,7 +352,7 @@ function Ensure-Environment {
 
 function Open-DashboardIfRequested {
     if ((Get-Setting "SAMSUNG_OCR_OPEN_BROWSER" "0") -eq "1") {
-        Start-Process "http://127.0.0.1:5000/"
+        Start-Process "$BackendBase/"
     }
 }
 
@@ -371,6 +382,7 @@ function Start-Backend {
         "--api_key", "lm-studio",
         "--model", $model,
         "--dir", $sourceRoot,
+        "--port", "$BackendPort",
         "--no_followme_auto_update"
     )
 
@@ -380,7 +392,7 @@ function Start-Backend {
     for ($i = 0; $i -lt 45; $i++) {
         Start-Sleep -Seconds 1
         if (Get-BackendStatus) {
-            Write-Step "OCR dashboard is ready: http://127.0.0.1:5000/"
+            Write-Step "OCR dashboard is ready: $BackendBase/"
             Open-DashboardIfRequested
             return
         }
@@ -415,7 +427,7 @@ function Start-Recursive {
     & $python "tools\recursive_ocr_flat_export.py" `
         "--source-root" $sourceRoot `
         "--output-dir" $outputDir `
-        "--backend-url" "http://127.0.0.1:5000" `
+        "--backend-url" $BackendBase `
         "--api-base" $apiBase `
         "--api-key" "lm-studio" `
         "--model" $model

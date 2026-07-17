@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / "runs"
 IMAGE_DIR = ROOT / "targeted_rerun_2026_temp"
-BACKEND_URL = "http://127.0.0.1:5000"
+BACKEND_URL = "http://127.0.0.1:5002"
 API_BASE = "http://127.0.0.1:1234/v1"
 API_KEY = "lm-studio"
 MODEL = "qwen/qwen3-vl-8b"

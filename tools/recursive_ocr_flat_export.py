@@ -34,7 +34,7 @@ from source_inventory_snapshot import (
 
 
 UNSUPPORTED_EXTENSIONS = {".heic", ".heif", ".webp"}
-DEFAULT_BACKEND_URL = "http://127.0.0.1:5000"
+DEFAULT_BACKEND_URL = "http://127.0.0.1:5002"
 DEFAULT_API_BASE = "http://127.0.0.1:1234/v1"
 DEFAULT_MODEL = "qwen/qwen3-vl-8b"
 

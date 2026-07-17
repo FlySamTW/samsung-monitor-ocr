@@ -34,7 +34,7 @@ from tools import build_upload_gate_proof as upload_gate_authority
 
 
 DEFAULT_OUTPUT_DIR = Path(r"D:\00_商化\00_已OCR照片")
-DEFAULT_BACKEND_URL = "http://127.0.0.1:5000"
+DEFAULT_BACKEND_URL = "http://127.0.0.1:5002"
 DEFAULT_REMOTE = "samsung_ocr_drive"
 CURRENT_YEAR = str(datetime.now().year)
 HISTORICAL_AUTH_SCHEMA = "samsung-ocr-historical-upload-authorization/v1"

@@ -2,7 +2,7 @@
     [string]$RepoRoot = "D:\00_商化\samsung-monitor-ocr",
     [string]$SourceRoot = "D:\00_商化\00_未整理商化照片",
     [string]$OutputDir = "D:\00_商化\00_已OCR照片",
-    [string]$BackendUrl = "http://127.0.0.1:5000",
+    [string]$BackendUrl = "http://127.0.0.1:5002",
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
     [int]$PollSeconds = 60

@@ -11,7 +11,9 @@ class WindowsLauncherWindowStyleTests(unittest.TestCase):
         self.assertTrue(all("-WindowStyle Hidden" in line for line in backend_lines))
         self.assertNotIn("-WindowStyle Minimized", SCRIPT)
         self.assertNotIn("-WindowStyle Normal", SCRIPT)
-        self.assertEqual(SCRIPT.count('Start-Process "http://127.0.0.1:5000/"'), 1)
+        self.assertEqual(SCRIPT.count('Start-Process "$BackendBase/"'), 1)
+        self.assertIn('[string]$BackendUrl = "http://127.0.0.1:5002"', SCRIPT)
+        self.assertIn('"--port", "$BackendPort"', SCRIPT)
         self.assertIn('if ((Get-Setting "SAMSUNG_OCR_OPEN_BROWSER" "0") -eq "1")', SCRIPT)
         self.assertGreaterEqual(SCRIPT.count("Open-DashboardIfRequested"), 3)
 

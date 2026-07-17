@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_BACKEND_URL = "http://127.0.0.1:5000"
+DEFAULT_BACKEND_URL = "http://127.0.0.1:5002"
 
 for _stream in (sys.stdout, sys.stderr):
     try:
