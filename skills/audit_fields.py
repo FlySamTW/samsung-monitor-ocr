@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.45"
+EVIDENCE_GUARD_REVISION = "20260718.46"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -1140,14 +1140,20 @@ def _all_multiscreen_single_consistent(
     return True
 
 
-def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool:
+def _central_monitor_with_two_edge_cut_neighbors(
+    record: Dict[str, Any],
+    *,
+    minimum_count: int = 3,
+) -> bool:
     """Detect a same-pass narration/count contradiction for the common 940 layout.
 
     This is intentionally narrow: the prose must identify one central monitor,
     exactly one neighbor on each side, and say those side monitors are cut by
-    the photo boundary.  A structured count of three or more then cannot mean
-    three *complete* monitors.  Mentions of other complete rows/fixtures make
-    the rule inapplicable so genuine distant views are not collapsed to one.
+    the photo boundary.  By default, a structured count of three or more then
+    cannot mean three *complete* monitors.  The narrow completed-single fast
+    path may lower ``minimum_count`` to two without changing the stored count.
+    Mentions of other complete rows/fixtures make the rule inapplicable so
+    genuine distant views are not collapsed to one.
     """
     text = str(record.get("thinking") or record.get("narration") or "")
     # Adjudication mutates the top-level final fields before the evidence
@@ -1160,7 +1166,7 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
     if (
         not isinstance(count, int)
         or isinstance(count, bool)
-        or count < 3
+        or count < minimum_count
     ):
         return False
     central_one = bool(re.search(r"中央.{0,8}(?:一台|1\s*台).{0,8}螢幕|中央螢幕", text))
@@ -1463,11 +1469,22 @@ def immediate_retry_decision(
     # store promotion can differ substantially from today's reference price.
 
     multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
+    safe_two_count_single = bool(
+        view_type == "單機"
+        and multiscreen_count == 2
+        and contract["normalized_evidence"].get("unique_main") is True
+        and contract["normalized_evidence"].get("label_ownership") == "matched"
+        and model
+        and price
+        and _narration_supports_only_one_complete_monitor(record)
+        and _central_monitor_with_two_edge_cut_neighbors(record, minimum_count=2)
+    )
     if (
         _narration_supports_only_one_complete_monitor(record)
         and isinstance(multiscreen_count, int)
         and not isinstance(multiscreen_count, bool)
         and multiscreen_count != 1
+        and not safe_two_count_single
     ):
         record["frame_count_narration_conflict"] = True
         reasons.append("敘述明確只有一台完整螢幕，結構完整台數必須為1")

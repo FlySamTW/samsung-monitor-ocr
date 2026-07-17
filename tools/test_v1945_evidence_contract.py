@@ -82,18 +82,63 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(third["verified"])
         self.assertFalse(third["unresolved"])
 
-    def test_partial_neighbor_narration_rejects_count_two(self):
+    def test_complete_owned_single_with_partial_neighbor_can_finish_at_count_two(self):
         row = self._multiscreen_single(
             complete_screen_count=2,
             thinking=(
-                "我看到前景中央一台完整螢幕，右側另一台螢幕只有部分露出，"
-                "其外框被原圖右邊界截斷，不完整。"
+                "我看到前景中央一台完整螢幕，左側螢幕外框被原圖左邊界截斷，"
+                "右側螢幕外框也被原圖右邊界截斷，兩側鄰機都不完整。"
+            ),
+        )
+
+        decision = immediate_retry_decision(row, 1, [], 3)
+
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 2)
+        self.assertNotIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+
+    def test_partial_neighbor_count_two_still_retries_without_complete_single_identity(self):
+        narration = (
+            "我看到前景中央一台完整螢幕，右側另一台螢幕只有部分露出，"
+            "其外框被原圖右邊界截斷，不完整。"
+        )
+        unsafe_updates = (
+            {"model": ""},
+            {"price": ""},
+            {"label_ownership": "ambiguous"},
+            {"unique_main": False},
+            {"view_type": "遠景", "category": "遠景"},
+        )
+
+        for updates in unsafe_updates:
+            with self.subTest(updates=updates):
+                row = self._multiscreen_single(
+                    complete_screen_count=2,
+                    thinking=narration,
+                    **updates,
+                )
+                decision = immediate_retry_decision(row, 1, [], 3)
+                self.assertTrue(decision["retry"])
+                self.assertFalse(decision["verified"])
+                self.assertIn(
+                    "敘述明確只有一台完整螢幕，結構完整台數必須為1",
+                    decision["reasons"],
+                )
+
+    def test_partial_neighbor_count_three_still_requires_three_pass_review(self):
+        row = self._multiscreen_single(
+            complete_screen_count=3,
+            thinking=(
+                "我看到前景中央一台完整螢幕，左右兩側鄰機都被原圖邊界裁切，"
+                "其外框不完整。"
             ),
         )
 
         decision = immediate_retry_decision(row, 1, [], 3)
 
         self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
         self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
 
     def test_incompatible_background_marketing_family_retries(self):

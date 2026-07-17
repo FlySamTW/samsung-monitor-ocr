@@ -841,3 +841,10 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - Codex 工作回合顯示「暫停／等待／已結束」不代表 OCR 停止。Dashboard 唯一權威是 port 5002 `/api/status` 的 `is_running`、目前檔名、processed/verified、presentation sequence、stream upload worker 與最新更新時間。
 - Dashboard 不得因 Codex 回合切換、監控喚醒、文件工作或新訊息而顯示假待機。若 port 5002 正在前進，介面必須顯示「正在執行」；若即時資料停止更新，應修復顯示同步，不能重啟正常 OCR 來掩蓋前端問題。
 - 最高鐵律不變：辨識、介面與逐張上傳持續運轉；單張異常只 containment 該張。除非證明為會污染多張照片的系統性錯誤，否則不得建立全域 fuse 或阻塞下一張。
+
+## 2026-07-18 `.46` 完整單機的 `count=2` 窄範圍首輪結案
+
+- `complete_screen_count=2` 不可單獨成為強制複核理由。若同一輪同時滿足：`view_type=單機`、`unique_main=true`、`label_ownership=matched`、型號與店內價格皆非空、自然敘述明確指出中央主螢幕完整且左右鄰機都被原圖邊界裁切、沒有其他完整展示列，則保留原始結構值供稽核，但不得只因 `count=2` 推入第二、第三輪。
+- 上述例外不得擴張到 `count>=3`、遠景、缺型號、缺價格、`unique_main=false`、價牌歸屬不明、FollowMe 證據衝突、request/image 綁定失敗或污染疑慮。這些情況照原守門複核。
+- 真實歷史重播：`屏東-SF-446` 第一輪為單機／S24F332EAC／2,390／唯一主角／價牌 matched，且左右鄰機均被邊界裁切；新版首輪 `verified=true`。`屏東-SF-445` 第一輪仍是遠景／count=3／無唯一主角，維持複核並由第三輪定案。
+- 這是級聯推論的效率修正，不是降低正確性標準。正式換版只能在照片邊界，保留同一 port 5002 Dashboard、同一 staging 斷點與逐張上傳佇列；換版前相關 evidence、三輪、runtime-health、即時重試、上傳及介面測試必須全數通過。
