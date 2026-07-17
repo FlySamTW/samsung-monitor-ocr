@@ -460,6 +460,34 @@ class BatchOrchestrator:
         self._persist_retry_state()
         return False
 
+    def _request_binding_incident_repeated_across_sources(self, reasons, result) -> bool:
+        """Contain one bad request echo, but fuse if it recurs on another photo.
+
+        A mismatched/missing echo is never usable evidence and still consumes
+        one of the absolute three model-call slots.  One isolated occurrence
+        can therefore move to the next stateless call for the same photo
+        without stopping the whole queue.  Recurrence on a different source is
+        a system-level binding fault and retains the durable global fuse.
+        """
+        source_id = str(
+            result.get("file_name")
+            or result.get("source_item_id")
+            or result.get("input_image_sha256")
+            or result.get("source_path")
+            or ""
+        ).strip()
+        if not source_id:
+            return True
+        repeated = False
+        for reason in sorted({str(item) for item in reasons if str(item)}):
+            prior = set(self.runtime_health_incident_sources.get(reason, []))
+            if prior and source_id not in prior:
+                repeated = True
+            prior.add(source_id)
+            self.runtime_health_incident_sources[reason] = sorted(prior)
+        self._persist_retry_state()
+        return repeated
+
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:
         return {
@@ -1836,6 +1864,7 @@ class BatchOrchestrator:
                     raise Exception("No processor function set")
                 
                 start_t = time.time()
+                contained_request_binding_failure = False
                 raw_result = self.processor_fn(
                     fname=fname,
                     image_b64=proc_res['base64'], 
@@ -1849,19 +1878,48 @@ class BatchOrchestrator:
 
                 if isinstance(raw_result, dict) and raw_result.get("runtime_health_stop"):
                     reasons = [str(x) for x in raw_result.get("runtime_health_reasons", []) if str(x)]
-                    self._persist_runtime_health_fuse(
-                        reasons or ["review_prompt_contamination"],
-                        source_file=fname,
-                        attempt=attempt_number,
-                        run_id=run_id,
-                        record_snapshot=raw_result,
+                    binding_only = bool(
+                        reasons
+                        and set(reasons) <= {"request_id_missing", "request_id_mismatch"}
                     )
-                    self.stream_buffer = str(raw_result.get("thinking") or "AI 判讀已由健康閘停止。")
-                    self.log_system(
-                        "🛑 [內容健康閘] 已停止 OCR：" + ("；".join(reasons) or "複核提示可能受到前輪答案污染")
+                    repeated_binding_fault = bool(
+                        binding_only
+                        and self._request_binding_incident_repeated_across_sources(
+                            reasons,
+                            {
+                                **raw_result,
+                                "file_name": fname,
+                            },
+                        )
                     )
-                    self.stop_event.set()
-                    break
+                    if binding_only and not repeated_binding_fault:
+                        contained_request_binding_failure = True
+                        raw_result = dict(raw_result)
+                        raw_result["runtime_health_stop"] = False
+                        raw_result["contained_request_binding_failure"] = True
+                        raw_result["request_binding_enforced"] = True
+                        raw_result["request_id_verified"] = False
+                        raw_result["independent_pass"] = True
+                        raw_result["prior_answer_exposed"] = False
+                        raw_result["prompt_contamination"] = False
+                        self.log_system(
+                            "⚠️ [回覆綁定門] 本輪回覆識別碼無效，已隔離且不參與定案；"
+                            f"仍受總模型呼叫上限 {self.max_total_attempts} 約束。"
+                        )
+                    else:
+                        self._persist_runtime_health_fuse(
+                            reasons or ["review_prompt_contamination"],
+                            source_file=fname,
+                            attempt=attempt_number,
+                            run_id=run_id,
+                            record_snapshot=raw_result,
+                        )
+                        self.stream_buffer = str(raw_result.get("thinking") or "AI 判讀已由健康閘停止。")
+                        self.log_system(
+                            "🛑 [內容健康閘] 已停止 OCR：" + ("；".join(reasons) or "複核提示可能受到前輪答案污染")
+                        )
+                        self.stop_event.set()
+                        break
                 
                 # [v18.53 Fix] Check stop signal after LLM call completes
                 if self.stop_event.is_set():
@@ -1915,11 +1973,12 @@ class BatchOrchestrator:
                 norm_result['ocr_attempt'] = attempt_number
                 norm_result["request_binding_enforced"] = True
 
-                apply_human_audited_pixel_authority(
-                    norm_result,
-                    previous_results,
-                    self.max_auto_attempts,
-                )
+                if not contained_request_binding_failure:
+                    apply_human_audited_pixel_authority(
+                        norm_result,
+                        previous_results,
+                        self.max_auto_attempts,
+                    )
 
                 if attempt_number == 1:
                     previous_final = next(
@@ -1944,7 +2003,19 @@ class BatchOrchestrator:
                 runtime_health_force_unresolved = False
                 can_retry_conflict = False
                 can_isolate_conflict = False
-                if not runtime_health.allow_processing:
+                if contained_request_binding_failure:
+                    norm_result["runtime_health_contained_reasons"] = list(
+                        raw_result.get("runtime_health_reasons") or ["request_id_mismatch"]
+                    )
+                    norm_result["runtime_health"] = {
+                        "healthy": False,
+                        "allow_processing": True,
+                        "allow_upload": False,
+                        "reasons": list(norm_result["runtime_health_contained_reasons"]),
+                        "display_narration": "本輪回覆識別碼無效，已隔離且不會參與定案。",
+                        "contained_request_binding_failure": True,
+                    }
+                elif not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
                     can_retry_conflict = first_pass_content_conflict_can_retry(
                         attempt_number, runtime_health.reasons, norm_result
@@ -1990,7 +2061,22 @@ class BatchOrchestrator:
                         break
 
                 review_decision = {"retry": False, "reasons": [], "unresolved": False}
-                if self.result_review_fn:
+                if contained_request_binding_failure:
+                    binding_reasons = list(
+                        norm_result.get("runtime_health_contained_reasons")
+                        or ["request_id_mismatch"]
+                    )
+                    review_decision = {
+                        "attempt": attempt_number,
+                        "retry": attempt_number < self.max_total_attempts,
+                        "unresolved": attempt_number >= self.max_total_attempts,
+                        "verified": False,
+                        "technical_retry_required": True,
+                        "technical_retry_reason": binding_reasons[0],
+                        "reasons": binding_reasons,
+                        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                    }
+                elif self.result_review_fn:
                     review_decision = self.result_review_fn(
                         norm_result,
                         attempt_number,

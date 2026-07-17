@@ -1116,6 +1116,82 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIn("系統", "系統" + current["adjudication_summary"])
         self.assertIn("遠景", current["adjudication_summary"])
 
+    def test_identity_free_single_majority_finishes_without_fourth_call(self):
+        history = [
+            make_pass(
+                "遠景", None, None, 3, False, "not_visible",
+                thinking="三台完整陳列，沒有唯一主角或可歸屬價牌。",
+            ),
+            make_pass(
+                "單機", None, None, 1, True, "not_visible",
+                thinking="中央只有一台完整主角，規格與價格看不清楚。",
+            ),
+        ]
+        current = make_pass(
+            "單機", None, None, 1, True, "not_visible",
+            quality_issue="不合格-沒有規格和價格牌",
+            thinking="中央只有一台完整主角，沒有可讀型號或價格。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_identity_free_single_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertTrue(current["thinking"].endswith("所以……"))
+
+    def test_identity_free_fallback_never_clears_cross_photo_integrity_flag(self):
+        history = [
+            make_pass("單機", None, None, 1, True, "not_visible"),
+            make_pass(
+                "單機", None, None, 1, True, "not_visible",
+                cross_photo_duplicate_core_suspected=True,
+            ),
+        ]
+        current = make_pass("單機", None, None, 1, True, "not_visible")
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertFalse(result["verified"])
+        self.assertTrue(result["technical_retry_required"])
+
+    def test_screen_below_branding_is_not_mistaken_for_wide_background(self):
+        history = [
+            make_pass(
+                "單機", None, None, 1, True, "not_visible",
+                thinking=(
+                    "我看到一台直立螢幕，螢幕下方有 Samsung 品牌標誌，"
+                    "價牌看不清楚，沒有其他完整螢幕。"
+                ),
+            ),
+            make_pass(
+                "單機", None, None, 1, True, "not_visible",
+                thinking=(
+                    "我看到一台完整主角，螢幕正下方有品牌貼紙，"
+                    "沒有可讀型號或價格。"
+                ),
+            ),
+        ]
+        current = make_pass(
+            "單機", None, None, 1, True, "not_visible",
+            thinking="我看到一台完整螢幕，下方標籤無法讀取，沒有其他完整螢幕。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_identity_free_single_consensus",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

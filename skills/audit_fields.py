@@ -1231,9 +1231,15 @@ def _weak_single_claim_in_wide_multiscreen_scene(record: Dict[str, Any]) -> bool
     # model cannot rescue a broad display wall by matching an empty label.
     if has_sufficient_followme_physical_evidence(normalized):
         return False
+    if _narration_supports_only_one_complete_monitor(record):
+        return False
     wide_scene = bool(
         re.search(r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架).{0,16}(?:螢幕|顯示器|面板|陳列)", text)
-        or re.search(r"(?:上方|下方|遠處|另一排|其他展示架).{0,18}(?:螢幕|顯示器|面板)", text)
+        or re.search(
+            r"(?:背景(?:上方|下方)?|上方|下方|遠處|另一排|其他展示架).{0,18}"
+            r"(?:另有|還有|可見).{0,8}(?:螢幕|顯示器|面板)",
+            text,
+        )
     )
     return wide_scene
 
@@ -1997,6 +2003,46 @@ def finalize_three_pass_outcome(
             and normalize_model_token(item.get("model"))
         }
         wide_identity_conflict_distant_fallback = len(single_model_keys) >= 2
+    # A genuinely unreadable product card is still a completed result, not a
+    # technical failure.  Keep this fallback deliberately narrow: all three
+    # calls must be fully healthy/bound/contract-valid, at least two calls must
+    # independently agree on the same 1-or-2 complete-screen single-subject
+    # geometry, and those supporting calls must contain neither model nor
+    # price.  This closes truthful "單機／無型號／無價格" photos without a
+    # fourth call while leaving cross-photo, runtime, binding, and prompt
+    # integrity incidents blocked.
+    fully_usable = [item for item in passes if _adjudication_pass_is_usable(item)]
+    fully_usable_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in fully_usable
+    }
+    identity_free_single_candidates = [
+        item
+        for item in fully_usable
+        if str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+        and (item.get("normalized_evidence") or item).get("unique_main") is True
+        and (item.get("normalized_evidence") or item).get("complete_screen_count") in {1, 2}
+        and not item.get("model")
+        and not item.get("price")
+        and not _weak_single_claim_in_wide_multiscreen_scene(item)
+        and not has_sufficient_followme_physical_evidence(
+            item.get("normalized_evidence") or item
+        )
+    ]
+    identity_free_count_votes = Counter(
+        int((item.get("normalized_evidence") or item).get("complete_screen_count"))
+        for item in identity_free_single_candidates
+    )
+    identity_free_winning_counts = [
+        count for count, votes in identity_free_count_votes.items() if votes >= 2
+    ]
+    identity_free_single_majority_fallback = bool(
+        len(passes) == max_attempts
+        and len(fully_usable) == len(passes)
+        and "" not in fully_usable_hashes
+        and len(fully_usable_hashes) == 1
+        and len(identity_free_winning_counts) == 1
+    )
     if distant_majority:
         usable = [
             item
@@ -2017,6 +2063,8 @@ def finalize_three_pass_outcome(
         usable = list(base_integrity)
     elif wide_identity_conflict_distant_fallback:
         usable = list(base_integrity)
+    elif identity_free_single_majority_fallback:
+        usable = list(fully_usable)
     else:
         # Other adjudication outcomes still require three fully healthy passes.
         if not _adjudication_pass_is_usable(record):
@@ -2086,6 +2134,10 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = list(usable)
         rule = "wide_scene_identity_conflict_distant_veto"
+    elif identity_free_single_majority_fallback:
+        final_view = "單機"
+        supporting = list(identity_free_single_candidates)
+        rule = "two_pass_identity_free_single_consensus"
     elif single_view_base_fallback:
         final_view = "單機"
         supporting = list(usable)
@@ -2241,8 +2293,13 @@ def finalize_three_pass_outcome(
         if rule in {
             "two_pass_non_followme_identity_consensus",
             "three_pass_single_subject_consensus",
+            "two_pass_identity_free_single_consensus",
         }:
-            record["complete_screen_count"] = 1
+            record["complete_screen_count"] = (
+                identity_free_winning_counts[0]
+                if rule == "two_pass_identity_free_single_consensus"
+                else 1
+            )
             record["followme_physical_evidence"] = []
             record["followme_family_confirmed"] = False
         one_complete_votes = sum(

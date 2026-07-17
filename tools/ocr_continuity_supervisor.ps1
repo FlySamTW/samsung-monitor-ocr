@@ -6,6 +6,7 @@ param(
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
     [int]$ContextLength = 32768,
+    [int]$Parallel = 1,
     [int]$UploadGateProofMaxAgeMinutes = 30
 )
 
@@ -323,8 +324,17 @@ try {
             Alert "required_local_model_unavailable" @{model=$Model}
             exit 6
         }
-        $load = Invoke-Lms @("load",$Model,"--context-length",$ContextLength,"--yes")
-        if (-not $load -or $load.exit -ne 0) { Alert "qwen_load_failed" @{model=$Model;context=$ContextLength}; exit 7 }
+        $load = Invoke-Lms @(
+            "load",$Model,
+            "--context-length",$ContextLength,
+            "--parallel",$Parallel,
+            "--gpu","max",
+            "--yes"
+        )
+        if (-not $load -or $load.exit -ne 0) {
+            Alert "qwen_load_failed" @{model=$Model;context=$ContextLength;parallel=$Parallel}
+            exit 7
+        }
     }
 
     if (-not $status -and $backend.Count -eq 0) {

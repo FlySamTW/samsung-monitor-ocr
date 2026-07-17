@@ -64,6 +64,23 @@ def assert_batch_directory_isolation(tmp_root: Path) -> None:
     assert orchestrator.session_processed == set()
 
 
+def assert_request_binding_fault_scope() -> None:
+    orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
+    orchestrator.runtime_health_incident_sources = {}
+    orchestrator._persist_retry_state = lambda: None
+
+    reasons = ["request_id_mismatch"]
+    assert orchestrator._request_binding_incident_repeated_across_sources(
+        reasons, {"file_name": "first.jpg"}
+    ) is False
+    assert orchestrator._request_binding_incident_repeated_across_sources(
+        reasons, {"file_name": "first.jpg"}
+    ) is False
+    assert orchestrator._request_binding_incident_repeated_across_sources(
+        reasons, {"file_name": "second.jpg"}
+    ) is True
+
+
 def main() -> None:
     try:
         ocr.build_runtime_system_prompt("規則" * 15000, "\nFollowMe 參考資料")
@@ -222,6 +239,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         assert_batch_directory_isolation(Path(tmp))
+    assert_request_binding_fault_scope()
     print("runtime safety guards: ok")
 
 

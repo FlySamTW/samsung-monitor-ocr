@@ -48,6 +48,9 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertLess(self.source.index("lm_server_recovery_attempt"), self.source.index("backend_started"))
         self.assertIn('"different_model_already_loaded"', self.source)
         self.assertIn('"--context-length",$ContextLength', self.source)
+        self.assertIn("[int]$Parallel = 1", self.source)
+        self.assertIn('"--parallel",$Parallel', self.source)
+        self.assertIn('"--gpu","max"', self.source)
         self.assertIn('"qwen/qwen3-vl-8b"', self.source)
 
     def test_current_year_and_upload_gates(self):
