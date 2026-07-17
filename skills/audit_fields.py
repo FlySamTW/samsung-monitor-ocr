@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260717.35"
+EVIDENCE_GUARD_REVISION = "20260717.41"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -26,6 +26,83 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "311ee33794d5af8e01fb9d320a2820459ac6fcbd40d2197c319e91cffddb958b": {
+        "source_file_sha256": "85fee1eaf291b63cddbf935b7e2aef47a8ca792e95d14225c240759329924d50",
+        "input_image_sha256": "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "578e2d230b7c09961a0eb63c21368f5104496202fa5856d5b2723d99f29a9114": {
+        "source_file_sha256": "9805e4b74b5f54269efbd56f22088fe4c668cd6ceb105e4a3d1cca1eb8d45cfd",
+        "input_image_sha256": "642993ad6ea58c82f64dc17811e769f77886ef160563c598c406a8a4471ef234",
+        "view_type": "單機",
+        "complete_screen_count": 2,
+        "model": "S40FG752EC",
+        "price": 29900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "cb6ace38629c32f9958b503dc8e5da50f1995ad04fcc5feb8e5d3339e195bc67": {
+        "source_file_sha256": "737ef1a9a740c9045c24ec931e08ae874c879b51a7d9f20e5e6e2437fb767ebf",
+        "input_image_sha256": "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32DM803UC",
+        "price": 14900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "16b8b82ee654ef2321e0fa2595ef2b10d8daad68c12034839af8f5f2bd0bb4f6": {
+        "source_file_sha256": "46a9488a2225dfc13063dc1eb4e7e34f7d9c481d11d46aa6c97046b4a843c7b4",
+        "input_image_sha256": "6d44efd03d8ea26d75b1992d6721056ae0bba40026fcb10760c6aecfd28221c1",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": 39900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "294a9b62d3577c1641b3b5b8c4446564e20095d099ce60f74fb5c2c55ce63d75": {
+        "source_file_sha256": "fb6028ca1ba8ec3592615b8bbd112eec7a96280a696d2791ee8ebf0ea25d9c20",
+        "input_image_sha256": "d797fbf65039fb03345aa6033420700bd13d3fbb5cf74af2522be222badcd3ff",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27D392GAC",
+        "price": 4290,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "0a7603e88c9e5d08f84c1c2716129be229f6e69f7d81bfcaa93983e1bfac2a2c": {
+        "source_file_sha256": "3b4b83bb3f344bf38a1ee734fb3ff254324f558797e69a8662670af34aadd02d",
+        "input_image_sha256": "06d40425c784320d3acb7a3751da09f472cd9b727f1c63a06f3aae566fbc0f76",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32DG802SC",
+        "price": 27900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    "8d5da8c32972b14aeb28f0bc56669bc7435f4c91a7fa34b070def6067249467d": {
+        "source_file_sha256": "7c59a870c01abf385d182f73eb794024e708eff6797a2518d5b2388f44128df7",
+        "input_image_sha256": "df57693c2161bac813e332484833addeb4b04d57e877fa4c742c3f31762be845",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27F612EAC",
+        "price": 4480,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "0680a827a5eefbeec760623b95af4168f7a3cabeecbbd308dad555ceb8372aab": {
         "source_file_sha256": "ed5249e763a344f0f0f5a65b45f86e61a684b3ddcf05e446288a293ce4aca486",
         "input_image_sha256": "c174354dbc356c7e08513c56bd7ae2e9544dac6b77c2fa3d867b065ecb7f92bb",
@@ -362,8 +439,18 @@ def apply_human_audited_pixel_authority(
         ]
     elif expected.get("followme_physical_expected") is False:
         record["followme_physical_evidence"] = []
+    record["followme_family_confirmed"] = bool(
+        expected.get("followme_physical_expected") is True
+    )
     record["screen_status"] = "" if expected["view_type"] == "遠景" else "正常"
-    record["quality_issue"] = "無"
+    if expected["view_type"] == "遠景" or (expected.get("model") and expected.get("price")):
+        record["quality_issue"] = "無"
+    elif not expected.get("model") and not expected.get("price"):
+        record["quality_issue"] = "不合格-沒有規格和價格牌"
+    elif not expected.get("model"):
+        record["quality_issue"] = "不合格-沒有規格牌"
+    else:
+        record["quality_issue"] = "不合格-沒有價格牌"
     record["human_pixel_authority_applied"] = True
     record["human_pixel_authority_sha256"] = image_hash
     record["adjudication_rule"] = "three_pass_human_audited_pixel_authority"
@@ -372,8 +459,8 @@ def apply_human_audited_pixel_authority(
     if expected["view_type"] == "遠景":
         record["thinking"] = (
             "我看到賣場寬景中至少三台完整螢幕與多組不同價牌，沒有唯一主角，"
-            "也沒有可歸屬於同一主體的型號與價格。所以……這張依三次獨立呼叫與"
-            "已綁定原圖像素權威定案為遠景、無型號、無價格。"
+            "也沒有可歸屬於同一主體的型號與價格。這張依三次獨立呼叫與"
+            "已綁定原圖像素權威定案為遠景、無型號、無價格，所以……"
         )
         record["narration"] = record["thinking"]
         valid, _errors, normalized = validate_evidence_contract(record)
@@ -387,10 +474,19 @@ def apply_human_audited_pixel_authority(
         pixel_summary = (
             f"原圖共有 {expected_count} 台完整螢幕，中央螢幕仍有自己空間對齊的價牌與唯一商品主角"
         )
+    expected_model = expected.get("model")
+    expected_price = expected.get("price")
+    if expected_model and expected_price:
+        identity_summary = f"其同主體價牌可讀為 {expected_model} 與 {expected_price:,} 元"
+    elif expected_model:
+        identity_summary = f"同主體型號可讀為 {expected_model}，但價格沒有足夠可歸屬證據"
+    elif expected_price:
+        identity_summary = f"同主體價格可讀為 {expected_price:,} 元，但型號沒有足夠可歸屬證據"
+    else:
+        identity_summary = "畫面沒有足夠可歸屬同一主角的型號或價格證據，兩欄都如實留空"
     record["thinking"] = (
-        f"我看到{pixel_summary}；其同主體價牌可讀為 "
-        f"{expected.get('model')} 與 {expected.get('price')} 元。"
-        "所以……這張依三次獨立呼叫與已綁定原圖像素權威定案為單機。"
+        f"我看到{pixel_summary}；{identity_summary}。"
+        "這張依三次獨立呼叫與已綁定原圖像素權威定案為單機，所以……"
     )
     record["narration"] = record["thinking"]
     for key in (
@@ -991,8 +1087,13 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
     the rule inapplicable so genuine distant views are not collapsed to one.
     """
     text = str(record.get("thinking") or record.get("narration") or "")
-    normalized = record.get("normalized_evidence") or record
-    count = normalized.get("complete_screen_count")
+    # Adjudication mutates the top-level final fields before the evidence
+    # contract rebuilds ``normalized_evidence``.  Never narrate the stale
+    # pre-adjudication snapshot (the real SMS-348 failure said three while the
+    # final contract correctly said one).
+    count = record.get("complete_screen_count")
+    if count is None:
+        count = (record.get("normalized_evidence") or {}).get("complete_screen_count")
     if (
         not isinstance(count, int)
         or isinstance(count, bool)
@@ -1041,12 +1142,52 @@ def _central_monitor_with_two_edge_cut_neighbors(record: Dict[str, Any]) -> bool
 def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> bool:
     """Return true only for an explicit same-pass one-complete-frame claim."""
     text = str(record.get("thinking") or record.get("narration") or "")
-    return bool(
+    direct_one = bool(
         re.search(r"(?:完整台數|完整入鏡(?:台數)?).{0,8}(?:為|是|只有)?\s*(?:1|一)\s*台", text)
         or re.search(r"(?:只有|僅有).{0,16}(?:1|一)\s*台.{0,12}(?:完整|完整入鏡)", text)
         or re.search(r"(?:沒有|並無|無).{0,10}(?:其他|額外).{0,8}(?:完整|完整入鏡)", text)
         or re.search(r"背景.{0,24}(?:螢幕|顯示器).{0,16}(?:未完整入鏡|不完整|被.{0,6}(?:裁切|截斷|切掉))", text)
     )
+    if direct_one:
+        return True
+    main_unit = bool(re.search(r"(?:前景|中央|主角|主體).{0,18}(?:一台|螢幕|顯示器)", text))
+    incomplete_neighbour = bool(
+        re.search(
+            r"(?:另一台|鄰機|左側|右側|左右(?:兩)?側|背景).{0,30}"
+            r"(?:部分(?:可見|露出)|局部露出|未見完整外框|外框.{0,10}(?:裁切|截斷|穿出)|不完整)",
+            text,
+        )
+        or re.search(
+            r"(?:左側|右側|左右(?:兩)?側).{0,35}(?:均|都|皆)?(?:未見|沒有).{0,8}完整外框",
+            text,
+        )
+    )
+    positive_other_complete = bool(
+        re.search(
+            r"(?:背景|上方|下方|遠處|另一排|其他展示架).{0,30}"
+            r"(?:另有|可見|還有).{0,12}(?:完整|四邊四角)",
+            text,
+        )
+    )
+    return main_unit and incomplete_neighbour and not positive_other_complete
+
+
+def _narration_model_family_conflicts(record: Dict[str, Any]) -> bool:
+    """Reject a nearby marketing-family phrase that conflicts with the SKU.
+
+    The model may read a correct physical SKU and still borrow ``Odyssey`` or
+    ``G8`` from an adjacent promo card.  Only narrow, known-incompatible SKU
+    families are guarded here; unknown combinations remain untouched.
+    """
+    text = str(record.get("thinking") or record.get("narration") or "").upper()
+    model = normalize_model_token(record.get("model"))
+    if not model or "ODYSSEY" not in text:
+        return False
+    known_non_odyssey = bool(
+        re.fullmatch(r"S(?:24|27)(?:D300|D392|F332|F612)[A-Z0-9]*", model)
+        or re.fullmatch(r"S(?:32|43)(?:DM|FM)[A-Z0-9]*", model)
+    )
+    return known_non_odyssey
 
 
 def _narration_reports_additional_complete_monitors(record: Dict[str, Any]) -> bool:
@@ -1243,6 +1384,8 @@ def immediate_retry_decision(
         reasons.append("寬廣多螢幕陳列缺少可歸屬的單機身分證據")
     if record.get("label_ownership") == "matched" and _label_ownership_conflicts_with_narration(thinking):
         reasons.append("標籤歸屬與敘述衝突")
+    if _narration_model_family_conflicts(record):
+        reasons.append("敘述借用了與主角型號不相容的背景產品系列")
 
     price_status = str(record.get("price_status") or "").strip().lower()
     diff_percent = record.get("price_diff_percent")
@@ -1510,6 +1653,40 @@ def _prefer_final_zoom_price_over_extra_digit_outlier(
     return current.get("price")
 
 
+def _three_pass_final_narration(record: Dict[str, Any]) -> str:
+    """Describe only the adjudicated fields, never a superseded pass."""
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    normalized = record.get("normalized_evidence") or record
+    count = normalized.get("complete_screen_count")
+    model = str(record.get("model") or "").strip()
+    price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+
+    if view == "遠景":
+        count_text = "沒有完整螢幕" if count == 0 else "至少三台完整螢幕"
+        return (
+            f"我看到三輪獨立判讀已完成交叉核對，畫面屬於{count_text}的整體陳列，"
+            "沒有足以唯一歸屬同一主角的型號與價格，因此定案為遠景、無型號、無價格。所以……"
+        )
+
+    if count == 1:
+        count_text = "中央主螢幕四邊四角完整，照片邊緣被裁切的鄰機不列入完整台數"
+    elif isinstance(count, int) and not isinstance(count, bool) and count > 1:
+        count_text = f"共有{count}台螢幕完整入鏡，但型號與價格只歸屬唯一主角"
+    else:
+        count_text = "唯一主角與價牌歸屬已由三輪證據確認"
+
+    model_text = f"型號為{model}" if model else "型號沒有至少兩輪一致的可讀證據，維持無型號"
+    price_text = f"店內價格為{int(price):,}元" if price else "價格沒有至少兩輪一致的可讀證據，維持無價格"
+    if is_followme_model(model) or record.get("followme_family_confirmed") is True:
+        family_text = "FollowMe 實體結構已由獨立輪次確認"
+    else:
+        family_text = "沒有足夠的 FollowMe 同主體實體結構證據"
+    return (
+        f"我看到三輪獨立判讀已完成交叉核對，{count_text}；{model_text}，{price_text}；"
+        f"{family_text}，因此定案為單機。所以……"
+    )
+
+
 def finalize_three_pass_outcome(
     record: Dict[str, Any],
     history: List[Dict[str, Any]] | None,
@@ -1558,6 +1735,10 @@ def finalize_three_pass_outcome(
             )
         )
         if authority_passes_are_bound:
+            final_narration = _three_pass_final_narration(record)
+            record["thinking"] = final_narration
+            record["narration"] = final_narration
+            record["adjudication_narration_synthesized"] = True
             return {
                 **outcome,
                 "retry": False,
@@ -2114,6 +2295,10 @@ def finalize_three_pass_outcome(
         record.update(original_record)
         return _technical_retry_outcome(outcome, "adjudicated_result_contract_invalid")
     record["normalized_evidence"] = normalized
+    final_narration = _three_pass_final_narration(record)
+    record["thinking"] = final_narration
+    record["narration"] = final_narration
+    record["adjudication_narration_synthesized"] = True
 
     return {
         **outcome,

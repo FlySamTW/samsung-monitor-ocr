@@ -37,6 +37,31 @@ def strict_known_model(value: object, valid_models: list[str]) -> str | None:
     return None
 
 
+def unique_embedded_known_model(value: object, valid_models: list[str]) -> str | None:
+    """Recover one exact catalog SKU embedded in a decorative model label.
+
+    Retail cards often prepend a series badge (for example ``G8``) to the real
+    Samsung SKU.  Exact matching must remain the default, but clearing the SKU
+    merely because the same structured field says ``G8 S32DG802SC`` loses
+    visible evidence.  Accept only one full, known catalog token contained in
+    the field; zero or multiple matches remain fail-closed.
+    """
+    target = re.sub(r"[^A-Z0-9]", "", normalize_model_token(value))
+    if not target or is_placeholder_model(target):
+        return None
+    matches: dict[str, str] = {}
+    for model in valid_models or []:
+        normalized = re.sub(r"[^A-Z0-9]", "", normalize_model_token(model))
+        if len(normalized) >= 8 and normalized in target:
+            matches.setdefault(normalized, model)
+    if len(matches) != 1:
+        return None
+    normalized, model = next(iter(matches.items()))
+    if normalized == target:
+        return None
+    return model
+
+
 def unique_known_model_completion(value: object, valid_models: list[str]) -> str | None:
     """Complete only a unique short retailer SKU with a trailing catalog suffix."""
     target = re.sub(r"[^A-Z0-9]", "", normalize_model_token(value))

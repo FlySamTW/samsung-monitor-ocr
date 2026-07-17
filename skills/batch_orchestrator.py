@@ -26,6 +26,7 @@ from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
     strict_known_model,
+    unique_embedded_known_model,
 )
 from skills.runtime_health_gate import (
     evaluate_runtime_health,
@@ -1874,7 +1875,10 @@ class BatchOrchestrator:
                 if norm_result.get('view_type') == '單機':
                     raw_model = norm_result.get('model', '')
                     if raw_model and not str(raw_model).upper().startswith("FOLLOWME"):
-                        matched = strict_known_model(raw_model, self.model_matcher.valid_models)
+                        matched = (
+                            strict_known_model(raw_model, self.model_matcher.valid_models)
+                            or unique_embedded_known_model(raw_model, self.model_matcher.valid_models)
+                        )
                         if matched:
                             norm_result['model'] = matched
                         elif (

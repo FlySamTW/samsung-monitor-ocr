@@ -241,6 +241,7 @@ V1945_OUTPUT_CONTRACT = (
     "MANDATORY BORDER-CONTACT CHECK: any outer bezel side/corner outside the ORIGINAL frame contributes zero. "
     "Narration must locate complete and edge-cut panels before reporting the count; a single-unit answer must state no additional complete monitor exists elsewhere. "
     "Screen-rendered brands or advertisements are signal content, not hardware identity; use the physical bezel and same-subject product card. "
+    "Nearby, background, or screen-rendered marketing-family words such as Odyssey, G7, G8, M8, and Smart Monitor may not be assigned to the main unit unless the same-subject physical card proves that ownership; when uncertain, narrate only the exact visible SKU and omit the family name. "
     "Any price explicitly read in narration must have exactly the same digits as structured price. A narration/structured price disagreement is unsafe and must not be finalized. "
     "If narration clearly reads a Samsung SKU and price from the dominant monitor's own spatially aligned card, structured model, price, and label_ownership=matched must report the same evidence; do not narrate readable values and then return null. "
     "A dominant full monitor with its aligned readable label is 單機, unique_main=true, label_ownership=matched; partial neighbors do not change that. "
@@ -1157,6 +1158,13 @@ def build_final_display_thinking(result, original_thinking=""):
             f"目前僅能確認結構化結果：{view_type or '待複核'}，{final_model}，{final_price}。"
         )
 
+    if thinking.startswith("我看到") and not thinking.endswith("所以……"):
+        # The model sometimes puts the required closing marker before its
+        # conclusion ("所以……這是單機").  Keep every observation/conclusion,
+        # but move that marker to the actual end so the boss-facing self-talk
+        # remains one complete, readable sentence rather than a dangling tail.
+        thinking = thinking.replace("所以……", "").strip()
+        thinking = thinking.rstrip("。！？；，, ") + "，所以……"
     return thinking
 
 
@@ -2938,6 +2946,7 @@ def process_single_image(
         "緊密近拍例外不得套用到一整排、展示牆、多層貨架或寬廣走道；判只有一台前，必須逐一回答上方、下方、遠處與另一排是否還有完整螢幕。"
         "畫面有多個面板時，自然觀察先列出完整螢幕的大約位置，再說明哪些螢幕被照片邊界截斷；若判單機，必須明說其他區域沒有額外完整螢幕。"
         "螢幕像素播放 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是訊號內容，不能決定硬體品牌，也不能否定中央實體螢幕正下方空間對齊的 Samsung 型號價牌。"
+        "背景、鄰機、螢幕畫面或旁邊宣傳卡上的 Odyssey、G7、G8、M8、Smart Monitor 系列字樣不得借給主角；沒有同主體價牌證明時，只敘述逐字型號，不加系列名稱。"
         "自然敘述與結構欄必須逐項一致，且自然敘述不得抄寫這些規則。"
     )
 

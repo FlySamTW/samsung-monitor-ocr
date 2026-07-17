@@ -592,6 +592,53 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertFalse(result["unresolved"])
         self.assertFalse(result["retry"])
 
+    def test_audited_g8_and_crowded_label_pixels_override_fixture_and_label_drift(self):
+        cases = [
+            (
+                "06d40425c784320d3acb7a3751da09f472cd9b727f1c63a06f3aae566fbc0f76",
+                "S32DG802SC",
+                27900,
+            ),
+            (
+                "df57693c2161bac813e332484833addeb4b04d57e877fa4c742c3f31762be845",
+                "S27F612EAC",
+                4480,
+            ),
+        ]
+        misleading_physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        for image_hash, expected_model, expected_price in cases:
+            with self.subTest(image_hash=image_hash):
+                passes = [
+                    make_pass(
+                        "單機", None, str(expected_price), 3, True, "matched",
+                        misleading_physical,
+                        image_hash=image_hash,
+                    )
+                    for _ in range(3)
+                ]
+                passes[-1]["ocr_attempt"] = 3
+
+                applied = apply_human_audited_pixel_authority(
+                    passes[-1], passes[:-1], max_attempts=3
+                )
+                result = finalize_three_pass_outcome(
+                    passes[-1], passes[:-1], unresolved(), max_attempts=3
+                )
+
+                self.assertTrue(applied)
+                self.assertTrue(result["verified"])
+                self.assertEqual(passes[-1]["complete_screen_count"], 1)
+                self.assertEqual(passes[-1]["model"], expected_model)
+                self.assertEqual(passes[-1]["price"], expected_price)
+                self.assertEqual(passes[-1]["followme_physical_evidence"], [])
+                self.assertIn(expected_model, passes[-1]["thinking"])
+                self.assertNotIn("健康閘收回", passes[-1]["thinking"])
+                self.assertTrue(passes[-1]["thinking"].startswith("我看到"))
+                self.assertTrue(passes[-1]["thinking"].endswith("所以……"))
+
     def test_edge_cut_rule_does_not_hide_other_complete_display_rows(self):
         text = (
             "我看到中央一台螢幕，左右各有一台螢幕且被照片邊界裁切，"
@@ -774,6 +821,49 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["complete_screen_count"], 1)
         self.assertIsNone(current["model"])
         self.assertEqual(current["price"], "3300")
+        self.assertTrue(current["adjudication_narration_synthesized"])
+        self.assertTrue(current["thinking"].startswith("我看到"))
+        self.assertTrue(current["thinking"].endswith("所以……"))
+        self.assertIn("維持無型號", current["thinking"])
+        self.assertIn("3,300元", current["thinking"])
+        self.assertNotIn("健康閘收回", current["thinking"])
+
+    def test_adjudicated_narration_uses_final_count_not_superseded_raw_claim(self):
+        first = make_pass(
+            model="S24F332EAC",
+            price="2390",
+            count=3,
+            thinking="我看到三台螢幕並排展示，中央螢幕四邊四角都在照片內，左側螢幕左外框被照片左邊界截斷，右側螢幕右外框被照片右邊界截斷。",
+        )
+        second = make_pass(
+            model="S24F332EAC",
+            price="2390",
+            count=1,
+            thinking="我看到中央一台完整，左右鄰機都被照片邊界裁切。",
+        )
+        current = make_pass(
+            model="S24F332EAC",
+            price="2390",
+            count=3,
+            thinking="我看到三台螢幕並排展示，中央一台螢幕完整入鏡，左右兩側的螢幕都被照片邊界裁切；所以這是一般單機，完整台數為三台。",
+        )
+        current["normalized_evidence"] = {
+            "complete_screen_count": 3,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "followme_physical_evidence": [],
+        }
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIn("被裁切的鄰機不列入完整台數", current["thinking"])
+        self.assertIn("S24F332EAC", current["thinking"])
+        self.assertIn("2,390元", current["thinking"])
+        self.assertNotIn("三台完整入鏡", current["thinking"])
+        self.assertNotIn("共有3台", current["thinking"])
+        self.assertNotIn("健康閘收回", current["thinking"])
 
     def test_one_structural_distant_and_two_wide_scene_votes_finish_distant(self):
         weak_single = make_pass(
@@ -1007,7 +1097,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 self.assertTrue(result["technical_retry_required"])
                 self.assertIn("three_call_hard_limit_reached", result["reasons"])
 
-    def test_original_model_self_talk_is_preserved_for_audit(self):
+    def test_original_model_self_talk_is_preserved_in_adjudication_audit(self):
         history = [
             make_pass("遠景", None, None, 3, False, "ambiguous"),
             make_pass("遠景", None, None, 4, False, "not_visible"),
@@ -1018,7 +1108,11 @@ class ThreePassFinalizationTests(unittest.TestCase):
         result = finalize_three_pass_outcome(current, history, unresolved())
 
         self.assertTrue(result["verified"])
-        self.assertEqual(current["thinking"], original_thinking)
+        self.assertEqual(
+            current["adjudication_original_current"]["thinking"], original_thinking
+        )
+        self.assertTrue(current["thinking"].startswith("我看到"))
+        self.assertTrue(current["thinking"].endswith("所以……"))
         self.assertIn("系統", "系統" + current["adjudication_summary"])
         self.assertIn("遠景", current["adjudication_summary"])
 

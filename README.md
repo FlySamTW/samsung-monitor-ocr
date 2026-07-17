@@ -331,4 +331,10 @@ retain `logs/ui_sync_v1944_live.json` plus `logs/ui_sync_v1944_live.png`.
 - A photo-local known-pixel conflict may reach call 3 without stopping unrelated photos. Prompt leakage, wrong request/image binding, cross-photo drift or invalid runtime output still trips the durable batch fuse.
 - Canonical six-photo acceptance run `20260717_072657_073759` finished 6/6 verified, 0 review, 0 failure, exactly 18 calls. The formal port-5002 run resumed from 192/1,500 without restart and the per-photo uploader resumed.
 - Existing-tab verification observed four synchronized photos (`1109→1110→1111→1112`), no horizontal overflow, visible total/folder progress, live narration and accumulated cards. Drive verification proved three consecutive `.35` receipt/canonical closed loops with zero `.35` failures or duplicate IDs.
-- Completion forecast remains 2026-09-06 at about 1,667 verified/uploaded photos per day; 2026-10-31 is the conservative management commitment.
+- Completion forecast must be recalculated from the rolling 24-hour verified/upload-eligible throughput; the target date is never presented as an observed forecast.
+
+# 2026-07-17 Revision .41 Content-Drift Guard
+
+- Monitoring caught two forms of false progress: counting edge-cut neighbour displays as complete, and borrowing `Odyssey/G7/G8/M8/Smart Monitor` marketing-family words from a nearby card, background, or screen content for the main unit. Revision `.41` strengthens the prompt, narration/structure guard, and full-image pixel authorities.
+- The real-image set `Lalapo-279 / 潭子-1397 / SMS-348 / SMS-356 / SMS-357` finished 5/5 verified, 0 review, 0 failure, exactly 15 independent calls, with no prior-answer exposure, prompt contamination, or fourth call.
+- On 2026-07-17 the honest rolling baseline was 259 photos/day with 84,990 remaining, forecasting 2027-06-11 at the old rate. Reaching 2026-09-06 requires a sustained 1,667/day (69.4/hour), 6.43 times that observed rate.

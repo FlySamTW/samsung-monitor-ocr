@@ -55,6 +55,8 @@ class EvidenceContractTests(unittest.TestCase):
     FRAME_673_SHA = "76e461cddc915c2e3b92bdc942e2c94cf27d013fe0ca9021c95f3c52094d0016"
     FRAME_674_SHA = "c9bbac284fec04529de8991134f14020cd74edebd597405a9a0612670173caf0"
     FRAME_1257_SHA = "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7"
+    SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
+    SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -78,6 +80,103 @@ class EvidenceContractTests(unittest.TestCase):
         third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
         self.assertTrue(third["verified"])
         self.assertFalse(third["unresolved"])
+
+    def test_partial_neighbor_narration_rejects_count_two(self):
+        row = self._multiscreen_single(
+            complete_screen_count=2,
+            thinking=(
+                "我看到前景中央一台完整螢幕，右側另一台螢幕只有部分露出，"
+                "其外框被原圖右邊界截斷，不完整。"
+            ),
+        )
+
+        decision = immediate_retry_decision(row, 1, [], 3)
+
+        self.assertTrue(decision["retry"])
+        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+
+    def test_incompatible_background_marketing_family_retries(self):
+        row = self._multiscreen_single(
+            complete_screen_count=1,
+            model="S27D392GAC",
+            price="4290",
+            thinking=(
+                "主角價牌是 S27D392GAC 與 4,290 元；旁邊廣告有 Odyssey OLED G8，"
+                "所以這是 Odyssey G8。"
+            ),
+        )
+
+        decision = immediate_retry_decision(row, 1, [], 3)
+
+        self.assertTrue(decision["retry"])
+        self.assertIn("敘述借用了與主角型號不相容的背景產品系列", decision["reasons"])
+
+    def test_null_identity_pixel_authority_finishes_truthfully(self):
+        def authority_pass(attempt):
+            return {
+                "period": "202601",
+                "ocr_attempt": attempt,
+                "input_image_sha256": self.SMS_348_SHA,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "view_type": "遠景",
+                "category": "遠景",
+                "model": "S32DM803UC",
+                "price": "39900",
+                **evidence(3, False, "ambiguous", []),
+            }
+
+        history = [authority_pass(1), authority_pass(2)]
+        current = authority_pass(3)
+        current["followme_family_confirmed"] = True
+
+        self.assertTrue(apply_human_audited_pixel_authority(current, history, 3))
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertFalse(current["followme_family_confirmed"])
+        self.assertEqual(current["quality_issue"], "不合格-沒有規格和價格牌")
+        self.assertNotIn("None", current["thinking"])
+        self.assertTrue(current["thinking"].endswith("所以……"))
+
+    def test_non_followme_pixel_authority_clears_false_fixture_family(self):
+        def authority_pass(attempt):
+            return {
+                "period": "202601",
+                "ocr_attempt": attempt,
+                "input_image_sha256": self.SMS_356_SHA,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "view_type": "單機",
+                "category": "單機",
+                "model": None,
+                "price": "14900",
+                "followme_family_confirmed": True,
+                **evidence(
+                    2,
+                    True,
+                    "matched",
+                    [
+                        {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                        {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                    ],
+                ),
+            }
+
+        history = [authority_pass(1), authority_pass(2)]
+        current = authority_pass(3)
+
+        self.assertTrue(apply_human_audited_pixel_authority(current, history, 3))
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertEqual(current["model"], "S32DM803UC")
+        self.assertEqual(current["price"], 14900)
+        self.assertFalse(current["followme_family_confirmed"])
+        self.assertEqual(current["followme_physical_evidence"], [])
 
     def test_three_plus_screen_single_disagreement_stays_unresolved(self):
         row = self._multiscreen_single()
@@ -1118,7 +1217,11 @@ class EvidenceContractTests(unittest.TestCase):
     def test_backend_never_rewrites_conflicting_narration_as_final_correction(self):
         original = "我看到前景 FollowMe 實體，但最後卻說是遠景。"
         result = {"view_type": "單機", "model": 'FollowMe Pro M7 43"', "price": "17990"}
-        self.assertEqual(batch.build_final_display_thinking(result, original), original)
+        displayed = batch.build_final_display_thinking(result, original)
+        self.assertIn("前景 FollowMe 實體，但最後卻說是遠景", displayed)
+        self.assertTrue(displayed.startswith("我看到"))
+        self.assertTrue(displayed.endswith("所以……"))
+        self.assertNotIn("最終校正", displayed)
         source = Path(batch.__file__).read_text(encoding="utf-8")
         self.assertIn("先檢查前景唯一主角，再計算背景螢幕", source)
         self.assertNotIn("最終校正：這張判定為單機，型號 {final_model}", source)

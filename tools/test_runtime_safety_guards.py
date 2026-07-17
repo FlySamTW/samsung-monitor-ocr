@@ -10,7 +10,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import samsung_ocr_batch_processor as ocr
 from skills.batch_orchestrator import BatchOrchestrator
 from skills.audit_fields import immediate_retry_decision
-from skills.model_validation import is_placeholder_model, strict_known_model
+from skills.model_validation import (
+    is_placeholder_model,
+    strict_known_model,
+    unique_embedded_known_model,
+)
 
 
 class _AliveWorker:
@@ -76,6 +80,14 @@ def main() -> None:
     assert 'parsed.get("narration")' in (
         PROJECT_ROOT / "samsung_ocr_batch_processor.py"
     ).read_text(encoding="utf-8")
+    normalized_self_talk = ocr.build_final_display_thinking(
+        {"view_type": "單機", "model": "S24F332EAC", "price": "2390"},
+        "我看到中央一台完整螢幕，所以……這不是 FollowMe，是一般單機。",
+    )
+    assert normalized_self_talk.startswith("我看到")
+    assert normalized_self_talk.endswith("所以……")
+    assert "這不是 FollowMe，是一般單機" in normalized_self_talk
+    assert normalized_self_talk.count("所以……") == 1
 
     assert not ocr.has_explicit_distant_layout_evidence(
         "這是 3C 賣場，有展示區與多台螢幕，但中間一台是主角。"
@@ -145,6 +157,15 @@ def main() -> None:
     assert is_placeholder_model("SXXTEST001")
     assert strict_known_model("S24F332EAC", ["S24F332EAC"]) == "S24F332EAC"
     assert strict_known_model("S24F532EAC", ["S24F332EAC"]) is None
+    assert unique_embedded_known_model(
+        "G8 S32DG802SC", ["S32DG802SC", "S24F332EAC"]
+    ) == "S32DG802SC"
+    assert unique_embedded_known_model(
+        "G8 S32DG802SC S24F332EAC", ["S32DG802SC", "S24F332EAC"]
+    ) is None
+    assert unique_embedded_known_model(
+        "G8 S32DG802XX", ["S32DG802SC"]
+    ) is None
 
     distant_record = {
         "file_name": "M-202605-測試.jpg",
