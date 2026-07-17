@@ -1016,6 +1016,56 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_wide_wall_stray_price_and_local_model_conflict_finish_distant(self):
+        first = make_pass(
+            view="單機",
+            model=None,
+            price="2988",
+            count=7,
+            unique=True,
+            ownership="matched",
+            thinking="我看到前景與上方一整排螢幕陳列，所有七台螢幕都完整入鏡。",
+        )
+        second = make_pass(
+            view="單機",
+            model=None,
+            price=None,
+            count=7,
+            unique=True,
+            ownership="not_visible",
+            healthy=False,
+            thinking="我看到一整排螢幕陳列，上方與中間層各有多台螢幕。",
+            runtime_health={
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": ["structured_authority_material_conflict:model"],
+                "contained_for_stateless_retry": True,
+            },
+        )
+        current = make_pass(
+            view="單機",
+            model=None,
+            price=None,
+            count=7,
+            unique=True,
+            ownership="ambiguous",
+            thinking="我看到展示牆上方與下方多台螢幕完整陳列，沒有 FollowMe 實體。",
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_wide_scene_structural_consensus",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertEqual(current["complete_screen_count"], 7)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_model_and_price_majorities_cannot_form_unsupported_chimera(self):
         history = [
             make_pass(model="S24A", price="100"),

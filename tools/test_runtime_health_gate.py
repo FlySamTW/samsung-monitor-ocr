@@ -572,6 +572,22 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(first_pass_content_conflict_can_retry(1, reasons, missing_price))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons, missing_price))
 
+        wide_unowned_scene = dict(owned_single)
+        wide_unowned_scene.update(
+            {
+                "price": None,
+                "complete_screen_count": 7,
+                "unique_main": True,
+                "label_ownership": "not_visible",
+            }
+        )
+        self.assertTrue(
+            first_pass_content_conflict_can_retry(2, reasons, wide_unowned_scene)
+        )
+        self.assertTrue(
+            final_content_conflict_can_isolate(3, reasons, wide_unowned_scene)
+        )
+
         price_conflict = ["structured_authority_material_conflict:price"]
         self.assertFalse(first_pass_content_conflict_can_retry(1, price_conflict, owned_single))
 

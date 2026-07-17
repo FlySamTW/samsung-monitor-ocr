@@ -357,21 +357,23 @@ def _followme_variant_authority_conflict_is_photo_local(
 def _owned_single_model_authority_conflict_is_photo_local(
     reasons: Iterable[Any], record: Mapping[str, Any] | None
 ) -> bool:
-    """Keep one photo's missing structured model inside its three-call budget.
+    """Keep one photo's structured-model disagreement inside its call budget.
 
     A narration-only model must never refill an explicitly empty structured
-    field.  When the same response still proves a single-unit candidate with a
-    unique main subject and an owned label, however, the omission is ordinary
-    same-photo content uncertainty rather than evidence
-    of cross-photo memory or request contamination.  Independent calls may
-    therefore settle the photo, or conservatively leave the model empty after
-    call three, without stopping unrelated photos in the batch.
+    field.  That disagreement is nevertheless local to the bound image: it may
+    mean an owned single-unit label was missed, or that prose mentioned one
+    brand while the structured answer correctly left a wide display wall
+    unidentified.  Neither case proves cross-photo memory or request
+    contamination.  Keep the pass non-uploadable and spend at most the same
+    photo's three calls; price/view/binding/prompt conflicts still fuse.
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
     value = dict(record or {})
     view_type = str(value.get("view_type") or value.get("category") or "").strip()
     price = value.get("price")
     complete_screen_count = value.get("complete_screen_count")
+    unique_main = value.get("unique_main")
+    label_ownership = value.get("label_ownership")
     return bool(
         normalized
         and normalized <= {
@@ -379,13 +381,14 @@ def _owned_single_model_authority_conflict_is_photo_local(
             "structured_narration_followme_conflict",
         }
         and "structured_authority_material_conflict:model" in normalized
-        and view_type == "單機"
+        and view_type in {"單機", "遠景"}
         and value.get("model") in (None, "")
         and (price in (None, "") or not absurd_price_reason(price))
         and isinstance(complete_screen_count, int)
-        and complete_screen_count >= 1
-        and value.get("unique_main") is True
-        and value.get("label_ownership") == "matched"
+        and not isinstance(complete_screen_count, bool)
+        and complete_screen_count >= 0
+        and unique_main in {True, False}
+        and label_ownership in {"matched", "ambiguous", "not_visible"}
     )
 
 

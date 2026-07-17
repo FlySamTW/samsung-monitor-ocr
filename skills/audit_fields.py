@@ -11,7 +11,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260718.46"
+EVIDENCE_GUARD_REVISION = "20260718.47"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -1313,6 +1313,38 @@ def _weak_single_claim_in_wide_multiscreen_scene(record: Dict[str, Any]) -> bool
     return wide_scene
 
 
+def _wide_multiscreen_geometry_claim(record: Dict[str, Any]) -> bool:
+    """Return true for a bound pass that plainly describes a 3+ monitor wall.
+
+    Model/price text is deliberately ignored here.  On a broad display wall a
+    nearby card may be readable without belonging to a unique Samsung subject;
+    letting that stray identity veto the shared 3+ geometry caused an otherwise
+    photo-local disagreement to stop the whole batch.  FollowMe fixture evidence
+    remains a hard exclusion and is handled by the dedicated single-unit lane.
+    """
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    normalized = record.get("normalized_evidence") or record
+    count = normalized.get("complete_screen_count")
+    text = str(record.get("thinking") or record.get("narration") or "")
+    if view not in {"單機", "遠景"}:
+        return False
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 3
+        or has_sufficient_followme_physical_evidence(normalized)
+    ):
+        return False
+    return bool(
+        re.search(
+            r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架|上方|下方|中間層)"
+            r"[^。；\n]{0,28}(?:多台|數台|至少(?:3|三)台|螢幕|顯示器|陳列)",
+            text,
+        )
+        or _narration_reports_additional_complete_monitors(record)
+    )
+
+
 def _is_samsung_sku_like(value: Any) -> bool:
     text = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
     if not text:
@@ -2058,14 +2090,41 @@ def finalize_three_pass_outcome(
         and len(base_integrity) == len(passes)
         and "" not in base_hashes
         and len(base_hashes) == 1
-        and all(not item.get("model") and not item.get("price") for item in base_integrity)
-        and sum(
-            isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), int)
-            and not isinstance((item.get("normalized_evidence") or item).get("complete_screen_count"), bool)
-            and (item.get("normalized_evidence") or item).get("complete_screen_count") >= 3
-            for item in base_integrity
-        ) >= 1
-        and all(_weak_single_claim_in_wide_multiscreen_scene(item) for item in base_integrity)
+        and (
+            (
+                all(not item.get("model") and not item.get("price") for item in base_integrity)
+                and sum(
+                    isinstance(
+                        (item.get("normalized_evidence") or item).get(
+                            "complete_screen_count"
+                        ),
+                        int,
+                    )
+                    and not isinstance(
+                        (item.get("normalized_evidence") or item).get(
+                            "complete_screen_count"
+                        ),
+                        bool,
+                    )
+                    and (item.get("normalized_evidence") or item).get(
+                        "complete_screen_count"
+                    )
+                    >= 3
+                    for item in base_integrity
+                )
+                >= 1
+                and all(
+                    _weak_single_claim_in_wide_multiscreen_scene(item)
+                    for item in base_integrity
+                )
+            )
+            or all(
+                str(item.get("view_type") or item.get("category") or "").strip()
+                == "單機"
+                and _wide_multiscreen_geometry_claim(item)
+                for item in base_integrity
+            )
+        )
     )
     # One structurally valid wide view must veto two weak "single" votes when
     # every pass still sees 3+ complete monitors and the two alleged subjects
