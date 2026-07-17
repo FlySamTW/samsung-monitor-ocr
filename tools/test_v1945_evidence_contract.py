@@ -57,6 +57,7 @@ class EvidenceContractTests(unittest.TestCase):
     FRAME_1257_SHA = "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7"
     SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
+    LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -177,6 +178,42 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(current["price"], 14900)
         self.assertFalse(current["followme_family_confirmed"])
         self.assertEqual(current["followme_physical_evidence"], [])
+
+    def test_lalaport_followme_authority_drops_unsupported_variant_and_price(self):
+        def authority_pass(attempt):
+            return {
+                "period": "202606",
+                "ocr_attempt": attempt,
+                "input_image_sha256": self.LALAPORT_301_SHA,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "view_type": "單機",
+                "category": "單機",
+                "model": "FollowMe Pro M7 43\"",
+                "price": "12990",
+                **evidence(1, True, "matched", []),
+            }
+
+        history = [authority_pass(1), authority_pass(2)]
+        current = authority_pass(3)
+
+        self.assertTrue(apply_human_audited_pixel_authority(current, history, 3))
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertEqual(
+            {item["cue"] for item in current["followme_physical_evidence"]},
+            {
+                "direct_followme_branding_on_unit",
+                "white_vertical_stand",
+                "round_base",
+                "attached_price_tray",
+            },
+        )
 
     def test_three_plus_screen_single_disagreement_stays_unresolved(self):
         row = self._multiscreen_single()

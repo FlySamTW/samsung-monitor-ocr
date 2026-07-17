@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import psutil
+from PIL import Image, ImageOps
 
 
 MIN_EVIDENCE_GUARD = (20260717, 42)
@@ -123,6 +124,28 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def prepared_input_sha256(path: Path) -> str:
+    """Reproduce the exact full-scene bytes hashed before a model request.
+
+    Production keeps raw source bytes when the image is already within the
+    2560-pixel long-edge bound.  Larger images are EXIF-oriented, resized with
+    Pillow's thumbnail implementation, converted to RGB, and encoded as JPEG
+    quality 95.  This hash is intentionally distinct from the source-file hash
+    stored in the Drive receipt.
+    """
+    with Image.open(path) as image:
+        oriented = ImageOps.exif_transpose(image)
+        if max(oriented.width, oriented.height) <= 2560:
+            return sha256_file(path)
+        prepared = oriented.copy()
+        prepared.thumbnail((2560, 2560))
+        import io
+
+        buffer = io.BytesIO()
+        prepared.convert("RGB").save(buffer, format="JPEG", quality=95)
+        return hashlib.sha256(buffer.getvalue()).hexdigest()
 
 
 def candidate_groups(input_csv: Path, source_root: Path) -> list[tuple[str, Path, int]]:
@@ -393,7 +416,7 @@ class ContinuationMonitor:
                     re.fullmatch(r"[0-9a-f]{64}", source_item_id)
                     and source_path.is_file()
                     and re.fullmatch(r"[0-9a-f]{64}", input_image_sha256)
-                    and sha256_file(source_path) == input_image_sha256
+                    and prepared_input_sha256(source_path) == input_image_sha256
                     and original_source_path.is_file()
                     and receipt.get("schema") == "samsung-ocr-stream-receipt-v1"
                     and receipt.get("source_item_id") == source_item_id

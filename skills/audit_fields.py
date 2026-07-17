@@ -324,6 +324,46 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "authority": "human_audited_pixel_authority",
     },
 }
+# Lalaport SES 301: the full frame visibly binds the foreground portrait
+# display to Samsung Follow Me 4K branding, a white vertical mobile stand,
+# an attached tray, and a round base.  The pixels do not safely establish a
+# specific M5/M7/Pro variant or a price, so the bounded three-call endpoint
+# must retain only the FollowMe family instead of guessing Pro M7 43".
+KNOWN_SOURCE_AUDIT_AUTHORITIES[
+    "dd7b9259bf384255e159d4d73414388f31142a2f487f4e5ead8cf310fe0b1470"
+] = {
+    "source_file_sha256": "0cc271bf16743dd9c390ac28f8afbe9e88958d5a04f131d36ef20fe460d2b091",
+    "input_image_sha256": "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66",
+    "view_type": "單機",
+    "complete_screen_count": 1,
+    "model": None,
+    "price": None,
+    "label_ownership": "matched",
+    "followme_physical_expected": True,
+    "followme_physical_evidence": [
+        {
+            "cue": "direct_followme_branding_on_unit",
+            "same_subject": True,
+            "strength": "strong",
+        },
+        {
+            "cue": "white_vertical_stand",
+            "same_subject": True,
+            "strength": "strong",
+        },
+        {
+            "cue": "round_base",
+            "same_subject": True,
+            "strength": "strong",
+        },
+        {
+            "cue": "attached_price_tray",
+            "same_subject": True,
+            "strength": "strong",
+        },
+    ],
+    "authority": "human_audited_pixel_authority",
+}
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
     for item in KNOWN_SOURCE_AUDIT_AUTHORITIES.values()

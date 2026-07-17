@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.continue_after_period_priority import ContinuationMonitor, MonitorConfig
+from PIL import Image
+
+from tools.continue_after_period_priority import (
+    ContinuationMonitor,
+    MonitorConfig,
+    prepared_input_sha256,
+)
 
 
 class FakeProcess:
@@ -154,11 +160,14 @@ class ContinuationMonitorTests(unittest.TestCase):
             source_item_id = "a" * 64
             original = config.source_root / "商化照片-202606" / "one.jpg"
             original.parent.mkdir()
-            original.write_bytes(b"source")
+            Image.new("RGB", (3200, 1800), (10, 20, 30)).save(
+                original, format="JPEG", quality=92
+            )
             source_sha = hashlib.sha256(original.read_bytes()).hexdigest()
             staged = config.priority_dir / "one.jpg"
-            staged.write_bytes(b"staged-image")
-            staged_sha = hashlib.sha256(staged.read_bytes()).hexdigest()
+            staged.write_bytes(original.read_bytes())
+            staged_sha = prepared_input_sha256(staged)
+            self.assertNotEqual(staged_sha, hashlib.sha256(staged.read_bytes()).hexdigest())
             published = config.output_dir / "M-202606-one.jpg"
             published.write_bytes(b"published")
             published_sha = hashlib.sha256(published.read_bytes()).hexdigest()
@@ -266,10 +275,14 @@ class ContinuationMonitorTests(unittest.TestCase):
             source_item_id = "d" * 64
             original = config.source_root / "period-202606" / "one.jpg"
             original.parent.mkdir()
-            original.write_bytes(b"original")
+            Image.new("RGB", (3200, 1800), (40, 50, 60)).save(
+                original, format="JPEG", quality=92
+            )
             staged = config.priority_dir / "one.jpg"
-            staged.write_bytes(b"staging-copy")
-            staged_sha = hashlib.sha256(staged.read_bytes()).hexdigest()
+            Image.new("RGB", (3200, 1800), (70, 80, 90)).save(
+                staged, format="JPEG", quality=92
+            )
+            staged_sha = prepared_input_sha256(staged)
             published = config.output_dir / "M-202606-one.jpg"
             published.write_bytes(b"published")
             receipt_dir = config.output_dir / "_drive_upload_stream" / "receipts"
@@ -281,8 +294,11 @@ class ContinuationMonitorTests(unittest.TestCase):
                         "source_item_id": source_item_id,
                         "original_source_path": str(original),
                         "published_path": str(published),
-                        # This deliberately uses the staging hash. It must fail.
-                        "source_sha256": staged_sha,
+                        # This deliberately uses the staging file hash instead
+                        # of the original source file hash. It must fail.
+                        "source_sha256": hashlib.sha256(
+                            staged.read_bytes()
+                        ).hexdigest(),
                         "published_sha256": hashlib.sha256(
                             published.read_bytes()
                         ).hexdigest(),

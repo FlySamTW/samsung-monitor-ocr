@@ -473,7 +473,8 @@
 ## 2026-07-17 202606 → 202601 自動交接守門
 
 - 新月份優先批次不再依賴人工在完成後按「繼續」。`tools/continue_after_period_priority.py` 只監看唯一的 202606 staging leaf；若它在未完成時意外 idle，只對原 leaf 做 `restart=false` 原位續跑，不重啟模型、不重跑已完成照片。
-- 交接條件固定為：202606 每張都有唯一 verified 且 upload-queued 的終局記錄；記錄的 input SHA 必須逐檔匹配 staging 實體檔，Drive receipt 的 source SHA 必須逐檔匹配 original source 實體檔，不得假定兩者位元 SHA 相同；`processed=success=verified=total`，failed/review/unknown 全為 0，後端 idle、逐張上傳 pending/working 為 0、唯一 uploader 存活、runtime fuse 不存在、正式 backend contract 為 v19.45 strict 且 evidence revision 不低於 `.42`。任一不符即 fail closed。
+- 交接條件固定為：202606 每張都有唯一 verified 且 upload-queued 的終局記錄；記錄的 input SHA 必須逐檔重建並匹配正式送模 full-scene bytes（大圖是縮至長邊 2560 後的 quality-95 JPEG，不是 raw JPG），Drive receipt 的 source SHA 必須逐檔匹配 original source raw file，published SHA 再匹配發布檔，三種 SHA 不得混用；`processed=success=verified=total`，failed/review/unknown 全為 0，後端 idle、逐張上傳 pending/working 為 0、唯一 uploader 存活、runtime fuse 不存在、正式 backend contract 為 v19.45 strict 且 evidence revision 不低於 `.42`。任一不符即 fail closed。
 - 切換前會先驗證候選 CSV 第一群組與保留的 `202601_商化照片-202601_6403a632` 在 period、來源資料匣 SHA-1 短碼與照片數均完全一致。條件成立後才把同一個 port 5002 backend 切回 202601，並再次讀回 API 證明以 `restart=false` 運行。
 - 後續由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 原位接續；CSV 固定順序為 202601（1,500）、202602（1,598）、202603（357）、202604（1,587）、202605（905）。monitor 的單例鎖保留到 runner 結束，其他 staged runner、90 分鐘無進度或整體逾時都會寫 alert，不會開第二套程序或可見終端機。
 - 十項單元測試與正式路徑唯讀 preflight 已通過；除交接流程外，也覆蓋缺少 Drive 收據與舊 summary 冒充新成功。preflight 證明目前 CSV 順序與 202601 staging 身分相符。正式 monitor 必須由 `Start-Process -WindowStyle Hidden` 啟動，日誌在 `logs/`，完成 receipt／失敗 alert 在 `_ocr_audit/`。
+- 內容監控另抓到 `台中LalaportSES-301` 三輪後把清楚的 Follow Me 4K 展示誤細分成 `Pro M7 43"`。主代理已直接檢視完整原圖：同一前景主體具品牌字樣、白色直立移動架、托盤與圓底座，但無足夠型號／價格像素。已把 source/input SHA 綁定的安全真值加入像素權威與永久測試；離線三輪定案只能輸出 `單機／FollowMe（型號未細分）／無價格`，不可第 4 次呼叫或保留猜測版本。
