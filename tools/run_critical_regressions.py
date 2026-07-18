@@ -32,6 +32,7 @@ def main() -> int:
         [sys.executable, "-m", "unittest", "-v", "tools.test_build_drive_correction_reconciliation"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_reconcile_drive_corrections"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_stream_drive_upload"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_record_period_priority_progress"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_continue_after_period_priority"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_recover_failed_fuse_uploads"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_revalidate_frozen_guard_results"],

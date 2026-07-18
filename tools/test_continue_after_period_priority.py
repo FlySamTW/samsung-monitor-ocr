@@ -98,6 +98,45 @@ class ContinuationMonitorTests(unittest.TestCase):
             },
         }
 
+    def test_completed_priority_records_processed_progress_without_upload_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            source_folder = config.source_root / "商化照片-202606"
+            source_folder.mkdir()
+            (config.priority_dir / ".period_priority_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "samsung-ocr-period-priority/v1",
+                        "complete": True,
+                        "period": "202606",
+                        "source_folder": str(source_folder),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def recorder(**kwargs):
+                calls.append(kwargs)
+                return {
+                    "processed_tasks": 1393,
+                    "current_guard_final_tasks": 379,
+                    "nonfinal_tasks": 1014,
+                    "drive_upload_complete": False,
+                }
+
+            monitor = ContinuationMonitor(
+                config,
+                progress_recorder=recorder,
+            )
+            report = monitor.persist_priority_overall_progress()
+            self.assertEqual(report["processed_tasks"], 1393)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(calls[0]["apply"])
+            self.assertEqual(calls[0]["period"], "202606")
+            self.assertEqual(calls[0]["source_folder"], source_folder.resolve())
+            self.assertIsNone(monitor.persist_priority_overall_progress())
+
     @staticmethod
     def write_identity_evidence(
         config,

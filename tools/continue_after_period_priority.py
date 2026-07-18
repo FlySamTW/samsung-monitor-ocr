@@ -32,6 +32,8 @@ from typing import Any, Callable
 import psutil
 from PIL import Image, ImageOps
 
+from tools.record_period_priority_progress import record_progress
+
 
 MIN_EVIDENCE_GUARD = (20260717, 42)
 PROVEN_RECEIPT_REVISION_MIGRATIONS = {
@@ -325,6 +327,7 @@ class ContinuationMonitor:
         runner_finder: Callable[[Path], list[psutil.Process]] = owned_runner_processes,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        progress_recorder: Callable[..., dict[str, Any]] = record_progress,
     ):
         self.config = config
         self.requester = requester
@@ -333,10 +336,51 @@ class ContinuationMonitor:
         self.runner_finder = runner_finder
         self.clock = clock
         self.wall_clock = wall_clock
+        self.progress_recorder = progress_recorder
+        self.priority_progress_recorded = False
         self.last_progress: tuple[int, int] | None = None
         self.expected_periods = validate_continuation_identity(config)
         self.started_at = self.clock()
         self.last_progress_at = self.started_at
+
+    def persist_priority_overall_progress(self) -> dict[str, Any] | None:
+        """Record OCR-processed progress without claiming export or upload.
+
+        The period-priority leaf is outside the recursive folder-summary
+        writer.  Persist its exact processed count as soon as the local batch
+        is complete, while keeping ready/copy/Drive completion separate.
+        """
+        if self.priority_progress_recorded:
+            return None
+        manifest_path = self.config.priority_dir / ".period_priority_manifest.json"
+        if not manifest_path.is_file():
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"priority progress manifest is unreadable: {manifest_path}"
+            ) from exc
+        source_folder = normalized(str(manifest.get("source_folder") or ""))
+        period = str(manifest.get("period") or "")
+        report = self.progress_recorder(
+            output_dir=self.config.output_dir,
+            staging_dir=self.config.priority_dir,
+            source_folder=source_folder,
+            period=period,
+            apply=True,
+        )
+        self.priority_progress_recorded = True
+        append_event(
+            self.config.log_path,
+            "priority_overall_progress_recorded",
+            period=period,
+            processed=report.get("processed_tasks"),
+            current_guard_final=report.get("current_guard_final_tasks"),
+            nonfinal=report.get("nonfinal_tasks"),
+            drive_upload_complete=False,
+        )
+        return report
 
     def validate_status(self, status: dict[str, Any]) -> Path:
         if str(status.get("version") or "").startswith("v19.45") is False:
@@ -790,6 +834,7 @@ class ContinuationMonitor:
                 self.sleeper(self.config.poll_seconds)
                 continue
 
+            self.persist_priority_overall_progress()
             upload = dict(status.get("stream_upload") or {})
             pending = int(upload.get("pending") or 0)
             working = int(upload.get("working") or 0)

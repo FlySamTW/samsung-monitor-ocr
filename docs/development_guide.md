@@ -1016,3 +1016,11 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 介面驗收只接管既有 Dashboard 分頁，沒有新增或重載分頁。15 秒內畫面由 202601 `693→695/1,500`、目前檔案 `1354→1356`、上傳總數 `54,782→54,783`；照片／檔名、輪次、LLM 自然語言、右側累積卡片與上傳數同步，狀態保持「正在執行」。
 - `大葉高島屋-182` 目前仍只有正式 pending job，尚未取得 Drive ID／size／MD5 精確收據；不得把 queued 當成 uploaded。逐張 uploader 持續運作，取得唯一收據後再閉環。
 - 2026 完成仍只代表當年度階段完成。continuity supervisor 必須接續 2025→2015，直到 `151,714` 張、`137` 個資料匣全部取得如實終局與 Drive 精確收據。
+
+## 2026-07-18 17:46 priority staging 與全案總盤的雙層進度
+
+- `folder_discovery.csv` 已含 202606，但 priority staging 完成後若沒有對應 `folder_summary.csv` row，Dashboard 會把真正已處理的 1,393 張漏掉，並錯列為下一個 pending 資料匣。這是總盤持久化缺口，不代表 OCR 沒跑。
+- `record_period_priority_progress.py` 只在 `.period_priority_manifest.json`、source map、來源資料匣、staging 圖片及每張 durable result task 完全集合相等時，才寫入 `processed`。它固定使用 `status=period_priority_processed_unexported`、`ready=0`、`copied_count=0`、`success_records=0`，不產生 copied／upload／Drive receipt 宣稱。
+- 202606 的真實雙層狀態為：`processed=1,393`；其中目前 `.52` 完整終局 379，舊守門或未終局 1,014。後者仍必須依照片邊界複核，不得把 processed 當成 current-guard ready。
+- 寫入後 `/api/status` 與既有 Dashboard 分頁同步顯示 `66,724/151,714`、`45/137`、剩餘 `84,990`；`ready_images` 仍為 `65,331`。202601 同時前進到 715/1,500、stream upload 54,832、pending 133，backend／browser 均未重啟。
+- `continue_after_period_priority.py` 在 priority 本地批次處理完成後、等待 upload drain 之前，會自動呼叫同一精確守門寫入 processed 總盤；這只修正 OCR 進度，不放寬正式 export、upload 或跨年度接續條件。

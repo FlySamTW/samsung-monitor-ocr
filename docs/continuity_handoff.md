@@ -606,3 +606,11 @@
 - 既有 Dashboard 分頁實測 15 秒內由 `693→695/1,500`，檔案 `台南東寧-1354→1356`，上傳 `54,782→54,783`；照片／檔名、LLM 自言自語、輪次、右欄累積卡片與上傳數同步。沒有新開、重載或重啟瀏覽器。
 - 17:28 stream uploader 為 running，canonical uploaded 54,774、pending 180、working 1、runtime fuse absent。`大葉高島屋-182` 仍在 pending，沒有 exact Drive receipt，不能宣稱已上傳。
 - 全案終點維持 2015–2026 共 `151,714` 張、`137` 個資料匣及逐張精確 Drive 收據；2026 結束後由 continuity supervisor 接續 2025→2015。
+
+## 2026-07-18 17:46 全案總盤修正但不冒充 202606 完整終局
+
+- 根因：202606 priority staging 已有 1,393 個 durable OCR tasks，但沒有寫入 recursive `folder_summary.csv`，所以 Dashboard 仍顯示 65,331 並把 202606 錯列 pending。
+- 新工具以 period-priority manifest、source map、來源／staging 完整檔名集合及 1,393 個唯一 tasks 交叉驗證後，只補 `processed=1393`。row 明確為 `period_priority_processed_unexported`，`ready=0`、`copied_count=0`、`success_records=0`，manifest 也固定 `drive_upload_complete=false`。
+- 更嚴格的盤點同時揭露：1,393 張已處理，但 `.52` current-guard final 只有 379；1,014 張仍為舊 revision 或未終局。不得把 202606 宣告全部完成，這 1,014 張須由後續照片邊界複核清單處理。
+- API 與既有分頁已即時更正為 `66,724/151,714`、`44.0%`、`45/137`、剩餘 `84,990`；ready 仍維持 65,331。202601 當下 715/1,500，uploader 54,832、pending 133、fuse absent，沒有重啟或新增分頁。
+- continuation monitor 已接入相同 recorder，後續 priority staging 完成會先如實記錄 processed，再獨立等待 export／Drive receipts；總盤更新不再依賴整批上傳完成。
