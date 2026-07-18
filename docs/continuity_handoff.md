@@ -557,3 +557,29 @@
   superseded-receipt audit metadata. All identity, hash, plan, target name and
   result fields still have to match. This makes a partially applied
   multi-photo recovery safely retryable without duplicate jobs.
+
+## 2026-07-18 16:15 all-years unattended continuity restored
+
+- The production endpoint remains all 151,714 supported photos, not the 2026
+  cycle. The root-bound continuation request was migrated in place to guard
+  revision `20260718.52`, preserving the original authorization time
+  `2026-07-14T20:19:21`; its source and output paths were byte-checked against
+  the existing directories.
+- The machine still had the obsolete four-hour `ocr_upload_watchdog.ps1`
+  scheduled action even though the repository contract requires
+  `ocr_continuity_supervisor.ps1` at five-minute intervals. Re-registering the
+  protected task was denied by Windows and made no runtime change. The
+  documented non-admin fallback was therefore installed instead: HKCU Run,
+  the current-user LIMITED `SamsungOCR_UserContinuityEnsure` five-minute task,
+  and exactly one hidden `ocr_continuity_daemon.ps1` process (initial PID
+  `35464`) with its atomic lock. Keep the old four-hour task as a backstop; do
+  not start a second daemon.
+- The daemon's first supervisor check returned
+  `planned_backend_upgrade_recovery_active`: the existing staged runner still
+  owns live work, so the supervisor correctly performed no restart or switch.
+  OCR/uploader/runner PIDs were identical before and after installation,
+  backend remained running, and runtime fuse remained absent.
+- At 16:15, 202601 was `580/1,500`. A second low-power read-only audit of the
+  latest three terminal photos found original pixels, narration, structured
+  evidence and final result consistent; there was no prior-answer exposure,
+  prompt contamination or fourth call.
