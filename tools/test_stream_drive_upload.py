@@ -14,10 +14,13 @@ from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.photo_rename_planner import copy_planned_image_idempotent, plan_single_image
 from tools.rclone_drive_upload import md5_file, read_csv
 from tools.stream_drive_upload import (
+    _equivalent_upload_job,
     COMPATIBLE_PENDING_REVISION_MIGRATIONS,
+    FUSE_UPLOAD_RECOVERY_SCHEMA,
     _YEAR_FOLDER_ID_CACHE,
     _append_uploaded_atomic,
     _atomic_json,
+    _canonical_sha256,
     enqueue_finalized_result,
     migrate_compatible_pending_jobs,
     process_one_job,
@@ -110,6 +113,21 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_upload_job_equivalence_ignores_only_enqueue_audit_metadata(self):
+        base = {
+            "schema": "samsung-ocr-stream-upload-v1",
+            "source_item_id": "a" * 64,
+            "target_name": "same.jpg",
+            "queued_at": "first",
+            "superseded_receipt": {"archived_path": "old.json"},
+        }
+        retried = dict(base)
+        retried["queued_at"] = "second"
+        retried.pop("superseded_receipt")
+        self.assertTrue(_equivalent_upload_job(base, retried))
+        retried["target_name"] = "different.jpg"
+        self.assertFalse(_equivalent_upload_job(base, retried))
+
     def setUp(self):
         _YEAR_FOLDER_ID_CACHE.clear()
 
@@ -157,6 +175,73 @@ class StreamDriveUploadTests(unittest.TestCase):
             self.assertEqual(len(archives), 1)
             archived = json.loads(archives[0].read_text(encoding="utf-8"))
             self.assertEqual(archived, original)
+
+    def test_frozen_fuse_recovery_upload_preserves_original_ocr_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-新北市-中和區-TK3C-中和-1335.jpg"
+            make_image(source)
+            output = root / "output"
+            job_path = enqueue_finalized_result(
+                verified_result(source),
+                output_dir=output,
+            )
+            frozen = json.loads(job_path.read_text(encoding="utf-8"))
+            frozen["evidence_guard_revision"] = "20260718.48"
+            frozen["failed_at"] = "2026-07-18T00:01:00"
+            frozen["error"] = (
+                "runtime health fuse is active: "
+                + str(output / "_ocr_audit" / "runtime_health_fuse.json")
+            )
+            archive = (
+                output
+                / "_ocr_audit"
+                / "fuse_failed_upload_recovery"
+                / "unit"
+                / "failed_jobs"
+                / job_path.name
+            )
+            _atomic_json(archive, frozen)
+            frozen["fuse_failed_upload_recovery"] = {
+                "schema": FUSE_UPLOAD_RECOVERY_SCHEMA,
+                "reason": "runtime_health_fuse_cleared_after_ocr_finalization",
+                "approved_uploader_revision": EVIDENCE_GUARD_REVISION,
+                "source_item_id": frozen["source_item_id"],
+                "source_revision": "20260718.48",
+                "source_sha256": frozen["source_sha256"],
+                "input_image_sha256": frozen["input_image_sha256"],
+                "run_id": frozen["run_id"],
+                "target_name": frozen["target_name"],
+                "failed_job_sha256": _canonical_sha256(
+                    {
+                        key: value
+                        for key, value in frozen.items()
+                        if key != "fuse_failed_upload_recovery"
+                    }
+                ),
+                "archived_failed_job": str(archive.resolve()),
+                "prepared_at": "2026-07-18T00:02:00",
+            }
+            _atomic_json(job_path, frozen)
+
+            self.assertEqual(migrate_compatible_pending_jobs(output), 0)
+            fake = FakeRclone()
+            receipt = process_one_job(
+                job_path,
+                output_dir=output,
+                rclone=Path("rclone.exe"),
+                runner=fake,
+            )
+
+            self.assertEqual(receipt["evidence_guard_revision"], "20260718.48")
+            self.assertNotEqual(
+                receipt["evidence_guard_revision"],
+                EVIDENCE_GUARD_REVISION,
+            )
+            self.assertEqual(
+                receipt["upload_recovery"]["failed_job_sha256"],
+                frozen["fuse_failed_upload_recovery"]["failed_job_sha256"],
+            )
 
     def test_previous_model_rule_revision_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

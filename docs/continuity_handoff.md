@@ -519,3 +519,41 @@
 - 九張均證明已有第 1／2／3 輪、相同 source identity 與 input SHA、不同 RequestID、`independent_pass=true`、無 prior-answer exposure／prompt contamination。以完整影像雜湊綁定像素權威後離線定案，沒有第 4 次呼叫。
 - 九份正式 Drive receipt 全部取得：1062 `11WwIgXjwUIoRliwz653Hcg_raloYtHbg`、731 `1jLDLl1FTZvT2snTt3K3-ds5xkM9L4-bo`、467 `1TbnuDYK7BDPNOILDx6zXBFFSKT9MpBzb`、1048 `1yFgJ2DXfybMNtoemSuyexnpwdak1yOH0`、114 `1ihO0tr7EqlT2GzeA1GQ1S48OVw1TFyLT`、1413 `1QN6b7RQzNyQGiq59kvP3B4J3hclggJfm`、919 `1Kzfa3W_2yvjSOzBIqTXWKfw6LDeCA7DY`、231 `1I4mOHVgKc90RbD6ZvDf4jEznc9QxQYVI`、435 `11CcFRHmJFkdI4gWAECPi6ji4BDvCZUv_`。
 - 套用與上傳期間正式 OCR／Dashboard 持續前進，`202606 1334→1364/1393`、失敗 0、fuse inactive；stream pending 最終歸零。新增九張 authority 回歸且完整 `tools/run_critical_regressions.py` 退出碼 0。
+
+## 2026-07-18 14:16 最新接手狀態（高於本文件較早進度）
+
+- `202606` 已完成 `1393/1393`，成功、verified 均為 1393，`review_required=0`、`failed=0`、runtime fuse inactive；這批不再需要模型判讀。
+- 最後兩張硬上限案件 `Game休閒館統領-408`、`TK3C 龜山-1357` 均證明三個模型呼叫名額已消耗、只有兩份乾淨 durable 輸出。已用完整影像權威精確綁定為 `遠景／無型號／無價格`，沒有第 4 次呼叫；Drive IDs 分別為 `1bEpcrOIJ01fwmosrdySJK8jcNV6U-qkH`、`1OKoXiNyQZUJCAejRP2ni9mJnMZH7xUgy`。
+- 其餘 68 張 review-required 已由低功耗完整原圖稽核，決策清冊與 API 集合精確相等；authority manifest 綁定 source item、來源 SHA、input SHA 與三輪 trace。全部使用既有證據終局結案，沒有追加模型呼叫。
+- 14:16 串流 uploader PID `28180` 正常，待傳由 31 持續下降至 21，最後成功上傳時間 `14:15:55`；不得因 OCR 已 idle 就把仍在上傳的資料夾宣告完整閉環。
+- hidden continuation monitor PID `38568` 正在等待上傳排空，日誌為 `logs/period_priority_continuation_20260718.jsonl`。待 `pending=working=0` 後會核對 1393 份 source map、trace、published source 與 Drive receipt，再以 `restart=false` 把同一 port 5002 backend 切回 `202601_商化照片-202601_6403a632`，接續既有 202601→202605 清單。
+- 接手者不得手動再啟動 monitor、uploader、backend 或瀏覽器；先讀 monitor 日誌與 `/api/status`。若 monitor fail closed，依 alert 的單一原因修正後從照片邊界接續，不可盲目重啟或開出重複進程。
+## 2026-07-18 16:04 continuation state
+
+- The project endpoint is not 2026. Source discovery now contains 137 folders
+  and 151,714 supported photos after adding 202606. The restored hidden
+  `rerun_staged_candidates.py --resume-existing-then-continue` runner owns the
+  fixed 202601–202605 chain without restarting the active photo. After current
+  year closure, continue the remaining 2025 item, all-year questionable
+  verification for already initially processed years, and historical OCR down
+  through 2015.
+- Port 5002 remained running while repair work proceeded. During the repair
+  window 202601 advanced from 532 to at least 556/1,500, fuse remained absent,
+  and the upload backlog continued decreasing. A low-power visual audit of
+  three recent photos found raw narration, structured evidence and terminal
+  results consistent; one incorrect middle-pass single vote was correctly
+  rejected and the third-pass distant result was accepted.
+- `tools/revalidate_frozen_guard_results.py` was added for frozen old-revision
+  results. It replays stored raw responses through current `.52` rules after
+  exact source/run/hash/independence proof and never performs another model
+  call. Sixteen `.41` tasks were safely revalidated and queued; their durable
+  manifest is
+  `D:\00_商化\00_已OCR照片\_ocr_audit\frozen_guard_revalidation\20260718_160411\manifest.json`.
+- One photo, `M-南投縣-南投市-SF-南投-533.jpg`, remains `.41` at call 2/3:
+  current rules reject the incomplete model token and 2026 single-unit missing
+  model evidence. Do not restamp it. Use its one remaining independent call at
+  a safe photo boundary, then enqueue its truthful terminal result.
+- Upload enqueue equivalence now ignores only volatile enqueue timestamps and
+  superseded-receipt audit metadata. All identity, hash, plan, target name and
+  result fields still have to match. This makes a partially applied
+  multi-photo recovery safely retryable without duplicate jobs.

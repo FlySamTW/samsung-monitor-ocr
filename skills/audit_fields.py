@@ -549,6 +549,34 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 統領 408: the full frame contains at least three complete displays.
+    # Two clean local outputs were persisted; the third call slot was consumed
+    # at the process boundary without a durable response. A bounded low-power
+    # visual audit closes the hard cap without making call four.
+    "5b5725bce558abf9a917a851c4e2a244ce95cfee552a6c6f965660f02142c8a3": {
+        "source_file_sha256": "b21e8ee02ea7f4afe4fc8f924a651fe5028f07322568a708ec3482d0d9d35fec",
+        "input_image_sha256": "2f3574081d63501d5e9cb6b8fa48296b54dbde31e432c18851f8307d4108b339",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 龜山 1357: the yellow display wall contains at least three complete
+    # monitors and no uniquely owned product/price card.
+    "3c72ff7806057247ebeba0f7b29bce5c4f630290fc2bb193dccb398cd8815bdb": {
+        "source_file_sha256": "ac1ca962a769d46c5afbc5dcd6c85b998602ab2b43b1c6f30664610ffe6e7cff",
+        "input_image_sha256": "1f957310877942ed49b573839e515cafa62966aab921738f44190c9fdae30d28",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 })
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item

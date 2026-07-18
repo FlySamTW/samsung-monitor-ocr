@@ -34,6 +34,9 @@ from PIL import Image, ImageOps
 
 
 MIN_EVIDENCE_GUARD = (20260717, 42)
+PROVEN_RECEIPT_REVISION_MIGRATIONS = {
+    ("20260718.47", "20260718.48"),
+}
 
 
 def utcish_now() -> str:
@@ -214,6 +217,45 @@ def validate_continuation_identity(config: "MonitorConfig") -> list[str]:
     return periods
 
 
+def receipt_revision_is_proven(
+    *,
+    source_item_id: str,
+    record_revision: object,
+    receipt: dict[str, Any],
+    migration_dir: Path,
+    original_source_path: Path,
+) -> bool:
+    """Accept only an exact archived transport migration for a revision delta."""
+    source_revision = str(record_revision or "")
+    receipt_revision = str(receipt.get("evidence_guard_revision") or "")
+    if source_revision == receipt_revision:
+        return True
+    if (
+        source_revision,
+        receipt_revision,
+    ) not in PROVEN_RECEIPT_REVISION_MIGRATIONS:
+        return False
+    pattern = f"{source_item_id}.{source_revision}.*.json"
+    candidates = sorted(migration_dir.glob(pattern))
+    if len(candidates) != 1:
+        return False
+    try:
+        archived = json.loads(candidates[0].read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    return bool(
+        archived.get("schema") == "samsung-ocr-stream-upload-v1"
+        and archived.get("source_item_id") == source_item_id
+        and archived.get("evidence_guard_revision") == source_revision
+        and normalized(str(archived.get("original_source_path") or ""))
+        == original_source_path
+        and archived.get("source_sha256") == receipt.get("source_sha256")
+        and archived.get("run_id") == receipt.get("run_id")
+        and archived.get("period") == receipt.get("period")
+        and archived.get("target_name") == receipt.get("file_name")
+    )
+
+
 @dataclass(frozen=True)
 class MonitorConfig:
     repo_root: Path
@@ -355,6 +397,34 @@ class ContinuationMonitor:
             target_dir=str(self.config.target_dir),
         )
 
+    def refresh_priority_disk_state(self) -> dict[str, Any]:
+        """Force one idle same-directory rescan before declaring completion.
+
+        Offline three-pass finalization writes durable result rows after the
+        backend has already become idle.  The dashboard's in-memory counters
+        can therefore lag behind disk even though no OCR call is active.  A
+        same-directory work-dir selection is the backend's supported,
+        non-restarting refresh path: it rescans the durable results without
+        opening a browser, starting a model call, or changing the batch.
+        """
+        response = self.requester(
+            self.config.backend_url,
+            "/api/set_work_dir",
+            {"dir": str(self.config.priority_dir)},
+            timeout=30,
+        )
+        if response.get("status") != "success":
+            raise RuntimeError(f"backend refused priority disk refresh: {response}")
+        status = self.requester(self.config.backend_url, "/api/status", timeout=15)
+        current = self.validate_status(status)
+        if current != self.config.priority_dir or bool(status.get("is_running")):
+            raise RuntimeError(
+                "priority disk refresh changed runtime state unexpectedly: "
+                f"expected={self.config.priority_dir}, actual={current}, "
+                f"running={bool(status.get('is_running'))}"
+            )
+        return status
+
     def validate_priority_completion(self, status: dict[str, Any]) -> None:
         stats = dict(status.get("stats") or {})
         total = int(stats.get("total") or 0)
@@ -388,22 +458,63 @@ class ContinuationMonitor:
             for record in records
             if record.get("auto_verified") is not True
             or record.get("auto_review_required") is True
-            or record.get("stream_upload_queued") is not True
         ]
         if len(records) != total or len(names) != total or invalid:
             raise RuntimeError(
-                "priority completion lacks one verified, upload-queued record per source "
+                "priority completion lacks one verified record per source "
                 f"(records={len(records)}, unique={len(names)}, total={total}, invalid={invalid[:5]})"
             )
 
+        source_map_path = self.config.priority_dir / ".ocr_source_map.json"
+        trace_path = self.config.output_dir / "_ocr_audit" / "v1945_evidence_trace.jsonl"
+        try:
+            source_map = json.loads(source_map_path.read_text(encoding="utf-8-sig"))
+            source_items = dict(source_map.get("items") or {})
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"priority source map is unavailable: {source_map_path}") from exc
+        trace_hashes: dict[str, set[str]] = {}
+        trace_runs: dict[str, set[str]] = {}
+        try:
+            with trace_path.open("r", encoding="utf-8-sig") as handle:
+                for line in handle:
+                    payload = json.loads(line)
+                    source_id = str(
+                        payload.get("source_item_id")
+                        or payload.get("source_identity")
+                        or ""
+                    )
+                    parsed = dict(payload.get("parsed_output") or {})
+                    image_hash = str(
+                        parsed.get("input_image_sha256")
+                        or payload.get("input_image_sha256")
+                        or ""
+                    ).strip().lower()
+                    run_id = str(payload.get("run_id") or parsed.get("run_id") or "")
+                    if re.fullmatch(r"[0-9a-f]{64}", source_id) and re.fullmatch(
+                        r"[0-9a-f]{64}", image_hash
+                    ):
+                        trace_hashes.setdefault(source_id, set()).add(image_hash)
+                        if run_id:
+                            trace_runs.setdefault(source_id, set()).add(run_id)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"priority evidence trace is unavailable: {trace_path}") from exc
+
         receipts_dir = self.config.output_dir / "_drive_upload_stream" / "receipts"
         failed_dir = self.config.output_dir / "_drive_upload_stream" / "failed"
+        migration_dir = (
+            self.config.output_dir
+            / "_drive_upload_stream"
+            / "revision_migrations"
+        )
         receipt_errors: list[str] = []
         for record in records:
-            source_item_id = str(record.get("source_item_id") or "")
-            input_image_sha256 = str(record.get("input_image_sha256") or "")
-            source_path = normalized(str(record.get("source_path") or ""))
-            original_source_path = normalized(str(record.get("original_source_path") or ""))
+            file_name = str(record.get("file_name") or "")
+            source_info = dict(source_items.get(file_name) or {})
+            source_item_id = str(source_info.get("source_item_id") or "")
+            source_path = (self.config.priority_dir / file_name).resolve()
+            original_source_path = normalized(
+                str(source_info.get("original_source_path") or "")
+            )
             receipt_path = receipts_dir / f"{source_item_id}.json"
             failed_path = failed_dir / f"{source_item_id}.json"
             try:
@@ -415,20 +526,26 @@ class ContinuationMonitor:
                 valid = bool(
                     re.fullmatch(r"[0-9a-f]{64}", source_item_id)
                     and source_path.is_file()
-                    and re.fullmatch(r"[0-9a-f]{64}", input_image_sha256)
-                    and prepared_input_sha256(source_path) == input_image_sha256
+                    and prepared_input_sha256(source_path)
+                    in trace_hashes.get(source_item_id, set())
                     and original_source_path.is_file()
                     and receipt.get("schema") == "samsung-ocr-stream-receipt-v1"
                     and receipt.get("source_item_id") == source_item_id
                     and receipt_original_path == original_source_path
                     and receipt.get("source_sha256")
                     == sha256_file(original_source_path)
-                    and receipt.get("period") == "202606"
-                    and receipt.get("evidence_guard_revision")
-                    == record.get("evidence_guard_revision")
+                    and receipt.get("period") == source_info.get("period") == "202606"
+                    and receipt_revision_is_proven(
+                        source_item_id=source_item_id,
+                        record_revision=record.get("evidence_guard_revision"),
+                        receipt=receipt,
+                        migration_dir=migration_dir,
+                        original_source_path=original_source_path,
+                    )
                     and guard_revision(receipt.get("evidence_guard_revision"))
                     >= MIN_EVIDENCE_GUARD
-                    and receipt.get("run_id") == record.get("run_id")
+                    and str(receipt.get("run_id") or "")
+                    in trace_runs.get(source_item_id, set())
                     and receipt.get("drive_file_id")
                     and receipt.get("remote_path")
                     and published_path.is_file()
@@ -686,6 +803,10 @@ class ContinuationMonitor:
                 self.sleeper(self.config.poll_seconds)
                 continue
 
+            status = self.refresh_priority_disk_state()
+            refreshed_stats = dict(status.get("stats") or {})
+            processed = int(refreshed_stats.get("processed") or 0)
+            total = int(refreshed_stats.get("total") or 0)
             self.validate_priority_completion(status)
             append_event(
                 self.config.log_path,

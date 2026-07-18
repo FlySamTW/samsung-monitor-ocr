@@ -98,6 +98,45 @@ class ContinuationMonitorTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def write_identity_evidence(
+        config,
+        *,
+        file_name,
+        source_item_id,
+        original,
+        staged_hash,
+        run_id="run-one",
+    ):
+        (config.priority_dir / ".ocr_source_map.json").write_text(
+            json.dumps(
+                {
+                    "items": {
+                        file_name: {
+                            "source_item_id": source_item_id,
+                            "original_source_path": str(original),
+                            "period": "202606",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        audit = config.output_dir / "_ocr_audit"
+        audit.mkdir(parents=True, exist_ok=True)
+        (audit / "v1945_evidence_trace.jsonl").write_text(
+            json.dumps(
+                {
+                    "source_item_id": source_item_id,
+                    "file_name": file_name,
+                    "run_id": run_id,
+                    "parsed_output": {"input_image_sha256": staged_hash},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def test_running_priority_is_observed_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
@@ -153,6 +192,7 @@ class ContinuationMonitorTests(unittest.TestCase):
             config = self.config(Path(tmp))
             states = [
                 self.status(config, config.priority_dir, False, 1, 1),
+                self.status(config, config.priority_dir, False, 1, 1),
                 self.status(config, config.target_dir, True, 14, 1500),
                 self.status(config, config.target_dir, True, 14, 1500),
             ]
@@ -168,6 +208,13 @@ class ContinuationMonitorTests(unittest.TestCase):
             staged.write_bytes(original.read_bytes())
             staged_sha = prepared_input_sha256(staged)
             self.assertNotEqual(staged_sha, hashlib.sha256(staged.read_bytes()).hexdigest())
+            self.write_identity_evidence(
+                config,
+                file_name="one.jpg",
+                source_item_id=source_item_id,
+                original=original,
+                staged_hash=staged_sha,
+            )
             published = config.output_dir / "M-202606-one.jpg"
             published.write_bytes(b"published")
             published_sha = hashlib.sha256(published.read_bytes()).hexdigest()
@@ -259,6 +306,8 @@ class ContinuationMonitorTests(unittest.TestCase):
                 [item[0] for item in calls],
                 [
                     "/api/status",
+                    "/api/set_work_dir",
+                    "/api/status",
                     "/api/success_records",
                     "/api/set_work_dir",
                     "/api/start_batch",
@@ -267,6 +316,44 @@ class ContinuationMonitorTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(config.receipt_path.is_file())
+
+    @patch("tools.continue_after_period_priority.psutil.pid_exists", return_value=True)
+    def test_completion_uses_refreshed_same_directory_disk_state(self, _pid_exists):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            stale = self.status(config, config.priority_dir, False, 1, 1)
+            stale["stats"]["verified"] = 0
+            stale["stats"]["review_required"] = 1
+            refreshed = self.status(config, config.priority_dir, False, 1, 1)
+            calls = []
+
+            def requester(_url, endpoint, payload=None, timeout=0):
+                calls.append((endpoint, payload))
+                if endpoint == "/api/status":
+                    return stale if len([c for c in calls if c[0] == endpoint]) == 1 else refreshed
+                if endpoint == "/api/set_work_dir":
+                    self.assertEqual(Path(payload["dir"]), config.priority_dir)
+                    return {"status": "success"}
+                if endpoint == "/api/success_records":
+                    return []
+                raise AssertionError(endpoint)
+
+            monitor = ContinuationMonitor(
+                config,
+                requester=requester,
+                sleeper=lambda _n: None,
+            )
+            with self.assertRaisesRegex(RuntimeError, "one verified record"):
+                monitor.run(max_polls=1)
+            self.assertEqual(
+                [item[0] for item in calls[:4]],
+                [
+                    "/api/status",
+                    "/api/set_work_dir",
+                    "/api/status",
+                    "/api/success_records",
+                ],
+            )
 
     @patch("tools.continue_after_period_priority.psutil.pid_exists", return_value=True)
     def test_receipt_must_hash_the_original_not_the_staging_copy(self, _pid_exists):
@@ -283,6 +370,13 @@ class ContinuationMonitorTests(unittest.TestCase):
                 staged, format="JPEG", quality=92
             )
             staged_sha = prepared_input_sha256(staged)
+            self.write_identity_evidence(
+                config,
+                file_name="one.jpg",
+                source_item_id=source_item_id,
+                original=original,
+                staged_hash=staged_sha,
+            )
             published = config.output_dir / "M-202606-one.jpg"
             published.write_bytes(b"published")
             receipt_dir = config.output_dir / "_drive_upload_stream" / "receipts"
@@ -315,6 +409,8 @@ class ContinuationMonitorTests(unittest.TestCase):
             def requester(_url, endpoint, payload=None, timeout=0):
                 if endpoint == "/api/status":
                     return self.status(config, config.priority_dir, False, 1, 1)
+                if endpoint == "/api/set_work_dir":
+                    return {"status": "success"}
                 if endpoint == "/api/success_records":
                     return [
                         {
@@ -374,9 +470,16 @@ class ContinuationMonitorTests(unittest.TestCase):
             status["stats"]["review_required"] = 1
             status["stats"]["verified"] = 99
 
+            def requester(_url, endpoint, payload=None, timeout=0):
+                if endpoint == "/api/status":
+                    return status
+                if endpoint == "/api/set_work_dir":
+                    return {"status": "success"}
+                raise AssertionError(endpoint)
+
             monitor = ContinuationMonitor(
                 config,
-                requester=lambda *_args, **_kwargs: status,
+                requester=requester,
                 sleeper=lambda _n: None,
             )
             with self.assertRaisesRegex(RuntimeError, "non-final terminal outcomes"):
@@ -388,10 +491,20 @@ class ContinuationMonitorTests(unittest.TestCase):
             config = self.config(Path(tmp))
             source_item_id = "b" * 64
             status = self.status(config, config.priority_dir, False, 1, 1)
+            missing_original = config.source_root / "商化照片-202606" / "missing.jpg"
+            self.write_identity_evidence(
+                config,
+                file_name="one.jpg",
+                source_item_id=source_item_id,
+                original=missing_original,
+                staged_hash="c" * 64,
+            )
 
             def requester(_url, endpoint, payload=None, timeout=0):
                 if endpoint == "/api/status":
                     return status
+                if endpoint == "/api/set_work_dir":
+                    return {"status": "success"}
                 if endpoint == "/api/success_records":
                     return [
                         {

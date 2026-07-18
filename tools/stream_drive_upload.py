@@ -47,9 +47,11 @@ from tools.rclone_drive_upload import (
 
 STREAM_SCHEMA = "samsung-ocr-stream-upload-v1"
 RECEIPT_SCHEMA = "samsung-ocr-stream-receipt-v1"
+FUSE_UPLOAD_RECOVERY_SCHEMA = "samsung-ocr-fuse-failed-upload-recovery-v1"
 APPROVED_DRIVE_ROOT_ID = "16X5qALC3zRYc7PpnexXLYprorBzBtT_f"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 _YEAR_FOLDER_ID_CACHE: dict[tuple[str, str, str], str] = {}
+MIN_FROZEN_RECOVERY_GUARD = (20260717, 42)
 COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # Historical .49/.50 jobs were compatible with .51 because those revisions
     # changed transport containment only. .52 changes model identity and
@@ -85,6 +87,123 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"JSON object required: {path}")
     return payload
+
+
+def _guard_key(value: object) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d{8})\.(\d+)", str(value or "").strip())
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        dict(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_fuse_failed_upload_recovery(
+    job: Mapping[str, Any],
+    *,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+) -> tuple[bool, list[str]]:
+    """Validate a frozen upload-only recovery without restamping OCR evidence.
+
+    This exception is deliberately narrower than a revision migration.  It
+    accepts only an immutable job whose sole recorded failure was an active
+    runtime fuse after OCR had already finalized.  The original failed JSON
+    must remain archived and byte-semantically identical to the recovered job
+    before its recovery envelope was added.
+    """
+    row = dict(job or {})
+    recovery = row.get("fuse_failed_upload_recovery")
+    errors: list[str] = []
+    if not isinstance(recovery, dict):
+        return False, ["missing_recovery_envelope"]
+    if recovery.get("schema") != FUSE_UPLOAD_RECOVERY_SCHEMA:
+        errors.append("recovery_schema")
+    recovery_reason = str(recovery.get("reason") or "")
+    if recovery_reason not in {
+        "runtime_health_fuse_cleared_after_ocr_finalization",
+        "current_revision_rejected_by_older_uploader",
+    }:
+        errors.append("recovery_reason")
+    if recovery.get("approved_uploader_revision") != EVIDENCE_GUARD_REVISION:
+        errors.append("approved_uploader_revision")
+
+    source_revision = str(row.get("evidence_guard_revision") or "")
+    if _guard_key(source_revision) < MIN_FROZEN_RECOVERY_GUARD:
+        errors.append("source_revision_too_old")
+    if recovery.get("source_revision") != source_revision:
+        errors.append("source_revision")
+    if recovery.get("source_item_id") != row.get("source_item_id"):
+        errors.append("source_item_id")
+    if recovery.get("source_sha256") != row.get("source_sha256"):
+        errors.append("source_sha256")
+    if recovery.get("input_image_sha256") != row.get("input_image_sha256"):
+        errors.append("input_image_sha256")
+    if recovery.get("run_id") != row.get("run_id"):
+        errors.append("run_id")
+    if recovery.get("target_name") != row.get("target_name"):
+        errors.append("target_name")
+    failure = str(row.get("error") or "")
+    if recovery_reason == "runtime_health_fuse_cleared_after_ocr_finalization":
+        if not failure.startswith("runtime health fuse is active:"):
+            errors.append("failure_was_not_runtime_fuse")
+    elif not (
+        recovery_reason == "current_revision_rejected_by_older_uploader"
+        and source_revision == EVIDENCE_GUARD_REVISION
+        and failure == "stale or invalid stream upload job"
+    ):
+        errors.append("failure_was_not_older_uploader_revision")
+
+    frozen = dict(row)
+    frozen.pop("fuse_failed_upload_recovery", None)
+    frozen_sha256 = _canonical_sha256(frozen)
+    if recovery.get("failed_job_sha256") != frozen_sha256:
+        errors.append("failed_job_sha256")
+
+    output_root = Path(output_dir).resolve()
+    recovery_root = (
+        output_root / "_ocr_audit" / "fuse_failed_upload_recovery"
+    ).resolve()
+    archived_text = str(recovery.get("archived_failed_job") or "")
+    try:
+        archived = Path(archived_text).resolve()
+        archived.relative_to(recovery_root)
+    except (OSError, ValueError):
+        errors.append("archived_failed_job_scope")
+        archived = None
+    if archived is not None:
+        try:
+            archived_payload = _read_json(archived)
+            if _canonical_sha256(archived_payload) != frozen_sha256:
+                errors.append("archived_failed_job_hash")
+        except (OSError, UnicodeError, ValueError, TypeError, RuntimeError):
+            errors.append("archived_failed_job_unavailable")
+
+    if not re.fullmatch(r"[0-9a-f]{64}", str(row.get("source_item_id") or "")):
+        errors.append("invalid_source_item_id")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(row.get("source_sha256") or "")):
+        errors.append("invalid_source_sha256")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(row.get("input_image_sha256") or "")):
+        errors.append("invalid_input_image_sha256")
+    if not str(row.get("run_id") or ""):
+        errors.append("missing_run_id")
+    if Path(str(row.get("target_name") or "")).name != str(row.get("target_name") or ""):
+        errors.append("unsafe_target_name")
+    plan = row.get("plan")
+    if (
+        not isinstance(plan, dict)
+        or plan.get("status") != READY_STATUS
+        or plan.get("target_name") != row.get("target_name")
+    ):
+        errors.append("plan_target_mismatch")
+    return not errors, errors
 
 
 def _stream_dirs(output_dir: Path) -> dict[str, Path]:
@@ -141,6 +260,14 @@ def _job_key(result: Mapping[str, Any]) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", source_item_id):
         raise RuntimeError("finalized result has no valid source_item_id")
     return source_item_id
+
+
+def _equivalent_upload_job(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Compare durable upload intent while ignoring audit-only enqueue metadata."""
+    volatile = {"queued_at", "superseded_receipt"}
+    left_stable = {key: value for key, value in dict(left).items() if key not in volatile}
+    right_stable = {key: value for key, value in dict(right).items() if key not in volatile}
+    return left_stable == right_stable
 
 
 def enqueue_finalized_result(
@@ -210,12 +337,10 @@ def enqueue_finalized_result(
         "normalized_evidence": normalized,
         "queued_at": datetime.now().isoformat(timespec="seconds"),
     }
-    canonical = json.dumps(job, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     for existing_path in (pending, working):
         if existing_path.exists():
             existing = _read_json(existing_path)
-            existing_canonical = json.dumps(existing, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            if existing_canonical == canonical:
+            if _equivalent_upload_job(existing, job):
                 return existing_path
             raise RuntimeError(f"same source_item_id already has a different upload job: {key}")
     if receipt.exists():
@@ -436,7 +561,20 @@ def process_one_job(
     output_dir = Path(output_dir).resolve()
     dirs = _stream_dirs(output_dir)
     job = _read_json(job_path)
-    if job.get("schema") != STREAM_SCHEMA or job.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION:
+    frozen_recovery_valid, frozen_recovery_errors = validate_fuse_failed_upload_recovery(
+        job,
+        output_dir=output_dir,
+    )
+    if (
+        job.get("schema") != STREAM_SCHEMA
+        or (
+            job.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION
+            and not frozen_recovery_valid
+        )
+    ):
+        detail = ",".join(frozen_recovery_errors[:5])
+        if detail:
+            raise RuntimeError(f"stale or invalid stream upload job: {detail}")
         raise RuntimeError("stale or invalid stream upload job")
     source = Path(str(job.get("original_source_path") or "")).resolve()
     if not source.is_file() or sha256_file(source) != str(job.get("source_sha256") or ""):
@@ -516,6 +654,8 @@ def process_one_job(
             "remote_path": f"{remote}:{year}/{file_name}",
             "confirmed_at": confirmed_at,
         }
+        if frozen_recovery_valid:
+            receipt["upload_recovery"] = dict(job["fuse_failed_upload_recovery"])
         receipt_path = dirs["receipts"] / f"{job['source_item_id']}.json"
         _atomic_json(receipt_path, receipt)
     job_path.unlink(missing_ok=True)
@@ -557,6 +697,14 @@ def migrate_compatible_pending_jobs(output_dir: Path) -> int:
         job = _read_json(path)
         old_revision = str(job.get("evidence_guard_revision") or "")
         if old_revision == EVIDENCE_GUARD_REVISION:
+            continue
+        frozen_recovery_valid, _ = validate_fuse_failed_upload_recovery(
+            job,
+            output_dir=output_dir,
+        )
+        if frozen_recovery_valid:
+            # This is an upload-only replay of a frozen, already-finalized
+            # result. Preserve its original OCR revision in the receipt.
             continue
         if COMPATIBLE_PENDING_REVISION_MIGRATIONS.get(old_revision) != EVIDENCE_GUARD_REVISION:
             raise RuntimeError(f"unapproved pending upload revision: {old_revision or 'missing'}")

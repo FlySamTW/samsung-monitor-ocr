@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,9 @@ from skills.model_validation import normalize_model_token
 from tools.stream_drive_upload import enqueue_finalized_result
 
 
+AUTHORITY_MANIFEST_SCHEMA = "samsung-ocr-bound-visual-authorities/v1"
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -33,6 +37,48 @@ def _atomic_json(path: Path, payload: Any) -> None:
 
 def _task_file_name(task: dict[str, Any]) -> str:
     return Path(str((task.get("data") or {}).get("image") or "")).name
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_authority_manifest(path: Path) -> int:
+    """Load exact hash-bound visual authorities for this offline run only."""
+    payload = json.loads(path.resolve().read_text(encoding="utf-8-sig"))
+    if payload.get("schema") != AUTHORITY_MANIFEST_SCHEMA:
+        raise RuntimeError("unexpected visual authority manifest schema")
+    entries = list(payload.get("entries") or [])
+    if int(payload.get("entry_count") or 0) != len(entries) or not entries:
+        raise RuntimeError("visual authority manifest is empty or inconsistent")
+    seen_sources: set[str] = set()
+    seen_hashes: set[str] = set()
+    for entry in entries:
+        source_id = str(entry.get("source_item_id") or "")
+        image_hash = str(entry.get("input_image_sha256") or "").strip().lower()
+        source_hash = str(entry.get("source_file_sha256") or "").strip().lower()
+        original = Path(str(entry.get("original_source_path") or "")).resolve()
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", source_id)
+            or not re.fullmatch(r"[0-9a-f]{64}", image_hash)
+            or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
+            or source_id in seen_sources
+            or image_hash in seen_hashes
+            or not original.is_file()
+            or _sha256_file(original) != source_hash
+            or entry.get("authority") != "human_audited_pixel_authority"
+        ):
+            raise RuntimeError(
+                f"invalid or stale visual authority: {entry.get('file_name')}"
+            )
+        KNOWN_SOURCE_EXPECTATIONS[image_hash] = entry
+        seen_sources.add(source_id)
+        seen_hashes.add(image_hash)
+    return len(entries)
 
 
 def _review_required(task: dict[str, Any]) -> bool:
@@ -788,6 +834,11 @@ def main() -> int:
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
+        "--authority-manifest",
+        type=Path,
+        help="Exact source/hash-bound visual authority manifest for this run.",
+    )
+    parser.add_argument(
         "--file-name",
         action="append",
         default=[],
@@ -795,6 +846,8 @@ def main() -> int:
     )
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
+    if args.authority_manifest:
+        load_authority_manifest(args.authority_manifest)
     report = finalize_file(
         args.result_file.resolve(),
         args.trace.resolve(),

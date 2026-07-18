@@ -1,0 +1,654 @@
+"""Re-adjudicate frozen old-guard results without another model call.
+
+This is intentionally narrower than a transport revision migration.  It
+rebuilds every pass from the stored raw model JSON, runs the current
+normalization/health/accuracy rules, and emits a current-revision upload only
+when the exact source identity and prepared-image bytes are still proven.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import urllib.request
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import samsung_ocr_batch_processor as backend
+from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
+    enrich_result_for_review,
+    finalize_three_pass_outcome,
+    immediate_retry_decision,
+    refresh_authoritative_price_comparison,
+    validate_evidence_contract,
+)
+from skills.batch_orchestrator import BatchOrchestrator
+from skills.field_extraction import FieldNormalizer
+from skills.model_matching import ModelMatcher
+from skills.model_validation import (
+    has_photo_label_model_evidence,
+    strict_known_model,
+    unique_embedded_known_model,
+)
+from skills.runtime_health_gate import (
+    evaluate_runtime_health,
+    final_content_conflict_can_isolate,
+    first_pass_content_conflict_can_retry,
+)
+from tools.continue_after_period_priority import prepared_input_sha256
+from tools.photo_rename_planner import READY_STATUS, plan_single_image
+from tools.stream_drive_upload import enqueue_finalized_result
+
+
+SCHEMA = "samsung-ocr-frozen-guard-revalidation/v1"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+META_FIELDS = (
+    "view_type",
+    "model",
+    "price",
+    "complete_screen_count",
+    "unique_main",
+    "label_ownership",
+    "followme_physical_evidence",
+    "followme_family_confirmed",
+    "three_pass_adjudicated",
+    "adjudication_rule",
+    "adjudication_summary",
+    "price_status",
+    "price_symbol",
+    "official_price",
+    "price_diff_percent",
+    "evidence_guard_revision",
+    "evidence_contract_valid",
+    "ocr_attempt",
+    "auto_verified",
+    "auto_review_required",
+    "review_status",
+    "auto_retry_reasons",
+    "technical_retry_required",
+    "technical_retry_exhausted",
+)
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def _atomic_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temp, path)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolved(value: Any) -> Path:
+    return Path(str(value or "")).resolve()
+
+
+def _task_file_name(task: dict[str, Any]) -> str:
+    return Path(str((task.get("data") or {}).get("image") or "")).name
+
+
+def _status(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url.rstrip("/") + "/api/status", timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("backend status is not an object")
+    return payload
+
+
+def _prove_inactive_staging(staging_dir: Path, status: dict[str, Any]) -> None:
+    current = _resolved(
+        status.get("current_relative_dir")
+        or status.get("image_dir")
+        or status.get("current_dir")
+    )
+    if current == staging_dir:
+        raise RuntimeError("refusing to rewrite the backend's active staging directory")
+    if status.get("runtime_health_fuse"):
+        raise RuntimeError("runtime health fuse is active")
+
+
+def _load_tasks(staging_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    by_name: dict[str, dict[str, Any]] = {}
+    files: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(staging_dir.glob("*OCR成功.json")):
+        tasks = _read_json(path)
+        if not isinstance(tasks, list):
+            raise RuntimeError(f"result file is not a task list: {path}")
+        files[str(path)] = tasks
+        for task in tasks:
+            if not isinstance(task, dict):
+                raise RuntimeError(f"result file contains a non-object task: {path}")
+            name = _task_file_name(task)
+            if not name or name in by_name:
+                raise RuntimeError(f"result task filename is missing or duplicated: {name}")
+            by_name[name] = task
+    return by_name, files
+
+
+def _load_trace_groups(
+    trace_path: Path,
+    *,
+    old_revision: str,
+    names: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    with trace_path.open("r", encoding="utf-8-sig") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            name = str(row.get("file_name") or "")
+            if name in names and str(row.get("evidence_guard_revision") or "") == old_revision:
+                grouped[name].append(row)
+    for rows in grouped.values():
+        rows.sort(key=lambda item: int(item.get("attempt") or 0))
+    return grouped
+
+
+def _raw_call(
+    trace: dict[str, Any],
+    *,
+    attempt: int,
+    normalizer: FieldNormalizer,
+    matcher: ModelMatcher,
+) -> dict[str, Any]:
+    raw_output = str(trace.get("raw_output") or "")
+    parsed, raw_objects, merge_mode, merge_rejected = backend._merge_v1945_json_objects(
+        raw_output
+    )
+    if (
+        not isinstance(parsed, dict)
+        or merge_rejected
+        or merge_mode != "single_object"
+        or len(raw_objects) != 1
+    ):
+        raise RuntimeError("stored raw response is not one unambiguous JSON object")
+    request_id = str(parsed.get("request_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", request_id):
+        raise RuntimeError("stored raw response has no valid request ID")
+
+    record = dict(parsed)
+    record.pop("request_id", None)
+    record["request_id_verified"] = True
+    record["request_binding_enforced"] = True
+    record["input_image_sha256"] = str(
+        (trace.get("parsed_output") or {}).get("input_image_sha256") or ""
+    ).lower()
+    record["thinking"] = str(record.get("narration") or "")
+    record["independent_pass"] = True
+    record["prior_answer_exposed"] = False
+    record["prompt_contamination"] = False
+    record = backend.finalize_evidence_contract(record, raw_output)
+    record = normalizer.normalize(record)
+
+    if record.get("view_type") == "單機":
+        raw_model = record.get("model") or ""
+        if raw_model and not str(raw_model).upper().startswith("FOLLOWME"):
+            matched = (
+                strict_known_model(raw_model, matcher.valid_models)
+                or unique_embedded_known_model(raw_model, matcher.valid_models)
+            )
+            if matched:
+                record["model"] = matched
+            elif (
+                record.get("unlisted_model_candidate")
+                and has_photo_label_model_evidence(
+                    raw_model,
+                    record,
+                    record.get("thinking") or record.get("narration") or "",
+                )
+            ):
+                record["model"] = str(raw_model).strip().upper()
+                record["official_model_unverified"] = True
+            else:
+                record["model"] = None
+                record["model_validation_failed"] = True
+                record["rejected_model"] = str(raw_model)
+    record["model"] = BatchOrchestrator._standardize_followme_model(
+        record.get("model")
+    )
+    record["category"] = record.get("view_type")
+    for field in (
+        "file_name",
+        "source_path",
+        "source_item_id",
+        "original_source_path",
+        "period",
+        "audit_folder",
+        "run_id",
+        "model_id",
+        "timestamp",
+        "started_at",
+    ):
+        record[field] = trace.get(field)
+    record["ocr_attempt"] = attempt
+    record = enrich_result_for_review(record)
+    record["ocr_attempt"] = attempt
+    record["request_binding_enforced"] = True
+    return record
+
+
+def _revalidate_calls(
+    traces: list[dict[str, Any]],
+    *,
+    normalizer: FieldNormalizer,
+    matcher: ModelMatcher,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    decision: dict[str, Any] = {}
+
+    for attempt, trace in enumerate(traces, start=1):
+        current = _raw_call(
+            trace,
+            attempt=attempt,
+            normalizer=normalizer,
+            matcher=matcher,
+        )
+        narration = str(current.get("thinking") or current.get("narration") or "")
+        health = evaluate_runtime_health(
+            current,
+            narration,
+            attempt=1,
+            upstream_upload_authorized=False,
+        )
+        current["runtime_health"] = health.to_dict()
+        can_retry = (
+            not health.allow_processing
+            and first_pass_content_conflict_can_retry(
+                attempt, health.reasons, current
+            )
+        )
+        can_isolate = (
+            not health.allow_processing
+            and final_content_conflict_can_isolate(
+                attempt, health.reasons, current
+            )
+        )
+        decision = immediate_retry_decision(current, attempt, history, 3)
+        if can_retry:
+            decision.update(
+                retry=True,
+                unresolved=False,
+                verified=False,
+                technical_retry_required=False,
+            )
+        elif can_isolate:
+            decision.update(
+                retry=False,
+                unresolved=True,
+                verified=False,
+                technical_retry_required=False,
+            )
+        decision = finalize_three_pass_outcome(current, history, decision, 3)
+
+        if attempt < len(traces):
+            history.append(current)
+            continue
+        if not health.allow_processing and not can_isolate and not can_retry:
+            decision.update(retry=False, unresolved=True, verified=False)
+        elif decision.get("verified") is True:
+            current["runtime_health"] = {
+                "healthy": True,
+                "allow_processing": True,
+                "allow_upload": True,
+                "reasons": [],
+                "display_narration": str(
+                    current.get("thinking") or current.get("narration") or ""
+                ),
+                "resolved_by_current_rule_revalidation": True,
+            }
+
+    if current is None:
+        raise RuntimeError("no stored calls")
+    # `category` is an alias, not an independent vote.  A current adjudicator
+    # may change view_type after parsing; keep the alias synchronized before
+    # validating the final contract.
+    current["category"] = current.get("view_type")
+    return current, decision
+
+
+def _validate_binding(
+    *,
+    name: str,
+    task: dict[str, Any],
+    traces: list[dict[str, Any]],
+    source_item: dict[str, Any],
+    staging_dir: Path,
+    old_revision: str,
+) -> dict[str, Any]:
+    meta = (task.get("data") or {}).get("ocr_meta") or {}
+    if (
+        meta.get("evidence_guard_revision") != old_revision
+        or meta.get("auto_verified") is not True
+        or meta.get("auto_review_required") is True
+    ):
+        raise RuntimeError("task is not one frozen verified old-revision result")
+    expected_attempts = list(range(1, len(traces) + 1))
+    if not traces or len(traces) > 3:
+        raise RuntimeError("stored call count is outside the 1..3 hard limit")
+    if [int(row.get("attempt") or 0) for row in traces] != expected_attempts:
+        raise RuntimeError("stored attempts are not contiguous from one")
+    if int(meta.get("ocr_attempt") or 0) != len(traces):
+        raise RuntimeError("task attempt count disagrees with stored trace")
+
+    staged = (staging_dir / name).resolve()
+    original = _resolved(source_item.get("original_source_path"))
+    source_id = str(source_item.get("source_item_id") or "").lower()
+    period = str(source_item.get("period") or "")
+    if (
+        staged.suffix.lower() not in IMAGE_EXTENSIONS
+        or not staged.is_file()
+        or not original.is_file()
+        or not re.fullmatch(r"[0-9a-f]{64}", source_id)
+        or not re.fullmatch(r"20\d{4}", period)
+    ):
+        raise RuntimeError("source map identity is incomplete")
+    prepared_hash = prepared_input_sha256(staged)
+    runs = {str(row.get("run_id") or "") for row in traces}
+    input_hashes = {
+        str((row.get("parsed_output") or {}).get("input_image_sha256") or "").lower()
+        for row in traces
+    }
+    if len(runs) != 1 or "" in runs or input_hashes != {prepared_hash}:
+        raise RuntimeError("stored calls do not bind one run and prepared image")
+    for row in traces:
+        if (
+            row.get("evidence_guard_revision") != old_revision
+            or str(row.get("file_name") or "") != name
+            or str(row.get("source_item_id") or "").lower() != source_id
+            or _resolved(row.get("source_path")) != staged
+            or _resolved(row.get("original_source_path")) != original
+            or str(row.get("period") or "") != period
+            or (row.get("parsed_output") or {}).get("request_id_verified") is not True
+            or (row.get("parsed_output") or {}).get("independent_pass") is not True
+            or (row.get("parsed_output") or {}).get("prior_answer_exposed") is True
+            or (row.get("parsed_output") or {}).get("prompt_contamination") is True
+        ):
+            raise RuntimeError("stored call identity or independence proof failed")
+    return {
+        "staged_path": str(staged),
+        "original_source_path": str(original),
+        "source_item_id": source_id,
+        "period": period,
+        "prepared_input_sha256": prepared_hash,
+        "source_sha256": _sha256_file(original),
+        "run_id": next(iter(runs)),
+    }
+
+
+def _update_task(task: dict[str, Any], result: dict[str, Any]) -> None:
+    meta = task.setdefault("data", {}).setdefault("ocr_meta", {})
+    for field in META_FIELDS:
+        meta[field] = result.get(field)
+    meta["revalidated_from_evidence_guard_revision"] = str(
+        result.get("revalidated_from_evidence_guard_revision") or ""
+    )
+    meta["revalidated_without_model_call"] = True
+    meta["revalidated_at"] = datetime.now().astimezone().isoformat()
+
+    annotation = (task.get("annotations") or [{}])[0]
+    values = {
+        "category": ("choices", [str(result.get("view_type") or "")]),
+        "model": ("text", [str(result.get("model") or "null")]),
+        "price": ("text", [str(result.get("price") or "null")]),
+    }
+    rows = []
+    for from_name, (value_key, value) in values.items():
+        rows.append(
+            {
+                "from_name": from_name,
+                "to_name": "image",
+                "type": "choices" if value_key == "choices" else "textarea",
+                "origin": "prediction",
+                "value": {value_key: value},
+            }
+        )
+    annotation["result"] = rows
+    if not task.get("annotations"):
+        task["annotations"] = [annotation]
+
+
+def revalidate(
+    *,
+    staging_dir: Path,
+    trace_path: Path,
+    output_dir: Path,
+    old_revision: str,
+    apply: bool,
+    backend_status: dict[str, Any],
+    enqueue: Callable[..., Path | None] = enqueue_finalized_result,
+) -> dict[str, Any]:
+    staging_dir = staging_dir.resolve()
+    trace_path = trace_path.resolve()
+    output_dir = output_dir.resolve()
+    _prove_inactive_staging(staging_dir, backend_status)
+    if (output_dir / "_ocr_audit" / "runtime_health_fuse.json").exists():
+        raise RuntimeError("runtime health fuse is active")
+
+    source_map = _read_json(staging_dir / ".ocr_source_map.json")
+    source_items = dict(source_map.get("items") or {})
+    tasks, task_files = _load_tasks(staging_dir)
+    names = {
+        name
+        for name, task in tasks.items()
+        if (
+            ((task.get("data") or {}).get("ocr_meta") or {}).get(
+                "evidence_guard_revision"
+            )
+            == old_revision
+        )
+    }
+    if not names:
+        raise RuntimeError("no frozen tasks match the requested old revision")
+    groups = _load_trace_groups(
+        trace_path,
+        old_revision=old_revision,
+        names=names,
+    )
+    normalizer = FieldNormalizer()
+    matcher = ModelMatcher("型號表.txt")
+    results: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    for name in sorted(names):
+        task = tasks[name]
+        source_item = source_items.get(name)
+        if not isinstance(source_item, dict):
+            raise RuntimeError(f"source map item is missing: {name}")
+        traces = groups.get(name) or []
+        binding = _validate_binding(
+            name=name,
+            task=task,
+            traces=traces,
+            source_item=source_item,
+            staging_dir=staging_dir,
+            old_revision=old_revision,
+        )
+        result, decision = _revalidate_calls(
+            traces,
+            normalizer=normalizer,
+            matcher=matcher,
+        )
+        if decision.get("verified") is not True:
+            rejected.append(
+                {
+                    "file_name": name,
+                    "reason": "current_rules_do_not_verify",
+                    "calls": len(traces),
+                    "reasons": [
+                        str(item) for item in decision.get("reasons") or []
+                    ],
+                }
+            )
+            continue
+        result.update(
+            {
+                **binding,
+                "file_name": name,
+                "source_path": binding["staged_path"],
+                "auto_verified": True,
+                "auto_review_required": False,
+                "review_status": "已完成",
+                "auto_retry_reasons": "",
+                "technical_retry_required": False,
+                "technical_retry_exhausted": False,
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                "evidence_contract_valid": True,
+                "ocr_attempt": len(traces),
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                # A current adjudicator has settled the identity fields.  Raw
+                # pass-level rejection flags belong to superseded candidates
+                # and must not block the newly adjudicated terminal result.
+                "model_validation_failed": False,
+                "rejected_model": "",
+                "price_conflict_detected": False,
+                "revalidated_from_evidence_guard_revision": old_revision,
+                "revalidated_without_model_call": True,
+            }
+        )
+        refresh_authoritative_price_comparison(
+            result,
+            result.get("model"),
+            result.get("price"),
+        )
+        if not result.get("model") or not result.get("price"):
+            result.update(
+                {
+                    "price_status": "not_compared",
+                    "price_symbol": "",
+                    "official_price": "",
+                    "price_diff_percent": None,
+                }
+            )
+        contract_valid, contract_errors, normalized = validate_evidence_contract(
+            result
+        )
+        if not contract_valid:
+            raise RuntimeError(
+                f"current result contract failed for {name}: "
+                + ";".join(contract_errors)
+            )
+        result["normalized_evidence"] = normalized
+        plan = plan_single_image(
+            Path(binding["original_source_path"]),
+            result,
+            binding["period"],
+            "＄",
+            current_year=datetime.now().year,
+        )
+        if plan.get("status") != READY_STATUS:
+            rejected.append(
+                {
+                    "file_name": name,
+                    "reason": "current_upload_plan_not_ready",
+                    "calls": len(traces),
+                    "reasons": [str(plan.get("reason") or "unknown")],
+                }
+            )
+            continue
+        results.append(result)
+
+    report = {
+        "schema": SCHEMA,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "mode": "apply" if apply else "dry_run",
+        "staging_dir": str(staging_dir),
+        "trace_path": str(trace_path),
+        "old_revision": old_revision,
+        "current_revision": EVIDENCE_GUARD_REVISION,
+        "result_count": len(results),
+        "rejected_count": len(rejected),
+        "rejected": rejected,
+        "results": [
+            {
+                "file_name": row["file_name"],
+                "source_item_id": row["source_item_id"],
+                "source_sha256": row["source_sha256"],
+                "input_image_sha256": row["prepared_input_sha256"],
+                "calls": row["ocr_attempt"],
+                "view_type": row.get("view_type"),
+                "model": row.get("model"),
+                "price": row.get("price"),
+                "adjudication_rule": row.get("adjudication_rule"),
+                "revalidated_without_model_call": True,
+            }
+            for row in results
+        ],
+    }
+    if not results:
+        raise RuntimeError("no frozen result can be safely revalidated")
+    if not apply:
+        return report
+
+    for row in results:
+        queued = enqueue(row, output_dir=output_dir)
+        if queued is None:
+            raise RuntimeError(f"current result was not queued: {row['file_name']}")
+    for row in results:
+        _update_task(tasks[row["file_name"]], row)
+    for path_text, payload in task_files.items():
+        _atomic_json(Path(path_text), payload)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    manifest = (
+        output_dir
+        / "_ocr_audit"
+        / "frozen_guard_revalidation"
+        / stamp
+        / "manifest.json"
+    )
+    _atomic_json(manifest, report)
+    report["manifest"] = str(manifest)
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--staging-dir", type=Path, required=True)
+    parser.add_argument("--trace", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--old-revision", required=True)
+    parser.add_argument("--backend-url", default="http://127.0.0.1:5002")
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args()
+    report = revalidate(
+        staging_dir=args.staging_dir,
+        trace_path=args.trace,
+        output_dir=args.output_dir,
+        old_revision=args.old_revision,
+        apply=args.apply,
+        backend_status=_status(args.backend_url),
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -933,3 +933,45 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `中壢易飛本店-753` 的真正 FollowMe 單機回歸必須同時保留：兩輪同主體物理證據中至少一輪為單一完整主體，且沒有額外完整螢幕敘述，仍在第三次呼叫後降階結案，不得因寬景修正退回待處理或產生第 4 次。
 - `finalize_existing_three_pass_reviews.py --output-dir` 必須傳正式輸出根目錄 `D:\00_商化\00_已OCR照片`，不可傳目前 staging leaf；否則會在 staging 下建立正式 worker 看不到的孤立 outbox。若操作失誤，先把相同 source identity 重新排入正式 outbox、取得唯一 Drive receipt，再把誤放 outbox 完整封存至 `_ocr_audit\misrouted_upload_queue_archive`，不得直接當成已上傳。
 - 本補強使用既有 `.52` 三輪證據，不把整個 2026 已驗證集合強制升版重跑；程式碼版本以 Git commit 追溯。正在執行的舊進程不會動態載入 Python 函式，必須等完整安全邊界、pending/working=0、關鍵回歸通過後以 hidden backend replacement 載入；等待期間由終局 review 清冊與離線定案器攔截同型風險，不得中途重啟正式批次。
+
+## 2026-07-18 202606 全批終局、缺輸出硬上限與安全接續
+
+- `202606` 的正式終局為 `1393/1393`：成功、verified 均為 1393，`review_required=0`、`failed=0`、runtime fuse inactive。資料夾完成不代表可略過逐張上傳；每張都必須取得與 source identity、來源 SHA、published SHA 一致的唯一 Drive receipt。
+- `Game休閒館統領-408` 與 `TK3C 龜山-1357` 已消耗三個模型呼叫名額，但 durable trace 只留下兩份乾淨輸出。此類「第三次呼叫已消耗、輸出跨程序邊界遺失」不得呼叫第 4 次；只有來源 item、來源 SHA、實際送模 input SHA、三次 consumed slots、兩份乾淨輸出及完整影像像素權威全部精確綁定時，才可用 `recover_consumed_cap_missing_result.py` 如實記錄「3 次已消耗／2 份可用輸出／第 3 份缺失」並保守結案。這不是一般兩輪即可定案的捷徑，technical integrity、memory contamination 或 identity 不明一律不得使用。
+- 408 與 1357 均由完整原圖權威確認為 `遠景／無型號／無價格`，且已取得正式 Drive receipts：408 `1bEpcrOIJ01fwmosrdySJK8jcNV6U-qkH`、1357 `1OKoXiNyQZUJCAejRP2ni9mJnMZH7xUgy`。
+- 剩餘複核採「清冊與 API 集合完全相等」原則：`data/202606_review_visual_decisions.json` 必須與當下 review-required 集合逐檔完全一致，不可漏張、增張或重複。`build_visual_authority_manifest.py` 只能用檔名定位 source map，權威本身必須綁定 source item、來源 SHA、trace input SHA、三輪獨立性及無前輪污染；檔名文字本身不是辨識證據。
+- `finalize_existing_three_pass_reviews.py --authority-manifest` 只接受上述精確綁定的離線 manifest，且必須先把逐張上傳工作寫入 durable outbox，再原子更新結果檔。68 張既有複核均以已消耗的最多三輪證據結案，沒有新增模型呼叫；套用後 `202606 review_required 68→0`。
+- 同資料夾的結果被離線更新後，接續監控必須先在 idle 邊界以 `/api/set_work_dir`、`restart=false` 刷新後端磁碟狀態，再重新讀取 status；不得因記憶體內舊快照誤判未完成或重跑。完成驗證應從 `.ocr_source_map.json` 綁定 source identity，從 `v1945_evidence_trace.jsonl` 綁定 input SHA／run，再核對 published source 與 Drive receipt；`/api/success_records` 是介面顯示資料，省略 identity 欄位，不能單獨作為上傳完成證據。
+- 期間優先批完成後，既有 Dashboard、port 5002 backend、LM Studio 與 uploader 均保持原進程。hidden continuation monitor 只等待 `pending=working=0`，逐張核對全部 1393 份 receipts 後，才以 `restart=false` 將同一 backend 切回既定 202601 staging 並接續 202601→202605；不得新開瀏覽器分頁、不得啟動第二套 backend／uploader／monitor，也不得在上傳尚未排空時宣稱整批閉環。
+## 2026-07-18 frozen guard revalidation and all-years continuation
+
+- 2026 is a priority correctness phase, not the project endpoint. The active
+  goal remains every supported source photo across 2015–2026 plus every exact
+  Drive receipt. After the fixed `202601 -> 202605` review chain, continuity
+  proceeds through 2025, the all-year questionable audit for already
+  initially processed folders, and then the remaining historical folders down
+  to 2015. Never mark the project complete merely because 2026 closes.
+- A result produced by an older evidence revision must never be made current
+  by changing its revision string. Use
+  `tools/revalidate_frozen_guard_results.py`: it proves the inactive staging
+  leaf, source-map identity, original source SHA-256, exact prepared-image
+  SHA-256, one run, contiguous attempts within the 1..3 hard limit, request
+  binding, independent passes, and absence of prior-answer exposure or prompt
+  contamination. It reparses each stored raw JSON object and replays current
+  normalization, model validation, runtime-health and deterministic
+  adjudication rules. It performs zero model calls.
+- Revalidation is allowed to change the old conclusion. This is the point of
+  re-adjudicating instead of transport-migrating. A missing current consensus
+  remains on the old revision and keeps its unused call budget; it must not be
+  restamped, guessed, or silently uploaded as current.
+- Multi-photo apply must preflight every current upload plan. Upload enqueue is
+  idempotent across retries: `queued_at` and superseded-receipt audit metadata
+  are not part of upload intent, while source identity, hashes, target name,
+  plan and final result remain exact. Queue first and expose the rewritten task
+  only after all accepted rows have durable jobs.
+- Formal 202606 application revalidated 16 old `.41` rows under `.52` without
+  a model call. The manifest is
+  `_ocr_audit/frozen_guard_revalidation/20260718_160411/manifest.json`.
+  `M-南投縣-南投市-SF-南投-533.jpg` remains `.41` with two calls because current
+  rules reject its incomplete model evidence; it retains exactly one legal
+  independent call for a later safe photo boundary.
