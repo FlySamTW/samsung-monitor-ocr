@@ -982,3 +982,28 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   `M-南投縣-南投市-SF-南投-533.jpg` remains `.41` with two calls because current
   rules reject its incomplete model evidence; it retains exactly one legal
   independent call for a later safe photo boundary.
+
+## 2026-07-18 離線終局結果必須同步所有介面讀取面
+
+- Label Studio 成功檔同時保存 `data.ocr_meta` 與
+  `annotations[0].result`。離線三輪定案不得只更新前者；Dashboard
+  `success_records` 仍會從第一個 annotation 讀取視角、型號與價格，只改
+  `ocr_meta` 會讓正式結果與介面顯示互相矛盾。
+- `finalize_existing_three_pass_reviews.py` 現在於同一次原子寫入同步
+  `view_type/category`、`model`、`price` 兩套表示。無型號或無價格在
+  `ocr_meta` 保持 JSON null，在 Label Studio textarea 使用字串 `null`，
+  與既有匯出契約一致。
+- 三輪 pass history 是不可改寫的稽核證據；離線定案不得覆寫原三輪，也
+  不得虛增第 4 輪。工具會另寫一筆 deterministic「第三輪終局定案」
+  presentation event，沿用該來源最後一次真實模型呼叫的 cumulative
+  sequence，`decision=accepted`，以同一 `source_item_id` 讓歷程 API 與
+  Dashboard 顯示最新終局。
+- 終局 event 寫入獨立
+  `presentation_finalization_YYYYMMDD.jsonl`，避免與仍在運行的 backend
+  競爭寫入正常 presentation stream；相同終局內容的 ID 可重入，不重複
+  寫入。
+- 事故樣本 `M-台北市-士林區-集雅社-大葉高島屋-182.jpg`：正式
+  `ocr_meta` 與逐張上傳工作原本已正確為
+  `遠景／無型號／無價格`，舊 annotation 卻殘留
+  `FollowMe M7 32"／12,990`。修復後 success API 與終局歷程均回傳遠景；
+  Drive 佇列沒有上傳過舊單機結果。

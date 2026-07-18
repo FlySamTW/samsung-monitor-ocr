@@ -470,7 +470,23 @@ class ThreePassFinalizationTests(unittest.TestCase):
                             "model": "FollowMe Pro M7 43\"",
                             "price": "17990",
                         },
-                    }
+                    },
+                    "annotations": [{
+                        "result": [
+                            {
+                                "from_name": "category",
+                                "value": {"choices": ["遠景"]},
+                            },
+                            {
+                                "from_name": "model",
+                                "value": {"text": ["null"]},
+                            },
+                            {
+                                "from_name": "price",
+                                "value": {"text": ["null"]},
+                            },
+                        ],
+                    }],
                 }], ensure_ascii=False),
                 encoding="utf-8",
             )
@@ -486,7 +502,20 @@ class ThreePassFinalizationTests(unittest.TestCase):
                     apply=True,
                 )
 
-            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]["data"]["ocr_meta"]
+            saved_task = json.loads(result_file.read_text(encoding="utf-8"))[0]
+            saved = saved_task["data"]["ocr_meta"]
+            saved_annotation = {
+                field["from_name"]: field["value"]
+                for field in saved_task["annotations"][0]["result"]
+            }
+            presentation_files = list(
+                (root / "_ocr_audit" / "presentation_history").glob(
+                    "presentation_finalization_*.jsonl"
+                )
+            )
+            presentation_event = json.loads(
+                presentation_files[0].read_text(encoding="utf-8").splitlines()[0]
+            )
 
         self.assertEqual(report[0]["status"], "finalized")
         self.assertEqual(saved["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
@@ -499,6 +528,13 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 "strength": "strong",
             }],
         )
+        self.assertEqual(saved_annotation["category"]["choices"], ["單機"])
+        self.assertEqual(saved_annotation["model"]["text"], ['FollowMe Pro M7 43"'])
+        self.assertEqual(saved_annotation["price"]["text"], ["17990"])
+        self.assertEqual(presentation_event["source_item_id"], "known-source")
+        self.assertEqual(presentation_event["pass_index"], 3)
+        self.assertEqual(presentation_event["decision"], "accepted")
+        self.assertTrue(presentation_event["result"]["auto_verified"])
 
     def test_targeted_finalizer_never_changes_an_unselected_task(self):
         from tools.finalize_existing_three_pass_reviews import finalize_file

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,201 @@ def _atomic_json(path: Path, payload: Any) -> None:
 
 def _task_file_name(task: dict[str, Any]) -> str:
     return Path(str((task.get("data") or {}).get("image") or "")).name
+
+
+def _sync_label_studio_annotation(
+    task: dict[str, Any],
+    row: dict[str, Any],
+) -> None:
+    """Keep the legacy Label Studio payload aligned with ``ocr_meta``.
+
+    Dashboard history still reads category/model/price from the first Label
+    Studio annotation.  Offline adjudication therefore must update both
+    representations atomically; updating only ``ocr_meta`` can display and
+    reload the pre-adjudication answer even though the upload row is correct.
+    """
+    category = str(row.get("view_type") or row.get("category") or "單機").strip()
+    model = row.get("model")
+    price = row.get("price")
+    result_items = [
+        {
+            "from_name": "category",
+            "to_name": "image",
+            "type": "choices",
+            "origin": "prediction",
+            "value": {"choices": [category]},
+        },
+        {
+            "from_name": "model",
+            "to_name": "image",
+            "type": "textarea",
+            "origin": "prediction",
+            "value": {"text": [str(model) if model else "null"]},
+        },
+        {
+            "from_name": "price",
+            "to_name": "image",
+            "type": "textarea",
+            "origin": "prediction",
+            "value": {"text": [str(price) if price else "null"]},
+        },
+    ]
+    annotations = task.get("annotations")
+    if not isinstance(annotations, list):
+        annotations = []
+        task["annotations"] = annotations
+    if annotations and isinstance(annotations[0], dict):
+        annotation = annotations[0]
+    else:
+        annotation = {
+            "id": task.get("id") or 1,
+            "created_at": row.get("timestamp") or row.get("completed_at") or "",
+        }
+        annotations.insert(0, annotation)
+    annotation["result"] = result_items
+    annotation.setdefault("was_cancelled", False)
+    annotation.setdefault("ground_truth", False)
+
+
+def _append_final_presentation_events(
+    output_dir: Path,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Persist a terminal replacement card without counting a fourth pass.
+
+    Pass cards are immutable audit records.  A later deterministic
+    adjudication therefore gets its own terminal event, reusing the last real
+    model-call sequence for this source.  It is written to a separate JSONL so
+    a live backend can keep appending its normal presentation stream without a
+    cross-process write race.
+    """
+    candidates: dict[str, tuple[dict[str, Any], str]] = {}
+    for row in rows:
+        source_item_id = str(row.get("source_item_id") or "").strip()
+        file_name = str(row.get("file_name") or "").strip()
+        if not source_item_id or not file_name:
+            raise RuntimeError(f"terminal presentation identity missing for {file_name}")
+        identity_seed = "|".join(
+            (
+                source_item_id,
+                str(row.get("evidence_guard_revision") or ""),
+                str(row.get("adjudication_rule") or ""),
+                str(row.get("view_type") or ""),
+                str(row.get("model") or ""),
+                str(row.get("price") or ""),
+            )
+        )
+        presentation_id = "p-final-" + hashlib.sha256(
+            identity_seed.encode("utf-8")
+        ).hexdigest()[:18]
+        candidates[source_item_id] = (row, presentation_id)
+    if not candidates:
+        return
+
+    history_dir = output_dir.resolve() / "_ocr_audit" / "presentation_history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    latest_source_events: dict[str, dict[str, Any]] = {}
+    existing_ids: set[str] = set()
+    for path in sorted(
+        history_dir.glob("presentation_*.jsonl*"),
+        key=lambda item: item.stat().st_mtime,
+    ):
+        try:
+            opener = gzip.open if path.suffix.lower() == ".gz" else open
+            with opener(path, "rt", encoding="utf-8") as handle:
+                for line in handle:
+                    if '"source_item_id"' not in line:
+                        continue
+                    item = json.loads(line)
+                    source_item_id = str(item.get("source_item_id") or "")
+                    candidate = candidates.get(source_item_id)
+                    if candidate is None:
+                        continue
+                    if item.get("presentation_id") == candidate[1]:
+                        existing_ids.add(candidate[1])
+                    latest_source_event = latest_source_events.get(source_item_id) or {}
+                    if (
+                        int(item.get("presentation_sequence") or 0),
+                        str(item.get("completed_at") or item.get("started_at") or ""),
+                    ) >= (
+                        int(latest_source_event.get("presentation_sequence") or 0),
+                        str(
+                            latest_source_event.get("completed_at")
+                            or latest_source_event.get("started_at")
+                            or ""
+                        ),
+                    ):
+                        latest_source_events[source_item_id] = item
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+
+    result_keys = (
+        "view_type", "screen_status", "quality_issue", "model", "price",
+        "category", "price_symbol", "price_status", "official_price",
+        "price_diff_percent", "auto_review_required", "review_status",
+        "auto_verified", "technical_retry_exhausted",
+        "three_pass_adjudicated", "adjudication_rule",
+        "adjudication_summary",
+    )
+    events: list[dict[str, Any]] = []
+    for source_item_id, (row, presentation_id) in candidates.items():
+        if presentation_id in existing_ids:
+            continue
+        latest_source_event = latest_source_events.get(source_item_id) or {}
+        timestamp = datetime.now().isoformat(timespec="microseconds")
+        narration = str(
+            row.get("adjudication_summary")
+            or row.get("thinking")
+            or row.get("narration")
+            or ""
+        ).strip()
+        result = {key: row.get(key) for key in result_keys}
+        events.append({
+            "presentation_id": presentation_id,
+            "presentation_sequence": int(
+                latest_source_event.get("presentation_sequence") or 0
+            ),
+            "source_item_id": source_item_id,
+            "run_id": str(
+                row.get("run_id") or latest_source_event.get("run_id") or ""
+            ),
+            "file_name": str(row.get("file_name") or ""),
+            "source_path": str(
+                row.get("original_source_path") or row.get("source_path") or ""
+            ),
+            "pass_index": 3,
+            "pass_label": "第三輪終局定案",
+            "ocr_attempt": 3,
+            "retry_reason": [],
+            "model_id": str(row.get("model_id") or ""),
+            "accuracy_profile": str(row.get("accuracy_profile") or "strict"),
+            "evidence_contract_version": str(
+                row.get("evidence_contract_version") or ""
+            ),
+            "evidence_guard_revision": str(
+                row.get("evidence_guard_revision") or ""
+            ),
+            "started_at": timestamp,
+            "completed_at": timestamp,
+            "previous_result_summary": {},
+            "full_ai_narration": narration,
+            "narration": narration,
+            "stream_buffer": narration,
+            "structured_result": result,
+            "decision": "accepted",
+            "result": result,
+        })
+    if not events:
+        return
+    path = history_dir / (
+        f"presentation_finalization_{datetime.now().strftime('%Y%m%d')}.jsonl"
+    )
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        for event in events:
+            handle.write(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
+        handle.flush()
 
 
 def _sha256_file(path: Path) -> str:
@@ -800,6 +997,7 @@ def finalize_file(
             "technical_retry_required", "technical_retry_exhausted",
         ):
             meta[field] = current.get(field)
+        _sync_label_studio_annotation(task, current)
         finalized_rows.append(current)
         report.append({
             "file": name,
@@ -825,6 +1023,7 @@ def finalize_file(
         # idempotent, so a write failure can be retried without a half-complete
         # verified row that never entered the upload stream.
         _atomic_json(result_path, tasks)
+        _append_final_presentation_events(output_dir, finalized_rows)
     return report
 
 
