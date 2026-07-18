@@ -9,6 +9,7 @@ import samsung_ocr_batch_processor as batch
 
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
+    KNOWN_SOURCE_EXPECTATIONS,
     apply_human_audited_pixel_authority,
     evidence_contract_decision,
     finalize_three_pass_outcome,
@@ -60,6 +61,26 @@ class EvidenceContractTests(unittest.TestCase):
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
     LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
     LIANGXING_765_SHA = "7c2abf080d2e4232895c169a5067c77cf01490bc4c017bdc79ed0cf5bbf295fd"
+    AUDITED_202606_EXPECTATIONS = {
+        "729f470ae5cd2f1d147904959fa777f42f45910cfe352c345477f320a9757230":
+            ("單機", 1, None, None, True),
+        "8be32ccfe71d8bb7096276248057e42f95a933fad4228c8f8cdde642cf51d06b":
+            ("遠景", 3, None, None, False),
+        "9943022d069a3c556a2da2106cf9600d93776c87ec73ec3ff04107bdcefe97c4":
+            ("單機", 1, "S27FG532EC", 5790, False),
+        "3d977798d9d7a275e97ebe4c8b9099a7cf71877fe6ef514e60b08bd96c50771a":
+            ("單機", 1, "S32DM803UC", 19900, False),
+        "c65f64217ba5181f429df00b21a473ef6bb78e444c18b6197dfe11e9bb01be87":
+            ("遠景", 4, None, None, False),
+        "e5d7157216f3700895160913bf6a1104959b0e02d55d751c90714029a5c6dae8":
+            ("遠景", 4, None, None, False),
+        "7ebacc47f8782b02702e6dabccf1215c8032c8f10dbede8e4b1bb03c685df8c5":
+            ("遠景", 8, None, None, False),
+        "1eba26f5209605f30559627f02fdf9e4a3dd3d35707dceb29a7c5741744e7185":
+            ("遠景", 3, None, None, False),
+        "74d17bdea3b9d6b5908b42ebce7ca1c461020473276ef4f1a35f96daa3e9a024":
+            ("單機", 2, None, None, False),
+    }
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -72,6 +93,42 @@ class EvidenceContractTests(unittest.TestCase):
         }
         row.update(updates)
         return row
+
+    def test_bounded_202606_visual_audits_override_all_nine_exhausted_rows(self):
+        for image_hash, expected in self.AUDITED_202606_EXPECTATIONS.items():
+            view_type, count, model, price, followme = expected
+            with self.subTest(image_hash=image_hash):
+                authority = KNOWN_SOURCE_EXPECTATIONS[image_hash]
+                self.assertEqual(authority["view_type"], view_type)
+                self.assertEqual(authority["complete_screen_count"], count)
+                self.assertEqual(authority.get("model"), model)
+                self.assertEqual(authority.get("price"), price)
+
+                passes = []
+                for attempt in (1, 2, 3):
+                    passes.append({
+                        "period": "202606",
+                        "ocr_attempt": attempt,
+                        "input_image_sha256": image_hash,
+                        "request_id_verified": True,
+                        "independent_pass": True,
+                        "prior_answer_exposed": False,
+                        "prompt_contamination": False,
+                        "view_type": "單機" if view_type == "遠景" else "遠景",
+                        "category": "單機" if view_type == "遠景" else "遠景",
+                        "model": "WRONG",
+                        "price": "999999",
+                        **evidence(3, view_type != "遠景", "ambiguous", []),
+                    })
+
+                self.assertTrue(
+                    apply_human_audited_pixel_authority(passes[2], passes[:2], 3)
+                )
+                self.assertEqual(passes[2]["view_type"], view_type)
+                self.assertEqual(passes[2]["complete_screen_count"], count)
+                self.assertEqual(passes[2]["model"], model)
+                self.assertEqual(passes[2]["price"], price)
+                self.assertEqual(passes[2]["followme_family_confirmed"], followme)
 
     def test_three_plus_screen_single_never_verifies_on_first_pass(self):
         row = self._multiscreen_single()

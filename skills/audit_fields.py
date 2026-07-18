@@ -433,6 +433,123 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES[
     ],
     "authority": "human_audited_pixel_authority",
 }
+# Bounded low-power visual audit of nine exhausted 202606 three-call rows.
+# These are exact pixel authorities, never filename heuristics.  They let the
+# existing three stateless calls close truthfully without a fourth request.
+KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
+    # 台中旗艦 1062: one complete FollowMe subject; variant and card are unsafe.
+    "f0c19a53e3491bd775b1e8b49a974e342120976e82b1b66172d612de49727bb5": {
+        "source_file_sha256": "e4f4c2d00d9fb494a0629395e1b25398c1dcc1d0c6a3dd63e663fb4a0a6aaefd",
+        "input_image_sha256": "729f470ae5cd2f1d147904959fa777f42f45910cfe352c345477f320a9757230",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    # 三創 731: at least three complete screens and no unique product subject.
+    "0231db5a2028c5477c6fd823314085f4386b724080f1e5fc6c82d024a2a4f589": {
+        "source_file_sha256": "0b9adee37346c9f7d1845e9f495adc537d9dd20cab3e32c1d79b081be69ffa3b",
+        "input_image_sha256": "8be32ccfe71d8bb7096276248057e42f95a933fad4228c8f8cdde642cf51d06b",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 員林 467: one display with a directly owned S27FG532EC / 5,790 card.
+    "4aa567e85382bd1ebd19063bdb8efb6a52803da4f9868dae44a79389eae5e167": {
+        "source_file_sha256": "f6aa3385b1b43c902d76d2654a8cc450c307c0e66c2910afd07f2214f9240b22",
+        "input_image_sha256": "9943022d069a3c556a2da2106cf9600d93776c87ec73ec3ff04107bdcefe97c4",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27FG532EC",
+        "price": 5790,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 中華 1048: the owned header/card identifies Smart Monitor M8.
+    "fa257180594c2efce27d030b33bea3eb9c600a8a9b27f085839f35984a0a52be": {
+        "source_file_sha256": "548c077fb918083f07291f1c5e6ed00468684a6dcec0e3ca694aaf65cb6671b1",
+        "input_image_sha256": "3d977798d9d7a275e97ebe4c8b9099a7cf71877fe6ef514e60b08bd96c50771a",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32DM803UC",
+        "price": 19900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 大葉高島屋 114: four or more complete screens, no unique main.
+    "34104d09f720a0d42b873bde271f0083d76c04ea5d27d10640824d9acbd5a464": {
+        "source_file_sha256": "533a0a1e5c6813c494f4ee24354d1a326a1d7a8f800cccd06260e8773de8de7e",
+        "input_image_sha256": "c65f64217ba5181f429df00b21a473ef6bb78e444c18b6197dfe11e9bb01be87",
+        "view_type": "遠景",
+        "complete_screen_count": 4,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 新北投 1413: FollowMe exists inside a 4+ screen wall, so the photo is distant.
+    "35d0847ebc44adca11d1d39a5fccd9bfe85776aa24f399c1e1f9c628116bf1ec": {
+        "source_file_sha256": "e5d7157216f3700895160913bf6a1104959b0e02d55d751c90714029a5c6dae8",
+        "input_image_sha256": "e5d7157216f3700895160913bf6a1104959b0e02d55d751c90714029a5c6dae8",
+        "view_type": "遠景",
+        "complete_screen_count": 4,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 新四維 919: eight or more complete screens, no unique main.
+    "0ae885c759b11e3bbf0ce0f482a9cfec760fab1cc32013ae2b165feddc185c46": {
+        "source_file_sha256": "3789a0fe01fed5ad347bd72c498edd0e830eab7ec65503d23d93cdac578557f7",
+        "input_image_sha256": "7ebacc47f8782b02702e6dabccf1215c8032c8f10dbede8e4b1bb03c685df8c5",
+        "view_type": "遠景",
+        "complete_screen_count": 8,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 高雄大樂 231: at least three complete screens and no unique main.
+    "a8a09f9268bfa0a76f16654a941d131d10d4ec531b1a439de1e98c0b303f5287": {
+        "source_file_sha256": "e2913b88e3012380ce421f9665ba73e05c382b32ded1acc53697f93421fe204a",
+        "input_image_sha256": "1eba26f5209605f30559627f02fdf9e4a3dd3d35707dceb29a7c5741744e7185",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 高雄建國 435: two complete screens; no safely owned model or price.
+    "2af1edcb993031d7787efa364ed14988664d74b717400b0c3052fd5b06430228": {
+        "source_file_sha256": "f56960aace8a4b26b1764ebc4cebc97c55415afc9cd01b9934613ffe3af27121",
+        "input_image_sha256": "74d17bdea3b9d6b5908b42ebce7ca1c461020473276ef4f1a35f96daa3e9a024",
+        "view_type": "單機",
+        "complete_screen_count": 2,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+})
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
     for item in KNOWN_SOURCE_AUDIT_AUTHORITIES.values()

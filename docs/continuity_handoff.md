@@ -512,3 +512,10 @@
 - 離線修復第一次誤把 `--output-dir` 指向 staging leaf；兩個工作沒有被正式 uploader 看見、沒有錯傳。已用相同 source identity 排入正式 `D:\00_商化\00_已OCR照片\_drive_upload_stream` 並取得上述 receipts，誤放 outbox 完整封存於 `_ocr_audit\misrouted_upload_queue_archive\20260718_114641_708_1414`。
 - 程式新增 708／1414 回歸並保留真正單機 753 與背景裁切 FollowMe 案例；三輪定案測試 58/58、完整 `tools/run_critical_regressions.py` 通過。正式 OCR 與 Dashboard 未重啟；磁碟版規則於下一個完整安全邊界 hidden 載入。
 - 2026-07-18 12:06 串流 uploader 因 Windows 短暫拒絕以 `os.replace` 更新 `status.json` 而退出；照片本體、結果與 pending job 均未遺失。已將狀態檔替換改為有限退避重試並新增回歸，僅以 hidden 單例恢復 uploader，未重啟 OCR、Dashboard 或瀏覽器。恢復後 pending `31→27`、receipt `1316→1320`、canonical `54239→54243`，證明逐張上傳重新前進。
+
+## 2026-07-18 `.52` 九張既有三輪複核閉環
+
+- 低功耗原圖稽核逐張否決「只相信離線候選」：台中旗艦 1062 是一台 FollowMe 實體但型號／價格不可安全歸屬；三創 731 與新北投 1413 都是 3+ 完整螢幕遠景；員林 467 是 `S27FG532EC／5,790`；中華 1048 是 `S32DM803UC／19,900`；大葉高島屋 114、新四維 919、高雄大樂 231 是遠景；高雄建國 435 只有兩台完整螢幕，依專案契約定案為單機且型號／價格留空。
+- 九張均證明已有第 1／2／3 輪、相同 source identity 與 input SHA、不同 RequestID、`independent_pass=true`、無 prior-answer exposure／prompt contamination。以完整影像雜湊綁定像素權威後離線定案，沒有第 4 次呼叫。
+- 九份正式 Drive receipt 全部取得：1062 `11WwIgXjwUIoRliwz653Hcg_raloYtHbg`、731 `1jLDLl1FTZvT2snTt3K3-ds5xkM9L4-bo`、467 `1TbnuDYK7BDPNOILDx6zXBFFSKT9MpBzb`、1048 `1yFgJ2DXfybMNtoemSuyexnpwdak1yOH0`、114 `1ihO0tr7EqlT2GzeA1GQ1S48OVw1TFyLT`、1413 `1QN6b7RQzNyQGiq59kvP3B4J3hclggJfm`、919 `1Kzfa3W_2yvjSOzBIqTXWKfw6LDeCA7DY`、231 `1I4mOHVgKc90RbD6ZvDf4jEznc9QxQYVI`、435 `11CcFRHmJFkdI4gWAECPi6ji4BDvCZUv_`。
+- 套用與上傳期間正式 OCR／Dashboard 持續前進，`202606 1334→1364/1393`、失敗 0、fuse inactive；stream pending 最終歸零。新增九張 authority 回歸且完整 `tools/run_critical_regressions.py` 退出碼 0。

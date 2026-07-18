@@ -727,6 +727,7 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 - 既有三輪修復必須先以冪等方式排入逐張上傳，再原子寫回 verified 結果；禁止先寫 verified 後因 enqueue 失敗留下半完成狀態。
 - 串流上傳若 pending 增加但 receipt 不動，必須核對 lock PID。PID 已不存在時將 stale lock 歸檔後只恢復 uploader，不重啟 OCR。驗收需看到 `uploaded/canonical/last_uploaded_at` 實際前進。
 - Windows 上 Dashboard／監控讀取 `status.json` 時，可能在 `os.replace` 的瞬間短暫阻止目的檔替換。`stream_drive_upload.py` 必須以有限退避重試狀態檔原子替換；此類展示狀態寫入競爭不得終止 durable uploader。只有重試耗盡後才可失敗，且 pending 工作仍須原封不動保留。恢復驗收仍要求唯一 hidden worker、無可見終端機、pending 下降及正式 receipt 增加。
+- 低功耗視覺稽核輸出的「候選定案」不是上傳權威。必須逐張核對原圖完整螢幕數、唯一主角、FollowMe 實體、同主體牌面與型號／價格歸屬；候選與像素不符時，以 `source_item_id + source_file_sha256 + input_image_sha256` 三重綁定人工像素權威。只有已完成三次獨立、request-bound、無前輪答案的照片可離線套用，嚴禁增加第 4 次模型呼叫或用檔名建立通用規則。
 - 現行 Chrome 既有分頁在縮放後有效寬度下，header/status 於 `max-width:2400px` 換成兩欄兩列，確保總進度、目前資料匣、目前檔案與執行狀態可見；主預覽、LLM 自言自語與右側累積卡片的既定半螢幕比例不得改動。
 - 2026-07-17 04:56 正式證據：`202601 131/1,500`、verified 131、review 0、failed 0、fuse inactive；逐張上傳 `81→105`、canonical `53,052→53,072`、pending 1，最近上傳時間 04:55:56。636 已定案並上傳為 `單機-S24F332EAC-✓＄2390`，637 已在隔離驗收定案為遠景。
 - 完工估算固定公開兩層：依目前可持續淨產能約 1,666 張／日，84,990 張剩餘量的實測目標日為 `2026-09-06`；對長官保守承諾日為 `2026-10-31`。任何停機日都必須重算，不得只回報「持續執行中」。
