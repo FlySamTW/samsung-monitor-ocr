@@ -169,6 +169,8 @@ def trip_runtime_health_fuse(
                 "unique_main", "label_ownership", "followme_physical_evidence",
                 "structured_authority_blocked_fields", "independent_pass",
                 "prior_answer_exposed", "prompt_contamination",
+                "request_id_verified", "request_binding_enforced",
+                "input_image_sha256", "source_item_id",
             )
             if key in source
         }
@@ -449,10 +451,19 @@ def first_pass_content_conflict_can_retry(
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
     current_attempt = int(attempt or 1)
+    same_photo_followme_scene_conflict = bool(
+        normalized
+        and normalized
+        <= {
+            "distant_followme_strong_evidence_conflict",
+            "structured_narration_followme_conflict",
+        }
+    )
     if (
         _followme_variant_authority_conflict_is_photo_local(normalized, record)
         or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
         or _known_pixel_content_conflict_is_photo_local(normalized, record)
+        or same_photo_followme_scene_conflict
     ):
         return current_attempt in {1, 2}
     if normalized == {"known_source_expectation_conflict"}:
@@ -472,10 +483,19 @@ def final_content_conflict_can_isolate(
 ) -> bool:
     """End one bounded same-photo conflict as unresolved after pass three."""
     normalized = {str(reason) for reason in reasons if str(reason)}
+    same_photo_followme_scene_conflict = bool(
+        normalized
+        and normalized
+        <= {
+            "distant_followme_strong_evidence_conflict",
+            "structured_narration_followme_conflict",
+        }
+    )
     if (
         _followme_variant_authority_conflict_is_photo_local(normalized, record)
         or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
         or _known_pixel_content_conflict_is_photo_local(normalized, record)
+        or same_photo_followme_scene_conflict
     ):
         return int(attempt or 1) >= 3
     if normalized == {"known_source_expectation_conflict"}:

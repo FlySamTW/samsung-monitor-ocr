@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import samsung_ocr_batch_processor as batch
 
@@ -216,11 +217,29 @@ class EvidenceContractTests(unittest.TestCase):
 
         history = [authority_pass(1), authority_pass(2)]
         current = authority_pass(3)
+        current.update(
+            price_status="high",
+            price_symbol="↑",
+            official_price=4990,
+            price_diff_percent=198.6,
+        )
 
-        self.assertTrue(apply_human_audited_pixel_authority(current, history, 3))
+        with patch(
+            "skills.official_price.validate_ocr_price",
+            return_value={
+                "status": "high",
+                "symbol": "↑",
+                "official_price": 10900,
+                "ocr_price": 14900,
+                "diff_percent": 36.7,
+            },
+        ):
+            self.assertTrue(apply_human_audited_pixel_authority(current, history, 3))
         self.assertEqual(current["complete_screen_count"], 1)
         self.assertEqual(current["model"], "S32DM803UC")
         self.assertEqual(current["price"], 14900)
+        self.assertEqual(current["official_price"], 10900)
+        self.assertEqual(current["price_diff_percent"], 36.7)
         self.assertFalse(current["followme_family_confirmed"])
         self.assertEqual(current["followme_physical_evidence"], [])
 
@@ -948,6 +967,35 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(postprocessed["structured_identity_conflict"])
         self.assertEqual(set(blocked), {"model", "price"})
 
+    def test_asserted_main_m8_rejects_odyssey_sku_without_rewriting_answer(self):
+        result = {
+            "view_type": "單機",
+            "model": "S27CG552EC",
+            "price": "7490",
+        }
+        blocked = batch.enforce_narrated_product_family_consistency(
+            result,
+            "我看到主角自己的標牌是 M8；這不是 FollowMe，是三星 Smart Monitor M8，所以……",
+        )
+        self.assertEqual(blocked, ["model"])
+        self.assertIsNone(result["model"])
+        self.assertEqual(result["price"], "7490")
+        self.assertTrue(result["structured_identity_conflict"])
+        self.assertEqual(result["narrated_product_family_conflict"], "smart_monitor_m8")
+
+    def test_nearby_m8_label_does_not_override_main_odyssey_sku(self):
+        result = {
+            "view_type": "單機",
+            "model": "S27CG552EC",
+            "price": "7490",
+        }
+        blocked = batch.enforce_narrated_product_family_consistency(
+            result,
+            "我看到主角價牌寫 S27CG552EC；旁邊另一台的側標寫 Smart Monitor M8，所以……",
+        )
+        self.assertEqual(blocked, [])
+        self.assertEqual(result["model"], "S27CG552EC")
+
     def test_cosmetic_model_and_price_normalization_remains_allowed(self):
         postprocessed = {
             "view_type": "單機",
@@ -1020,6 +1068,16 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(full.endswith(batch.V1945_OUTPUT_CONTRACT))
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
+        self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+
+    def test_actual_runtime_reference_keeps_production_prompt_within_hard_limit(self):
+        from skills.followme_reference import build_followme_prompt_section
+
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        full, _ = batch.build_runtime_system_prompt(
+            prompt,
+            build_followme_prompt_section(),
+        )
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
 
     def test_complete_screen_count_uses_original_frame_and_never_counts_crop_duplicates(self):

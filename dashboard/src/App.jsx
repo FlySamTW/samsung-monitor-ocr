@@ -619,6 +619,32 @@ const App = () => {
     item?.technical_retry_exhausted === true
     || String(item?.review_status || "").includes("技術錯誤")
   );
+  const getUnresolvedCardStatus = (item) => {
+    if (isStaleGuardRevision(item)) {
+      return {
+        label: "等待新版複核",
+        detail: "新版守門接手後自動處理",
+      };
+    }
+    if (isTerminalTechnicalFailure(item)) {
+      return {
+        label: "技術錯誤／該張未上傳",
+        detail: "系統修復後自動重跑",
+      };
+    }
+    const passIndex = Number(item?.pass_index || item?.ocr_attempt || 0);
+    const decision = String(item?.decision || "").trim().toLowerCase();
+    if (decision === "retry_scheduled" && passIndex > 0 && passIndex < 3) {
+      return {
+        label: `第 ${passIndex} 輪有疑點／已排入第 ${passIndex + 1} 輪`,
+        detail: "最多三輪，完成後自動結案上傳",
+      };
+    }
+    return {
+      label: "第三輪已完成／自動定案中",
+      detail: "完成後立即排入逐張上傳",
+    };
+  };
   const hasPassMetadata = (item) => Boolean(item && (item.pass_index || item.pass_label));
   const getPassHeading = (item) => {
     if (!hasPassMetadata(item)) return "";
@@ -1845,8 +1871,8 @@ const App = () => {
                                           )}
                                           {!res._pendingReveal && isExplicitlyUnresolved(res) && (
                                             <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: isTerminalTechnicalFailure(res) ? '#b91c1c' : '#b45309', color: '#fff', fontWeight: '800' }}>{isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"}</span>
-                                              {!isStaleGuardRevision(res) && <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: '700' }}>{isTerminalTechnicalFailure(res) ? "系統修復後自動重跑" : "完成後立即排入逐張上傳"}</span>}
+                                              <span style={{ fontSize: '0.66rem', padding: '2px 6px', borderRadius: '3px', background: isTerminalTechnicalFailure(res) ? '#b91c1c' : '#b45309', color: '#fff', fontWeight: '800' }}>{getUnresolvedCardStatus(res).label}</span>
+                                              <span style={{ fontSize: '0.62rem', color: '#fbbf24', fontWeight: '700' }}>{getUnresolvedCardStatus(res).detail}</span>
                                             </div>
                                           )}
                                           {!res._pendingReveal && !isExplicitlyUnresolved(res) && res.view_type !== '遠景' && (

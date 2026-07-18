@@ -18,6 +18,7 @@ from skills.audit_fields import (
     KNOWN_SOURCE_EXPECTATIONS,
     apply_human_audited_pixel_authority,
     finalize_three_pass_outcome,
+    refresh_authoritative_price_comparison,
     validate_evidence_contract,
 )
 from skills.model_validation import normalize_model_token
@@ -174,6 +175,164 @@ def _inject_cleared_photo_local_fuse_calls(
             continue
 
 
+def _inject_contained_followme_scene_fuse_calls(
+    trace_path: Path,
+    grouped: dict[tuple[str, str], list[dict[str, Any]]],
+    source_grouped: dict[tuple[str, str], list[dict[str, Any]]],
+) -> None:
+    """Restore a consumed FollowMe/scene-conflict call from its recovery proof."""
+    audit_dir = trace_path.parent.resolve()
+    recovery_dir = audit_dir / "content_fuse_recovery"
+    history_dir = (audit_dir / "runtime_health_fuse_history").resolve()
+    if not recovery_dir.is_dir() or not history_dir.is_dir():
+        return
+    allowed_reasons = {
+        "distant_followme_strong_evidence_conflict",
+        "structured_narration_followme_conflict",
+    }
+
+    for receipt_path in sorted(recovery_dir.glob("*.json")):
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+            if (
+                receipt.get("status") != "recovered"
+                or receipt.get("recovery_rule")
+                != "same_photo_followme_scene_conflict_preserve_call_and_retry"
+            ):
+                continue
+            name = str(receipt.get("file_name") or "")
+            source_id = str(receipt.get("source_item_id") or "")
+            attempt = int(receipt.get("consumed_calls") or 0)
+            archive_text = str(receipt.get("fuse_history") or "")
+            archive = Path(archive_text).resolve() if archive_text else None
+            if archive is None or not archive.is_file():
+                archive = None
+                for candidate in sorted(
+                    history_dir.glob(f"content_*_{source_id[:12]}.json")
+                ):
+                    candidate_payload = json.loads(
+                        candidate.read_text(encoding="utf-8-sig")
+                    )
+                    recovery_receipt = Path(
+                        str(candidate_payload.get("recovery_receipt") or "")
+                    )
+                    if (
+                        recovery_receipt.name == receipt_path.name
+                        and candidate_payload.get("clearance")
+                        == "same_photo_followme_scene_conflict_preserve_call_and_retry"
+                    ):
+                        archive = candidate.resolve()
+                        break
+            if (
+                not name
+                or not re.fullmatch(r"[0-9a-f]{64}", source_id)
+                or attempt not in {1, 2}
+                or archive is None
+                or archive.parent != history_dir
+                or not archive.is_file()
+            ):
+                continue
+            fuse = json.loads(archive.read_text(encoding="utf-8-sig"))
+            run_id = str(fuse.get("run_id") or "")
+            reasons = {
+                str(item) for item in fuse.get("reasons") or [] if str(item)
+            }
+            snapshot = dict(fuse.get("record_snapshot") or {})
+            raw = json.loads(str(snapshot.get("raw_model_output") or ""))
+            request_id = str(raw.get("request_id") or "").strip().lower()
+            if (
+                fuse.get("source_file") != name
+                or int(fuse.get("attempt") or 0) != attempt
+                or not run_id
+                or not reasons
+                or not reasons <= allowed_reasons
+                or not re.fullmatch(r"[0-9a-f]{32}", request_id)
+            ):
+                continue
+
+            anchors = [
+                item
+                for item in source_grouped.get((name, source_id), [])
+                if item.get("request_id_verified") is True
+                and item.get("request_binding_enforced") is True
+                and item.get("independent_pass") is True
+                and item.get("prior_answer_exposed") is not True
+                and item.get("prompt_contamination") is not True
+            ]
+            if not anchors or any(
+                int(item.get("ocr_attempt") or 0) == attempt for item in anchors
+            ):
+                continue
+            image_hashes = {
+                str(item.get("input_image_sha256") or "").strip().lower()
+                for item in anchors
+            }
+            if (
+                len(image_hashes) != 1
+                or not re.fullmatch(r"[0-9a-f]{64}", next(iter(image_hashes), ""))
+            ):
+                continue
+            image_hash = next(iter(image_hashes))
+            anchor = anchors[-1]
+            narration = str(snapshot.get("narration") or "")
+            call = {
+                "view_type": snapshot.get("view_type"),
+                "category": snapshot.get("category") or snapshot.get("view_type"),
+                "model": snapshot.get("model"),
+                "price": snapshot.get("price"),
+                "screen_status": raw.get("screen_status"),
+                "quality_issue": raw.get("quality_issue"),
+                "complete_screen_count": snapshot.get("complete_screen_count"),
+                "unique_main": snapshot.get("unique_main"),
+                "label_ownership": snapshot.get("label_ownership"),
+                "followme_physical_evidence": (
+                    snapshot.get("followme_physical_evidence") or []
+                ),
+                "structured_authority_blocked_fields": (
+                    snapshot.get("structured_authority_blocked_fields") or []
+                ),
+                "thinking": narration,
+                "narration": narration,
+                "raw_model_output": snapshot.get("raw_model_output"),
+                "run_id": run_id,
+                "timestamp": fuse.get("tripped_at"),
+                "file_name": name,
+                "source_item_id": source_id,
+                "source_path": anchor.get("source_path"),
+                "original_source_path": anchor.get("original_source_path"),
+                "period": anchor.get("period"),
+                "ocr_attempt": attempt,
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "requires_structured_retry": False,
+                "runtime_health": {
+                    "healthy": False,
+                    "allow_processing": True,
+                    "allow_upload": False,
+                    "reasons": sorted(reasons),
+                    "contained_for_stateless_retry": True,
+                },
+                "runtime_health_contained_reasons": sorted(reasons),
+                "recovered_from_contained_followme_scene_fuse": True,
+                "content_fuse_recovery_receipt": str(receipt_path),
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+            }
+            valid, errors, normalized = validate_evidence_contract(call)
+            if set(errors) - {"distant_followme_physical_conflict"}:
+                continue
+            call["evidence_contract_valid"] = valid
+            call["contained_contract_errors"] = sorted(set(errors))
+            call["normalized_evidence"] = normalized
+            grouped[(name, run_id)].append(call)
+            source_grouped[(name, source_id)].append(call)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+
 def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     source_grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -202,6 +361,11 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
                     source_grouped[(name, source_id)].append(item)
 
     _inject_cleared_photo_local_fuse_calls(trace_path, grouped, source_grouped)
+    _inject_contained_followme_scene_fuse_calls(
+        trace_path,
+        grouped,
+        source_grouped,
+    )
 
     latest: dict[str, list[dict[str, Any]]] = {}
     for (name, _run_id), rows in grouped.items():
@@ -489,12 +653,24 @@ def finalize_file(
                     current, calls, existing_meta
                 )
         if completed_current_adjudication:
-            if apply_human_audited_pixel_authority(current, calls[:-1], 3):
+            authority_reapplied = apply_human_audited_pixel_authority(
+                current, calls[:-1], 3
+            )
+            if authority_reapplied:
                 current["three_pass_adjudicated"] = True
                 current["adjudication_rule"] = "three_call_known_pixel_authority_repair"
                 current["adjudication_summary"] = (
                     "三輪獨立判讀已完成；依人工核對且以完整影像雜湊綁定的像素事實修正，"
                     "沒有增加第 4 次模型呼叫。"
+                )
+            elif known_pixel_repair:
+                expected = KNOWN_SOURCE_EXPECTATIONS.get(
+                    str(current.get("input_image_sha256") or "").strip().lower()
+                ) or {}
+                refresh_authoritative_price_comparison(
+                    current,
+                    expected.get("model"),
+                    expected.get("price"),
                 )
         elif (
             recovered_restart_authority

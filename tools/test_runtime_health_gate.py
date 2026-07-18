@@ -515,6 +515,17 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(final_content_conflict_can_isolate(3, narration_only))
         self.assertFalse(final_content_conflict_can_isolate(3, reasons))
 
+    def test_distant_plus_narrated_followme_conflict_reaches_pass_three_locally(self):
+        reasons = [
+            "distant_followme_strong_evidence_conflict",
+            "structured_narration_followme_conflict",
+        ]
+        self.assertTrue(first_pass_content_conflict_can_retry(1, reasons))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, reasons))
+        self.assertFalse(first_pass_content_conflict_can_retry(3, reasons))
+        self.assertFalse(final_content_conflict_can_isolate(2, reasons))
+        self.assertTrue(final_content_conflict_can_isolate(3, reasons))
+
     def test_followme_variant_authority_conflict_is_bounded_to_one_photo(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},

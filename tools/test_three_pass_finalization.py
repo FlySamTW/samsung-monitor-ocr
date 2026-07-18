@@ -1649,6 +1649,207 @@ class ThreePassFinalizationTests(unittest.TestCase):
             "two_pass_identity_free_single_consensus",
         )
 
+    def test_followme_scene_conflict_finishes_after_three_calls_without_price(self):
+        physical = [
+            {
+                "cue": "white_vertical_stand",
+                "same_subject": True,
+                "strength": "strong",
+            },
+            {
+                "cue": "round_base",
+                "same_subject": True,
+                "strength": "strong",
+            },
+        ]
+        first = make_pass(
+            "單機", None, None, 1, True, "not_visible", physical
+        )
+        second = make_pass(
+            "遠景",
+            None,
+            None,
+            3,
+            False,
+            "not_visible",
+            physical,
+            healthy=False,
+            runtime_health={
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": [
+                    "distant_followme_strong_evidence_conflict",
+                    "structured_narration_followme_conflict",
+                ],
+                "contained_for_stateless_retry": True,
+            },
+        )
+        current = make_pass(
+            "單機",
+            'FollowMe Pro M7 43"',
+            None,
+            1,
+            True,
+            "matched",
+            physical,
+        )
+
+        result = finalize_three_pass_outcome(
+            current,
+            [first, second],
+            unresolved(),
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_followme_physical_consensus",
+        )
+
+    def test_content_fuse_receipt_restores_followme_scene_second_call(self):
+        from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
+
+        with TemporaryDirectory() as temp_dir:
+            audit = Path(temp_dir)
+            trace = audit / "trace.jsonl"
+            recovery_dir = audit / "content_fuse_recovery"
+            history_dir = audit / "runtime_health_fuse_history"
+            recovery_dir.mkdir()
+            history_dir.mkdir()
+            source_id = "9" * 64
+            image_hash = "8" * 64
+            name = "followme-753.jpg"
+            physical = [
+                {
+                    "cue": "white_vertical_stand",
+                    "same_subject": True,
+                    "strength": "strong",
+                },
+                {
+                    "cue": "round_base",
+                    "same_subject": True,
+                    "strength": "strong",
+                },
+            ]
+
+            def trace_row(attempt, model):
+                parsed = make_pass(
+                    "單機",
+                    model,
+                    None,
+                    1,
+                    True,
+                    "matched" if model else "not_visible",
+                    physical,
+                    image_hash=image_hash,
+                    file_name=name,
+                    source_item_id=source_id,
+                    source_path=str(audit / name),
+                    original_source_path=str(audit / "original" / name),
+                    period="202606",
+                    run_id=f"run-{attempt}",
+                    ocr_attempt=attempt,
+                    timestamp=f"2026-07-18T00:00:0{attempt}",
+                )
+                return {
+                    "file_name": name,
+                    "source_item_id": source_id,
+                    "run_id": parsed["run_id"],
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                }
+
+            trace.write_text(
+                "\n".join(
+                    json.dumps(row, ensure_ascii=False)
+                    for row in (
+                        trace_row(1, None),
+                        trace_row(3, 'FollowMe Pro M7 43"'),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            receipt = recovery_dir / "receipt.json"
+            archive = history_dir / f"content_test_{source_id[:12]}.json"
+            archive.write_text(
+                json.dumps(
+                    {
+                        "source_file": name,
+                        "attempt": 2,
+                        "run_id": "run-2",
+                        "tripped_at": "2026-07-18T00:00:02",
+                        "reasons": [
+                            "distant_followme_strong_evidence_conflict",
+                            "structured_narration_followme_conflict",
+                        ],
+                        "clearance": (
+                            "same_photo_followme_scene_conflict_preserve_call_and_retry"
+                        ),
+                        "recovery_receipt": str(receipt),
+                        "record_snapshot": {
+                            "view_type": "遠景",
+                            "category": "遠景",
+                            "model": None,
+                            "price": None,
+                            "complete_screen_count": 3,
+                            "unique_main": False,
+                            "label_ownership": "not_visible",
+                            "followme_physical_evidence": physical,
+                            "narration": "前景主體具有 FollowMe 支架，但結構欄位判為遠景。",
+                            "raw_model_output": json.dumps(
+                                {
+                                    "request_id": "7" * 32,
+                                    "screen_status": "正常",
+                                    "quality_issue": "無",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "status": "recovered",
+                        "file_name": name,
+                        "source_item_id": source_id,
+                        "consumed_calls": 2,
+                        "remaining_calls": 1,
+                        "recovery_rule": (
+                            "same_photo_followme_scene_conflict_preserve_call_and_retry"
+                        ),
+                        "fuse_history": str(archive),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            calls = _load_three_call_groups(trace)[name]
+            current = calls[-1]
+            outcome = finalize_three_pass_outcome(
+                current,
+                calls[:-1],
+                unresolved(),
+            )
+
+        self.assertEqual([item["ocr_attempt"] for item in calls], [1, 2, 3])
+        self.assertTrue(calls[1]["recovered_from_contained_followme_scene_fuse"])
+        self.assertTrue(outcome["verified"])
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

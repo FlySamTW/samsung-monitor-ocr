@@ -194,6 +194,9 @@ class PresentationSoakTests(unittest.TestCase):
         unresolved_start = app.index("const isExplicitlyUnresolved =")
         unresolved_end = app.index("const hasPassMetadata", unresolved_start)
         unresolved = app[unresolved_start:unresolved_end]
+        status_start = app.index("const getUnresolvedCardStatus =")
+        status_end = app.index("const hasPassMetadata", status_start)
+        unresolved_status = app[status_start:status_end]
         rail_start = app.index('data-testid="result-rail"')
         rail_end = app.index('{showReviewPanel && (', rail_start)
         rail = app[rail_start:rail_end]
@@ -204,10 +207,12 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('item.auto_review_required === true', unresolved)
         self.assertIn('item.accepted === false', unresolved)
         self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isTerminalTechnicalFailure(res) ? "technical-failure" : isExplicitlyUnresolved(res) ? "auto-finalizing" : "completed"}', rail)
-        self.assertIn('技術錯誤／該張未上傳', rail)
-        self.assertIn('系統修復後自動重跑', rail)
-        self.assertIn('第三輪已完成／自動定案中', rail)
-        self.assertIn('完成後立即排入逐張上傳', rail)
+        self.assertIn('label: "技術錯誤／該張未上傳"', unresolved_status)
+        self.assertIn('detail: "系統修復後自動重跑"', unresolved_status)
+        self.assertIn('{getUnresolvedCardStatus(res).label}', rail)
+        self.assertIn('{getUnresolvedCardStatus(res).detail}', rail)
+        self.assertIn('label: "第三輪已完成／自動定案中"', unresolved_status)
+        self.assertIn('detail: "完成後立即排入逐張上傳"', unresolved_status)
         self.assertIn("!isExplicitlyUnresolved(res) && res.view_type !== '遠景'", rail)
         self.assertIn('!isExplicitlyUnresolved(res) && res.view_type &&', rail)
 
@@ -307,7 +312,11 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('const serverGuardRevision = String(data.evidence_guard_revision || "").trim()', app)
         self.assertIn('const isStaleGuardRevision = (item)', app)
         self.assertIn('String(item.evidence_guard_revision || "") !== serverGuardRevision', app)
-        self.assertIn('isStaleGuardRevision(res) ? "等待新版複核" : isTerminalTechnicalFailure(res) ? "技術錯誤／該張未上傳" : "第三輪已完成／自動定案中"', app)
+        self.assertIn('if (isStaleGuardRevision(item))', app)
+        self.assertIn('label: "等待新版複核"', app)
+        self.assertIn('detail: "新版守門接手後自動處理"', app)
+        self.assertIn('decision === "retry_scheduled" && passIndex > 0 && passIndex < 3', app)
+        self.assertIn('label: "第三輪已完成／自動定案中"', app)
 
     def test_active_content_repair_is_not_labeled_idle(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")

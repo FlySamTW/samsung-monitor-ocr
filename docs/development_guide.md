@@ -908,3 +908,15 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `tools/recover_contained_request_binding_fuse.py` 只接受第 1 或第 2 次的 missing／unverified fuse；它不回退已消耗次數，只把同一照片放回 durable retry queue 最前方，保留總上限三次、封存 fuse 並寫 recovery receipt。明確 mismatch、提示污染、前輪答案暴露、第三次失敗或狀態不一致全部拒絕。
 - 此規則落實「單張異常不得阻塞整批」：該張用完三次仍無有效證據時留下保守終局技術結果並前進下一張，禁止第 4 次；介面、照片、判讀卡與逐張上傳仍須依同一 durable 狀態同步。
 - 已確認錯名的 Drive 物件只能在新版逐張 receipt 已取得唯一 Drive ID、size、MD5 後汰換。`reconcile_drive_corrections.py` 對舊路徑送入垃圾桶後，rclone 可能以 `directory not found` 表示物件已不存在，readback 必須把這個特定狀態視為空集合，再以新物件 ID／size／MD5 驗證存活；`Hashes.md5` 與 `Hashes.MD5` 均須接受。其他 rclone 錯誤仍 fail closed，成功後清除帳本中的舊錯誤與 dry-run 指令。
+## 2026-07-18 `.52` 照片級內容衝突、三輪終局與介面同步
+
+- 正式級聯仍是「首輪健康即可結案，只有風險照片才升級，整張照片最多三次模型呼叫」。單機若型號、店內價格、價牌歸屬、唯一主角與自然敘述互相一致，第一輪即完成並立即排入逐張上傳；`↑／↓／✓` 由 deterministic price comparison 產生，不是加跑模型的理由。
+- 同一張照片同時出現 `distant_followme_strong_evidence_conflict` 與 `structured_narration_followme_conflict`，屬於 photo-local 內容矛盾。第 1、2 次可繼續同圖 blind adjudication；第 3 次後必須以已取得的三輪證據保守定案並前進下一張，禁止建立全域 fuse、禁止第 4 次呼叫。
+- 三輪定案器必須能同時接受上述兩個照片級衝突理由。若至少兩輪對同一實機的白色直立架、托盤或圓形底座形成 FollowMe 實體共識，但沒有兩輪一致支持確切變體與價格，終局應為 `單機／FollowMe（型號未細分）／無價格`；不得把不可靠的 M5、M7、Pro 或鄰近價牌冒充確定結果。
+- 內容 fuse 已經消耗的模型呼叫不得遺失或重算。離線恢復只有在 recovery receipt、fuse archive、source_item_id、來源 SHA、實際送模 full-image SHA 與原 RequestID 全部一致時，才可把該次重建為已消耗輪次；恢復後剩餘呼叫數必須等於 `3 - 已消耗次數`。任何欄位缺失或多義都 fail closed，不得藉恢復產生第 4 次呼叫。
+- 模型自然敘述明確指出主體為 Smart Monitor M8，但結構欄卻給出 Odyssey／G5／G7 等不相容 SKU 時，守門必須清除不可信型號並進入下一輪；不得從前輪答案或附近價牌補寫。這是污染防護，不是把自然敘述直接改寫成答案。
+- 人工像素權威若更正型號或店內價格，必須同步清除並重新計算 `official_price`、`price_diff_percent`、`price_status` 與 `price_symbol`。舊型號留下的比價資料不得附著到新版結果；新版逐張上傳完成唯一 `Drive ID + size + MD5` 回讀後，才可依舊 receipt 的 Drive ID 汰換錯名物件。
+- OCR 後端與 uploader 必須載入同一 evidence revision。換版只能在照片邊界完成；相鄰 revision 的 durable outbox 只可經明列遷移規則核對後接續。worker 健康不能只看狀態檔，還必須確認唯一 PID 存活；若 worker 已退出而 pending 增加，只能以 hidden window 啟動一個 replacement，保留 stdout／stderr 日誌，不得彈出終端機。
+- Dashboard 的卡片文字必須反映實際輪次：第 1、2 輪有疑點時顯示已排入下一輪，不得預先寫成「第三輪已完成」；只有三次模型呼叫已用完時才能顯示第三輪終局。前端 transport 不得把未完成輪次冒充終局，也不得把終局冒充待人工裁決。
+- 每次介面健康核對都必須在既有分頁同時驗證：全案總進度、目前資料夾進度、當前照片與輪次、LLM 自然語言逐字區、右側累積卡片、逐張上傳總數／pending，以及後端 `is_running` 與 runtime fuse。不得只看進度數字；不得重啟瀏覽器、不得新增分頁或視窗。
+- `.52` 事故案例 `中壢易飛本店-753`：前兩次照片級內容衝突被安全保留，第三次後以 FollowMe 實體共識降階結案，沒有第 4 次呼叫；Drive receipt 已取得唯一 ID `1xokZj1pKeJf5QQO6_Bp3PpI3kJASsC86`。`中壢環球-429` 由完整影像像素權威更正為 `S32DM803UC／14,900`，比價重新計算為官方 `10,900／↑36.7%`，新版 Drive 物件 ID `1AzfDvbwGQfqyE-v9QozkSbGw-vc_qJS9`；舊錯名物件只在新版讀回後才移入垃圾桶。

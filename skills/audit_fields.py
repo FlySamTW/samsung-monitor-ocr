@@ -357,6 +357,23 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 中壢環球 429 has one complete upper Smart Monitor M8.  Its directly
+    # attached header card reads S32DM803UC (32") M8 and its own lower card
+    # reads 14,900.  The 7,490 card belongs to the separate, edge-cut monitor
+    # below.  A previous single pass narrated M8 but paired the lower monitor's
+    # G5 SKU/price with it.  Bind the correction to both immutable source bytes
+    # and the exact full-image inference bytes; never infer this from filename.
+    "e91de117616a0fe977fe4ddc66d8d7b6817c775b4d3c6642f4fb39acdd298256": {
+        "source_file_sha256": "0b2b48967e786195a5b19a910d73ae51247f9b94bf393a9f064916efce9abf96",
+        "input_image_sha256": "571d00091af96702454a32b96b6c5f6b988da73cbac4a415e6dbaa9a3abc9795",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32DM803UC",
+        "price": 14900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 }
 # Lalaport SES 301: the full frame visibly binds the foreground portrait
 # display to Samsung Follow Me 4K branding, a white vertical mobile stand,
@@ -470,6 +487,34 @@ def known_source_expectation_conflict(record: Dict[str, Any]) -> bool:
     return False
 
 
+def refresh_authoritative_price_comparison(
+    record: Dict[str, Any],
+    model: Any,
+    price: Any,
+) -> None:
+    """Drop rejected-SKU metadata and compare the authoritative identity."""
+    for key in ("price_status", "price_symbol", "official_price", "price_diff_percent"):
+        record.pop(key, None)
+    if (
+        str(record.get("period") or "").startswith("2026")
+        and model
+        and price
+    ):
+        try:
+            from skills.official_price import validate_ocr_price
+
+            comparison = validate_ocr_price(str(model), int(price))
+            record["price_status"] = comparison.get("status")
+            record["price_symbol"] = comparison.get("symbol")
+            record["official_price"] = comparison.get("official_price")
+            record["price_diff_percent"] = comparison.get("diff_percent")
+        except (OSError, TypeError, ValueError):
+            record["price_status"] = "unknown"
+            record["price_symbol"] = "?"
+            record["official_price"] = None
+            record["price_diff_percent"] = None
+
+
 def apply_human_audited_pixel_authority(
     record: Dict[str, Any],
     history: List[Dict[str, Any]] | None,
@@ -515,6 +560,11 @@ def apply_human_audited_pixel_authority(
         record["followme_physical_evidence"] = []
     record["followme_family_confirmed"] = bool(
         expected.get("followme_physical_expected") is True
+    )
+    refresh_authoritative_price_comparison(
+        record,
+        expected.get("model"),
+        expected.get("price"),
     )
     record["screen_status"] = "" if expected["view_type"] == "遠景" else "正常"
     if expected["view_type"] == "遠景" or (expected.get("model") and expected.get("price")):
@@ -1668,7 +1718,11 @@ def _adjudication_pass_has_base_integrity(
             or (
                 allow_local_followme_conflict
                 and runtime_reasons
-                and runtime_reasons <= {"structured_narration_followme_conflict"}
+                and runtime_reasons
+                <= {
+                    "distant_followme_strong_evidence_conflict",
+                    "structured_narration_followme_conflict",
+                }
             )
         )
     )

@@ -1054,6 +1054,53 @@ def enforce_explicit_structured_authority(result, explicit_fields):
     return list(dict.fromkeys(blocked))
 
 
+def enforce_narrated_product_family_consistency(result, narration):
+    """Reject a structured SKU that contradicts an asserted main-unit family.
+
+    This never converts prose into a replacement SKU.  It only makes a
+    material contradiction unusable so the photo receives another stateless
+    image-bound pass.  Nearby/background family labels remain non-authoritative.
+    """
+    if not isinstance(result, dict):
+        return []
+    text = str(narration or "").strip()
+    model = re.sub(r"[^A-Z0-9]", "", str(result.get("model") or "").upper())
+    if not text or not model:
+        return []
+
+    asserted_m8 = bool(
+        re.search(
+            r"(?:這(?:台|張|是)|所以|主角|主體|中央(?:主角)?(?:螢幕)?|"
+            r"前景(?:中央)?(?:主角)?(?:螢幕)?|判斷(?:為|是)|型號(?:為|是))"
+            r"[^。；\n]{0,48}(?:SMART\s*MONITOR\s*)?M8\b",
+            text,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"(?:不是|並非|非)\s*FOLLOW\s*ME[^。；\n]{0,24}"
+            r"(?:是|為)\s*(?:三星|SAMSUNG)?\s*(?:SMART\s*MONITOR\s*)?M8\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    if not asserted_m8:
+        return []
+
+    # The current verified M8 table contains the desktop M8 and its FM bundle
+    # SKU.  A narration that explicitly rules out FollowMe narrows this to the
+    # desktop S32DM803UC, but both are materially incompatible with Odyssey/G5.
+    compatible = {"S32DM803UC", "S32FM803UC"}
+    if re.search(r"(?:不是|並非|非)\s*FOLLOW\s*ME", text, re.IGNORECASE):
+        compatible = {"S32DM803UC"}
+    if model in compatible:
+        return []
+
+    result["model"] = None
+    result["structured_identity_conflict"] = True
+    result["narrated_product_family_conflict"] = "smart_monitor_m8"
+    return ["model"]
+
+
 def apply_narration_identity_rescue(result, explicit_fields, field, value):
     """Fill a legacy missing identity field without overriding structured output.
 
@@ -3890,6 +3937,12 @@ def process_single_image(
         structured_authority_blocked_fields = enforce_explicit_structured_authority(
             data_obj,
             explicit_structured_fields,
+        )
+        structured_authority_blocked_fields.extend(
+            enforce_narrated_product_family_consistency(data_obj, thinking_text)
+        )
+        structured_authority_blocked_fields = list(
+            dict.fromkeys(structured_authority_blocked_fields)
         )
 
         # 4. Auto-Calculate Quality Issue
