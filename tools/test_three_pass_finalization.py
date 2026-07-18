@@ -12,6 +12,7 @@ from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     apply_human_audited_pixel_authority,
     finalize_three_pass_outcome,
+    immediate_retry_decision,
     validate_evidence_contract,
 )
 
@@ -65,6 +66,149 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_three_matching_followme_passes_clear_first_duplicate_warning(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "我看到一台完整主角，具有白色垂直支架、圓形底座與附著託盤，"
+            "同一台螢幕附著的規格牌寫著 FOLLOW ME PRO，"
+            "型號與價格牌都歸屬同一台，所以……"
+        )
+        history = [
+            make_pass(
+                model='FollowMe Pro M7 43"',
+                price="17990",
+                physical=fixture,
+                cross_photo_duplicate_core_suspected=True,
+                thinking=narration,
+            ),
+            make_pass(
+                model='FollowMe Pro M7 43"',
+                price="17990",
+                physical=fixture,
+                thinking=narration,
+            ),
+        ]
+        current = make_pass(
+            model='FollowMe Pro M7 43"',
+            price="17990",
+            physical=fixture,
+            thinking=narration,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_cross_photo_suspicion_cleared",
+        )
+        self.assertEqual(current["model"], 'FollowMe Pro M7 43"')
+        self.assertEqual(current["price"], "17990")
+
+    def test_live_guard_accepts_third_clean_duplicate_confirmation(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "我看到一台完整主角，具有白色垂直支架、圓形底座與附著託盤，"
+            "同一台螢幕附著的規格牌寫著 FOLLOW ME PRO，"
+            "型號與價格牌都歸屬同一台，所以……"
+        )
+        history = [
+            make_pass(
+                model='FollowMe Pro M7 43"',
+                price="17990",
+                physical=fixture,
+                cross_photo_duplicate_core_suspected=True,
+                thinking=narration,
+            ),
+            make_pass(
+                model='FollowMe Pro M7 43"',
+                price="17990",
+                physical=fixture,
+                thinking=narration,
+            ),
+        ]
+        current = make_pass(
+            model='FollowMe Pro M7 43"',
+            price="17990",
+            physical=fixture,
+            thinking=narration,
+            ocr_attempt=3,
+            period="202601",
+        )
+
+        decision = immediate_retry_decision(current, 3, history, 3)
+
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertFalse(decision["unresolved"])
+        self.assertTrue(current["cross_photo_duplicate_core_cleared_by_three_pass"])
+
+    def test_explicit_three_complete_screens_veto_conflicting_single_votes(self):
+        history = [
+            make_pass(
+                "單機",
+                None,
+                "12900",
+                3,
+                True,
+                "matched",
+                healthy=False,
+                runtime_health={
+                    "healthy": False,
+                    "reasons": ["structured_authority_material_conflict:model"],
+                },
+                thinking=(
+                    "我看到三台螢幕完整入鏡，分別位於上方與下方，"
+                    "每台都有自己的價牌，所以……"
+                ),
+            ),
+            make_pass(
+                "單機",
+                "S32DM703UC",
+                "12990",
+                3,
+                True,
+                "matched",
+                thinking=(
+                    "我看到三台螢幕完整入鏡，分別位於上方與下方，"
+                    "畫面中有多張不同價牌，所以……"
+                ),
+            ),
+        ]
+        current = make_pass(
+            "遠景",
+            None,
+            None,
+            3,
+            False,
+            "ambiguous",
+            thinking=(
+                "我看到三台螢幕完整入鏡，沒有可唯一歸屬同一主角的型號與價格，"
+                "所以……"
+            ),
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "distant_structural_veto_over_wide_geometry_single_votes",
+        )
+
     def test_two_bound_identity_votes_discard_unbound_third_without_fourth_call(self):
         history = [
             make_pass("單機", "S32CG552EC", "6990", 2, True, "matched"),

@@ -583,3 +583,11 @@
   latest three terminal photos found original pixels, narration, structured
   evidence and final result consistent; there was no prior-answer exposure,
   prompt contamination or fourth call.
+
+## 2026-07-18 16:35 三輪終局補強與全年度終點再確認
+
+- 使用者再次確認 2026 不是終點。正式終點仍是 2015–2026 全部 `151,714` 張、`137` 個資料夾逐張定案並取得 Drive 精確收據；202601–202605 完成後由全年度 continuity supervisor 接續 2025→2015，不得停在當年度待機或把 2026 完成誤報成全案完成。
+- 唯讀稽核發現部分照片已完成三次乾淨、同圖、無記憶呼叫，仍因終局規則過度保守被標成技術停止。新增窄範圍規則：只有第一輪因鄰近不同照片出現相同型號／價格而警示，後兩輪都以相同 input SHA、不同 request、無提示／前輪污染，且視角、完整台數、唯一主角、價牌歸屬、型號、價格與 FollowMe 實體證據完全一致時，第三輪可清除警示並結案；第二、第三輪再出現跨照片警示、缺身分、runtime 不健康或雜湊不一致仍失敗封閉。
+- 多螢幕終局同步補強：敘述明確表示三台以上完整入鏡時，納入寬景幾何證據。一張結構正確的遠景票可否決兩張同時承認三台以上完整螢幕、卻自相矛盾標成單機的票；終局固定為遠景／無型號／無價格，不借用附近價牌。
+- `小北門-467` dry-run 現可定案為 `FollowMe Pro M7 43／17,990`；`新景美-1349` 同樣可解除一次性重複警示；`微風本館-194` 可定案為遠景／無型號／無價格。另有 `大葉高島屋-182` 原規則已可定案。這些只完成零寫入 dry-run；正式 result JSON 仍由 live backend 寫入，必須等照片／資料夾安全邊界再套用，避免整檔原子替換覆蓋新結果。
+- 三輪終局測試 61/61 及完整 `tools/run_critical_regressions.py` 全部通過。正式 OCR、Dashboard、uploader 與瀏覽器未重啟。

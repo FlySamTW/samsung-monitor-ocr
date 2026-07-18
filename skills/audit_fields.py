@@ -1556,7 +1556,8 @@ def _wide_multiscreen_geometry_claim(record: Dict[str, Any]) -> bool:
     ):
         return False
     return bool(
-        re.search(
+        _distant_count_supported_by_narration(text, count)
+        or re.search(
             r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架|上方|下方|上層|下層|中間層)"
             r"[^。；\n]{0,28}(?:多台|數台|至少(?:3|三)台|螢幕|顯示器|陳列)",
             text,
@@ -1727,6 +1728,10 @@ def immediate_retry_decision(
     if cross_photo_suspected:
         if attempt < max_attempts:
             reasons.append("跨照片重複核心不得以兩輪相同洗白，必須完成第三輪無記憶複核")
+        elif _three_pass_cross_photo_suspicion_cleared(
+            (history + [record])[-max_attempts:]
+        ):
+            record["cross_photo_duplicate_core_cleared_by_three_pass"] = True
         else:
             reasons.append("跨照片污染疑慮經三輪仍不得自動驗證，需人工或異構模型複核")
     if attempt >= 2 and re.search(
@@ -1934,6 +1939,89 @@ def _adjudication_pass_has_base_integrity(
     )
 
 
+def _three_pass_cross_photo_suspicion_cleared(
+    passes: List[Dict[str, Any]],
+) -> bool:
+    """Clear one first-pass duplicate warning after two clean confirmations.
+
+    Adjacent store photos can truthfully contain the same SKU and price.  The
+    duplicate-core detector therefore escalates the first answer, but it must
+    not become a permanent photo-local stop after two further stateless,
+    request-bound reads of the same pixels confirm the exact owned identity.
+
+    Only the first pass may carry the warning. All three contracts, image
+    hashes, geometry and identity fields must agree. A repeated warning,
+    missing identity, prompt/memory problem or runtime failure remains blocked.
+    """
+    if len(passes) != 3:
+        return False
+    if passes[0].get("cross_photo_duplicate_core_suspected") is not True:
+        return False
+    if any(
+        item.get("cross_photo_duplicate_core_suspected") is True
+        for item in passes[1:]
+    ):
+        return False
+
+    image_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in passes
+    }
+    if "" in image_hashes or len(image_hashes) != 1:
+        return False
+
+    signatures: list[tuple[str, str, int, bool, str]] = []
+    for item in passes:
+        view = str(item.get("view_type") or item.get("category") or "").strip()
+        normalized = item.get("normalized_evidence") or item
+        count = normalized.get("complete_screen_count")
+        model_key = (
+            followme_identity_key(item.get("model"))
+            or normalize_model_token(item.get("model"))
+        )
+        price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+        runtime = item.get("runtime_health") or {}
+        contract_valid, _errors, _normalized = validate_evidence_contract(item)
+        if not (
+            view == "單機"
+            and model_key
+            and price_key
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count in {1, 2}
+            and normalized.get("unique_main") is True
+            and normalized.get("label_ownership") == "matched"
+            and item.get("independent_pass") is True
+            and item.get("request_binding_enforced") is True
+            and item.get("request_id_verified") is True
+            and item.get("prior_answer_exposed") is not True
+            and item.get("prompt_contamination") is not True
+            and item.get("requires_structured_retry") is not True
+            and isinstance(runtime, dict)
+            and runtime.get("healthy") is True
+            and item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+            and contract_valid
+        ):
+            return False
+        if is_followme_model(item.get("model")) and not (
+            has_sufficient_followme_physical_evidence(normalized)
+            and _followme_single_subject_geometry_supported(item)
+        ):
+            return False
+        signatures.append(
+            (
+                model_key,
+                price_key,
+                int(count),
+                bool(normalized.get("unique_main")),
+                str(normalized.get("label_ownership") or ""),
+            )
+        )
+    return len(set(signatures)) == 1
+
+
 def _subthree_distant_conflict_only(record: Dict[str, Any]) -> bool:
     """Allow only the known 1–2-screen false-distant contract failure."""
     valid, errors, normalized = validate_evidence_contract(record)
@@ -2085,6 +2173,7 @@ def finalize_three_pass_outcome(
         return _technical_retry_outcome(outcome, "three_call_hard_limit_reached")
 
     passes = (list(history or []) + [record])[-max_attempts:]
+    cleared_cross_photo_single = _three_pass_cross_photo_suspicion_cleared(passes)
 
     # A human-audited pixel authority is allowed to settle only after the
     # third independent, request-bound call. Earlier calls may legitimately
@@ -2538,7 +2627,9 @@ def finalize_three_pass_outcome(
         and len(prior_identity_pairs) == 1
         and all(model_key and price_key for model_key, price_key in prior_identity_pairs)
     )
-    if binding_discarded_head_fallback:
+    if cleared_cross_photo_single:
+        usable = list(passes)
+    elif binding_discarded_head_fallback:
         usable = prior_bound_passes
     elif distant_majority:
         usable = [
@@ -2623,7 +2714,11 @@ def finalize_three_pass_outcome(
             else:
                 multiscreen_distant.append(item)
 
-    if binding_discarded_head_fallback:
+    if cleared_cross_photo_single:
+        final_view = "單機"
+        supporting = list(usable)
+        rule = "three_pass_cross_photo_suspicion_cleared"
+    elif binding_discarded_head_fallback:
         final_view = "單機"
         supporting = list(prior_bound_passes)
         rule = "two_bound_pass_consensus_discarded_unbound_third"
