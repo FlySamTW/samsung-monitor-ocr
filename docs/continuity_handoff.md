@@ -503,3 +503,11 @@
 - 所有 FollowMe 都是 Smart 系列，不要求 OSD。價格只保存與比對現場價／官網價，不參與型號身分判斷。
 - 本次只更新程式、提示詞、測試與 Git，不重啟目前可能執行中的 OCR、不碰照片及雲端資料；`.52` 會在下一次安全重啟後載入。
 - 原工作目錄內既有的 Dashboard 暫存檔及其他未追蹤工具不屬於本次提交，必須原樣保留。
+
+## 2026-07-18 `.52` FollowMe 寬景幾何補強與兩張閉環
+
+- 低功耗原圖稽核證實 `竹北 SF-708` 至少五台完整螢幕；舊定案器因第 2、3 輪都辨識到同一 FollowMe 實體，曾準備錯誤輸出 `單機／FollowMe M7 32／12,618`。新版規則將 FollowMe 實體視為「場景內存在證據」，不得覆蓋整張照片 3+ 完整螢幕的遠景幾何。
+- `新北投-1414` 亦確認至少五台完整螢幕；右側 FollowMe 宣傳／展示不可建立唯一主角或價牌歸屬。兩張均使用既有三次、同圖、無前輪記憶的證據離線定案為 `遠景／無型號／無價格`，沒有第 4 次呼叫。
+- 兩張已逐張上傳且取得正式 receipt：708 Drive ID `1kmfJeRMYladBeW7hEi1n23eAK0PfMszt`；1414 Drive ID `1Fhln7SWm8yEB9BMATdX1xLCP-E0iOlyE`。正式 uploader `pending=working=0` 後才宣告閉環。
+- 離線修復第一次誤把 `--output-dir` 指向 staging leaf；兩個工作沒有被正式 uploader 看見、沒有錯傳。已用相同 source identity 排入正式 `D:\00_商化\00_已OCR照片\_drive_upload_stream` 並取得上述 receipts，誤放 outbox 完整封存於 `_ocr_audit\misrouted_upload_queue_archive\20260718_114641_708_1414`。
+- 程式新增 708／1414 回歸並保留真正單機 753 與背景裁切 FollowMe 案例；三輪定案測試 58/58、完整 `tools/run_critical_regressions.py` 通過。正式 OCR 與 Dashboard 未重啟；磁碟版規則於下一個完整安全邊界 hidden 載入。

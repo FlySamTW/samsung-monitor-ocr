@@ -1439,6 +1439,101 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_followme_inside_five_monitor_wall_finishes_as_distant(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                "遠景",
+                None,
+                None,
+                5,
+                False,
+                "not_visible",
+                thinking="我看到展示架至少五台完整螢幕，中央雖有 FollowMe，仍無唯一主角。",
+                runtime_health={
+                    "healthy": False,
+                    "allow_processing": True,
+                    "allow_upload": False,
+                    "reasons": ["structured_narration_followme_conflict"],
+                },
+            ),
+            make_pass(
+                "單機",
+                'FollowMe M7 32"',
+                "12618",
+                5,
+                True,
+                "matched",
+                fixture,
+                thinking="中央是 FollowMe M7 32，但上方與右側另有多台完整螢幕。",
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            'FollowMe M7 32"',
+            "12618",
+            3,
+            True,
+            "matched",
+            fixture,
+            thinking="中央 FollowMe 可辨識，背景與旁邊至少三台完整螢幕仍完整入鏡。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["unresolved"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "distant_structural_veto_over_wide_geometry_single_votes",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertFalse(current.get("followme_family_confirmed", False))
+
+    def test_followme_poster_in_five_monitor_wall_does_not_create_single_subject(self):
+        history = [
+            make_pass(
+                "單機",
+                None,
+                None,
+                5,
+                True,
+                "matched",
+                thinking="展示牆共有五台完整螢幕，右側 FollowMe 只是宣傳展示牌。",
+            ),
+            make_pass(
+                "單機",
+                None,
+                None,
+                5,
+                True,
+                "ambiguous",
+                thinking="上層與下層可見五台完整螢幕，沒有唯一可歸屬價牌的主角。",
+            ),
+        ]
+        current = make_pass(
+            "遠景",
+            None,
+            None,
+            3,
+            False,
+            "not_visible",
+            thinking="展示架至少三台完整螢幕，FollowMe 字樣不能歸屬特定橫向螢幕。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
     def test_followme_fixture_consensus_survives_variant_disagreement(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},

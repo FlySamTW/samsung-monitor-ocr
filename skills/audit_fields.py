@@ -1393,8 +1393,10 @@ def _wide_multiscreen_geometry_claim(record: Dict[str, Any]) -> bool:
     Model/price text is deliberately ignored here.  On a broad display wall a
     nearby card may be readable without belonging to a unique Samsung subject;
     letting that stray identity veto the shared 3+ geometry caused an otherwise
-    photo-local disagreement to stop the whole batch.  FollowMe fixture evidence
-    remains a hard exclusion and is handled by the dedicated single-unit lane.
+    photo-local disagreement to stop the whole batch.  FollowMe hardware can be
+    present inside a broad display wall, so it must not erase the 3+ complete-
+    monitor geometry.  It proves the family of one unit, not that the whole photo
+    has a unique single subject.
     """
     view = str(record.get("view_type") or record.get("category") or "").strip()
     normalized = record.get("normalized_evidence") or record
@@ -1406,17 +1408,47 @@ def _wide_multiscreen_geometry_claim(record: Dict[str, Any]) -> bool:
         not isinstance(count, int)
         or isinstance(count, bool)
         or count < 3
-        or has_sufficient_followme_physical_evidence(normalized)
     ):
         return False
     return bool(
         re.search(
-            r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架|上方|下方|中間層)"
+            r"(?:整排|一整排|一排|多排|展示牆|展示架|貨架|上方|下方|上層|下層|中間層)"
             r"[^。；\n]{0,28}(?:多台|數台|至少(?:3|三)台|螢幕|顯示器|陳列)",
             text,
         )
         or _narration_reports_additional_complete_monitors(record)
     )
+
+
+def _followme_single_subject_geometry_not_contradicted(record: Dict[str, Any]) -> bool:
+    """Reject a FollowMe single vote that explicitly describes a wide wall."""
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    normalized = record.get("normalized_evidence") or record
+    return bool(
+        view == "單機"
+        and normalized.get("unique_main") is True
+        and has_sufficient_followme_physical_evidence(normalized)
+        and not _narration_reports_additional_complete_monitors(record)
+        and not _wide_multiscreen_geometry_claim(record)
+    )
+
+
+def _followme_single_subject_geometry_supported(record: Dict[str, Any]) -> bool:
+    """Require at least one positive single-subject geometry observation.
+
+    Two calls that both identify a real FollowMe unit may still describe a wide
+    photo containing several other complete monitors.  Those calls confirm that
+    a FollowMe exists in the scene, but do not turn the photo into a single-unit
+    view.  Only 1–2 complete screens, or an explicit same-pass statement that all
+    neighbours are incomplete/cropped, may enter the FollowMe single lane.
+    """
+    normalized = record.get("normalized_evidence") or record
+    count = normalized.get("complete_screen_count")
+    if not _followme_single_subject_geometry_not_contradicted(record):
+        return False
+    if isinstance(count, int) and not isinstance(count, bool) and count in {1, 2}:
+        return True
+    return _narration_supports_only_one_complete_monitor(record)
 
 
 def _is_samsung_sku_like(value: Any) -> bool:
@@ -1975,7 +2007,17 @@ def finalize_three_pass_outcome(
     distant_majority = bool(
         len(winning_hashes) == 1 and current_hash == winning_hashes[0]
     )
-    base_integrity = [item for item in passes if _adjudication_pass_has_base_integrity(item)]
+    # Photo-local FollowMe narration/structure disagreements do not invalidate
+    # request binding or the shared screen geometry.  Keep them available to the
+    # wide-scene veto while still excluding transport, memory, prompt, and
+    # cross-photo integrity failures.
+    base_integrity = [
+        item
+        for item in passes
+        if _adjudication_pass_has_base_integrity(
+            item, allow_local_followme_conflict=True
+        )
+    ]
     base_hashes = {
         str(item.get("input_image_sha256") or "").strip().lower()
         for item in base_integrity
@@ -2101,20 +2143,14 @@ def finalize_three_pass_outcome(
         and len(single_local_integrity) == len(passes)
         and "" not in single_local_hashes
         and len(single_local_hashes) == 1
-        and all(
-            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
-            for item in single_local_integrity
-        )
-        and all(
-            (item.get("normalized_evidence") or item).get("unique_main") is True
-            for item in single_local_integrity
-        )
         and sum(
-            has_sufficient_followme_physical_evidence(
-                item.get("normalized_evidence") or item
-            )
+            _followme_single_subject_geometry_not_contradicted(item)
             for item in single_local_integrity
         ) >= 2
+        and any(
+            _followme_single_subject_geometry_supported(item)
+            for item in single_local_integrity
+        )
     )
     # A first-pass distant claim may omit FollowMe cues that its own narration
     # saw.  That is a contained photo-local content conflict, not a transport,
@@ -2128,13 +2164,13 @@ def finalize_three_pass_outcome(
         and "" not in single_local_hashes
         and len(single_local_hashes) == 1
         and sum(
-            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
-            and (item.get("normalized_evidence") or item).get("unique_main") is True
-            and has_sufficient_followme_physical_evidence(
-                item.get("normalized_evidence") or item
-            )
+            _followme_single_subject_geometry_not_contradicted(item)
             for item in single_local_integrity
         ) >= 2
+        and any(
+            _followme_single_subject_geometry_supported(item)
+            for item in single_local_integrity
+        )
     )
     mixed_wide_distant_base_fallback = bool(
         len(passes) == max_attempts
@@ -2421,7 +2457,11 @@ def finalize_three_pass_outcome(
                 edge_cut_single.append(item)
             if is_weak_wide_single:
                 weak_wide_single.append(item)
-        if strong_followme and (is_followme_model(item.get("model")) or view == "單機"):
+        if (
+            strong_followme
+            and (is_followme_model(item.get("model")) or view == "單機")
+            and _followme_single_subject_geometry_not_contradicted(item)
+        ):
             followme.append(item)
         if (
             view == "遠景"
@@ -2470,7 +2510,9 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(usable)
         rule = "three_pass_single_subject_consensus"
-    elif len(followme) >= 2:
+    elif len(followme) >= 2 and any(
+        _followme_single_subject_geometry_supported(item) for item in followme
+    ):
         final_view = "單機"
         supporting = followme
         rule = "two_pass_followme_physical_consensus"

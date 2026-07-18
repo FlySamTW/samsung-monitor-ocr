@@ -921,3 +921,13 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 每次介面健康核對都必須在既有分頁同時驗證：全案總進度、目前資料夾進度、當前照片與輪次、LLM 自然語言逐字區、右側累積卡片、逐張上傳總數／pending，以及後端 `is_running` 與 runtime fuse。不得只看進度數字；不得重啟瀏覽器、不得新增分頁或視窗。
 - `.52` 事故案例 `中壢易飛本店-753`：前兩次照片級內容衝突被安全保留，第三次後以 FollowMe 實體共識降階結案，沒有第 4 次呼叫；Drive receipt 已取得唯一 ID `1xokZj1pKeJf5QQO6_Bp3PpI3kJASsC86`。`中壢環球-429` 由完整影像像素權威更正為 `S32DM803UC／14,900`，比價重新計算為官方 `10,900／↑36.7%`，新版 Drive 物件 ID `1AzfDvbwGQfqyE-v9QozkSbGw-vc_qJS9`；舊錯名物件只在新版讀回後才移入垃圾桶。
 - `良興桃園-765` 三次呼叫依序出現寬景單機、單機與遠景衝突；第三輪已正確描述至少三台完整螢幕、非唯一主角。低功耗原圖抽查確認為 `遠景／無型號／無價格`，以 source item、來源 SHA 與 full-image inference SHA 三重綁定的像素權威離線結案，呼叫數仍為 3。修復只能在照片邊界短暫停止寫入同一場次檔，port 5002 Dashboard 保持在線；結案排入逐張上傳後以 `restart=false` 接續。Drive receipt 已取得唯一 ID `1OqqaA6YSaNQ0zUQacTjIKey2acRg9z4J`、size `660675`、MD5 `7c53a3d1ea5b8b1d0e42d60109b894ce`。
+
+### `.52` FollowMe 存在證據不得覆蓋整張照片的寬景幾何
+
+- FollowMe 白色直立架、圓形底座、托盤或同主體產品卡只能證明「畫面內有一台 FollowMe」，不能證明整張照片只有一個主角。原圖若仍有至少三台螢幕四邊四角完整入鏡，整張照片必須定案為 `遠景／無型號／無價格`；其中一台可辨識為 FollowMe 也不得把整張照片改成單機。
+- `two_pass_followme_physical_consensus` 只能使用同輪同圖、`view_type=單機`、`unique_main=true` 且沒有敘述額外完整螢幕的票。至少兩輪不得被寬景敘述反證，且其中至少一輪必須正面證明 `complete_screen_count` 為 1–2，或自然敘述明確指出其他鄰機皆不完整／被原圖裁切。兩輪都回報 3+ 台完整螢幕時，即使型號與價格一致也不能進入 FollowMe 單機共識。
+- `M-新竹縣-竹北市-SF-竹北-708.jpg` 的三輪為 `遠景/count=5`、`單機 FollowMe/count=5`、`單機 FollowMe/count=3`；低功耗原圖稽核確認至少五台完整螢幕。修正後由 `distant_structural_veto_over_wide_geometry_single_votes` 定案遠景並逐張上傳，Drive ID `1kmfJeRMYladBeW7hEi1n23eAK0PfMszt`。
+- `M-台北市-北投區-TK3C-新北投-1414.jpg` 原圖至少五台完整螢幕，右側 `Samsung FollowMe` 只是現場宣傳／展示證據，不能歸屬任何特定橫向螢幕的型號或價牌。修正後定案遠景並逐張上傳，Drive ID `1Fhln7SWm8yEB9BMATdX1xLCP-E0iOlyE`。
+- `中壢易飛本店-753` 的真正 FollowMe 單機回歸必須同時保留：兩輪同主體物理證據中至少一輪為單一完整主體，且沒有額外完整螢幕敘述，仍在第三次呼叫後降階結案，不得因寬景修正退回待處理或產生第 4 次。
+- `finalize_existing_three_pass_reviews.py --output-dir` 必須傳正式輸出根目錄 `D:\00_商化\00_已OCR照片`，不可傳目前 staging leaf；否則會在 staging 下建立正式 worker 看不到的孤立 outbox。若操作失誤，先把相同 source identity 重新排入正式 outbox、取得唯一 Drive receipt，再把誤放 outbox 完整封存至 `_ocr_audit\misrouted_upload_queue_archive`，不得直接當成已上傳。
+- 本補強使用既有 `.52` 三輪證據，不把整個 2026 已驗證集合強制升版重跑；程式碼版本以 Git commit 追溯。正在執行的舊進程不會動態載入 Python 函式，必須等完整安全邊界、pending/working=0、關鍵回歸通過後以 hidden backend replacement 載入；等待期間由終局 review 清冊與離線定案器攔截同型風險，不得中途重啟正式批次。
