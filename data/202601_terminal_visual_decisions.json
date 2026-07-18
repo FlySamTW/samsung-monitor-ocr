@@ -1,0 +1,104 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decision_rule": "以完整原圖逐張核對；至少三台螢幕四邊四角完整入鏡即為遠景，展示圖片與宣傳板內的螢幕不計入實體台數；FollowMe 位於寬景內不覆寫整張照片幾何；型號與價格只保留能與唯一實機安全歸屬的像素欄位。",
+  "deferred_decisions": [
+    {
+      "file_name": "M-台北市-士林區-集雅社-大葉高島屋-179.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 10990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "binding_blocker": "有效的 attempt 1 與 attempt 3 分屬不同 run_id；不得為了結案放寬 hash-bound authority 守門，也不得進行第 4 次模型呼叫。"
+    }
+  ],
+  "decisions": [
+    {
+      "file_name": "M-台北市-文山區-TK3C-新景美-1342.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 0,
+      "model": null,
+      "price": null,
+      "label_ownership": "not_visible",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台北市-文山區-TK3C-新景美-1350.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": true
+    },
+    {
+      "file_name": "M-台北市-松山區-TK3C-復北-1408.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 6,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": true
+    },
+    {
+      "file_name": "M-台北市-松山區-集雅社-微風南京-209.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台北市-松山區-集雅社-微風南京-211.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 0,
+      "model": null,
+      "price": null,
+      "label_ownership": "not_visible",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台南市-中西區-集雅社-台南小北門-465.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": true
+    },
+    {
+      "file_name": "M-台南市-中西區-集雅社-台南小北門-472.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台南市-中西區-集雅社-台南西門-241.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台南市-仁德區-TK3C-仁德-1538.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": true
+    }
+  ]
+}

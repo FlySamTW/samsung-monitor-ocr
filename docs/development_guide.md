@@ -1007,3 +1007,12 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   `遠景／無型號／無價格`，舊 annotation 卻殘留
   `FollowMe M7 32"／12,990`。修復後 success API 與終局歷程均回傳遠景；
   Drive 佇列沒有上傳過舊單機結果。
+
+## 2026-07-18 17:30 舊場次像素終局與不中斷介面驗收
+
+- `data/202601_terminal_visual_decisions.json` 是一次性、逐來源檔案的完整原圖決策清冊；正式 manifest 必須再由 `build_visual_authority_manifest.py` 綁定 source item、原始來源 SHA、實際送模 input SHA、乾淨獨立輪次與三次硬上限。決策清冊本身不是可上傳權威。
+- 九張已耗盡三輪的 202601 技術列通過上述 manifest 與 finalizer dry-run 後離線定案：七張遠景、兩張單機缺型號／價格；全部寫成 `auto_verified=true`、`auto_review_required=false`，同步 `ocr_meta`、annotation、終局 presentation event 及正式逐張 upload outbox，沒有第 4 次模型呼叫。202601 即時 review-required 因而由 42 降至 33。
+- `大葉高島屋-179` 的像素觀察為單機、價格 10,990，但有效 attempt 1 與 attempt 3 分屬不同 `run_id`。不得為了清零 review 放寬 builder 或假造同一 run；該筆保留於清冊的 `deferred_decisions`，必須走能證明持久化 consumed slots 的專用修復，仍禁止第 4 次模型呼叫。
+- 介面驗收只接管既有 Dashboard 分頁，沒有新增或重載分頁。15 秒內畫面由 202601 `693→695/1,500`、目前檔案 `1354→1356`、上傳總數 `54,782→54,783`；照片／檔名、輪次、LLM 自然語言、右側累積卡片與上傳數同步，狀態保持「正在執行」。
+- `大葉高島屋-182` 目前仍只有正式 pending job，尚未取得 Drive ID／size／MD5 精確收據；不得把 queued 當成 uploaded。逐張 uploader 持續運作，取得唯一收據後再閉環。
+- 2026 完成仍只代表當年度階段完成。continuity supervisor 必須接續 2025→2015，直到 `151,714` 張、`137` 個資料匣全部取得如實終局與 Drive 精確收據。

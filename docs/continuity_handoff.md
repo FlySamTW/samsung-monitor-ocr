@@ -597,3 +597,12 @@
 - 多螢幕終局同步補強：敘述明確表示三台以上完整入鏡時，納入寬景幾何證據。一張結構正確的遠景票可否決兩張同時承認三台以上完整螢幕、卻自相矛盾標成單機的票；終局固定為遠景／無型號／無價格，不借用附近價牌。
 - `小北門-467` dry-run 現可定案為 `FollowMe Pro M7 43／17,990`；`新景美-1349` 同樣可解除一次性重複警示；`微風本館-194` 可定案為遠景／無型號／無價格。另有 `大葉高島屋-182` 原規則已可定案。這些只完成零寫入 dry-run；正式 result JSON 仍由 live backend 寫入，必須等照片／資料夾安全邊界再套用，避免整檔原子替換覆蓋新結果。
 - 三輪終局測試 61/61 及完整 `tools/run_critical_regressions.py` 全部通過。正式 OCR、Dashboard、uploader 與瀏覽器未重啟。
+
+## 2026-07-18 17:30 九張 hash-bound 終局與即時畫面證據
+
+- `data/202601_terminal_visual_decisions.json` 中九張正式 decisions 已由 builder 產生 `_ocr_audit\visual_authority\202601_terminal_manifest.json`；manifest 精確綁定 source item、原圖 SHA、input SHA 與乾淨三輪。finalizer dry-run 九張皆為 `would_finalize`，正式 apply 後為七張遠景、兩張單機缺型號／價格，全部 verified、非 review，且 API 最後一筆歷程都是「第三輪終局定案／accepted」。
+- 202601 即時 review-required `42→33`。套用時正式 backend 正在寫 `20260718-1653-OCR成功.json`，離線修復只原子更新舊 `20260718-1528-OCR成功.json`，沒有競爭同一結果檔，也沒有停止 OCR。
+- `大葉高島屋-179` 未混入 manifest：有效 attempt 1 與 attempt 3 分屬不同 run。其保守像素決策保存在 `deferred_decisions`；不得放寬 hash-bound builder、不得把跨 run 記錄偽裝成同一乾淨 run、不得呼叫第 4 次模型。
+- 既有 Dashboard 分頁實測 15 秒內由 `693→695/1,500`，檔案 `台南東寧-1354→1356`，上傳 `54,782→54,783`；照片／檔名、LLM 自言自語、輪次、右欄累積卡片與上傳數同步。沒有新開、重載或重啟瀏覽器。
+- 17:28 stream uploader 為 running，canonical uploaded 54,774、pending 180、working 1、runtime fuse absent。`大葉高島屋-182` 仍在 pending，沒有 exact Drive receipt，不能宣稱已上傳。
+- 全案終點維持 2015–2026 共 `151,714` 張、`137` 個資料匣及逐張精確 Drive 收據；2026 結束後由 continuity supervisor 接續 2025→2015。
