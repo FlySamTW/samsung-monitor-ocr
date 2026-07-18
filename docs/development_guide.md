@@ -920,3 +920,4 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - Dashboard 的卡片文字必須反映實際輪次：第 1、2 輪有疑點時顯示已排入下一輪，不得預先寫成「第三輪已完成」；只有三次模型呼叫已用完時才能顯示第三輪終局。前端 transport 不得把未完成輪次冒充終局，也不得把終局冒充待人工裁決。
 - 每次介面健康核對都必須在既有分頁同時驗證：全案總進度、目前資料夾進度、當前照片與輪次、LLM 自然語言逐字區、右側累積卡片、逐張上傳總數／pending，以及後端 `is_running` 與 runtime fuse。不得只看進度數字；不得重啟瀏覽器、不得新增分頁或視窗。
 - `.52` 事故案例 `中壢易飛本店-753`：前兩次照片級內容衝突被安全保留，第三次後以 FollowMe 實體共識降階結案，沒有第 4 次呼叫；Drive receipt 已取得唯一 ID `1xokZj1pKeJf5QQO6_Bp3PpI3kJASsC86`。`中壢環球-429` 由完整影像像素權威更正為 `S32DM803UC／14,900`，比價重新計算為官方 `10,900／↑36.7%`，新版 Drive 物件 ID `1AzfDvbwGQfqyE-v9QozkSbGw-vc_qJS9`；舊錯名物件只在新版讀回後才移入垃圾桶。
+- `良興桃園-765` 三次呼叫依序出現寬景單機、單機與遠景衝突；第三輪已正確描述至少三台完整螢幕、非唯一主角。低功耗原圖抽查確認為 `遠景／無型號／無價格`，以 source item、來源 SHA 與 full-image inference SHA 三重綁定的像素權威離線結案，呼叫數仍為 3。修復只能在照片邊界短暫停止寫入同一場次檔，port 5002 Dashboard 保持在線；結案排入逐張上傳後以 `restart=false` 接續。Drive receipt 已取得唯一 ID `1OqqaA6YSaNQ0zUQacTjIKey2acRg9z4J`、size `660675`、MD5 `7c53a3d1ea5b8b1d0e42d60109b894ce`。

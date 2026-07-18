@@ -374,6 +374,24 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES = {
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 良興桃園 765 is a multi-row display wall.  At least three monitors have
+    # all four corners visible, there is no unique subject, and the several
+    # nearby model/price cards belong to different displays.  The first two
+    # calls tried to bind one nearby Odyssey card to a supposed single subject;
+    # the third correctly described the full-frame geometry as distant.  This
+    # authority is bound to immutable source and inference bytes so the
+    # exhausted three-call result can close without a fourth model request.
+    "27c03963c2796671433a018f05afc00fec0a98cdf4cd4f6c89a336c9d27f0cad": {
+        "source_file_sha256": "d6d7a61619a3a28dbd5089cab113356fde4d59c2b62ba3458b3d7e5c153716c3",
+        "input_image_sha256": "7c2abf080d2e4232895c169a5067c77cf01490bc4c017bdc79ed0cf5bbf295fd",
+        "view_type": "遠景",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_visible",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 }
 # Lalaport SES 301: the full frame visibly binds the foreground portrait
 # display to Samsung Follow Me 4K branding, a white vertical mobile stand,

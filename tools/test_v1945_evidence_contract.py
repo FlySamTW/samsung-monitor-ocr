@@ -59,6 +59,7 @@ class EvidenceContractTests(unittest.TestCase):
     SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
     LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
+    LIANGXING_765_SHA = "7c2abf080d2e4232895c169a5067c77cf01490bc4c017bdc79ed0cf5bbf295fd"
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -242,6 +243,40 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(current["price_diff_percent"], 36.7)
         self.assertFalse(current["followme_family_confirmed"])
         self.assertEqual(current["followme_physical_evidence"], [])
+
+    def test_liangxing_765_three_calls_finalize_as_distant_without_fourth_call(self):
+        def authority_pass(attempt, view_type, count, unique, ownership):
+            return {
+                "ocr_attempt": attempt,
+                "input_image_sha256": self.LIANGXING_765_SHA,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True, "reasons": []},
+                "view_type": view_type,
+                "category": view_type,
+                "model": "S27CG552EC" if view_type == "單機" else None,
+                "price": None,
+                **evidence(count, unique, ownership, []),
+            }
+
+        first = authority_pass(1, "單機", 7, True, "matched")
+        second = authority_pass(2, "單機", 1, True, "matched")
+        third = authority_pass(3, "遠景", 3, False, "not_visible")
+
+        self.assertTrue(apply_human_audited_pixel_authority(third, [first, second], 3))
+        self.assertEqual(third["view_type"], "遠景")
+        self.assertEqual(third["complete_screen_count"], 3)
+        self.assertIsNone(third["model"])
+        self.assertIsNone(third["price"])
+        self.assertFalse(third["unique_main"])
+        self.assertEqual(third["ocr_attempt"], 3)
+        self.assertTrue(third["human_pixel_authority_applied"])
+        self.assertEqual(
+            third["adjudication_rule"],
+            "three_pass_human_audited_pixel_authority",
+        )
 
     def test_lalaport_followme_authority_drops_unsupported_variant_and_price(self):
         def authority_pass(attempt):
