@@ -726,6 +726,7 @@ Every model JSON must echo the exact full 128-bit per-call `RequestID` in `reque
 - 程序邊界若已消耗三次呼叫但遺失其中一筆 trace，只可在相同 `source_item_id`、相同完整影像 SHA-256、最新相鄰 trace 為 `1+3` 或 `2+3`、結果檔保存 `three_call_hard_limit_reached`，且像素權威精確命中時修復；不得第 4 次呼叫。沒有 canonical `YYYYMM` period 的 smoke trace 不得壓過正式 trace。
 - 既有三輪修復必須先以冪等方式排入逐張上傳，再原子寫回 verified 結果；禁止先寫 verified 後因 enqueue 失敗留下半完成狀態。
 - 串流上傳若 pending 增加但 receipt 不動，必須核對 lock PID。PID 已不存在時將 stale lock 歸檔後只恢復 uploader，不重啟 OCR。驗收需看到 `uploaded/canonical/last_uploaded_at` 實際前進。
+- Windows 上 Dashboard／監控讀取 `status.json` 時，可能在 `os.replace` 的瞬間短暫阻止目的檔替換。`stream_drive_upload.py` 必須以有限退避重試狀態檔原子替換；此類展示狀態寫入競爭不得終止 durable uploader。只有重試耗盡後才可失敗，且 pending 工作仍須原封不動保留。恢復驗收仍要求唯一 hidden worker、無可見終端機、pending 下降及正式 receipt 增加。
 - 現行 Chrome 既有分頁在縮放後有效寬度下，header/status 於 `max-width:2400px` 換成兩欄兩列，確保總進度、目前資料匣、目前檔案與執行狀態可見；主預覽、LLM 自言自語與右側累積卡片的既定半螢幕比例不得改動。
 - 2026-07-17 04:56 正式證據：`202601 131/1,500`、verified 131、review 0、failed 0、fuse inactive；逐張上傳 `81→105`、canonical `53,052→53,072`、pending 1，最近上傳時間 04:55:56。636 已定案並上傳為 `單機-S24F332EAC-✓＄2390`，637 已在隔離驗收定案為遠景。
 - 完工估算固定公開兩層：依目前可持續淨產能約 1,666 張／日，84,990 張剩餘量的實測目標日為 `2026-09-06`；對長官保守承諾日為 `2026-10-31`。任何停機日都必須重算，不得只回報「持續執行中」。

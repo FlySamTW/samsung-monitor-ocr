@@ -67,7 +67,17 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(dict(payload), ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
+    # On Windows a dashboard/status reader can briefly hold the destination
+    # file without delete sharing.  Treat that as a transient presentation
+    # collision, not as a reason to terminate the durable upload worker.
+    for attempt in range(8):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt >= 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _read_json(path: Path) -> dict[str, Any]:

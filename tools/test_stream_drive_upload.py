@@ -17,6 +17,7 @@ from tools.stream_drive_upload import (
     COMPATIBLE_PENDING_REVISION_MIGRATIONS,
     _YEAR_FOLDER_ID_CACHE,
     _append_uploaded_atomic,
+    _atomic_json,
     enqueue_finalized_result,
     migrate_compatible_pending_jobs,
     process_one_job,
@@ -111,6 +112,21 @@ class FakeRclone:
 class StreamDriveUploadTests(unittest.TestCase):
     def setUp(self):
         _YEAR_FOLDER_ID_CACHE.clear()
+
+    def test_status_write_retries_transient_windows_replace_denial(self):
+        with tempfile.TemporaryDirectory() as root:
+            status_path = Path(root) / "status.json"
+            with (
+                patch(
+                    "tools.stream_drive_upload.os.replace",
+                    side_effect=[PermissionError(5, "busy"), PermissionError(5, "busy"), None],
+                ) as replace_mock,
+                patch("tools.stream_drive_upload.time.sleep") as sleep_mock,
+            ):
+                _atomic_json(status_path, {"worker_state": "running"})
+
+            self.assertEqual(replace_mock.call_count, 3)
+            self.assertEqual(sleep_mock.call_count, 2)
 
     def test_explicitly_approved_pending_revision_migrates_with_durable_proof(self):
         with tempfile.TemporaryDirectory() as tmp:

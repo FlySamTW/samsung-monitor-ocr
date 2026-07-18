@@ -511,3 +511,4 @@
 - 兩張已逐張上傳且取得正式 receipt：708 Drive ID `1kmfJeRMYladBeW7hEi1n23eAK0PfMszt`；1414 Drive ID `1Fhln7SWm8yEB9BMATdX1xLCP-E0iOlyE`。正式 uploader `pending=working=0` 後才宣告閉環。
 - 離線修復第一次誤把 `--output-dir` 指向 staging leaf；兩個工作沒有被正式 uploader 看見、沒有錯傳。已用相同 source identity 排入正式 `D:\00_商化\00_已OCR照片\_drive_upload_stream` 並取得上述 receipts，誤放 outbox 完整封存於 `_ocr_audit\misrouted_upload_queue_archive\20260718_114641_708_1414`。
 - 程式新增 708／1414 回歸並保留真正單機 753 與背景裁切 FollowMe 案例；三輪定案測試 58/58、完整 `tools/run_critical_regressions.py` 通過。正式 OCR 與 Dashboard 未重啟；磁碟版規則於下一個完整安全邊界 hidden 載入。
+- 2026-07-18 12:06 串流 uploader 因 Windows 短暫拒絕以 `os.replace` 更新 `status.json` 而退出；照片本體、結果與 pending job 均未遺失。已將狀態檔替換改為有限退避重試並新增回歸，僅以 hidden 單例恢復 uploader，未重啟 OCR、Dashboard 或瀏覽器。恢復後 pending `31→27`、receipt `1316→1320`、canonical `54239→54243`，證明逐張上傳重新前進。
