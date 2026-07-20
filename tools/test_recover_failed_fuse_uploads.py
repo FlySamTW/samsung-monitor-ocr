@@ -446,6 +446,86 @@ class FailedFuseUploadRecoveryTests(unittest.TestCase):
                         inactive_priority=True,
                     )
 
+    def test_active_current_revision_rejection_can_recover_without_stopping_ocr(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.fixture(Path(temp))
+            current_job = dict(fixture["job"])
+            current_job["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+            current_job["error"] = (
+                "stale or invalid stream upload job: missing_recovery_envelope"
+            )
+            write_json(fixture["failed"], current_job)
+
+            task_path = fixture["priority"] / "run-OCR成功.json"
+            tasks = json.loads(task_path.read_text(encoding="utf-8"))
+            tasks[0]["data"]["ocr_meta"]["evidence_guard_revision"] = (
+                EVIDENCE_GUARD_REVISION
+            )
+            write_json(task_path, tasks)
+
+            presentation = dict(fixture["presentation"])
+            presentation["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+            status = dict(fixture["status"])
+            status["is_running"] = True
+            status["stats"] = {
+                "total": 20,
+                "success": 1,
+                "verified": 1,
+                "failed": 0,
+                "review_required": 0,
+                "verification_unknown": 0,
+            }
+
+            def requester(_url: str, endpoint: str):
+                if endpoint == "/api/status":
+                    return status
+                raise AssertionError(
+                    "active recovery must use the finalized local result snapshot"
+                )
+
+            with (
+                patch(
+                    "tools.recover_failed_fuse_uploads._request_json",
+                    side_effect=requester,
+                ),
+                patch(
+                    "tools.recover_failed_fuse_uploads.psutil.pid_exists",
+                    return_value=True,
+                ),
+            ):
+                recoverable, stale = build_recovery_plan(
+                    priority_dir=fixture["priority"],
+                    output_dir=fixture["output"],
+                    backend_url="http://unit.test",
+                    active_priority=True,
+                )
+            self.assertEqual(len(recoverable), 1)
+            self.assertEqual(stale, [])
+            self.assertEqual(
+                recoverable[0]["recovery_reason"],
+                "current_revision_rejected_by_older_uploader",
+            )
+            apply_recovery(
+                recoverable=recoverable,
+                stale_markers=stale,
+                output_dir=fixture["output"],
+            )
+            pending = (
+                fixture["output"]
+                / "_drive_upload_stream"
+                / "pending"
+                / f"{SOURCE_ID}.json"
+            )
+            recovered = json.loads(pending.read_text(encoding="utf-8"))
+            valid, errors = validate_fuse_failed_upload_recovery(
+                recovered,
+                output_dir=fixture["output"],
+            )
+            self.assertTrue(valid, errors)
+            self.assertTrue(status["is_running"])
+
     def test_receipt_revision_delta_requires_one_exact_migration_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

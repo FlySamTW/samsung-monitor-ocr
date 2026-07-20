@@ -211,6 +211,7 @@ def build_recovery_plan(
     backend_url: str,
     expected_stopped_worker_pid: int | None = None,
     inactive_priority: bool = False,
+    active_priority: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     priority_dir = priority_dir.resolve()
     output_dir = output_dir.resolve()
@@ -221,14 +222,19 @@ def build_recovery_plan(
     stats = dict(status.get("stats") or {})
     upload = dict(status.get("stream_upload") or {})
     total = int(stats.get("total") or 0)
-    if inactive_priority:
+    if inactive_priority and active_priority:
+        raise RuntimeError("priority recovery mode is ambiguous")
+    if active_priority:
+        if current_dir != priority_dir or status.get("is_running") is not True:
+            raise RuntimeError("active priority recovery requires the running directory")
+    elif inactive_priority:
         if current_dir == priority_dir:
             raise RuntimeError("inactive priority recovery cannot target the active directory")
     elif current_dir != priority_dir or status.get("is_running"):
         raise RuntimeError("backend is not idle at the exact priority directory")
     if status.get("runtime_health_fuse"):
         raise RuntimeError("runtime health fuse is active")
-    if not inactive_priority and (
+    if not inactive_priority and not active_priority and (
         int(stats.get("success") or 0) != total
         or int(stats.get("verified") or 0) != total
         or int(stats.get("failed") or 0) != 0
@@ -275,6 +281,15 @@ def build_recovery_plan(
             raise RuntimeError(
                 "inactive priority directory is not a complete verified frozen batch"
             )
+        presentation_keys = {
+            _presentation_key(row) for row in full_results.values()
+        }
+    elif active_priority:
+        # Success files are append-only, photo-finalized records.  Reading the
+        # current atomic snapshot lets an upload-only repair run while OCR
+        # continues with later photos; an incomplete folder is expected here.
+        if not source_items or not full_results:
+            raise RuntimeError("active priority has no finalized local results")
         presentation_keys = {
             _presentation_key(row) for row in full_results.values()
         }
@@ -374,7 +389,7 @@ def build_recovery_plan(
         if failure.startswith("runtime health fuse is active:"):
             recovery_reason = "runtime_health_fuse_cleared_after_ocr_finalization"
         elif (
-            failure == "stale or invalid stream upload job"
+            failure.startswith("stale or invalid stream upload job")
             and job.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
         ):
             recovery_reason = "current_revision_rejected_by_older_uploader"
@@ -390,7 +405,9 @@ def build_recovery_plan(
             not source.is_file()
             or job.get("original_source_path") != str(source)
             or job.get("source_sha256") != sha256_file(source)
-            or not (job.get("period") == info.get("period") == "202606")
+            or job.get("period") != info.get("period")
+            or not re.fullmatch(r"20\d{4}", str(job.get("period") or ""))
+            or not str(job.get("period") or "").startswith(str(datetime.now().year))
             or job.get("source_item_id") != info.get("source_item_id")
             or job.get("evidence_guard_revision")
             != row.get("evidence_guard_revision")
@@ -554,6 +571,14 @@ def main() -> int:
             "is actively working in a different directory"
         ),
     )
+    parser.add_argument(
+        "--active-priority",
+        action="store_true",
+        help=(
+            "Recover already-finalized current-year rows from the actively running "
+            "priority directory without stopping OCR"
+        ),
+    )
     args = parser.parse_args()
 
     recoverable, stale_markers = build_recovery_plan(
@@ -562,6 +587,7 @@ def main() -> int:
         backend_url=args.backend_url,
         expected_stopped_worker_pid=args.expected_stopped_worker_pid,
         inactive_priority=args.inactive_priority,
+        active_priority=args.active_priority,
     )
     summary = {
         "recoverable": len(recoverable),

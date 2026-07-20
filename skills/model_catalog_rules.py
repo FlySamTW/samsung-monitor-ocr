@@ -104,8 +104,17 @@ def extract_samsung_models(value: object) -> list[str]:
         model = normalize_samsung_model(match.group(0))
         if model and model not in models:
             models.append(model)
-    direct = normalize_samsung_model(text)
-    if re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,12}", direct) and direct not in models:
+    # Only treat the whole value as a direct code when the whole value really
+    # is one code.  Compacting arbitrary prose can otherwise join a valid SKU
+    # to a nearby price (``S24D362GAC`` + ``3490``) and manufacture a second,
+    # longer model candidate.
+    direct_text = text.strip()
+    direct = normalize_samsung_model(direct_text)
+    if (
+        re.fullmatch(r"L?[A-Z]\d{2}[A-Z0-9]{5,15}(?:XZW)?", direct_text)
+        and re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,12}", direct)
+        and direct not in models
+    ):
         models.insert(0, direct)
     return models
 

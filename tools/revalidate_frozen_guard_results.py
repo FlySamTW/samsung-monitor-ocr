@@ -36,6 +36,8 @@ from skills.field_extraction import FieldNormalizer
 from skills.model_matching import ModelMatcher
 from skills.model_validation import (
     has_photo_label_model_evidence,
+    recover_pipeline_unlisted_model_candidate,
+    resolve_photo_label_model_candidate,
     strict_known_model,
     unique_embedded_known_model,
 )
@@ -191,6 +193,20 @@ def _raw_call(
         raise RuntimeError("stored raw response has no valid request ID")
 
     record = dict(parsed)
+    pre_contract_candidate = resolve_photo_label_model_candidate(
+        record.get("model"),
+        record,
+        record.get("narration") or "",
+    )
+    if pre_contract_candidate:
+        record["model"] = pre_contract_candidate
+        record["unlisted_model_candidate"] = True
+        record["official_model_unverified"] = True
+    # The live pipeline's narrow recovery contract binds the candidate to the
+    # one stored raw object.  Frozen replay must carry the same authority
+    # before any validator/normalizer can erase an unlisted but photo-proven
+    # SKU.
+    record["raw_objects"] = raw_objects
     record.pop("request_id", None)
     record["request_id_verified"] = True
     record["request_binding_enforced"] = True
@@ -203,10 +219,21 @@ def _raw_call(
     record["prompt_contamination"] = False
     record = backend.finalize_evidence_contract(record, raw_output)
     record = normalizer.normalize(record)
+    recover_pipeline_unlisted_model_candidate(record)
 
     if record.get("view_type") == "單機":
         raw_model = record.get("model") or ""
         if raw_model and not str(raw_model).upper().startswith("FOLLOWME"):
+            photo_label_candidate = resolve_photo_label_model_candidate(
+                raw_model,
+                record,
+                record.get("thinking") or record.get("narration") or "",
+            )
+            if photo_label_candidate:
+                record["model"] = photo_label_candidate
+                record["unlisted_model_candidate"] = True
+                record["official_model_unverified"] = True
+                raw_model = photo_label_candidate
             matched = (
                 strict_known_model(raw_model, matcher.valid_models)
                 or unique_embedded_known_model(raw_model, matcher.valid_models)

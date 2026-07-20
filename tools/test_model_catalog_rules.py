@@ -10,6 +10,7 @@ from skills.followme_reference import build_followme_prompt_section
 from skills.model_catalog_rules import (
     FOLLOWME_MODELS,
     FOLLOWME_UNRESOLVED,
+    extract_samsung_models,
     normalize_confirmed_followme_model,
     normalize_followme_family,
     normalize_samsung_model,
@@ -25,6 +26,14 @@ from tools.photo_rename_planner import canonical_followme_model
 
 
 class ModelCatalogRulesTest(unittest.TestCase):
+    def test_prose_model_and_price_do_not_merge_into_a_fake_model(self):
+        narration = (
+            "中央主角正下方價牌清楚標示型號 S24D362GAC，"
+            "會員售價 3,490 元。"
+        )
+        self.assertEqual(extract_samsung_models(narration), ["S24D362GAC"])
+        self.assertEqual(extract_samsung_models("S24D362GAC"), ["S24D362GAC"])
+
     def test_official_code_normalization_preserves_model_suffix(self):
         self.assertEqual(normalize_samsung_model("LS27HG806EFXZW"), "S27HG806EF")
         self.assertEqual(normalize_samsung_model("LS32FM703UCXZW"), "S32FM703UC")

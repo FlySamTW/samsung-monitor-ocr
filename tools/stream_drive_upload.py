@@ -157,7 +157,7 @@ def validate_fuse_failed_upload_recovery(
     elif not (
         recovery_reason == "current_revision_rejected_by_older_uploader"
         and source_revision == EVIDENCE_GUARD_REVISION
-        and failure == "stale or invalid stream upload job"
+        and failure.startswith("stale or invalid stream upload job")
     ):
         errors.append("failure_was_not_older_uploader_revision")
 

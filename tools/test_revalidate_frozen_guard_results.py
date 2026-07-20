@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.revalidate_frozen_guard_results import revalidate
+from skills.field_extraction import FieldNormalizer
+from skills.model_matching import ModelMatcher
+from tools.revalidate_frozen_guard_results import _raw_call, revalidate
 
 
 class FrozenGuardRevalidationTests(unittest.TestCase):
@@ -284,6 +286,50 @@ class FrozenGuardRevalidationTests(unittest.TestCase):
                         enqueue=lambda *args, **kwargs: output / "queued.json",
                     )
             self.assertEqual(result_path.read_bytes(), before)
+
+    def test_raw_replay_preserves_photo_proven_unlisted_model(self):
+        narration = (
+            "中央主角螢幕正下方有實體價牌，清楚標示型號 "
+            "S24D362GAC 與會員售價 3,490 元，價牌歸屬明確。"
+        )
+        raw = {
+            "request_id": "c" * 32,
+            "narration": narration,
+            "view_type": "單機",
+            "screen_status": "正常",
+            "quality_issue": "無",
+            "model": "S24D362GAC",
+            "price": "3490",
+            "complete_screen_count": 1,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "followme_physical_evidence": [],
+        }
+        trace = {
+            "raw_output": json.dumps(raw, ensure_ascii=False),
+            "parsed_output": {"input_image_sha256": "b" * 64},
+            "file_name": "M-test-unlisted.jpg",
+            "source_path": "staged.jpg",
+            "source_item_id": "a" * 64,
+            "original_source_path": "original.jpg",
+            "period": "202601",
+            "audit_folder": "audit",
+            "run_id": "old-run",
+            "model_id": "qwen/qwen3-vl-8b",
+            "timestamp": "2026-07-20T20:00:00",
+            "started_at": "2026-07-20T19:59:45",
+        }
+        matcher = ModelMatcher("型號表.txt")
+        matcher.valid_models = []
+        replayed = _raw_call(
+            trace,
+            attempt=1,
+            normalizer=FieldNormalizer(),
+            matcher=matcher,
+        )
+        self.assertEqual(replayed["model"], "S24D362GAC")
+        self.assertTrue(replayed["unlisted_model_candidate"])
+        self.assertTrue(replayed["official_model_unverified"])
 
 
 if __name__ == "__main__":
