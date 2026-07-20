@@ -62,6 +62,7 @@ from skills.model_catalog_rules import (
     FOLLOWME_UNRESOLVED,
     normalize_confirmed_followme_model,
     normalize_followme_family,
+    normalize_samsung_model,
     resolve_followme_model as resolve_catalog_followme_model,
 )
 from skills.model_validation import (
@@ -1032,6 +1033,14 @@ def enforce_explicit_structured_authority(result, explicit_fields):
     if explicit_model not in (None, "") and final_model not in (None, ""):
         canonical_explicit = re.sub(r"[^A-Z0-9]", "", str(explicit_model).upper())
         canonical_final = re.sub(r"[^A-Z0-9]", "", str(final_model).upper())
+        normalized_explicit = normalize_samsung_model(explicit_model)
+        normalized_final = normalize_samsung_model(final_model)
+        equivalent_official_samsung_code = bool(
+            normalized_explicit
+            and normalized_final
+            and normalized_explicit.startswith("S")
+            and normalized_explicit == normalized_final
+        )
         completion_from = re.sub(
             r"[^A-Z0-9]",
             "",
@@ -1043,7 +1052,13 @@ def enforce_explicit_structured_authority(result, explicit_fields):
             and canonical_final.startswith(canonical_explicit)
             and 1 <= len(canonical_final) - len(canonical_explicit) <= 3
         )
-        if canonical_explicit and canonical_final and canonical_explicit != canonical_final and not allowed_prefix_completion:
+        if (
+            canonical_explicit
+            and canonical_final
+            and canonical_explicit != canonical_final
+            and not allowed_prefix_completion
+            and not equivalent_official_samsung_code
+        ):
             blocked.append("model")
             result["model"] = None
             result["structured_identity_conflict"] = True

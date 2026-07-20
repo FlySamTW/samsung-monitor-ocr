@@ -1340,6 +1340,26 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(postprocessed["price"], "12990")
         self.assertEqual(blocked, [])
 
+    def test_official_full_sku_and_catalog_short_model_are_equivalent(self):
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S32DG802SC",
+            "price": "32900",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "單機",
+                "category": "單機",
+                "model": "LS32DG802SCXZW",
+                "price": "32900",
+            },
+        )
+        self.assertEqual(postprocessed["model"], "S32DG802SC")
+        self.assertEqual(postprocessed["price"], "32900")
+        self.assertEqual(blocked, [])
+
     def test_general_single_category_normalization_is_not_a_blocked_override(self):
         postprocessed = {
             "view_type": "單機",

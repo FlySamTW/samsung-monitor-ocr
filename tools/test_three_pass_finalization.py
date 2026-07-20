@@ -66,6 +66,77 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_full_official_sku_consensus_recovers_catalog_short_model(self):
+        from tools.finalize_existing_three_pass_reviews import (
+            _recover_full_official_sku_consensus,
+        )
+
+        raw = json.dumps(
+            {
+                "view_type": "單機",
+                "model": "LS32DG802SCXZW",
+                "price": "32900",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+            },
+            ensure_ascii=False,
+        )
+        calls = [
+            make_pass(
+                model=None,
+                price="32900",
+                raw_objects=[raw],
+                normalized_evidence={
+                    "complete_screen_count": 1,
+                    "unique_main": True,
+                    "label_ownership": "matched",
+                    "followme_physical_evidence": [],
+                },
+            )
+            for _ in range(3)
+        ]
+
+        recovered = _recover_full_official_sku_consensus(calls)
+
+        self.assertEqual(recovered, "S32DG802SC")
+        self.assertEqual([call["model"] for call in calls], ["S32DG802SC"] * 3)
+        self.assertEqual([call["quality_issue"] for call in calls], ["無"] * 3)
+
+    def test_full_official_sku_consensus_rejects_neighbor_owned_label(self):
+        from tools.finalize_existing_three_pass_reviews import (
+            _recover_full_official_sku_consensus,
+        )
+
+        raw = json.dumps(
+            {
+                "view_type": "單機",
+                "model": "LS32DG802SCXZW",
+                "price": "32900",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "ambiguous",
+            },
+            ensure_ascii=False,
+        )
+        calls = [
+            make_pass(
+                model=None,
+                price="32900",
+                raw_objects=[raw],
+                normalized_evidence={
+                    "complete_screen_count": 1,
+                    "unique_main": True,
+                    "label_ownership": "matched",
+                    "followme_physical_evidence": [],
+                },
+            )
+            for _ in range(3)
+        ]
+
+        self.assertIsNone(_recover_full_official_sku_consensus(calls))
+        self.assertEqual([call["model"] for call in calls], [None] * 3)
+
     def test_three_matching_followme_passes_clear_first_duplicate_warning(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},

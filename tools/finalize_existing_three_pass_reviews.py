@@ -25,11 +25,13 @@ from skills.audit_fields import (
     refresh_authoritative_price_comparison,
     validate_evidence_contract,
 )
-from skills.model_validation import normalize_model_token
+from skills.model_catalog_rules import normalize_samsung_model
+from skills.model_validation import normalize_model_token, strict_known_model
 from tools.stream_drive_upload import enqueue_finalized_result
 
 
 AUTHORITY_MANIFEST_SCHEMA = "samsung-ocr-bound-visual-authorities/v1"
+MODEL_LIST_PATH = Path(__file__).resolve().parents[1] / "型號表.txt"
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
@@ -675,6 +677,87 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
     return latest
 
 
+def _recover_full_official_sku_consensus(
+    calls: list[dict[str, Any]],
+) -> str | None:
+    """Restore a catalog SKU lost only by full-code/short-code normalization.
+
+    The immutable pass trace remains untouched.  Recovery requires at least
+    two independent, request-bound single-unit calls whose raw JSON names the
+    same catalog model and whose label belongs to that one complete subject.
+    This closes a post-processing defect without performing a fourth model
+    call or accepting a nearby/background label.
+    """
+    try:
+        valid_models = [
+            line.strip()
+            for line in MODEL_LIST_PATH.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError):
+        return None
+    if not valid_models:
+        return None
+
+    votes: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for call in calls:
+        evidence = call.get("normalized_evidence") or call
+        if (
+            call.get("request_id_verified") is not True
+            or call.get("prior_answer_exposed") is True
+            or call.get("prompt_contamination") is True
+            or str(call.get("view_type") or "") != "單機"
+            or evidence.get("complete_screen_count") != 1
+            or evidence.get("unique_main") is not True
+            or str(evidence.get("label_ownership") or "") != "matched"
+        ):
+            continue
+        call_models: set[str] = set()
+        for raw in call.get("raw_objects") or []:
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            raw_model = payload.get("model")
+            normalized_raw = normalize_samsung_model(raw_model)
+            catalog_model = strict_known_model(raw_model, valid_models)
+            if (
+                not catalog_model
+                or not normalized_raw.startswith("S")
+                or payload.get("complete_screen_count") != 1
+                or payload.get("unique_main") is not True
+                or str(payload.get("label_ownership") or "") != "matched"
+                or str(payload.get("view_type") or "") != "單機"
+            ):
+                continue
+            call_models.add(catalog_model)
+        if len(call_models) == 1:
+            votes[next(iter(call_models))].append(call)
+
+    winners = [
+        (model, rows)
+        for model, rows in votes.items()
+        if len(rows) >= 2
+    ]
+    if len(winners) != 1:
+        return None
+    model, rows = winners[0]
+    for call in rows:
+        call["model"] = model
+        call["model_validation_failed"] = False
+        call["rejected_model"] = ""
+        call["structured_authority_blocked_fields"] = [
+            field
+            for field in call.get("structured_authority_blocked_fields") or []
+            if field != "model"
+        ]
+        if call.get("price"):
+            call["quality_issue"] = "無"
+    return model
+
+
 def _recover_known_authority_after_restart(
     current: dict[str, Any], calls: list[dict[str, Any]], meta: dict[str, Any]
 ) -> bool:
@@ -841,6 +924,16 @@ def finalize_file(
             continue
         existing_meta = (task.get("data") or {}).get("ocr_meta") or {}
         calls = groups.get(name) or []
+        recovered_official_sku = _recover_full_official_sku_consensus(calls)
+        official_sku_repair = bool(
+            apply
+            and recovered_official_sku
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
+            and int(existing_meta.get("ocr_attempt") or 0) == 3
+            and len(calls) == 3
+        )
         completed_current_adjudication = bool(
             apply
             and existing_meta.get("auto_verified") is True
@@ -863,7 +956,9 @@ def finalize_file(
             and bool(calls[-1].get("adjudication_rule"))
         )
         completed_current_adjudication = (
-            completed_current_adjudication or stale_terminal_blocker_repair
+            completed_current_adjudication
+            or stale_terminal_blocker_repair
+            or official_sku_repair
         )
         known_pixel_repair = bool(
             apply
@@ -904,6 +999,18 @@ def finalize_file(
             # authority silently fall back to the old wrong adjudication.
             if known_pixel_repair:
                 current["ocr_attempt"] = 3
+            if official_sku_repair:
+                current["model"] = recovered_official_sku
+                if current.get("price"):
+                    current["quality_issue"] = "無"
+                current["three_pass_adjudicated"] = True
+                current["adjudication_rule"] = (
+                    "three_pass_full_official_sku_normalization_repair"
+                )
+                current["adjudication_summary"] = (
+                    "三輪原始結構化答案均讀到同一完整官方料號；"
+                    "已將完整料號正規化為型號表短碼，不增加第 4 次模型呼叫。"
+                )
             current["category"] = current.get("view_type")
             decision = {
                 "attempt": 3,
