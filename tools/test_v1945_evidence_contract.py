@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,6 +96,78 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(batch.infer_period_from_text(staging), "202601")
         self.assertEqual(batch.infer_period_from_text(r"商化照片-202606"), "202606")
         self.assertEqual(batch.infer_period_from_text(r"run\20260720_200139"), "")
+
+    def test_catalog_loading_is_independent_of_process_working_directory(self):
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                os.chdir(temp_dir)
+                catalog = batch.load_model_catalog()
+            finally:
+                os.chdir(original_cwd)
+        self.assertIn("S32DG702EC", catalog)
+
+    def test_empty_catalog_never_erases_photo_model(self):
+        model, available = batch.revalidate_model_without_empty_catalog_erasure(
+            "S32DG702EC", []
+        )
+        self.assertEqual(model, "S32DG702EC")
+        self.assertFalse(available)
+
+    def test_resolution_fragment_cannot_become_retail_price(self):
+        self.assertTrue(
+            batch.price_looks_like_display_spec(
+                "35424",
+                "下方價牌寫「35,424 2160」，螢幕播放 Samsung Follow Me 4K。",
+            )
+        )
+        self.assertFalse(
+            batch.price_looks_like_display_spec(
+                "12990",
+                "同一實機價牌清楚寫 32吋 4K，售價 12,990 元。",
+            )
+        )
+
+    def test_generic_followme_4k_does_not_prove_m5_32_variant(self):
+        row = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": 'FollowMe M5 32"',
+            "price": "12990",
+            "quality_issue": "無",
+            "thinking": (
+                "同一實機貼紙只寫 Samsung Follow Me 4K；白色直立支架、"
+                "圓形底座與附著託盤清楚可見，價牌寫 12,990 元。"
+            ),
+            **evidence(
+                1,
+                True,
+                "matched",
+                [
+                    {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                    {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                ],
+            ),
+        }
+        self.assertIn(
+            "followme_specific_identity_evidence_missing",
+            followme_variant_evidence_reasons(row),
+        )
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+
+    def test_explicit_same_pass_followme_variant_remains_supported(self):
+        row = {
+            "model": 'FollowMe M7 32"',
+            "thinking": (
+                "同一實機規格牌清楚寫 FollowMe M7 32吋，"
+                "白色直立支架與圓形底座屬於同一台。"
+            ),
+        }
+        self.assertEqual(followme_variant_evidence_reasons(row), [])
 
     def _multiscreen_single(self, **updates):
         row = {

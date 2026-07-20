@@ -59,6 +59,29 @@ COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     "20260718.49": "20260718.51",
     "20260718.50": "20260718.51",
 }
+TRANSIENT_UPLOAD_ERROR_MARKERS = (
+    "exact remote readback failed",
+    "exact remote readback timed out",
+    "exact remote readback returned invalid",
+    "single-photo upload failed",
+    "single-photo upload timed out",
+    "remote upload was not uniquely confirmed",
+    "runtime health fuse is active",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "network",
+    "timeout",
+    "timed out",
+    "too many requests",
+    "rate limit",
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+)
 
 
 def _truthy(value: object) -> bool:
@@ -682,6 +705,36 @@ def recover_working_jobs(output_dir: Path) -> int:
     return count
 
 
+def is_transient_upload_failure(exc: BaseException) -> bool:
+    """Return whether a failure may be retried without changing OCR evidence."""
+    if isinstance(exc, (TimeoutError, ConnectionError, PermissionError)):
+        return True
+    text = str(exc or "").strip().lower()
+    return any(marker in text for marker in TRANSIENT_UPLOAD_ERROR_MARKERS)
+
+
+def requeue_transient_job(
+    job_path: Path,
+    exc: BaseException,
+    *,
+    output_dir: Path,
+    now_epoch: float | None = None,
+) -> Path:
+    """Delay a network/fuse retry while allowing later photos to upload."""
+    now = float(time.time() if now_epoch is None else now_epoch)
+    job = _read_json(job_path)
+    retry_count = max(0, int(job.get("transport_retry_count") or 0)) + 1
+    delay_seconds = min(300.0, 15.0 * (2 ** min(retry_count - 1, 5)))
+    job["transport_retry_count"] = retry_count
+    job["last_transport_error"] = str(exc)
+    job["last_transport_error_at"] = datetime.now().isoformat(timespec="seconds")
+    job["retry_not_before_epoch"] = now + delay_seconds
+    pending = _stream_dirs(output_dir)["pending"] / job_path.name
+    _atomic_json(pending, job)
+    job_path.unlink(missing_ok=True)
+    return pending
+
+
 def migrate_compatible_pending_jobs(output_dir: Path) -> int:
     """Upgrade explicitly compatible queued jobs without weakening the gate.
 
@@ -764,7 +817,18 @@ def claim_next_job(output_dir: Path) -> Path | None:
     pending = sorted(dirs["pending"].glob("*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
     if not pending:
         return None
-    source = pending[0]
+    now = time.time()
+    source = None
+    for candidate in pending:
+        try:
+            retry_not_before = float(_read_json(candidate).get("retry_not_before_epoch") or 0)
+        except (OSError, UnicodeError, ValueError, TypeError, RuntimeError):
+            retry_not_before = 0
+        if retry_not_before <= now:
+            source = candidate
+            break
+    if source is None:
+        return None
     target = dirs["working"] / source.name
     try:
         os.replace(source, target)
@@ -844,13 +908,25 @@ def run_worker(
                     break
                 time.sleep(max(1.0, poll_seconds))
             except Exception as exc:
-                job = _read_json(job_path)
-                job["failed_at"] = datetime.now().isoformat(timespec="seconds")
-                job["error"] = str(exc)
-                failed = _stream_dirs(output_dir)["failed"] / job_path.name
-                _atomic_json(failed, job)
-                job_path.unlink(missing_ok=True)
-                refresh_status(output_dir, worker_state="error", last_error=str(exc))
+                if is_transient_upload_failure(exc):
+                    requeue_transient_job(
+                        job_path,
+                        exc,
+                        output_dir=output_dir,
+                    )
+                    refresh_status(
+                        output_dir,
+                        worker_state="waiting",
+                        last_error=str(exc),
+                    )
+                else:
+                    job = _read_json(job_path)
+                    job["failed_at"] = datetime.now().isoformat(timespec="seconds")
+                    job["error"] = str(exc)
+                    failed = _stream_dirs(output_dir)["failed"] / job_path.name
+                    _atomic_json(failed, job)
+                    job_path.unlink(missing_ok=True)
+                    refresh_status(output_dir, worker_state="error", last_error=str(exc))
                 if once:
                     break
         refresh_status(output_dir, worker_state="stopped", worker_pid=0)

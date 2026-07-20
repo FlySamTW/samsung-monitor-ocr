@@ -15,6 +15,7 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $audit = Join-Path $OutputDir "_ocr_audit"
 $BenchmarkLockPath = Join-Path $audit "model_benchmark.lock"
 $RuntimeHealthFusePath = Join-Path $audit "runtime_health_fuse.json"
+$PipelinePausePath = Join-Path $audit "pipeline_pause.json"
 $logDir = Join-Path $RepoRoot "logs"
 $lockPath = Join-Path $audit "ocr_continuity_supervisor.lock"
 $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
@@ -315,6 +316,10 @@ try {
     if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
         Alert "runtime_health_fuse_active" @{fuse=$RuntimeHealthFusePath}
         exit 9
+    }
+    if (Test-Path -LiteralPath $PipelinePausePath) {
+        Log-Event "pipeline_pause_noop" @{pause=$PipelinePausePath}
+        exit 0
     }
     if (Test-Path -LiteralPath $BenchmarkLockPath) {
         try {

@@ -19,6 +19,8 @@ from rich.logging import RichHandler
 from openai import OpenAI
 
 REPO_ROOT = Path(__file__).resolve().parent
+MODEL_LIST_PATH = REPO_ROOT / "型號表.txt"
+ASSETS_DIR = REPO_ROOT / "assets"
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -1243,6 +1245,66 @@ def clean_monitor_price(price, min_price=2000, context_text=""):
     return digits
 
 
+def price_looks_like_display_spec(price, context_text=""):
+    """Reject a resolution/spec fragment that the model mislabeled as price.
+
+    Retail monitor prices overwhelmingly end in 0 or 9.  A different ending is
+    not rejected by itself, but it is unsafe when the same alleged price is
+    immediately followed by a common vertical-resolution value.  This catches
+    the observed ``35,424 2160`` hallucination without weakening valid prices
+    such as 12,990 or 19,900.
+    """
+    digits = "".join(ch for ch in str(price or "") if ch.isdigit())
+    text = str(context_text or "")
+    if len(digits) not in {4, 5} or not text:
+        return False
+    try:
+        if int(digits) % 10 in {0, 9}:
+            return False
+    except ValueError:
+        return False
+    formatted = f"{int(digits):,}"
+    price_token = rf"(?:{re.escape(digits)}|{re.escape(formatted)})"
+    return bool(
+        re.search(
+            rf"{price_token}\s*(?:[x×*]\s*)?(?:1080|1200|1440|1600|2160|3840)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def load_model_catalog(path=MODEL_LIST_PATH):
+    """Load the model catalog from a repository-bound path, never process CWD."""
+    catalog_path = Path(path).resolve()
+    try:
+        return [
+            line.strip().upper()
+            for line in catalog_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError):
+        return []
+
+
+def revalidate_model_without_empty_catalog_erasure(model, valid_models):
+    """Return ``(model, catalog_available)`` without treating load failure as evidence.
+
+    An empty catalog is a runtime/configuration fault.  It must block automatic
+    verification, but must never erase a model that the current photo actually
+    supplied.
+    """
+    candidate = str(model or "").strip()
+    if not candidate:
+        return None, bool(valid_models)
+    if not valid_models or is_followme_model(candidate):
+        return candidate, bool(valid_models)
+    upper = candidate.upper()
+    if upper in valid_models:
+        return upper, True
+    return strict_known_model(upper, valid_models), True
+
+
 def structured_narration_price_conflict(structured_price, narration_price):
     """Reject any same-pass narration/JSON price disagreement.
 
@@ -1568,6 +1630,7 @@ OUTPUT_ROOT = Path(os.environ.get("OCR_OUTPUT_DIR", r"D:\00_商化\00_已OCR照�
 SOURCE_ROOT = Path(os.environ.get("OCR_SOURCE_ROOT", r"D:\00_商化\00_未整理商化照片"))
 DRIVE_MANIFEST_DIR = OUTPUT_ROOT / "_drive_upload"
 AUDIT_DIR = OUTPUT_ROOT / "_ocr_audit"
+PIPELINE_PAUSE_PATH = AUDIT_DIR / "pipeline_pause.json"
 MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
 MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
@@ -1923,6 +1986,34 @@ def build_overall_progress(current_folder=None, current_stats=None) -> dict:
         "next_pending_folder": next_pending,
         "next_blocked_folder": next_blocked,
     }
+
+
+def read_pipeline_pause():
+    try:
+        payload = json.loads(PIPELINE_PAUSE_PATH.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+
+
+def write_pipeline_pause(reason, current_dir=""):
+    """Persist an intentional stop so continuity workers cannot advance periods."""
+    PIPELINE_PAUSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "samsung-ocr-pipeline-pause/v1",
+        "paused_at": datetime.now().isoformat(),
+        "reason": str(reason or "operator_stop"),
+        "current_dir": str(current_dir or ""),
+    }
+    temp = PIPELINE_PAUSE_PATH.with_name(
+        f".{PIPELINE_PAUSE_PATH.name}.{os.getpid()}.tmp"
+    )
+    temp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temp, PIPELINE_PAUSE_PATH)
+    return payload
 
 
 def _parse_review_filename(file_name: str) -> dict:
@@ -2821,8 +2912,9 @@ def process_single_image(
     # Load Valid Models for Injection
     # [v9.42 Dynamic Loading] Reload model list from file every time to respect User's "maintain text file only" request
     try:
-        with open('型號表.txt', 'r', encoding='utf-8') as f:
-            raw_models = [line.strip() for line in f if line.strip()]
+        raw_models = load_model_catalog()
+        if not raw_models:
+            raise RuntimeError(f"empty or unavailable catalog: {MODEL_LIST_PATH}")
         # Update matcher dynamically
         if orchestrator.model_matcher:
             orchestrator.model_matcher.valid_models = raw_models
@@ -2890,9 +2982,8 @@ def process_single_image(
     # Get model list for injection
     # v16.9 Fix: Actually load the list!
     try:
-        with open('型號表.txt', 'r', encoding='utf-8') as f:
-             valid_models_str = f.read()
-    except:
+        valid_models_str = MODEL_LIST_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
         valid_models_str = "(無法讀取型號表)"
 
     # [v18.75 FIX] Load System Prompt from PromptManager (Bundle System)
@@ -2910,9 +3001,8 @@ def process_single_image(
     try:
         # 🔥 強制每次都從檔案讀取，不使用快取
         # One production prompt is the source of truth for every provider.
-        prompt_file = 'samsung_ocr_prompt.txt'
-        with open(prompt_file, 'r', encoding='utf-8') as f:
-            prompt_template = f.read()
+        prompt_file = REPO_ROOT / 'samsung_ocr_prompt.txt'
+        prompt_template = prompt_file.read_text(encoding="utf-8")
         # 可選：記錄檔案修改時間，方便 debug
         # import os; mtime = os.path.getmtime(prompt_file)
         # print(f"[DEBUG] Prompt loaded, mtime={mtime}")
@@ -3482,12 +3572,10 @@ def process_single_image(
 
         # [v18 Strict Backend Insurance]
         # 1. Load Model List
-        valid_models_list = []
-        try:
-             with open('型號表.txt', 'r', encoding='utf-8') as f:
-                 valid_models_list = [line.strip().upper() for line in f if line.strip()]
-        except:
-             if orchestrator: orchestrator.log_system("⚠️ 無法讀取型號表，跳過模型嚴格校驗")
+        valid_models_list = load_model_catalog()
+        catalog_load_failed = not valid_models_list
+        if catalog_load_failed and orchestrator:
+            orchestrator.log_system("⛔ 型號表未載入；保留本輪讀值但停止自動驗證，避免把型號擦除")
 
         # Handle 'data' nesting if exists
         data_obj = parsed # Default
@@ -3495,6 +3583,8 @@ def process_single_image(
              data_obj = parsed.get('data', parsed)
 
         if not isinstance(data_obj, dict): data_obj = {} # Fallback to empty dict to prevent AttributeError
+        if catalog_load_failed:
+            data_obj["model_catalog_unavailable"] = True
         explicit_structured_fields = {
             key: data_obj.get(key)
             for key in ("view_type", "category", "model", "price")
@@ -3847,6 +3937,15 @@ def process_single_image(
             data_obj["price"] = None
             data_obj["price_conflict_detected"] = True
 
+        if price_looks_like_display_spec(data_obj.get("price"), thinking_text):
+            console.print(
+                f"[yellow]⚠️ [價格守門] {data_obj.get('price')} 緊鄰解析度數字，"
+                "視為規格誤讀，不得當售價[/yellow]"
+            )
+            data_obj["rejected_spec_like_price"] = data_obj.get("price")
+            data_obj["price"] = None
+            data_obj["price_conflict_detected"] = True
+
         cleaned_final_price = clean_monitor_price(data_obj.get("price"), context_text=thinking_text)
         if data_obj.get("price") and not cleaned_final_price:
             console.print(f"[dim]⚠️ [價格攔截] 最終價格 {data_obj.get('price')} 2000 元以下或格式不合 -> 清除[/dim]")
@@ -4078,13 +4177,20 @@ def process_single_image(
 
             # ... (Model matching remains same) ...
             valid_models_list = orchestrator.model_matcher.valid_models if orchestrator and orchestrator.model_matcher else []
+            if not valid_models_list:
+                result_json["model_catalog_unavailable"] = True
             if parsed_model and parsed_model not in valid_models_list:
                 # Friendly FollowMe names were already normalized from explicit
                 # machine-readable physical evidence.  A second generic SKU-list
                 # pass must not erase that verified classification.
                 if not is_followme_model(parsed_model):
-                    exact_model = strict_known_model(parsed_model, valid_models_list)
-                    result_json["model"] = exact_model
+                    exact_model, catalog_available = revalidate_model_without_empty_catalog_erasure(
+                        parsed_model, valid_models_list
+                    )
+                    if catalog_available:
+                        result_json["model"] = exact_model
+                        if not exact_model:
+                            result_json["model_validation_failed"] = True
 
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
@@ -4207,7 +4313,12 @@ def process_single_image(
         # Final fail-closed validation after every rescue/correction path.
         final_guard_model = result_json.get("model")
         if final_guard_model and not is_followme_standard_name(final_guard_model) and not is_other_brand_model(final_guard_model):
-            known_final_model = strict_known_model(final_guard_model, valid_models_list)
+            known_final_model, catalog_available = revalidate_model_without_empty_catalog_erasure(
+                final_guard_model, valid_models_list
+            )
+            if not catalog_available:
+                result_json["model_catalog_unavailable"] = True
+                known_final_model = final_guard_model
             if known_final_model:
                 result_json["model"] = known_final_model
             elif should_compare_official_price(fname) and is_samsung_model_like(final_guard_model) and try_discover_model(final_guard_model):
@@ -4459,6 +4570,7 @@ def get_status():
             "overall_progress": overall_progress,
             "review_progress": review_progress,
             "runtime_health_fuse": public_runtime_health_fuse(read_runtime_health_fuse(AUDIT_DIR)),
+            "pipeline_pause": read_pipeline_pause(),
             "stream_upload": read_stream_status(OUTPUT_ROOT),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
@@ -4915,6 +5027,7 @@ def start_batch():
         )
         if not started:
             return jsonify({"error": "批次仍在執行或停止中，請稍候再試"}), 409
+        PIPELINE_PAUSE_PATH.unlink(missing_ok=True)
         save_last_config(orchestrator.image_dir, model_name_global)
         mode_text = "重新啟動" if restart else "繼續執行"
         return jsonify({"status": "started", "message": f"批次處理已{mode_text} (目錄: {orchestrator.image_dir})"})
@@ -5032,8 +5145,17 @@ def stop_batch():
         return jsonify({"error": "系統未初始化"}), 500
 
     try:
+        req_data = request.json or {}
+        pause = write_pipeline_pause(
+            req_data.get("reason") or "operator_stop",
+            getattr(orchestrator, "image_dir", ""),
+        )
         orchestrator.stop_batch()
-        return jsonify({"status": "stopped", "message": "批次處理已停止"})
+        return jsonify({
+            "status": "stopped",
+            "message": "批次處理已停止",
+            "pipeline_pause": pause,
+        })
     except Exception as e:
         return jsonify({"error": f"停止失敗: {str(e)}"}), 500
 
@@ -5295,8 +5417,8 @@ def main():
         "accuracy_profile": ACCURACY_PROFILE,
         "presentation_role": "production",
         "output_file": "final_results_v4.csv", # Legacy
-        "assets_dir": "assets",
-        "model_list_file": "型號表.txt",
+        "assets_dir": str(ASSETS_DIR),
+        "model_list_file": str(MODEL_LIST_PATH),
         "max_dimensions": (2560, 1440),
         "bottom_label_strip": args.bottom_label_strip,
         "bottom_center_zoom": args.bottom_center_zoom,
@@ -5318,9 +5440,9 @@ def main():
     set_price_log_callback(price_log_to_dashboard)
 
     is_ocg = 'opencode.ai' in str(args.api_base or '')
-    prompt_file = 'samsung_ocr_prompt_opencode_go.txt' if is_ocg else 'samsung_ocr_prompt.txt'
-    if os.path.exists(prompt_file):
-        prompt_mtime = os.path.getmtime(prompt_file)
+    prompt_file = REPO_ROOT / ('samsung_ocr_prompt_opencode_go.txt' if is_ocg else 'samsung_ocr_prompt.txt')
+    if prompt_file.exists():
+        prompt_mtime = prompt_file.stat().st_mtime
         prompt_time_str = datetime.fromtimestamp(prompt_mtime).strftime('%Y-%m-%d %H:%M:%S')
         orchestrator.log_system(f"📜 Prompt 版本: {prompt_time_str}", with_timestamp=False)
         console.print(f"[bold green]📜 Prompt 版本 ({prompt_file}): {prompt_time_str}[/bold green]")

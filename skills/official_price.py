@@ -14,6 +14,7 @@ import re
 import time
 import json
 import requests
+from pathlib import Path
 from typing import Optional, Tuple, Dict, Callable, List
 from rich.console import Console
 
@@ -26,6 +27,9 @@ from skills.model_catalog_rules import (
 )
 
 console = Console()
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PRICE_CACHE = REPO_ROOT / "即時價格表.txt"
+DEFAULT_MODEL_LIST = REPO_ROOT / "型號表.txt"
 
 # 三星產品頁 URL 模板 (使用完整型號)
 SAMSUNG_PRODUCT_API = "https://www.samsung.com/tw/api/v1/product/{model_id}/spec"
@@ -53,9 +57,9 @@ def _log_price_status(message: str):
 class OfficialPriceManager:
     """官方價格管理器"""
     
-    def __init__(self, cache_file: str = "即時價格表.txt", model_list_file: str = "型號表.txt"):
-        self.cache_file = cache_file
-        self.model_list_file = model_list_file
+    def __init__(self, cache_file: str | Path = DEFAULT_PRICE_CACHE, model_list_file: str | Path = DEFAULT_MODEL_LIST):
+        self.cache_file = str(Path(cache_file).resolve())
+        self.model_list_file = str(Path(model_list_file).resolve())
         self.price_cache: Dict[str, int] = {}
         self.session_fetched: set = set()  # 本次執行期間已嘗試抓取的型號
         self.discontinued_models: set = set()  # [v18.71] 本次執行期間確認停產的型號

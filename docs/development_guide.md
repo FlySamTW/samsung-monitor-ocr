@@ -1078,3 +1078,15 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 已接受且 `auto_verified=true`、`auto_review_required=false` 的照片，`review_status` 必須清為 `已完成`，不得留下先前輪次的 `待審核`。舊 live backend 若仍在記憶體保留修復前的技術錯誤，`get_all_records()` 只能在 durable 列具有明確三輪定案規則、已驗證且記憶列仍未解決時，讓 durable 終局結果優先；一般新記憶結果仍優先，避免舊檔覆蓋真正的新結果。
 - `tools/maintain_active_three_pass_repairs.py` 是單一 evidence revision 的零模型呼叫相容橋。它只對已用滿三輪、同圖綁定且能被現行 deterministic finalizer 證明的列套用修復，先保留可稽核快照，再以 optimistic compare-before-replace 合併；舊後端再次寫檔時可冪等重套。它不得停止 OCR、不得重啟 port 5002、不得開啟或重新整理瀏覽器、不得產生第四輪，後端 revision 改變時必須退出。
 - 現行介面驗收必須在同一既有分頁看到：`正在執行`、目前檔案、同檔預覽、自然語言 LLM 即時文字、右側累積卡片、移動中的月份複核數，以及持續增加的逐張上傳數。總進度暫時不動而月份複核與上傳持續前進是正常去重語意；月份複核、目前檔案與上傳也一起不動才屬卡住。
+
+## 2026-07-20 `.55`：型號表路徑、規格誤價、停止邊界與 202601 恢復
+
+- 所有型號表、prompt、assets 與價格快取都必須以 repository root 組成絕對路徑，不得依賴程序目前工作目錄。正式程序啟動後要核對型號表載入筆數大於零；即使目錄暫時無法載入，也只能標記 `model_catalog_unavailable` 並阻止自動驗證，不得把同輪原圖已讀到的型號清空後冒充「無型號」。
+- 價格欄位必須拒絕明顯來自顯示規格的數字。事故樣本 `台中廣三SMS-351` 把敘述中的 `35,424 2160`（解析度文字）誤作售價 35,424；`.55` 在正規化與 frozen replay 兩條路都會清空這種 spec-like price、標記價格衝突並使用尚未消耗的獨立輪次。三輪後仍無實體價牌就以無價格如實結案。
+- `Samsung Follow Me 4K` 只能證明 FollowMe 家族，不能單獨證明 `M5 32`、`M7 32`、`Pro M7 43` 或尺寸。若自然敘述只支持泛稱，而輸出猜了具體款式，必須回報 `followme_specific_identity_evidence_missing`；只有同輪可見文字、實體價牌或 SKU 明確支持相同款式時才可保留具體型號。
+- `/api/stop` 必須在照片邊界寫入持久化 `pipeline_pause.json`；continuity supervisor 看見此標記只能健康 no-op，不得自行續跑或換月。只有經確認的 `/api/start_batch` 成功後才清除標記。`wait_for_folder_done` 在 `is_running=false` 且 `processed < total` 時必須報告未完成並保留 staging，絕對不得當成資料匣完成、刪除 staging 或前進下一月份。
+- 網路、rclone、Drive readback 或 runtime fuse 等可重試傳輸錯誤不得永久移入 failed。stream uploader 以延遲退避把該工作原子放回 pending，未到重試時間的工作不得擋住後續照片；OCR 仍按每張終局即 enqueue 的鐵律前進。只有內容契約、source identity、雜湊或 revision 不一致等不可恢復錯誤才進永久 failed。
+- `maintain_active_three_pass_repairs.py` 必須記錄未解集合 fingerprint；相同 unresolved 集合沒有新終局時不得每輪重寫近 500 MB 快照。零筆定案的交易快照要自動刪除，仍不得改動任何來源照片。
+- 本次停止後舊 continuation 曾錯誤把未完成 202601 當完成並切到 202602／202603。恢復時不得沿用誤切月份：以 frozen candidate CSV 重建精確 202601 staging 共 1,478 張與 `.ocr_source_map.json`，再恢復最後完整 206-row 快照。`.54` 原始三輪經 `.55` 綁定 dry-run 後，169 筆安全結果零模型呼叫升版並先 enqueue，37 筆不安全結果從舊 task 檔移除，交回正常最多三輪流程；`台中廣三SMS-349` 與 `351` 都屬後者，沒有冒充安全結果。
+- frozen partial apply 的 `--drop-rejected-for-rerun` 只允許搭配 `--apply --allow-partial`。所有 safe rows 必須先成功建立新版逐張 upload job，才可原子更新 task；被拒列只從舊完成 task 移除，不刪圖片、不刪 trace、不增加第 4 輪，並保留正常 pipeline 可用的合法呼叫額度。
+- 換版順序固定為：先在舊 uploader 上讓唯一可證明的舊 revision 網路失敗工作取得精確 receipt，再於 idle 邊界只熱換隱藏 uploader；接著以 `reload_backend_at_safe_idle.ps1 -AllowIncompleteStoppedBatch` 只換 port 5002，禁止開／重整瀏覽器；核對 `.55`、compact-v2、132 筆型號、202601 staging 與 `pipeline_pause` 後，才用 `confirmed=true`、`restart=false` 續跑。既有 Dashboard 分頁驗收由 169/1,478 前進至 186/1,478，上傳總數由 55,792 前進至 55,803，LLM 逐字區與右側縮圖同步，證明不是只看 API 宣稱正常。

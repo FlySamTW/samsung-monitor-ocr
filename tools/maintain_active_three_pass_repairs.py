@@ -223,6 +223,25 @@ def _new_review_names(
     }
 
 
+def _review_fingerprint(result_path: Path, names: set[str]) -> str:
+    """Hash only unresolved rows so unrelated live writes do not make snapshots."""
+    try:
+        tasks = _read_json(result_path)
+    except Exception:
+        return ""
+    selected = [
+        task
+        for task in tasks if isinstance(task, dict) and _task_file_name(task) in names
+    ] if isinstance(tasks, list) else []
+    canonical = json.dumps(
+        selected,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _sha256_bytes(canonical)
+
+
 def _collect_stale_status_repairs(
     result_path: Path,
     repairs: dict[str, dict[str, Any]],
@@ -286,6 +305,10 @@ def _prove_new_repairs(
         name = _task_file_name(task)
         if name in finalized_names:
             repairs[_repair_key(result_path, name)] = deepcopy(task)
+    if not finalized_names:
+        # The copy is only a transactional work file.  Keeping one per poll
+        # caused hundreds of megabytes of audit noise without adding evidence.
+        snapshot.unlink(missing_ok=True)
     return report
 
 
@@ -325,6 +348,7 @@ def run(args: argparse.Namespace) -> int:
     work_dir = audit_dir / "snapshots"
     _claim_lock(lock_path)
     repairs = _load_store(store_path)
+    attempted_review_fingerprints: dict[str, str] = {}
     authority_entries = 0
     if args.authority_manifest:
         authority_entries = load_authority_manifest(args.authority_manifest)
@@ -378,6 +402,12 @@ def run(args: argparse.Namespace) -> int:
 
             names = _new_review_names(result_path, repairs)
             if names:
+                fingerprint = _review_fingerprint(result_path, names)
+                fingerprint_key = str(result_path.resolve())
+                if fingerprint and attempted_review_fingerprints.get(fingerprint_key) == fingerprint:
+                    time.sleep(args.poll_seconds)
+                    continue
+                attempted_review_fingerprints[fingerprint_key] = fingerprint
                 report = _prove_new_repairs(
                     result_path=result_path,
                     trace_path=args.trace,

@@ -260,6 +260,88 @@ class FrozenGuardRevalidationTests(unittest.TestCase):
             )
             self.assertTrue(Path(report["manifest"]).is_file())
 
+    def test_partial_apply_drops_only_rejected_tasks_for_normal_rerun(self):
+        with tempfile.TemporaryDirectory() as temp:
+            staging, trace, output = self._fixture(Path(temp))
+            source_map_path = staging / ".ocr_source_map.json"
+            source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
+            rejected_name = next(iter(source_map["items"]))
+            safe_name = "M-test-safe.jpg"
+            safe_source_id = "d" * 64
+            safe_original = Path(temp) / "source" / "商化照片-202606" / safe_name
+            safe_staged = staging / safe_name
+            safe_original.write_bytes(b"original-safe")
+            safe_staged.write_bytes(b"prepared-safe")
+            source_map["items"][safe_name] = {
+                "source_item_id": safe_source_id,
+                "original_source_path": str(safe_original),
+                "period": "202606",
+            }
+            source_map_path.write_text(json.dumps(source_map), encoding="utf-8")
+
+            result_path = next(staging.glob("*OCR成功.json"))
+            tasks = json.loads(result_path.read_text(encoding="utf-8"))
+            safe_task = json.loads(json.dumps(tasks[0]))
+            safe_task["id"] = 2
+            safe_task["data"]["image"] = f"/data/upload/1/{safe_name}"
+            tasks.append(safe_task)
+            result_path.write_text(json.dumps(tasks), encoding="utf-8")
+
+            rejected_trace = json.loads(trace.read_text(encoding="utf-8"))
+            rejected_trace["attempt"] = 2
+            safe_trace = json.loads(json.dumps(rejected_trace))
+            safe_trace.update(
+                {
+                    "file_name": safe_name,
+                    "attempt": 1,
+                    "source_item_id": safe_source_id,
+                    "source_path": str(safe_staged),
+                    "original_source_path": str(safe_original),
+                }
+            )
+            trace.write_text(
+                json.dumps(rejected_trace) + "\n" + json.dumps(safe_trace) + "\n",
+                encoding="utf-8",
+            )
+            queued = []
+            with patch(
+                "tools.revalidate_frozen_guard_results.prepared_input_sha256",
+                return_value="b" * 64,
+            ):
+                report = revalidate(
+                    staging_dir=staging,
+                    trace_path=trace,
+                    output_dir=output,
+                    old_revision="20260717.41",
+                    apply=True,
+                    allow_partial=True,
+                    drop_rejected_for_rerun=True,
+                    backend_status={
+                        "current_relative_dir": str(Path(temp) / "other"),
+                        "runtime_health_fuse": None,
+                    },
+                    enqueue=lambda row, *, output_dir: (
+                        queued.append(row) or output_dir / "queued.json"
+                    ),
+                )
+            self.assertEqual(report["result_count"], 1)
+            self.assertEqual(report["rejected_count"], 1)
+            self.assertEqual(report["dropped_for_rerun"], 1)
+            self.assertEqual(len(queued), 1)
+            remaining = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [Path(task["data"]["image"]).name for task in remaining],
+                [safe_name],
+            )
+            self.assertNotIn(
+                rejected_name,
+                [Path(task["data"]["image"]).name for task in remaining],
+            )
+            self.assertEqual(
+                remaining[0]["data"]["ocr_meta"]["evidence_guard_revision"],
+                queued[0]["evidence_guard_revision"],
+            )
+
     def test_missing_independence_proof_performs_no_write(self):
         with tempfile.TemporaryDirectory() as temp:
             staging, trace, output = self._fixture(Path(temp))

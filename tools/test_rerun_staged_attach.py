@@ -73,6 +73,25 @@ class AttachExistingTests(unittest.TestCase):
         self.assertEqual(result, done)
         self.assertEqual(request.call_count, 2)
 
+    def test_wait_refuses_idle_incomplete_folder_instead_of_advancing(self):
+        incomplete = {
+            "is_running": False,
+            "stats": {"processed": 1, "total": 3, "success": 1, "failed": 0},
+        }
+        with patch.object(questionable, "json_request", return_value=incomplete):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "preserve staging and do not advance",
+            ):
+                questionable.wait_for_folder_done(
+                    "http://mock",
+                    Path("group"),
+                    1,
+                    0,
+                    max_consecutive_status_errors=1,
+                    retry_sleep_seconds=0,
+                )
+
     def test_resume_selects_active_group_and_only_later_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

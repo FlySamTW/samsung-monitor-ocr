@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260720.54"
+EVIDENCE_GUARD_REVISION = "20260720.55"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -883,28 +883,61 @@ def followme_models_equivalent(first: Any, second: Any) -> bool:
 
 
 def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
-    """Require explicit same-unit ``Pro`` evidence for every Pro bundle.
+    """Require same-pass physical text support for every specific bundle.
 
-    Size, price and panel SKU can all be shared with a regular bundle.  They
-    may validate other fields, but none of them can upgrade a model to Pro.
+    Generic ``FollowMe 4K`` wording plus a stand proves the FollowMe family,
+    not M5/M7/Pro or screen size.  A specific variant survives only when the
+    same pass independently reads the matching family+size or panel SKU.
     """
-    if followme_identity_key(record.get("model")) not in {"PRO_M7_32", "PRO_M7_43"}:
+    identity = followme_identity_key(record.get("model"))
+    if (
+        not identity
+        or identity == "UNRESOLVED"
+        or not is_followme_model(record.get("model"))
+    ):
         return []
 
     narration = str(record.get("thinking") or record.get("narration") or "")
-    same_unit_pro_label = bool(
-        re.search(
-            r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)"
-            r".{0,40}(?<![A-Z])PRO(?![A-Z])"
-            r"|(?<![A-Z])PRO(?![A-Z]).{0,40}"
-            r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)",
-            narration,
-            re.IGNORECASE,
+    if identity in {"PRO_M7_32", "PRO_M7_43"}:
+        same_unit_pro_label = bool(
+            re.search(
+                r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)"
+                r".{0,40}(?<![A-Z])PRO(?![A-Z])"
+                r"|(?<![A-Z])PRO(?![A-Z]).{0,40}"
+                r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)",
+                narration,
+                re.IGNORECASE,
+            )
         )
-    )
-    if same_unit_pro_label:
+        if same_unit_pro_label:
+            return []
+        return ["followme_pro_identity_evidence_missing"]
+
+    # Machine-readable fixture evidence remains authoritative for ordinary
+    # FollowMe rows.  The narrow unsafe case is a pass that explicitly reads
+    # only the generic product-card text "Follow Me 4K" but nevertheless
+    # returns a particular M5/M7/size.  That exact wording proves family only.
+    if not re.search(r"FOLLOW\s*ME\s*4K", narration, re.IGNORECASE):
         return []
-    return ["followme_pro_identity_evidence_missing"]
+
+    narration_identity = followme_identity_key(narration)
+    compact = re.sub(r"[^A-Z0-9]", "", narration.upper())
+    identity_patterns = {
+        "M5_27": (r"M5.{0,12}(?:27\s*(?:吋|型|\"))", r"(?:LS|S)?27FM50\d[A-Z0-9]*"),
+        "M5_32": (r"M5.{0,12}(?:32\s*(?:吋|型|\"))", r"(?:LS|S)?32FM50\d[A-Z0-9]*"),
+        "M7_32": (r"M7.{0,12}(?:32\s*(?:吋|型|\"))", r"(?:LS|S)?32FM70\d[A-Z0-9]*"),
+        "M7_43": (r"M7.{0,12}(?:43\s*(?:吋|型|\"))", r"(?:LS|S)?43FM70\d[A-Z0-9]*"),
+        "PRO_M7_32": (r"PRO.{0,12}M7.{0,12}(?:32\s*(?:吋|型|\"))",),
+        "PRO_M7_43": (r"PRO.{0,12}M7.{0,12}(?:43\s*(?:吋|型|\"))",),
+    }
+    explicit_variant = narration_identity == identity or any(
+        re.search(pattern, narration, re.IGNORECASE)
+        or re.search(pattern, compact, re.IGNORECASE)
+        for pattern in identity_patterns.get(identity, ())
+    )
+    if not explicit_variant:
+        return ["followme_specific_identity_evidence_missing"]
+    return []
 
 
 def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
@@ -1701,6 +1734,8 @@ def immediate_retry_decision(
         reasons.append("價牌短型號唯一補全需第二輪獨立確認")
     if record.get("model_validation_failed") or is_placeholder_model(model):
         reasons.append("型號未通過正式清單驗證")
+    if record.get("model_catalog_unavailable"):
+        reasons.append("型號表未載入，屬系統設定錯誤")
     if record.get("price_conflict_detected"):
         reasons.append("價格欄位互相衝突")
     if record.get("brand_evidence_conflict"):
@@ -2992,6 +3027,7 @@ def finalize_three_pass_outcome(
             if item.get("model_validation_failed") is not True
             and item.get("price_conflict_detected") is not True
             and item.get("brand_evidence_conflict") is not True
+            and not followme_variant_evidence_reasons(item)
         ]
         model = _consensus_value(
             field_safe,

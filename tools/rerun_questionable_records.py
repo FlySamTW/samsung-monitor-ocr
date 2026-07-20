@@ -385,7 +385,12 @@ def wait_for_folder_done(
             )
             last_line = now
         if not running and total > 0:
-            return status
+            if processed >= total:
+                return status
+            raise RuntimeError(
+                f"folder stopped before completion: {folder} "
+                f"processed={processed} total={total}; preserve staging and do not advance"
+            )
         done_tuple = (processed, success, failed, total)
         if total > 0 and processed >= total:
             if done_tuple == last_done_tuple:

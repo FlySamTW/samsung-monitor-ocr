@@ -214,6 +214,13 @@ def _raw_call(
         (trace.get("parsed_output") or {}).get("input_image_sha256") or ""
     ).lower()
     record["thinking"] = str(record.get("narration") or "")
+    if backend.price_looks_like_display_spec(
+        record.get("price"),
+        record.get("thinking"),
+    ):
+        record["rejected_spec_like_price"] = record.get("price")
+        record["price"] = None
+        record["price_conflict_detected"] = True
     record["independent_pass"] = True
     record["prior_answer_exposed"] = False
     record["prompt_contamination"] = False
@@ -468,6 +475,7 @@ def revalidate(
     apply: bool,
     backend_status: dict[str, Any],
     allow_partial: bool = False,
+    drop_rejected_for_rerun: bool = False,
     enqueue: Callable[..., Path | None] = enqueue_finalized_result,
 ) -> dict[str, Any]:
     staging_dir = staging_dir.resolve()
@@ -498,7 +506,7 @@ def revalidate(
         names=names,
     )
     normalizer = FieldNormalizer()
-    matcher = ModelMatcher("型號表.txt")
+    matcher = ModelMatcher(str(backend.MODEL_LIST_PATH))
     results: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
 
@@ -626,6 +634,7 @@ def revalidate(
         "old_revision": old_revision,
         "current_revision": EVIDENCE_GUARD_REVISION,
         "allow_partial": allow_partial,
+        "drop_rejected_for_rerun": drop_rejected_for_rerun,
         "result_count": len(results),
         "rejected_count": len(rejected),
         "rejected": rejected,
@@ -656,8 +665,22 @@ def revalidate(
             raise RuntimeError(f"current result was not queued: {row['file_name']}")
     for row in results:
         _update_task(tasks[row["file_name"]], row)
+    rejected_names = {
+        str(row.get("file_name") or "")
+        for row in rejected
+        if str(row.get("file_name") or "")
+    }
     for path_text, payload in task_files.items():
+        if drop_rejected_for_rerun:
+            payload[:] = [
+                task
+                for task in payload
+                if _task_file_name(task) not in rejected_names
+            ]
         _atomic_json(Path(path_text), payload)
+    report["dropped_for_rerun"] = (
+        len(rejected_names) if drop_rejected_for_rerun else 0
+    )
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     manifest = (
         output_dir
@@ -687,7 +710,17 @@ def main() -> int:
         ),
     )
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--drop-rejected-for-rerun",
+        action="store_true",
+        help=(
+            "With --apply --allow-partial, remove old-revision rejects from "
+            "the task file so the normal bounded pipeline reprocesses them."
+        ),
+    )
     args = parser.parse_args()
+    if args.drop_rejected_for_rerun and not (args.apply and args.allow_partial):
+        parser.error("--drop-rejected-for-rerun requires --apply --allow-partial")
     report = revalidate(
         staging_dir=args.staging_dir,
         trace_path=args.trace,
@@ -696,6 +729,7 @@ def main() -> int:
         apply=args.apply,
         backend_status=_status(args.backend_url),
         allow_partial=args.allow_partial,
+        drop_rejected_for_rerun=args.drop_rejected_for_rerun,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

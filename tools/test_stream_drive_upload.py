@@ -22,9 +22,11 @@ from tools.stream_drive_upload import (
     _atomic_json,
     _canonical_sha256,
     enqueue_finalized_result,
+    is_transient_upload_failure,
     migrate_compatible_pending_jobs,
     process_one_job,
     read_stream_status,
+    requeue_transient_job,
     remote_stat_exact,
 )
 
@@ -113,6 +115,43 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_network_readback_failure_is_retryable_but_gate_failure_is_not(self):
+        self.assertTrue(
+            is_transient_upload_failure(
+                RuntimeError("exact remote readback failed: rc=1")
+            )
+        )
+        self.assertFalse(
+            is_transient_upload_failure(
+                RuntimeError("source bytes changed after OCR finalization")
+            )
+        )
+
+    def test_transient_failure_returns_job_to_delayed_pending_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            dirs = {
+                name: output / "_drive_upload_stream" / name
+                for name in ("pending", "working")
+            }
+            for path in dirs.values():
+                path.mkdir(parents=True, exist_ok=True)
+            job_path = dirs["working"] / "a.json"
+            job_path.write_text(
+                json.dumps({"schema": "test"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            pending = requeue_transient_job(
+                job_path,
+                RuntimeError("exact remote readback failed: rc=1"),
+                output_dir=output,
+                now_epoch=1000.0,
+            )
+            payload = json.loads(pending.read_text(encoding="utf-8"))
+            self.assertFalse(job_path.exists())
+            self.assertEqual(payload["transport_retry_count"], 1)
+            self.assertEqual(payload["retry_not_before_epoch"], 1015.0)
+
     def test_upload_job_equivalence_ignores_only_enqueue_audit_metadata(self):
         base = {
             "schema": "samsung-ocr-stream-upload-v1",
