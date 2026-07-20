@@ -136,7 +136,7 @@ class BuildDriveCorrectionRunGateTests(unittest.TestCase):
             self.assertFalse(summary["safe_to_replace"])
             self.assertTrue(ledger.is_file())
 
-    def test_duplicate_source_identity_breaks_ledger_integrity(self):
+    def test_multiple_distinct_stale_names_for_one_source_are_reconcilable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             output = self.fixture(root)
@@ -153,9 +153,31 @@ class BuildDriveCorrectionRunGateTests(unittest.TestCase):
             self.write_csv(upload / "drive_upload_uploaded.csv", uploaded, ["year","file_name","drive_file_id"])
             ledger = root / "ledger.jsonl"
             summary = builder.run(output, "2026", ledger, execute=True)
+            self.assertEqual(summary["duplicate_identities"], 0)
+            self.assertEqual(summary["multi_stale_source_identities"], 1)
+            self.assertTrue(summary["ledger_integrity_ok"])
+            self.assertTrue(summary["safe_to_upload_new"])
+            self.assertTrue(summary["safe_to_replace"])
+            self.assertTrue(ledger.exists())
+
+    def test_same_old_remote_path_twice_is_an_identity_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = self.fixture(root)
+            upload = output / "_drive_upload"
+            with (upload / "drive_upload_stale_uploaded_review_required.csv").open(encoding="utf-8-sig", newline="") as handle:
+                stale = list(csv.DictReader(handle))
+            stale.append(dict(stale[0]))
+            self.write_csv(
+                upload / "drive_upload_stale_uploaded_review_required.csv",
+                stale,
+                ["year","period","file_name","source_path","remote_path"],
+            )
+            ledger = root / "ledger.jsonl"
+            summary = builder.run(output, "2026", ledger, execute=True)
             self.assertEqual(summary["duplicate_identities"], 1)
+            self.assertEqual(summary["conflicting_source_identities"], 1)
             self.assertFalse(summary["ledger_integrity_ok"])
-            self.assertFalse(summary["safe_to_upload_new"])
             self.assertFalse(summary["safe_to_replace"])
             self.assertFalse(ledger.exists())
 

@@ -46,6 +46,10 @@ $BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\model_benchmark.lock"
 $UploadGateProofBuilder = Join-Path $RepoRoot "tools\build_upload_gate_proof.py"
 $UploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
 $HistoricalUploadAuthorizationPath = Join-Path $OutputDir "_ocr_audit\historical_upload_authorization.json"
+$DriveCorrectionBuilder = Join-Path $RepoRoot "tools\build_drive_correction_reconciliation.py"
+$DriveCorrectionReconciler = Join-Path $RepoRoot "tools\reconcile_drive_corrections.py"
+$DriveCorrectionLedgerPath = Join-Path $OutputDir "_drive_upload\drive_correction_reconciliation.jsonl"
+$DriveCorrectionSummaryPath = "$DriveCorrectionLedgerPath.summary.json"
 $script:UploadCompleted = $false
 
 function Write-RunLog {
@@ -232,27 +236,119 @@ function Update-UploadGateProof {
 }
 
 function Rebuild-DriveCorrectionLedgerIfSafe {
-    $builder = Join-Path $RepoRoot "tools\build_drive_correction_reconciliation.py"
-    if (-not (Test-Path -LiteralPath $builder)) {
-        Write-RunLog "drive correction ledger rebuild skipped; builder missing path=$builder"
-        return
+    if (-not (Test-Path -LiteralPath $DriveCorrectionBuilder)) {
+        throw "drive correction ledger builder missing: $DriveCorrectionBuilder"
     }
     $year = (Get-Date).Year
     Write-RunLog "rebuilding Drive correction ledger from fresh manifest year=$year"
-    $builderOutput = @(& $Python $builder --output-dir $OutputDir --year $year --execute 2>&1)
+    $builderOutput = @(& $Python $DriveCorrectionBuilder --output-dir $OutputDir --year $year --execute 2>&1)
     $builderExit = $LASTEXITCODE
     $builderText = ($builderOutput -join "`n")
-    if ($builderExit -ne 0) {
-        Write-RunLog "drive correction ledger rebuild failed closed exit=$builderExit detail=$builderText"
-        return
-    }
     try {
         $summary = $builderText | ConvertFrom-Json
-        Write-RunLog ("drive correction ledger rebuilt rows={0} ready={1} blocked={2} discover_old={3}" -f `
-            $summary.ledger_rows, $summary.new_ready, $summary.gate_blocked, $summary.old_drive_id_discovery_required)
     } catch {
-        Write-RunLog "drive correction ledger rebuild returned unreadable summary; ledger remains local-only detail=$builderText"
+        throw "drive correction ledger rebuild returned unreadable summary: $builderText"
     }
+    if (
+        $summary.ledger_written -ne $true -or
+        $summary.ledger_integrity_ok -ne $true -or
+        $summary.all_rows_accounted -ne $true -or
+        $summary.all_replacements_gate_ready -ne $true
+    ) {
+        throw "drive correction ledger is not complete and gate-ready: $builderText"
+    }
+    if ($builderExit -ne 0 -and $summary.safe_to_upload_new -ne $true) {
+        throw "drive correction ledger rebuild failed closed exit=$builderExit detail=$builderText"
+    }
+    Write-RunLog ("drive correction ledger rebuilt rows={0} ready={1} multi_stale_sources={2} discover_old={3}" -f `
+        $summary.ledger_rows, $summary.new_ready, $summary.multi_stale_source_identities, $summary.old_drive_id_discovery_required)
+}
+
+function Read-DriveCorrectionRows {
+    if (-not (Test-Path -LiteralPath $DriveCorrectionLedgerPath)) {
+        throw "drive correction ledger missing: $DriveCorrectionLedgerPath"
+    }
+    $rows = @()
+    foreach ($line in Get-Content -LiteralPath $DriveCorrectionLedgerPath -Encoding UTF8) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            try { $rows += ($line | ConvertFrom-Json) }
+            catch { throw "drive correction ledger contains invalid JSONL" }
+        }
+    }
+    return @($rows)
+}
+
+function Assert-DriveCorrectionRows {
+    param(
+        [object[]]$Rows,
+        [string[]]$AllowedStatuses,
+        [switch]$RequireOldDriveId
+    )
+    $invalid = @($Rows | Where-Object {
+        -not $_.source_identity -or
+        -not $_.original_source_path -or
+        -not $_.corrected_file_name -or
+        -not $_.local_sha256 -or
+        $_.gate_evidence -or
+        $_.mapping_error -or
+        $_.last_error -or
+        $AllowedStatuses -notcontains [string]$_.status -or
+        ($RequireOldDriveId -and -not $_.old_drive_file_id)
+    })
+    if ($invalid.Count -gt 0) {
+        $sample = @($invalid | Select-Object -First 5 | ForEach-Object {
+            "{0}:{1}:{2}" -f $_.old_file_name,$_.status,$_.last_error
+        }) -join ";"
+        throw "drive correction phase failed closed rows=$($invalid.Count) sample=$sample"
+    }
+}
+
+function Complete-DriveCorrectionReconciliation {
+    if (-not (Test-Path -LiteralPath $DriveCorrectionReconciler)) {
+        throw "drive correction reconciler missing: $DriveCorrectionReconciler"
+    }
+    if (-not (Test-Path -LiteralPath $DriveCorrectionSummaryPath)) {
+        throw "drive correction summary missing: $DriveCorrectionSummaryPath"
+    }
+    $summary = Get-Content -LiteralPath $DriveCorrectionSummaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        $summary.ledger_written -ne $true -or
+        $summary.ledger_integrity_ok -ne $true -or
+        $summary.all_rows_accounted -ne $true -or
+        $summary.all_replacements_gate_ready -ne $true
+    ) {
+        throw "drive correction authority is incomplete; current-year completion remains blocked"
+    }
+    $rows = @(Read-DriveCorrectionRows)
+    if ($rows.Count -eq 0) {
+        Write-RunLog "no stale Drive correction rows"
+        return
+    }
+    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_ready")
+
+    $discoverOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase discover-old 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Drive correction old-ID discovery failed: $($discoverOutput -join "`n")"
+    }
+    $rows = @(Read-DriveCorrectionRows)
+    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_ready") -RequireOldDriveId
+
+    $uploadOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase upload-new 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Drive correction new-file verification failed: $($uploadOutput -join "`n")"
+    }
+    $rows = @(Read-DriveCorrectionRows)
+    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_uploaded_verified","unchanged_remote_verified")
+
+    $trashOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase trash-old 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Drive correction old-file disposal failed: $($trashOutput -join "`n")"
+    }
+    $rows = @(Read-DriveCorrectionRows)
+    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("old_trashed_verified","unchanged_remote_verified")
+    $trashed = @($rows | Where-Object { $_.status -eq "old_trashed_verified" }).Count
+    $unchanged = @($rows | Where-Object { $_.status -eq "unchanged_remote_verified" }).Count
+    Write-RunLog "Drive corrections completed rows=$($rows.Count) old_trashed=$trashed unchanged_verified=$unchanged"
 }
 
 function Start-Uploader-IfNeeded {
@@ -616,11 +712,16 @@ try {
         Write-HistoricalUploadAuthorization
     }
     Refresh-UploadAndReviewSplit
-    Rebuild-DriveCorrectionLedgerIfSafe
+    if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
+        Rebuild-DriveCorrectionLedgerIfSafe
+    } else {
+        Write-RunLog "preserving completed current-year Drive correction ledger during historical continuation"
+    }
     if (-not (Update-UploadGateProof -Required)) { throw "current-year upload proof missing after final review" }
     Start-Uploader-IfNeeded -WaitForCompletion
     if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
         if (-not $script:UploadCompleted) { throw "current-year verified uploads are not complete" }
+        Complete-DriveCorrectionReconciliation
         $gate = Get-Content -LiteralPath $UploadGateProofPath -Raw | ConvertFrom-Json
         $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
         [pscustomobject]@{

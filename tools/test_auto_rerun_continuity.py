@@ -47,8 +47,24 @@ class AutoRerunContinuityTests(unittest.TestCase):
 
     def test_fresh_manifest_precedes_fail_closed_drive_ledger_rebuild(self):
         self.assertIn("build_drive_correction_reconciliation.py", SCRIPT)
+        self.assertIn("reconcile_drive_corrections.py", SCRIPT)
         main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]
         self.assertLess(main_tail.index("Rebuild-DriveCorrectionLedgerIfSafe"), main_tail.index("Start-Uploader-IfNeeded"))
+
+    def test_current_year_marker_requires_verified_new_and_disposed_old_drive_objects(self):
+        self.assertIn("function Complete-DriveCorrectionReconciliation", SCRIPT)
+        self.assertIn("--execute --phase discover-old", SCRIPT)
+        self.assertIn("--execute --phase upload-new", SCRIPT)
+        self.assertIn("--execute --phase trash-old", SCRIPT)
+        self.assertIn('@("old_trashed_verified","unchanged_remote_verified")', SCRIPT)
+        uploader = SCRIPT.rindex("Start-Uploader-IfNeeded -WaitForCompletion")
+        reconciliation = SCRIPT.index("Complete-DriveCorrectionReconciliation", uploader)
+        marker = SCRIPT.index(
+            r'$markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"',
+            reconciliation,
+        )
+        self.assertLess(uploader, reconciliation)
+        self.assertLess(reconciliation, marker)
 
     def test_manifest_review_split_and_exact_gate_proof_are_mandatory(self):
         self.assertIn('throw "upload manifest refresh failed; completion and upload remain blocked"', SCRIPT)

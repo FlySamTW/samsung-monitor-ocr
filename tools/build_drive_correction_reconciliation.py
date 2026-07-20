@@ -243,14 +243,54 @@ def write_atomic_jsonl(path: Path, rows: list[dict]) -> None:
     os.replace(temp, path)
 
 
-def _duplicate_source_identities(rows: list[dict]) -> list[str]:
-    """Return non-empty source identities used by more than one ledger row."""
-    counts: dict[str, int] = defaultdict(int)
+def _source_identity_multiples(rows: list[dict]) -> tuple[list[str], list[str]]:
+    """Return consistent multi-stale identities and genuinely conflicting ones.
+
+    One original photo can legitimately have several stale remote names left
+    by older OCR revisions.  Those rows must all point to the same corrected
+    output and must name distinct old remote objects.  Treating that expected
+    case as a duplicate identity makes it impossible to remove every wrong
+    historical filename.
+    """
+    grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         value = str(row.get("source_identity") or "").strip()
         if value:
-            counts[value] += 1
-    return sorted(identity for identity, count in counts.items() if count > 1)
+            grouped[value].append(row)
+
+    consistent: list[str] = []
+    conflicting: list[str] = []
+    for identity, items in grouped.items():
+        if len(items) <= 1:
+            continue
+        canonical_targets = {
+            (
+                str(item.get("original_source_path") or "").casefold(),
+                str(item.get("period") or ""),
+                str(item.get("corrected_file_name") or "").casefold(),
+                str(item.get("local_sha256") or "").lower(),
+            )
+            for item in items
+        }
+        old_paths = [
+            str(item.get("old_remote_path") or "").strip().casefold()
+            for item in items
+        ]
+        old_ids = [
+            str(item.get("old_drive_file_id") or "").strip()
+            for item in items
+            if str(item.get("old_drive_file_id") or "").strip()
+        ]
+        if (
+            len(canonical_targets) != 1
+            or any(not path for path in old_paths)
+            or len(old_paths) != len(set(old_paths))
+            or len(old_ids) != len(set(old_ids))
+        ):
+            conflicting.append(identity)
+        else:
+            consistent.append(identity)
+    return sorted(consistent), sorted(conflicting)
 
 
 def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> dict:
@@ -276,7 +316,7 @@ def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> 
         current_outputs=current_outputs,
         current_mapping_errors=current_errors + [f"missing input: {path}" for path in missing_inputs],
     )
-    duplicate_identities = _duplicate_source_identities(rows)
+    multi_stale_identities, conflicting_identities = _source_identity_multiples(rows)
     accounted_statuses = (
         summary["new_ready"]
         + summary["gate_blocked"]
@@ -292,7 +332,7 @@ def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> 
         not missing_inputs
         and summary["mapping_errors"] == 0
         and not current_errors
-        and not duplicate_identities
+        and not conflicting_identities
     )
     all_replacements_gate_ready = (
         summary["gate_blocked"] == 0
@@ -319,8 +359,14 @@ def run(output_dir: Path, year: str, ledger: Path, *, execute: bool = False) -> 
         "all_old_drive_ids_resolved": all_old_drive_ids_resolved,
         "safe_to_upload_new": safe_to_upload_new,
         "safe_to_replace": safe_to_replace,
-        "duplicate_identities": len(duplicate_identities),
-        "duplicate_identity_samples": duplicate_identities[:30],
+        # Backward-compatible field: only unsafe identity conflicts are
+        # reported as duplicates.  Several distinct stale names for the same
+        # source are valid correction work, not an integrity failure.
+        "duplicate_identities": len(conflicting_identities),
+        "duplicate_identity_samples": conflicting_identities[:30],
+        "multi_stale_source_identities": len(multi_stale_identities),
+        "multi_stale_source_identity_samples": multi_stale_identities[:30],
+        "conflicting_source_identities": len(conflicting_identities),
         "current_outputs": len(current_outputs),
         "current_mapping_errors": len(current_errors),
         "missing_inputs": missing_inputs,
