@@ -44,6 +44,49 @@ from skills.runtime_health_gate import (
 log = logging.getLogger("rich")
 
 
+def _select_durable_or_memory_record(
+    durable: dict | None,
+    memory: dict | None,
+) -> dict:
+    """Prefer a proved durable repair over a stale live-memory failure.
+
+    A compatibility repair worker can safely re-adjudicate an already
+    completed three-pass row without restarting the live backend. Older
+    backend processes still retain the pre-repair row in ``recent_results`` or
+    ``session_results``. Blindly overlaying that memory would make the API and
+    Dashboard show a technical failure even though the durable result is
+    verified and already eligible for per-photo upload.
+
+    Memory continues to win in every normal case. Durable data wins only when
+    it carries an explicit bounded adjudication and the memory copy is still
+    unresolved. This prevents an old file from hiding a genuinely newer live
+    success.
+    """
+    durable = dict(durable or {})
+    memory = dict(memory or {})
+    if not durable:
+        return memory
+    if not memory:
+        return durable
+
+    durable_is_proved_adjudication = bool(
+        durable.get("auto_verified") is True
+        and durable.get("auto_review_required") is not True
+        and (
+            durable.get("three_pass_adjudicated") is True
+            or str(durable.get("adjudication_rule") or "").strip()
+        )
+    )
+    memory_is_unresolved = bool(
+        memory.get("auto_review_required") is True
+        or memory.get("auto_verified") is not True
+        or memory.get("technical_retry_exhausted") is True
+    )
+    if durable_is_proved_adjudication and memory_is_unresolved:
+        return durable
+    return memory
+
+
 def cross_photo_duplicate_core(previous: dict | None, current: dict | None) -> bool:
     """Flag an identical identity answer on two distinct adjacent photos.
 
@@ -964,13 +1007,20 @@ class BatchOrchestrator:
             if f in all_records_map:
                 record_map[f] = all_records_map[f]
         
-        # Overlay Memory
+        # Overlay Memory, except when a bounded durable repair has already
+        # superseded an unresolved copy retained by an older live backend.
         for res in self.recent_results:
             if res['file_name'] in actual_files:
-                record_map[res['file_name']] = res
+                record_map[res['file_name']] = _select_durable_or_memory_record(
+                    record_map.get(res['file_name']),
+                    res,
+                )
         for res in self.session_results:
             if res['file_name'] in actual_files:
-                record_map[res['file_name']] = res
+                record_map[res['file_name']] = _select_durable_or_memory_record(
+                    record_map.get(res['file_name']),
+                    res,
+                )
         
         # 3. Filter by actual files in current dir
         # Only return records for files that actually exist in the image_dir
@@ -1078,6 +1128,9 @@ class BatchOrchestrator:
                             "auto_verified": meta.get("auto_verified", False),
                             "auto_review_required": meta.get("auto_review_required", False),
                             "review_status": meta.get("review_status") or "",
+                            "technical_retry_exhausted": meta.get("technical_retry_exhausted", False),
+                            "three_pass_adjudicated": meta.get("three_pass_adjudicated", False),
+                            "adjudication_rule": meta.get("adjudication_rule") or "",
                             "evidence_contract_version": meta.get("evidence_contract_version") or "",
                             "evidence_guard_revision": meta.get("evidence_guard_revision") or "",
                             "evidence_contract_valid": meta.get("evidence_contract_valid", False),
@@ -2299,6 +2352,14 @@ class BatchOrchestrator:
                     norm_result['rerun_reason'] = norm_result['auto_retry_reasons'] or "三輪後仍有疑慮"
                 else:
                     norm_result['auto_review_required'] = False
+                    # Contract parsing may have provisionally marked the row
+                    # review_required before the bounded three-pass
+                    # adjudicator settled it.  Never leave that stale display
+                    # status on a verified result: /api/status correctly
+                    # treats it as review work and the Dashboard would look
+                    # stuck even though the photo was already accepted.
+                    if norm_result.get('auto_verified') is True:
+                        norm_result['review_status'] = "已完成"
 
                 # D. Update Stats (v16.24 Robust)
                 is_success = (

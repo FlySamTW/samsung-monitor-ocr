@@ -1069,3 +1069,12 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 型號抽取不得先把整段自然敘述壓成純英數再當成一個型號，否則「`S24D362GAC`，售價 `3,490`」會被偽造為第二個候選 `S24D362GAC3490`，使真實價牌型號因「多候選」被清空。整段直讀分支只接受整個欄位本身就是一個 Samsung code；一般敘述一律使用有邊界的型號 token。
 - 內容監控在照片邊界主動停止尚未完成的批次後，若需要載入修正版後端，只能由 `reload_backend_at_safe_idle.ps1 -AllowIncompleteStoppedBatch` 明確執行。此模式不代表一般 idle：仍必須證明 backend `is_running=false`、沒有任何 owned OCR runner、沒有 fuse／benchmark lock、只有一個 repo-owned port 5002 listener；換版後也不得自行開始批次或開啟瀏覽器。未指定此 switch 時，`processed=total` 的原安全條件維持不變。
 - 上傳 worker 與後端必須載入相同的 `EVIDENCE_GUARD_REVISION`。若後端已安全升版、舊 worker 卻把同版工作退成 `stale or invalid stream upload job: ...`，OCR 不得因此停止；先只熱換隱藏的上傳 worker，再以 `tools/recover_failed_fuse_uploads.py --active-priority` 將「目前年份、目前 revision、原圖雜湊、同 run 潔淨 trace、已終局成功記錄」全部一致的工作封存原失敗 JSON 後原子補回 pending。這個模式不呼叫模型、不改判讀內容，也不得接受其他錯誤原因或舊 revision。
+
+## 2026-07-20 `.54` 三輪內容收斂與不中斷顯示相容
+
+- Dashboard 上方 `初次辨識總進度` 是唯一來源照片的去重完成數。對同一張 2026 照片做第二、第三輪或離線重驗時，該數字不得重複增加；正在執行的真實進展必須另外以 `YYYYMM 複核 processed/total`、`verified/review/failed` 與 `上傳總數/待上傳` 同時顯示。正式總數只在首次完成一張原先未處理的來源照片時增加。
+- 同一張照片三次健康、獨立、request-bound 且 input SHA 相同後即結束模型呼叫。中央主螢幕加左右邊界裁切鄰機，若至少兩輪同時支持相同非 FollowMe 型號、相同價格、同主體價牌與邊界裁切幾何，定案規則為 `two_pass_edge_cut_identity_consensus`。模型不得把被邊界裁切的鄰機誤算成三台完整螢幕並抹除中央主體。
+- 兩輪無型號／無價格的 3+ 螢幕寬景可否決一個孤立的附近價牌身分票，規則為 `two_wide_geometry_votes_veto_single_identity_outlier`；三輪均證明零台完整螢幕時以 `three_pass_zero_screen_scene_consensus` 定案為遠景；一輪零台與一輪 3+ 台若都一致證明無唯一主角、無同主體價牌及無 FollowMe 實體，使用 `two_pass_distant_scene_consensus`。這些規則只處理同圖內容差異，不得放寬 request binding、來源雜湊或污染守門。
+- 已接受且 `auto_verified=true`、`auto_review_required=false` 的照片，`review_status` 必須清為 `已完成`，不得留下先前輪次的 `待審核`。舊 live backend 若仍在記憶體保留修復前的技術錯誤，`get_all_records()` 只能在 durable 列具有明確三輪定案規則、已驗證且記憶列仍未解決時，讓 durable 終局結果優先；一般新記憶結果仍優先，避免舊檔覆蓋真正的新結果。
+- `tools/maintain_active_three_pass_repairs.py` 是單一 evidence revision 的零模型呼叫相容橋。它只對已用滿三輪、同圖綁定且能被現行 deterministic finalizer 證明的列套用修復，先保留可稽核快照，再以 optimistic compare-before-replace 合併；舊後端再次寫檔時可冪等重套。它不得停止 OCR、不得重啟 port 5002、不得開啟或重新整理瀏覽器、不得產生第四輪，後端 revision 改變時必須退出。
+- 現行介面驗收必須在同一既有分頁看到：`正在執行`、目前檔案、同檔預覽、自然語言 LLM 即時文字、右側累積卡片、移動中的月份複核數，以及持續增加的逐張上傳數。總進度暫時不動而月份複核與上傳持續前進是正常去重語意；月份複核、目前檔案與上傳也一起不動才屬卡住。

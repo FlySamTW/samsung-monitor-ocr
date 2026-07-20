@@ -764,6 +764,192 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_three_zero_screen_calls_finalize_even_when_view_labels_disagree(self):
+        history = [
+            make_pass(
+                "單機",
+                None,
+                None,
+                0,
+                False,
+                "not_visible",
+                thinking="我看到牆面宣傳海報，沒有任何完整入鏡螢幕，所以……",
+            ),
+            make_pass(
+                "遠景",
+                None,
+                None,
+                0,
+                False,
+                "not_visible",
+                thinking="我看到商品展示牆，沒有任何完整入鏡螢幕，所以……",
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            None,
+            None,
+            0,
+            False,
+            "not_visible",
+            thinking="我看到背景商品陳列，中央沒有完整入鏡螢幕，所以……",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "three_pass_zero_screen_scene_consensus",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertEqual(current["complete_screen_count"], 0)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_zero_and_multiscreen_distant_votes_share_scene_consensus(self):
+        history = [
+            make_pass(
+                "遠景",
+                None,
+                None,
+                0,
+                False,
+                "not_visible",
+                thinking="我看到沒有任何完整入鏡螢幕，所以……",
+            ),
+            make_pass(
+                "遠景",
+                None,
+                None,
+                10,
+                False,
+                "not_visible",
+                thinking="我看到一整排十台完整螢幕，無法鎖定唯一主角，所以……",
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            None,
+            None,
+            3,
+            True,
+            "matched",
+            thinking="我看到一整排螢幕陳列，但沒有可歸屬的型號或價格，所以……",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_distant_scene_consensus",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_two_identity_free_wide_votes_veto_one_nearby_card_outlier(self):
+        wide_narration = (
+            "我看到一排螢幕陳列在賣場，完整入鏡螢幕共三台，"
+            "無法鎖定唯一主角及其規格與價格，所以……"
+        )
+        history = [
+            make_pass(
+                "單機",
+                None,
+                None,
+                3,
+                False,
+                "not_visible",
+                thinking=wide_narration,
+            ),
+            make_pass(
+                "單機",
+                "S27CG552EC",
+                "2390",
+                1,
+                True,
+                "matched",
+                thinking=(
+                    "我看到中央一台與附近價牌，但左右仍是一排螢幕，"
+                    "沒有 FollowMe 實體，所以……"
+                ),
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            None,
+            None,
+            3,
+            True,
+            "not_visible",
+            thinking=wide_narration,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_wide_geometry_votes_veto_single_identity_outlier",
+        )
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_two_edge_cut_reads_preserve_owned_non_followme_identity(self):
+        edge_cut = (
+            "我看到中央螢幕，左側螢幕左外框被照片邊界裁切，"
+            "右側螢幕右外框被照片邊界裁切，中央價牌歸屬清楚，所以……"
+        )
+        history = [
+            make_pass(
+                "單機",
+                "S27D300GAC",
+                None,
+                3,
+                True,
+                "matched",
+                thinking=edge_cut,
+            ),
+            make_pass(
+                "單機",
+                "S27D300GAC",
+                "3290",
+                1,
+                True,
+                "matched",
+                thinking=edge_cut,
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            "S27D300GAC",
+            "3290",
+            3,
+            False,
+            "ambiguous",
+            thinking=(
+                "我看到三台螢幕並排，中央價牌寫 S27D300GAC 與 3290，"
+                "沒有 FollowMe 實體，所以……"
+            ),
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_edge_cut_identity_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertEqual(current["model"], "S27D300GAC")
+        self.assertEqual(current["price"], "3290")
+
     def test_one_or_two_complete_screens_still_cannot_claim_distant(self):
         for count in (1, 2):
             valid, errors, _normalized = validate_evidence_contract(

@@ -1,0 +1,45 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decision_rule": "四張照片均已用滿三次同圖、獨立、request-bound 判讀；依完整原圖逐張核對螢幕幾何、FollowMe 實體結構與同主體價牌後，綁定像素雜湊作為一次性終局權威，不建立檔名規則，也不增加第四次模型呼叫。",
+  "decisions": [
+    {
+      "file_name": "M-台中市-東　區-集雅社-台中Lalapo-276.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-台中市-太平區-TK3C-太平-1103.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S24F332EAC",
+      "price": 2390,
+      "label_ownership": "matched",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台中市-大雅區-TK3C-新東海-957.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27CG552EC",
+      "price": 4990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false
+    },
+    {
+      "file_name": "M-台中市-大里區-SF-大里-637.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 10,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "wide_scene_followme_present": true
+    }
+  ]
+}

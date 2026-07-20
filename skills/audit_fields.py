@@ -2327,6 +2327,70 @@ def finalize_three_pass_outcome(
         for pair, items in non_followme_pair_groups.items()
         if len(items) >= 2
     ]
+    # A tight three-monitor composition can still be one valid photographed
+    # subject when the left and right neighbours are cut by the image edges.
+    # The model sometimes contradicts that same physical description by
+    # writing ``complete_screen_count=3``.  After three clean, stateless calls,
+    # retain a non-FollowMe identity only when:
+    #   * all calls bind to the same pixels and say single view;
+    #   * two calls independently describe the central/edge-cut geometry;
+    #   * the same model appears at least twice, the same price at least twice;
+    #   * at least two calls bind the label to the main subject.
+    # This is deliberately stronger than combining unrelated field majorities:
+    # the chosen model/price pair must also occur together in two calls.
+    edge_cut_identity_candidates = [
+        item
+        for item in single_local_integrity
+        if _central_monitor_with_two_edge_cut_neighbors(item, minimum_count=1)
+    ]
+    edge_cut_model_votes = Counter(
+        normalize_model_token(item.get("model"))
+        for item in single_local_integrity
+        if normalize_model_token(item.get("model"))
+        and not is_followme_model(item.get("model"))
+    )
+    edge_cut_price_votes = Counter(
+        re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+        for item in single_local_integrity
+        if re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+    )
+    edge_cut_pair_votes = Counter(
+        (
+            normalize_model_token(item.get("model")),
+            re.sub(r"[^0-9]", "", str(item.get("price") or "")),
+        )
+        for item in single_local_integrity
+        if normalize_model_token(item.get("model"))
+        and re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+        and not is_followme_model(item.get("model"))
+    )
+    edge_cut_identity_consensus_fallback = bool(
+        len(passes) == max_attempts
+        and len(single_local_integrity) == len(passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip()
+            == "單機"
+            for item in single_local_integrity
+        )
+        and len(edge_cut_identity_candidates) >= 2
+        and max(edge_cut_model_votes.values(), default=0) >= 2
+        and max(edge_cut_price_votes.values(), default=0) >= 2
+        and max(edge_cut_pair_votes.values(), default=0) >= 2
+        and sum(
+            (item.get("normalized_evidence") or item).get("label_ownership")
+            == "matched"
+            for item in single_local_integrity
+        )
+        >= 2
+        and not any(
+            has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in single_local_integrity
+        )
+    )
     single_identity_base_fallback = bool(
         len(passes) == max_attempts
         and len(single_local_integrity) == len(passes)
@@ -2473,6 +2537,70 @@ def finalize_three_pass_outcome(
                 for item in base_integrity
             )
         )
+    )
+    # Two independent identity-free 3+ screen reads outweigh one isolated
+    # nearby-card identity on a broad display wall.  This closes the real 966
+    # case without a fourth call: the two wide votes must both be bound to the
+    # same image, contain no model/price, and have no FollowMe hardware.
+    identity_free_wide_candidates = [
+        item
+        for item in base_integrity
+        if _wide_multiscreen_geometry_claim(item)
+        and not item.get("model")
+        and not item.get("price")
+        and (item.get("normalized_evidence") or item).get("label_ownership")
+        != "matched"
+        and not has_sufficient_followme_physical_evidence(
+            item.get("normalized_evidence") or item
+        )
+    ]
+    two_wide_votes_veto_identity_outlier_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and len(identity_free_wide_candidates) >= 2
+        and len(base_integrity) - len(identity_free_wide_candidates) == 1
+        and all(
+            item.get("model") and item.get("price")
+            for item in base_integrity
+            if item not in identity_free_wide_candidates
+        )
+        and not any(
+            has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in base_integrity
+        )
+    )
+    # A photo with no complete monitor is still a completed scene result.
+    # Raw view labels may say "single" because the schema has only two labels,
+    # so use the shared physical fact instead: every clean bound call must say
+    # zero complete screens, no unique main, no owned identity and no FollowMe
+    # fixture.  It truthfully finalizes as distant/no identity.
+    zero_screen_scene_candidates = [
+        item
+        for item in base_integrity
+        if (item.get("normalized_evidence") or item).get(
+            "complete_screen_count"
+        )
+        == 0
+        and (item.get("normalized_evidence") or item).get("unique_main")
+        is False
+        and (item.get("normalized_evidence") or item).get("label_ownership")
+        != "matched"
+        and not item.get("model")
+        and not item.get("price")
+        and not has_sufficient_followme_physical_evidence(
+            item.get("normalized_evidence") or item
+        )
+    ]
+    zero_screen_scene_base_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and len(zero_screen_scene_candidates) == len(passes)
     )
     wide_geometry_distant_veto_fallback = bool(
         len(passes) == max_attempts
@@ -2639,6 +2767,8 @@ def finalize_three_pass_outcome(
         ]
     elif conservative_single_fallback or wide_distant_structural_fallback:
         usable = list(base_integrity)
+    elif edge_cut_identity_consensus_fallback:
+        usable = list(single_local_integrity)
     elif single_identity_base_fallback:
         usable = list(single_local_integrity)
     elif single_view_base_fallback:
@@ -2650,6 +2780,10 @@ def finalize_three_pass_outcome(
     elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
     elif wide_scene_structural_base_fallback:
+        usable = list(base_integrity)
+    elif two_wide_votes_veto_identity_outlier_fallback:
+        usable = list(base_integrity)
+    elif zero_screen_scene_base_fallback:
         usable = list(base_integrity)
     elif wide_geometry_distant_veto_fallback:
         usable = list(base_integrity)
@@ -2722,6 +2856,10 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(prior_bound_passes)
         rule = "two_bound_pass_consensus_discarded_unbound_third"
+    elif edge_cut_identity_consensus_fallback:
+        final_view = "單機"
+        supporting = list(usable)
+        rule = "two_pass_edge_cut_identity_consensus"
     elif single_identity_base_fallback:
         final_view = "單機"
         supporting = list(winning_non_followme_pairs[0][1])
@@ -2734,6 +2872,14 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = list(usable)
         rule = "three_pass_wide_scene_structural_consensus"
+    elif two_wide_votes_veto_identity_outlier_fallback:
+        final_view = "遠景"
+        supporting = list(identity_free_wide_candidates)
+        rule = "two_wide_geometry_votes_veto_single_identity_outlier"
+    elif zero_screen_scene_base_fallback:
+        final_view = "遠景"
+        supporting = list(zero_screen_scene_candidates)
+        rule = "three_pass_zero_screen_scene_consensus"
     elif wide_geometry_distant_veto_fallback:
         final_view = "遠景"
         supporting = list(usable)
@@ -2772,6 +2918,15 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = multiscreen_distant
         rule = "two_pass_distant_structural_consensus"
+    elif len(distant) >= 2:
+        # Zero visible complete screens and a broad 3+ screen wall are both
+        # truthful distant-scene observations.  The exact count may vary with
+        # crop visibility, but two independent bound distant calls still agree
+        # on the only project-relevant outcome: no unique owned monitor,
+        # model, or price.
+        final_view = "遠景"
+        supporting = distant
+        rule = "two_pass_distant_scene_consensus"
     elif len(single) >= 2:
         final_view = "單機"
         supporting = single
@@ -2818,7 +2973,15 @@ def finalize_three_pass_outcome(
         ]
         record["model"] = None
         record["price"] = None
-        record["complete_screen_count"] = 0 if rule == "two_pass_no_complete_screen_scene_consensus" else max(3, min(counts) if counts else 3)
+        record["complete_screen_count"] = (
+            0
+            if rule
+            in {
+                "two_pass_no_complete_screen_scene_consensus",
+                "three_pass_zero_screen_scene_consensus",
+            }
+            else max(3, min(counts) if counts else 3)
+        )
         record["unique_main"] = False
         record["label_ownership"] = "ambiguous"
         record["followme_physical_evidence"] = []
@@ -2902,6 +3065,7 @@ def finalize_three_pass_outcome(
             record["followme_physical_evidence"] = []
         if rule in {
             "two_pass_non_followme_identity_consensus",
+            "two_pass_edge_cut_identity_consensus",
             "three_pass_single_subject_consensus",
             "two_pass_identity_free_single_consensus",
         }:
