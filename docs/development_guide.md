@@ -1024,3 +1024,36 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 202606 的真實雙層狀態為：`processed=1,393`；其中目前 `.52` 完整終局 379，舊守門或未終局 1,014。後者仍必須依照片邊界複核，不得把 processed 當成 current-guard ready。
 - 寫入後 `/api/status` 與既有 Dashboard 分頁同步顯示 `66,724/151,714`、`45/137`、剩餘 `84,990`；`ready_images` 仍為 `65,331`。202601 同時前進到 715/1,500、stream upload 54,832、pending 133，backend／browser 均未重啟。
 - `continue_after_period_priority.py` 在 priority 本地批次處理完成後、等待 upload drain 之前，會自動呼叫同一精確守門寫入 processed 總盤；這只修正 OCR 進度，不放寬正式 export、upload 或跨年度接續條件。
+
+## 2026-07-18 18:13 frozen-guard partial safe revalidation
+
+- One malformed frozen row must not block every independently safe row, and this must never weaken source binding. `revalidate_frozen_guard_results.py --allow-partial` runs the full binding preflight per photo. Only rows with exact source/prepared hashes, one run, contiguous independent attempts within the 1..3 hard limit, request binding, and no prior-answer exposure or prompt contamination may replay current rules. Rejected rows keep their original file, revision, and remaining call budget.
+- Partial mode preserves the original apply boundary: every accepted row gets an idempotent per-photo upload job before its durable result is rewritten. Any enqueue failure prevents the new revision from becoming visible. Frozen replay performs zero model calls and is never a fourth pass.
+- Formal 202606 dry-run covered `.51/.50/.48/.47/.45/.43/.42/.41`: 971 rows passed current `.52`; about 40 rows remained old because binding, FollowMe Pro physical identity, model validity, three-pass integrity, or content-consistency proof did not pass. Critical regressions passed before per-revision apply. Evidence manifests are under `_ocr_audit/frozen_guard_revalidation/20260718_180507` through `20260718_181216`.
+- Rebuilt priority proof now states `processed=1,393`, `current_guard_final=1,350`, `nonfinal=43`, and `stale_guard=40`. Those 43 photos continue through the normal photo-bounded maximum-three-pass lane; they must not be restamped or represented as complete.
+- During apply, formal 202601 review continued from 728 to 760/1,500, the stream uploader stayed running and advanced from 54,870 to 54,941, runtime fuse remained absent, and neither backend nor the existing Dashboard tab was restarted.
+- This is still only the 2026 priority phase. Completion remains all supported 2015-2026 photos: 151,714 images, 137 folders, and exact Drive receipts; continuity must continue 2025 down to 2015 after the fixed 2026 chain closes.
+
+## 2026-07-20 `.53`：2026 全面複核、型號／價格證據與逐張上傳鐵律
+
+- 專案優先順序固定為：**照片辨識正確 > 對話 tokens 耗用 > 完成時間**。但「正確性優先」不等於無限重跑；每張照片仍最多三次彼此無記憶、無前輪答案的獨立模型呼叫，三次後必須用已取得證據保守定案並繼續下一張，禁止第 4 次。
+- **先完整閉環 2026，再處理 2025→2015。** 2026 閉環必須同時證明：來源清冊逐張有如實終局、使用當前 evidence revision、沒有 review／failed／stale 結果，以及每張皆有唯一 Drive ID、size、MD5 精確收據。舊統計 CSV 或「processed」不得冒充上述完成證明。
+- 2026 尚未閉環期間，任何誤啟的歷史年份 stream job 必須在 uploader 停止的安全邊界，以原始 JSON、SHA-256 與 manifest 完整移到 `_ocr_audit/deferred_historical_stream_jobs`；不得刪除、改寫、上傳或讓歷史照片插隊。2026 閉環後才依來源雜湊恢復。
+- **每張完成就上傳。** OCR 定案器必須先把該張 verified 結果寫入 durable stream outbox，uploader 隨即逐張傳輸與精確讀回；不得等資料夾、月份或全年完成才開始上傳。網路不穩只允許該工作可重入重試，不得阻塞 OCR 下一張，也不得累積成最後一次性大量傳輸。
+- 舊結果全面風險掃描發現兩類候選：模型自然敘述可讀到型號但結構型號被清空，以及模型選到「市價／原價／建議售價／參考價」。這些是需逐張重驗的風險集合，不可直接視為全部錯誤，也不可批次猜值覆寫。
+- 型號表／官方目錄沒有舊 SKU 時，不得因此把原圖價牌上的型號直接清成空值。只有當同一張原圖的主價牌可歸屬、敘述與結構各自提供唯一型號、沒有第二個候選，且差異只限三星舊曲面螢幕常見的首字母 `C`／`S` 表記時，才可保留該「未列入目錄但原圖可讀」候選並標記 `official_model_unverified`；任何多候選、遠景、價牌不屬於主機或更大差異都要 fail closed。
+- 同一價牌的小字 `市價／原價／建議售價／參考價` 不是店內實售價格；應優先讀取同牌的大字促銷價、會員價、現金價或特價。若只看得到參考價，`price` 必須為空並進入尚未使用的下一個獨立輪次，不得把參考價寫入檔名。三輪已滿則以無價格如實終局。
+- `.53` 換版不得把 `.52` 的字串直接改成新版。舊三輪只有在 source identity、來源 SHA、input SHA、request binding、連續輪次、無前輪暴露與 current-rule replay 全部通過時，才可零模型呼叫重驗；未通過者保留原 revision 與合法剩餘呼叫額度。
+- 監督程序只允許一套隱藏進程。它以 `lms ps` 核對實際載入模型，正式配置為 `qwen/qwen3-vl-8b`、context `32768`、parallel `1`；後端固定 port `5002`。啟動後必須等待 API 健康才可接續工作。即使 OCR 正常，若 durable stream outbox 有 pending 且沒有 uploader，仍必須先補起唯一隱藏 uploader，不能被 `healthy_noop` 略過。
+- Dashboard 只能沿用既有分頁；禁止另開視窗／分頁。每次健康核對要同時驗證照片、檔名、輪次、LLM 自然語言逐字區、右側累積卡片、全案與當期進度、逐張上傳 pending／receipt、backend `is_running` 與 runtime fuse。監控不只看「數字有動」，還要抽查原圖、自然敘述、結構結果與最終檔名是否一致，發現系統性跑歪時只在照片邊界 fail safe。
+
+### 2026-07-20 中斷復原基準
+
+- 中斷盤點時 LM Studio port `1234` 尚存，但 backend port `5002`、stream uploader 與 supervisor 已停止。舊交接 CSV 顯示 202602–202605 尚有 `3,117` 張上傳差額；202601 與 202606 同時存在重複列，因此 `3,117` 只能作為待查下限，不能作為精確缺口。
+- `.53` 啟動前已把誤啟的 32 筆 202101 stream jobs完整延後至 `_ocr_audit/deferred_historical_stream_jobs/20260720_195303`，每筆均保留來源身分與 SHA-256；pending／working 歸零，沒有刪除照片。
+- 舊 2026 trace 的廣義風險掃描找出 622 個來源曾出現「raw model 非空但 parsed model 為空」，以及 303 個來源曾選到明示參考價。集合包含重複場次、遠景、FollowMe 與後來已修正結果，必須以 `.53` 精確綁定重驗，不得把這兩個數字當成確定錯誤量。
+- `M-台中市-北屯區-SF-北屯-456.jpg` 是歷史年份的已知例子：原圖價牌可讀 `C27F390FHE`，大字促銷價 `5,990`，小字市價 `7,990`。它目前不得插隊 2026，也不得做第 4 次呼叫；等 2026 閉環後，以原圖雜湊綁定的既有三輪證據依 `.53` 離線重驗。
+- Windows venv 的 launcher 與實際 interpreter 會同時出現在程序清單且攜帶相同命令列；這是一個邏輯 worker，不是兩套 OCR／uploader。監督程序必須折疊同一 parent-child 鏈後才判斷 singleton；兩個彼此獨立的根程序仍要視為重複並 fail closed。
+- `lms` 在 Windows PowerShell 被擷取時仍可能輸出 ANSI 顏色碼；監督程序必須先去除 ANSI，且包裝函式參數不得命名為 PowerShell 自動變數 `$Args`，否則實際子命令會遺失，使已載入模型被誤報為不存在。
+- staging 路徑同時含執行時間 `20260720_200139` 與來源月份 `202601_商化照片-202601_...`。月份解析只接受獨立且月份為 01–12 的 `YYYYMM`，不得把時間片段 `200139` 顯示成目前資料匣。此修正只在安全後端邊界載入；禁止為了純顯示文字中斷正在推論的照片。
+- 20:02–20:09 復原實測：202601 `.53` 從 0 前進至 13/1,478，verified 13、review 0、failed 0；12 份新結果已逐張取得 Drive ID、size、MD5 receipt，沒有等整批完成。三張原圖抽查為：草屯 670 遠景、671 單機 `S27CG552EC／4,990`、672 單機 `S32CG552EC／6,990`，原圖、自然敘述、結構、終局檔名與 receipts 一致。

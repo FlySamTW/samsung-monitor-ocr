@@ -65,6 +65,7 @@ from skills.model_catalog_rules import (
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
+    resolve_photo_label_model_candidate,
     safe_known_model_correction,
     strict_known_model,
     unique_known_model_completion,
@@ -378,10 +379,13 @@ def calculate_image_cost(model_name, input_tokens, output_tokens):
 def infer_period_from_text(*parts):
     for part in parts:
         text = str(part or "")
-        month_match = re.search(r"(20\d{4})", text)
+        # Accept only a standalone valid YYYYMM.  Staging paths also contain
+        # run timestamps such as `20260720_200139`; the old broad pattern
+        # incorrectly rendered `200139` as the review period in Dashboard.
+        month_match = re.search(r"(?<!\d)(20\d{2}(?:0[1-9]|1[0-2]))(?!\d)", text)
         if month_match:
             return month_match.group(1)
-        year_match = re.search(r"(20\d{2})", text)
+        year_match = re.search(r"(?<!\d)(20\d{2})(?!\d)", text)
         if year_match:
             return year_match.group(1)
     return ""
@@ -1249,6 +1253,23 @@ def structured_narration_price_conflict(structured_price, narration_price):
     structured_digits = "".join(ch for ch in str(structured_price or "") if ch.isdigit())
     narration_digits = "".join(ch for ch in str(narration_price or "") if ch.isdigit())
     return bool(structured_digits and narration_digits and structured_digits != narration_digits)
+
+
+def narration_marks_reference_only_price(structured_price, narration):
+    """Detect an amount explicitly described as list/reference price, not sale price."""
+    digits = "".join(ch for ch in str(structured_price or "") if ch.isdigit())
+    text = str(narration or "")
+    if not digits or not text:
+        return False
+    formatted = f"{int(digits):,}" if digits.isdigit() else digits
+    price_pattern = rf"(?:{re.escape(digits)}|{re.escape(formatted)})"
+    return bool(
+        re.search(
+            rf"(?:市價|原價|建議售價|參考價).{{0,12}}{price_pattern}",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 OTHER_BRAND_ALIASES = (
@@ -3077,17 +3098,6 @@ def process_single_image(
                 if model_name_global == "qwen3.7-plus":
                     ocg_max_tokens = 900
                     ocg_max_image_px = 2560
-                elif has_photo_label_model_evidence(clean_model, data_obj, thinking_text):
-                    # Current product feeds omit discontinued store stock.  Keep
-                    # the exact structured SKU as a reviewable photo-evidence
-                    # candidate; the multi-pass gate decides whether independent
-                    # agreement is strong enough to verify it.
-                    data_obj["model"] = clean_model
-                    data_obj["unlisted_model_candidate"] = True
-                    data_obj["official_model_unverified"] = True
-                    console.print(
-                        f"[yellow]⚠️ [Model Guard] 官網未收錄，但同張主角價牌證據明確，保留候選並要求獨立複核: {clean_model}[/yellow]"
-                    )
                 else:
                     ocg_max_tokens = 2000
                     ocg_max_image_px = 2560
@@ -3596,6 +3606,9 @@ def process_single_image(
                 exact_model = strict_known_model(clean_model, valid_models_list)
                 prefix_completion = unique_known_model_completion(clean_model, valid_models_list)
                 safe_correction = safe_known_model_correction(clean_model, valid_models_list)
+                photo_label_candidate = resolve_photo_label_model_candidate(
+                    clean_model, data_obj, thinking_text
+                )
                 if exact_model:
                     data_obj["model"] = exact_model
                 elif prefix_completion:
@@ -3615,6 +3628,18 @@ def process_single_image(
                     data_obj["model"] = clean_model
                     if valid_models_list is not None and clean_model not in valid_models_list:
                         valid_models_list.append(clean_model)
+                elif photo_label_candidate:
+                    # Historical store stock is not always present in the
+                    # current catalog. Keep only a uniquely readable,
+                    # same-photo main-label token; the multi-pass gate still
+                    # decides whether independent evidence is sufficient.
+                    data_obj["model"] = photo_label_candidate
+                    data_obj["unlisted_model_candidate"] = True
+                    data_obj["official_model_unverified"] = True
+                    console.print(
+                        "[yellow]⚠️ [Model Guard] 官網未收錄，但同張主角價牌證據明確，"
+                        f"保留候選並要求獨立複核: {photo_label_candidate}[/yellow]"
+                    )
                 else:
                     # A Samsung-looking string is not evidence.  Unknown or
                     # discontinued models must be re-read/reviewed, never
@@ -3811,6 +3836,15 @@ def process_single_image(
                         data_obj["price_conflict_detected"] = True
                 else:
                     console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
+
+        if narration_marks_reference_only_price(data_obj.get("price"), thinking_text):
+            console.print(
+                f"[yellow]⚠️ [價格守門] {data_obj.get('price')} 在同輪敘述中被明示為市價／原價／參考價，"
+                "不可冒充目前店內售價，清除後獨立重讀[/yellow]"
+            )
+            data_obj["reference_only_price"] = data_obj.get("price")
+            data_obj["price"] = None
+            data_obj["price_conflict_detected"] = True
 
         cleaned_final_price = clean_monitor_price(data_obj.get("price"), context_text=thinking_text)
         if data_obj.get("price") and not cleaned_final_price:
@@ -4390,11 +4424,11 @@ def get_status():
         # while idle makes the dashboard request deleted staging paths.
         presentation_queue = _presentation_payload(orchestrator)
         current_dir_text = str(getattr(orchestrator, 'image_dir', None) or "")
-        period_match = re.search(r"(?<!\d)(20\d{4})(?!\d)", current_dir_text)
+        review_period = infer_period_from_text(current_dir_text)
         current_attempt = int((getattr(orchestrator, "auto_attempts", {}) or {}).get(current_file, 0) or 0)
         review_progress = {
             "mode": "current_year_review" if "_ocr_staging" in current_dir_text else "initial_ocr",
-            "period": period_match.group(1) if period_match else "",
+            "period": review_period,
             "processed": stats["processed"],
             "success": stats["success"],
             "failed": stats["failed"],

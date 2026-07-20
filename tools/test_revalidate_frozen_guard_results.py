@@ -142,6 +142,82 @@ class FrozenGuardRevalidationTests(unittest.TestCase):
                     },
                 )
 
+    def test_partial_mode_keeps_binding_reject_unchanged_and_returns_safe_subset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            staging, trace, output = self._fixture(Path(temp))
+            source_map_path = staging / ".ocr_source_map.json"
+            source_map = json.loads(source_map_path.read_text(encoding="utf-8"))
+            first_name = next(iter(source_map["items"]))
+            second_name = "M-test-2.jpg"
+            second_source_id = "d" * 64
+            second_original = Path(temp) / "source" / "商化照片-202606" / second_name
+            second_staged = staging / second_name
+            second_original.write_bytes(b"original-two")
+            second_staged.write_bytes(b"prepared-two")
+            source_map["items"][second_name] = {
+                "source_item_id": second_source_id,
+                "original_source_path": str(second_original),
+                "period": "202606",
+            }
+            source_map_path.write_text(json.dumps(source_map), encoding="utf-8")
+
+            result_path = next(staging.glob("*OCR成功.json"))
+            tasks = json.loads(result_path.read_text(encoding="utf-8"))
+            second_task = json.loads(json.dumps(tasks[0]))
+            second_task["id"] = 2
+            second_task["data"]["image"] = f"/data/upload/1/{second_name}"
+            tasks.append(second_task)
+            result_path.write_text(json.dumps(tasks), encoding="utf-8")
+
+            first_trace = json.loads(trace.read_text(encoding="utf-8"))
+            first_trace["attempt"] = 2
+            second_trace = json.loads(json.dumps(first_trace))
+            second_trace.update(
+                {
+                    "file_name": second_name,
+                    "attempt": 1,
+                    "source_item_id": second_source_id,
+                    "source_path": str(second_staged),
+                    "original_source_path": str(second_original),
+                }
+            )
+            trace.write_text(
+                json.dumps(first_trace) + "\n" + json.dumps(second_trace) + "\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "tools.revalidate_frozen_guard_results.prepared_input_sha256",
+                return_value="b" * 64,
+            ):
+                report = revalidate(
+                    staging_dir=staging,
+                    trace_path=trace,
+                    output_dir=output,
+                    old_revision="20260717.41",
+                    apply=False,
+                    allow_partial=True,
+                    backend_status={
+                        "current_relative_dir": str(Path(temp) / "other"),
+                        "runtime_health_fuse": None,
+                    },
+                )
+            self.assertEqual(report["result_count"], 1)
+            self.assertEqual(report["rejected_count"], 1)
+            self.assertEqual(
+                report["rejected"][0]["reason"], "binding_preflight_rejected"
+            )
+            self.assertEqual(report["results"][0]["file_name"], second_name)
+            unchanged = json.loads(result_path.read_text(encoding="utf-8"))
+            first = next(
+                task
+                for task in unchanged
+                if Path(task["data"]["image"]).name == first_name
+            )
+            self.assertEqual(
+                first["data"]["ocr_meta"]["evidence_guard_revision"],
+                "20260717.41",
+            )
+
     def test_apply_queues_before_exposing_current_task(self):
         with tempfile.TemporaryDirectory() as temp:
             staging, trace, output = self._fixture(Path(temp))

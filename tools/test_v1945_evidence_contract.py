@@ -33,7 +33,11 @@ from tools.finalize_existing_three_pass_reviews import (
 )
 from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace, cross_photo_duplicate_core
 from skills.runtime_health_gate import review_prompt_leak_reasons
-from skills.model_validation import has_photo_label_model_evidence, unique_known_model_completion
+from skills.model_validation import (
+    has_photo_label_model_evidence,
+    resolve_photo_label_model_candidate,
+    unique_known_model_completion,
+)
 from samsung_ocr_batch_processor import _merge_v1945_json_objects, validate_request_binding, new_request_id
 
 
@@ -81,6 +85,15 @@ class EvidenceContractTests(unittest.TestCase):
         "74d17bdea3b9d6b5908b42ebce7ca1c461020473276ef4f1a35f96daa3e9a024":
             ("單機", 2, None, None, False),
     }
+
+    def test_staging_timestamp_never_replaces_the_source_period(self):
+        staging = (
+            r"D:\00_商化\00_已OCR照片\_ocr_staging\20260720_200139"
+            r"\202601_商化照片-202601_6403a632"
+        )
+        self.assertEqual(batch.infer_period_from_text(staging), "202601")
+        self.assertEqual(batch.infer_period_from_text(r"商化照片-202606"), "202606")
+        self.assertEqual(batch.infer_period_from_text(r"run\20260720_200139"), "")
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -905,6 +918,35 @@ class EvidenceContractTests(unittest.TestCase):
             )
         )
 
+    def test_unlisted_legacy_model_uses_unique_visible_card_token(self):
+        record = {
+            "view_type": "單機",
+            "unique_main": True,
+            "label_ownership": "matched",
+        }
+        narration = (
+            '我看到中央主角自己的實體價牌清楚寫著 27" SAMSUNG '
+            "C27F390FHE 曲面螢幕與售價。"
+        )
+        self.assertEqual(
+            resolve_photo_label_model_candidate("S27F390FHE", record, narration),
+            "C27F390FHE",
+        )
+        self.assertIsNone(
+            resolve_photo_label_model_candidate(
+                "S27F390FHE",
+                record,
+                narration + "旁邊另一張牌寫 S27F390FHE。",
+            )
+        )
+        self.assertIsNone(
+            resolve_photo_label_model_candidate(
+                "S27F390FHE",
+                {**record, "label_ownership": "ambiguous", "unique_main": False},
+                "價牌模糊，可能是 C27F390FHE，但無法確認。",
+            )
+        )
+
     def test_unlisted_model_three_independent_pass_consensus_can_verify(self):
         base = {
             "period": "202601",
@@ -1148,6 +1190,22 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(batch.structured_narration_price_conflict("12990", "$12,900"))
         self.assertFalse(batch.structured_narration_price_conflict("12900", "$12,900"))
         self.assertFalse(batch.structured_narration_price_conflict(None, "$12,900"))
+
+    def test_reference_price_cannot_masquerade_as_store_sale_price(self):
+        self.assertTrue(
+            batch.narration_marks_reference_only_price(
+                "7990",
+                "同一張價牌上方小字市價 7,990 元，下方另有醒目促銷價。",
+            )
+        )
+        self.assertFalse(
+            batch.narration_marks_reference_only_price(
+                "5990",
+                "同一張價牌醒目售價 5,990 元，上方另列市價 7,990 元。",
+            )
+        )
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("市價／原價／建議售價／參考價", prompt)
 
     def test_prompt_has_no_copyable_json_answer_templates(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")

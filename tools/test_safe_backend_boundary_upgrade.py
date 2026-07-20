@@ -68,7 +68,9 @@ class SafeBoundaryUpgradeTests(unittest.TestCase):
         self.assertIn('function Start-EvidenceBackfillIfNeeded', self.supervisor)
         self.assertIn('build_v1945_evidence_backfill.py', self.supervisor)
         self.assertIn('evidence_backfill_restarted', self.supervisor)
-        self.assertIn('"--execute","--resume-existing-then-continue"', self.supervisor)
+        self.assertIn('$runnerMode = "--execute"', self.supervisor)
+        self.assertIn('$runnerMode = "--resume-existing-then-continue"', self.supervisor)
+        self.assertNotIn('"--execute","--resume-existing-then-continue"', self.supervisor)
 
     def test_failed_verification_retains_lock_and_success_removes_it(self):
         self.assertIn('upgrade_failed_lock_retained', self.script)

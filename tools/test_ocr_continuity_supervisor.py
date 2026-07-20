@@ -27,6 +27,14 @@ class ContinuitySupervisorTests(unittest.TestCase):
         release = self.source.index("Remove-Item -LiteralPath $BenchmarkLockPath -Force", recovery)
         self.assertGreater(release, recovery)
 
+    def test_backfill_resumes_only_when_backend_is_already_inside_staging(self):
+        self.assertIn('$stagingRoot = Join-Path $OutputDir "_ocr_staging"', self.source)
+        self.assertIn('$runnerMode = "--execute"', self.source)
+        self.assertIn('$runnerMode = "--resume-existing-then-continue"', self.source)
+        self.assertIn("[System.StringComparison]::OrdinalIgnoreCase", self.source)
+        self.assertIn("$runnerMode,", self.source)
+        self.assertNotIn('"--execute","--resume-existing-then-continue"', self.source)
+
     def test_hidden_launches_use_named_nonempty_arguments(self):
         self.assertIn("[string[]]$ProcessArgs", self.source)
         self.assertIn("hidden process launch contains an empty executable or argument", self.source)
@@ -40,6 +48,8 @@ class ContinuitySupervisorTests(unittest.TestCase):
 
     def test_exact_repo_owned_processes_and_fail_closed_hung(self):
         self.assertIn("[regex]::Escape($RepoRoot)", self.source)
+        self.assertIn("$matchedPids[[int]$process.ProcessId] = $true", self.source)
+        self.assertIn("-not $matchedPids.ContainsKey([int]$_.ParentProcessId)", self.source)
         self.assertIn('"backend_process_exists_but_api_unhealthy"', self.source)
         self.assertIn('"staged_or_recursive_state_ambiguous"', self.source)
         self.assertNotIn("Stop-Process", self.source)
@@ -47,11 +57,37 @@ class ContinuitySupervisorTests(unittest.TestCase):
     def test_recovery_order_and_safe_model_gate(self):
         self.assertLess(self.source.index("lm_server_recovery_attempt"), self.source.index("backend_started"))
         self.assertIn('"different_model_already_loaded"', self.source)
+        self.assertIn("function Invoke-Lms([string[]]$CommandArgs)", self.source)
+        self.assertIn("& $lms @CommandArgs", self.source)
+        self.assertNotIn("function Invoke-Lms([string[]]$Args)", self.source)
+        self.assertIn('Invoke-Lms @("ps")', self.source)
+        self.assertIn('$inventory = Invoke-Lms @("ls")', self.source)
+        self.assertNotIn('@("ls","--json")', self.source)
+        self.assertIn(r"-replace '\x1B\[[0-?]*[ -/]*[@-~]', ''", self.source)
+        self.assertIn('"qwen_reload_for_runtime_contract"', self.source)
         self.assertIn('"--context-length",$ContextLength', self.source)
         self.assertIn("[int]$Parallel = 1", self.source)
         self.assertIn('"--parallel",$Parallel', self.source)
         self.assertIn('"--gpu","max"', self.source)
         self.assertIn('"qwen/qwen3-vl-8b"', self.source)
+
+    def test_backend_uses_configured_port_and_waits_for_api(self):
+        self.assertIn('$backendPort = ([uri]$BackendUrl).Port', self.source)
+        self.assertIn('"--port",[string]$backendPort', self.source)
+        self.assertIn('"--no_followme_auto_update"', self.source)
+        launch = self.source.index('$backendScript,')
+        wait = self.source.index('for ($attempt = 0; $attempt -lt 45', launch)
+        timeout = self.source.index('"backend_start_timeout"', wait)
+        self.assertLess(launch, wait)
+        self.assertLess(wait, timeout)
+
+    def test_stream_uploader_is_repaired_before_healthy_noop(self):
+        repair = self.source.index('"stream_uploader_started"')
+        noop = self.source.index('"healthy_noop"')
+        self.assertLess(repair, noop)
+        self.assertIn('"tools\\stream_drive_upload.py"', self.source)
+        self.assertIn('"stream_uploader_recovery_failed"', self.source)
+        self.assertIn("stream_pending=$streamPendingCount", self.source)
 
     def test_current_year_and_upload_gates(self):
         self.assertIn('"-CurrentYearOnly"', self.source)
@@ -61,7 +97,7 @@ class ContinuitySupervisorTests(unittest.TestCase):
 
     def test_uploader_requires_fresh_content_bound_gate_proof(self):
         uploader = self.source[self.source.index('$pending = Join-Path $OutputDir "_drive_upload\\drive_upload_ready_pending.csv"'):]
-        self.assertLess(uploader.index("Test-UploadGateProof"), uploader.index('Start-Hidden -File $python -ProcessArgs @("tools\\rclone_drive_upload.py"'))
+        self.assertLess(uploader.index("Test-UploadGateProof"), uploader.index("Start-Hidden -File $python -ProcessArgs @($bulkUploaderScript"))
         for token in (
             "upload_gate_proof.json",
             "UploadGateProofMaxAgeMinutes",
@@ -98,7 +134,7 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn("historical_continuation_gate_blocked", self.source)
 
     def test_full_project_starts_recursive_before_all_year_watcher(self):
-        recursive = self.source.index('"tools\\recursive_ocr_flat_export.py"')
+        recursive = self.source.index("$recursiveScript,")
         watcher = self.source.index('"-SkipCurrentYearPhases"')
         self.assertLess(recursive, watcher)
         self.assertNotIn('"--ignore-current-year-review-gate"', self.source)

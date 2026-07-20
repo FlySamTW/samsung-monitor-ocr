@@ -440,6 +440,7 @@ def revalidate(
     old_revision: str,
     apply: bool,
     backend_status: dict[str, Any],
+    allow_partial: bool = False,
     enqueue: Callable[..., Path | None] = enqueue_finalized_result,
 ) -> dict[str, Any]:
     staging_dir = staging_dir.resolve()
@@ -477,17 +478,30 @@ def revalidate(
     for name in sorted(names):
         task = tasks[name]
         source_item = source_items.get(name)
-        if not isinstance(source_item, dict):
-            raise RuntimeError(f"source map item is missing: {name}")
         traces = groups.get(name) or []
-        binding = _validate_binding(
-            name=name,
-            task=task,
-            traces=traces,
-            source_item=source_item,
-            staging_dir=staging_dir,
-            old_revision=old_revision,
-        )
+        try:
+            if not isinstance(source_item, dict):
+                raise RuntimeError(f"source map item is missing: {name}")
+            binding = _validate_binding(
+                name=name,
+                task=task,
+                traces=traces,
+                source_item=source_item,
+                staging_dir=staging_dir,
+                old_revision=old_revision,
+            )
+        except RuntimeError as exc:
+            if not allow_partial:
+                raise
+            rejected.append(
+                {
+                    "file_name": name,
+                    "reason": "binding_preflight_rejected",
+                    "calls": len(traces),
+                    "reasons": [str(exc)],
+                }
+            )
+            continue
         result, decision = _revalidate_calls(
             traces,
             normalizer=normalizer,
@@ -584,6 +598,7 @@ def revalidate(
         "trace_path": str(trace_path),
         "old_revision": old_revision,
         "current_revision": EVIDENCE_GUARD_REVISION,
+        "allow_partial": allow_partial,
         "result_count": len(results),
         "rejected_count": len(rejected),
         "rejected": rejected,
@@ -636,6 +651,14 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--old-revision", required=True)
     parser.add_argument("--backend-url", default="http://127.0.0.1:5002")
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help=(
+            "Preflight every frozen task independently, apply only the exact "
+            "safe subset, and leave binding/current-rule rejects unchanged."
+        ),
+    )
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     report = revalidate(
@@ -645,6 +668,7 @@ def main() -> int:
         old_revision=args.old_revision,
         apply=args.apply,
         backend_status=_status(args.backend_url),
+        allow_partial=args.allow_partial,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

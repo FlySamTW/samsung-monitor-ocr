@@ -6,6 +6,7 @@ import re
 
 from skills.model_catalog_rules import (
     compact_model,
+    extract_samsung_models,
     normalize_followme_family,
     normalize_samsung_model,
     samsung_model_family,
@@ -206,3 +207,43 @@ def has_photo_label_model_evidence(
     has_readable = bool(re.search(r"(?:清楚|清晰|標示|寫著|印著|可讀)", text))
     has_same_subject = bool(re.search(r"(?:主角|中間|中央|正下方|自己的|同一台|歸屬明確)", text))
     return has_label and has_readable and has_same_subject
+
+
+def resolve_photo_label_model_candidate(
+    value: object,
+    record: dict | None,
+    narration: object = "",
+) -> str | None:
+    """Resolve one discontinued SKU from the same photo without catalog guessing.
+
+    A model sometimes normalizes the first family letter in structured JSON
+    (for example ``C27F390FHE`` on the physical card becomes
+    ``S27F390FHE``). Preserve the visible card token only when the same pass
+    has exactly one readable main-subject label candidate and the two tokens
+    are otherwise byte-for-byte identical. Multiple labels, speculative text,
+    distant views, or unrelated model strings remain fail-closed.
+    """
+    structured = normalize_samsung_model(value)
+    if (
+        not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,}", structured)
+        or is_placeholder_model(structured)
+    ):
+        return None
+
+    payload = record if isinstance(record, dict) else {}
+    text = str(narration or payload.get("thinking") or payload.get("narration") or "").strip()
+    candidates = [
+        candidate
+        for candidate in extract_samsung_models(text)
+        if has_photo_label_model_evidence(candidate, payload, text)
+    ]
+    if len(candidates) != 1:
+        return None
+
+    candidate = candidates[0]
+    if candidate == structured or (
+        len(candidate) == len(structured)
+        and candidate[1:] == structured[1:]
+    ):
+        return candidate
+    return None
