@@ -89,6 +89,18 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn('"stream_uploader_recovery_failed"', self.source)
         self.assertIn("stream_pending=$streamPendingCount", self.source)
 
+    def test_runtime_edits_reload_only_at_a_fully_idle_boundary(self):
+        self.assertIn("Get-LatestBackendRuntimeWrite", self.source)
+        self.assertIn("reload_backend_at_safe_idle.ps1", self.source)
+        self.assertIn('$watcher.Count -eq 0', self.source)
+        self.assertIn('$staged.Count -eq 0', self.source)
+        self.assertIn('$recursive.Count -eq 0', self.source)
+        self.assertIn('"safe_idle_reload_started"', self.source)
+        running_noop = self.source.index('if ($status -and [bool]$status.is_running)')
+        reload_start = self.source.index('"safe_idle_reload_started"')
+        self.assertLess(running_noop, reload_start)
+        self.assertNotIn("Stop-Process", self.source)
+
     def test_current_year_and_upload_gates(self):
         self.assertIn('"-CurrentYearOnly"', self.source)
         self.assertIn("drive_upload_ready_pending.csv", self.source)

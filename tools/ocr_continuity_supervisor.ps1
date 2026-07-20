@@ -33,6 +33,7 @@ $recursiveScript = Join-Path $RepoRoot "tools\recursive_ocr_flat_export.py"
 $stagedScript = Join-Path $RepoRoot "tools\rerun_staged_candidates.py"
 $watcherScript = Join-Path $RepoRoot "tools\auto_rerun_questionable_after_recursive.ps1"
 $bulkUploaderScript = Join-Path $RepoRoot "tools\rclone_drive_upload.py"
+$safeIdleReloadScript = Join-Path $RepoRoot "tools\reload_backend_at_safe_idle.ps1"
 $streamPendingDir = Join-Path $OutputDir "_drive_upload_stream\pending"
 try { $backendPort = ([uri]$BackendUrl).Port } catch { throw "invalid BackendUrl: $BackendUrl" }
 if ($backendPort -le 0) { throw "BackendUrl must include a valid port: $BackendUrl" }
@@ -125,6 +126,19 @@ function Read-JsonFile([string]$Path) {
 function Get-FileSha256([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
     try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() } catch { return "" }
+}
+function Get-LatestBackendRuntimeWrite {
+    $runtimePaths = @(
+        $backendScript,
+        (Join-Path $RepoRoot "samsung_ocr_prompt.txt"),
+        (Join-Path $RepoRoot "skills\audit_fields.py"),
+        (Join-Path $RepoRoot "skills\model_validation.py")
+    )
+    $items = @($runtimePaths | ForEach-Object {
+        if (Test-Path -LiteralPath $_ -PathType Leaf) { Get-Item -LiteralPath $_ }
+    })
+    if ($items.Count -ne $runtimePaths.Count) { return $null }
+    return ($items | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
 }
 function Get-CsvRowCount([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
@@ -388,6 +402,52 @@ try {
     if ($backend.Count -gt 0 -and -not $status) {
         Alert "backend_process_exists_but_api_unhealthy" @{backend_pids=@($backend.ProcessId)}
         exit 3
+    }
+
+    # Runtime source may be patched while a long staged run is active. Never
+    # restart a running photo or an owned runner. At the first completely idle
+    # boundary, hand the zero-work reload to a hidden helper and exit so the
+    # next supervisor cycle observes only the freshly loaded backend.
+    $safeReload = @(Owned "reload_backend_at_safe_idle\.ps1")
+    if ($safeReload.Count -gt 1) {
+        Alert "safe_idle_reload_duplicate" @{workers=@($safeReload.ProcessId)}
+        exit 14
+    }
+    if ($safeReload.Count -eq 1) {
+        Log-Event "safe_idle_reload_in_progress" @{pid=$safeReload[0].ProcessId}
+        exit 0
+    }
+    if (
+        $status -and
+        $backend.Count -eq 1 -and
+        $watcher.Count -eq 0 -and
+        $staged.Count -eq 0 -and
+        $recursive.Count -eq 0
+    ) {
+        $latestRuntimeWrite = Get-LatestBackendRuntimeWrite
+        $backendCreated = [datetime]$backend[0].CreationDate
+        if ($latestRuntimeWrite -and $latestRuntimeWrite -gt $backendCreated.AddSeconds(2)) {
+            if (-not (Test-Path -LiteralPath $safeIdleReloadScript -PathType Leaf)) {
+                Alert "safe_idle_reload_helper_missing" @{path=$safeIdleReloadScript}
+                exit 15
+            }
+            $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+            Start-Hidden -File "powershell.exe" -ProcessArgs @(
+                "-NoProfile","-ExecutionPolicy","Bypass","-File",$safeIdleReloadScript,
+                "-RepoRoot",$RepoRoot,
+                "-SourceRoot",$SourceRoot,
+                "-OutputDir",$OutputDir,
+                "-BackendUrl",$BackendUrl,
+                "-ApiBase",$ApiBase,
+                "-Model",$Model
+            ) -OutFile (Join-Path $logDir "safe_idle_reload_$stamp.out.log") -ErrFile (Join-Path $logDir "safe_idle_reload_$stamp.err.log")
+            Log-Event "safe_idle_reload_started" @{
+                backend_created=$backendCreated.ToString("o")
+                latest_runtime_write=$latestRuntimeWrite.ToString("o")
+                helper=$safeIdleReloadScript
+            }
+            exit 0
+        }
     }
 
     $lm = Get-LmModels

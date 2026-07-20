@@ -25,6 +25,7 @@ def main() -> int:
         [sys.executable, str(ROOT / "test_rclone_upload_safety_unit.py")],
         [sys.executable, str(ROOT / "tools" / "test_ocr_upload_watchdog.py")],
         [sys.executable, str(ROOT / "tools" / "test_ocr_continuity_supervisor.py")],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_safe_idle_backend_reload"],
         [sys.executable, str(ROOT / "tools" / "test_auto_rerun_continuity.py")],
         [sys.executable, str(ROOT / "tools" / "test_recursive_completion_contract.py")],
         [sys.executable, "-m", "unittest", "-v", "tools.test_historical_continuation_gate"],
