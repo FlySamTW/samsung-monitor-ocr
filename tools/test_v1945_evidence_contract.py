@@ -35,6 +35,7 @@ from skills.batch_orchestrator import BatchOrchestrator, _append_v1945_trace, cr
 from skills.runtime_health_gate import review_prompt_leak_reasons
 from skills.model_validation import (
     has_photo_label_model_evidence,
+    recover_pipeline_unlisted_model_candidate,
     resolve_photo_label_model_candidate,
     unique_known_model_completion,
 )
@@ -971,6 +972,115 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(final["verified"])
         self.assertFalse(final["unresolved"])
         self.assertTrue(third["unlisted_model_photo_consensus"])
+
+    def test_pipeline_marker_recovers_unlisted_model_erased_after_validation(self):
+        narration = (
+            "中央主角螢幕正下方有實體價牌，清楚標示型號 "
+            "S24D362GAC 與會員售價 3,490 元，價牌歸屬明確。"
+        )
+        record = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": "3490",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "raw_objects": [
+                json.dumps(
+                    {
+                        "view_type": "單機",
+                        "model": "S24D362GAC",
+                        "price": "3490",
+                    },
+                    ensure_ascii=False,
+                )
+            ],
+        }
+        self.assertEqual(
+            recover_pipeline_unlisted_model_candidate(record),
+            "S24D362GAC",
+        )
+        self.assertEqual(record["model"], "S24D362GAC")
+        self.assertTrue(record["official_model_unverified"])
+
+    def test_pipeline_marker_recovery_rejects_distant_or_ambiguous_models(self):
+        narration = (
+            "中央主角自己的實體價牌清楚標示 S24D362GAC，"
+            "另一張價牌清楚標示 S27D300GAC。"
+        )
+        base = {
+            "model": None,
+            "price": "3490",
+            "thinking": narration,
+            "unlisted_model_candidate": True,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "raw_objects": [
+                json.dumps({"model": "S24D362GAC"}),
+                json.dumps({"model": "S27D300GAC"}),
+            ],
+        }
+        self.assertIsNone(
+            recover_pipeline_unlisted_model_candidate(
+                {**base, "view_type": "單機", "category": "單機"}
+            )
+        )
+        self.assertIsNone(
+            recover_pipeline_unlisted_model_candidate(
+                {
+                    **base,
+                    "view_type": "遠景",
+                    "category": "遠景",
+                    "raw_objects": [json.dumps({"model": "S24D362GAC"})],
+                }
+            )
+        )
+
+    def test_recovered_unlisted_models_form_three_pass_consensus(self):
+        passes = []
+        for _ in range(3):
+            narration = (
+                "主角自己的實體價牌清楚標示 S24D362GAC 與 3,490 元。"
+            )
+            item = {
+                "period": "202601",
+                "view_type": "單機",
+                "category": "單機",
+                "model": None,
+                "price": "3490",
+                "thinking": narration,
+                "unlisted_model_candidate": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True},
+                "raw_objects": [
+                    json.dumps(
+                        {
+                            "view_type": "單機",
+                            "model": "S24D362GAC",
+                            "price": "3490",
+                        }
+                    )
+                ],
+                **evidence(1, True, "matched"),
+            }
+            self.assertEqual(
+                recover_pipeline_unlisted_model_candidate(item),
+                "S24D362GAC",
+            )
+            passes.append(item)
+        self.assertTrue(immediate_retry_decision(passes[0], 1, [], 3)["retry"])
+        self.assertTrue(
+            immediate_retry_decision(passes[1], 2, [passes[0]], 3)["retry"]
+        )
+        final = immediate_retry_decision(passes[2], 3, passes[:2], 3)
+        self.assertTrue(final["verified"])
+        self.assertEqual(passes[2]["model"], "S24D362GAC")
 
     def test_unlisted_model_single_late_pass_stays_unresolved(self):
         distant = {

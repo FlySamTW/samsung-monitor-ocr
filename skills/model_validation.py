@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from skills.model_catalog_rules import (
@@ -247,3 +248,63 @@ def resolve_photo_label_model_candidate(
     ):
         return candidate
     return None
+
+
+def recover_pipeline_unlisted_model_candidate(record: dict | None) -> str | None:
+    """Restore a pipeline-approved unlisted SKU if a later layer erased it.
+
+    ``unlisted_model_candidate`` is pipeline-owned and is set only after the
+    structured model and same-photo label evidence pass the strict candidate
+    check.  A later normalizer must not turn that accepted candidate into an
+    empty value before the independent-pass consensus gate sees it.  Recovery
+    is deliberately narrow: it requires one unique structured SKU in the raw
+    JSON, a single-unit result, strong same-photo ownership evidence, and no
+    material model conflict flag.
+    """
+    if not isinstance(record, dict):
+        return None
+    if record.get("model") not in (None, ""):
+        return str(record.get("model") or "").strip().upper() or None
+    if record.get("unlisted_model_candidate") is not True:
+        return None
+    if str(record.get("view_type") or record.get("category") or "").strip() == "遠景":
+        return None
+    if any(
+        record.get(flag)
+        for flag in (
+            "model_validation_failed",
+            "structured_identity_conflict",
+            "narrated_product_family_conflict",
+            "brand_evidence_conflict",
+        )
+    ):
+        return None
+
+    raw_objects = record.get("raw_objects") or []
+    if not isinstance(raw_objects, list):
+        raw_objects = [raw_objects]
+    candidates: list[str] = []
+    narration = record.get("thinking") or record.get("narration") or ""
+    for raw in raw_objects:
+        parsed = raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        if not isinstance(parsed, dict):
+            continue
+        payload = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+        candidate = normalize_samsung_model(payload.get("model"))
+        if (
+            candidate
+            and has_photo_label_model_evidence(candidate, record, narration)
+        ):
+            candidates.append(candidate)
+
+    unique = list(dict.fromkeys(candidates))
+    if len(unique) != 1:
+        return None
+    record["model"] = unique[0]
+    record["official_model_unverified"] = True
+    return unique[0]

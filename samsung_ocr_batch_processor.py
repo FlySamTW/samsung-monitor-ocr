@@ -65,6 +65,7 @@ from skills.model_catalog_rules import (
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
+    recover_pipeline_unlisted_model_candidate,
     resolve_photo_label_model_candidate,
     safe_known_model_correction,
     strict_known_model,
@@ -4311,6 +4312,7 @@ def process_single_image(
 
     # [v17.30] Include thinking process for sidecar logging and PERSISTENCE
     # Ensure we use the safest thinking_text version captured earlier
+    recover_pipeline_unlisted_model_candidate(result_json)
     result_json = finalize_evidence_contract(result_json, locals().get("full_response_text", ""))
     result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
     final_think = thinking_text if 'thinking_text' in locals() else ""

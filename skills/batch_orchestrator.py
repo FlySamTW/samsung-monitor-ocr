@@ -30,6 +30,7 @@ from skills.audit_fields import (
 from skills.model_validation import (
     has_photo_label_model_evidence,
     is_placeholder_model,
+    recover_pipeline_unlisted_model_candidate,
     strict_known_model,
     unique_embedded_known_model,
 )
@@ -1932,6 +1933,12 @@ class BatchOrchestrator:
                 
                 # C. Post-Process (Validation & Matching)
                 norm_result = self.field_norm.normalize(raw_result)
+                recovered_unlisted_model = recover_pipeline_unlisted_model_candidate(norm_result)
+                if recovered_unlisted_model:
+                    self.log_system(
+                        "⚠️ 未收錄型號候選曾被後續欄位處理清空，"
+                        f"已依同輪原始 JSON 與同主體價牌證據恢復: '{recovered_unlisted_model}'"
+                    )
                 
                 # Model Match (Strict Mode)
                 if norm_result.get('view_type') == '單機':

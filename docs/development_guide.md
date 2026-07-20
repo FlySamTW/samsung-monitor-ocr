@@ -1059,3 +1059,9 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 20:02–20:09 復原實測：202601 `.53` 從 0 前進至 13/1,478，verified 13、review 0、failed 0；12 份新結果已逐張取得 Drive ID、size、MD5 receipt，沒有等整批完成。三張原圖抽查為：草屯 670 遠景、671 單機 `S27CG552EC／4,990`、672 單機 `S32CG552EC／6,990`，原圖、自然敘述、結構、終局檔名與 receipts 一致。
 - 20:19–20:22 低功耗抽查新文心 976、977、978：原圖、完整螢幕數、FollowMe 實體結構、同主體價牌、`.53` 結構結果與新版檔名均一致；三張新版皆取得 Drive receipt。抽查同時發現根目錄與舊上傳帳本仍可能保留同一來源的歷史錯名。**新版 receipt 不等於舊錯名已汰換**：2026 完成 marker 之前必須由更正帳本逐筆完成舊 Drive ID 唯一發現、新檔 ID／size／MD5 讀回、舊檔移入垃圾桶、舊路徑不存在與新檔仍存活的二次讀回。多個不同舊錯名指向同一來源且都映射至同一新版輸出，是必須全部處理的合法多筆更正，不得誤判成 source identity 衝突；只有新版目標不一致、舊路徑重複或舊 ID 重複才 fail closed。歷史階段不得覆寫已完成的 2026 更正帳本。
 - 長批次執行中若 backend runtime 檔案比現行 backend 程序新（例如 staging 月份顯示修正），不得中途重啟。supervisor 只在 backend `is_running=false`、`processed=total`、沒有 watcher／staged／recursive runner、沒有 fuse／benchmark lock 的完全閒置邊界，交給唯一隱藏 helper 換版；helper 只停止 port 5002 的 repo-owned backend parent/child tree，不開瀏覽器，並在新版 API、版本、compact status contract 與 evidence revision 全部讀回後才算成功。
+
+## 2026-07-20 `.54`：未收錄型號候選不得在後處理遺失
+
+- `.53` 即時監控發現 `台中五權-1143` 與 `公益-1261` 三輪原始 JSON／自然敘述皆讀到同一主角價牌 `S24D362GAC`，且 pipeline 已標記 `unlisted_model_candidate=true`，但後續欄位處理把 `model` 清成空值，三輪定案器因而只看見三個空值並錯誤 verified。這是系統性守門漏洞，不是模型沒讀到。
+- `unlisted_model_candidate` 是 pipeline-owned 標記；若後續層把其型號清空，必須從同輪 `raw_objects` 恢復，而且只接受一個唯一 Samsung 型號、單機、`unique_main=true`、`label_ownership=matched`、自然敘述也明確綁定同主體實體價牌，且沒有型號驗證、結構身分、產品家族或品牌衝突。遠景、多候選、模糊／推測敘述一律不得恢復。
+- 此防線必須同時存在於單輪結果離開後端前及批次定案正規化後；三個獨立輪次因此能用真實型號形成共識。已錯誤清空的 2026 結果不得改字串冒充新版，必須依 source identity、原圖 SHA、input SHA、三輪 request binding 與原始 JSON 零模型呼叫重驗；不能證明者才重新呼叫，總呼叫數仍不得超過三次。
