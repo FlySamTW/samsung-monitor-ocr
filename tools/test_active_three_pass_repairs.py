@@ -7,7 +7,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.maintain_active_three_pass_repairs import (
     _collect_stale_status_repairs,
+    _drop_stale_authority_repairs,
     _merge_repaired_tasks,
+    _new_authority_names,
     _repair_key,
 )
 from skills.batch_orchestrator import _select_durable_or_memory_record
@@ -163,6 +165,50 @@ class ActiveThreePassRepairTests(unittest.TestCase):
                 merged[0]["data"]["ocr_meta"]["review_status"],
                 "已完成",
             )
+
+    def test_bound_authority_reopens_wrongly_completed_row_without_broadening(self):
+        from tempfile import TemporaryDirectory
+        import json
+
+        with TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / "run-OCR成功.json"
+            completed = task("bound.jpg", verified=True, review=False)
+            unrelated = task("other.jpg", verified=True, review=False)
+            result_path.write_text(
+                json.dumps([completed, unrelated], ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            names = _new_authority_names(
+                result_path,
+                {},
+                {"bound.jpg"},
+            )
+
+            self.assertEqual(names, {"bound.jpg"})
+
+            repairs = {
+                _repair_key(result_path, "bound.jpg"): completed,
+            }
+            self.assertEqual(
+                _new_authority_names(result_path, repairs, {"bound.jpg"}),
+                set(),
+            )
+
+    def test_new_bound_authority_drops_only_its_stale_stored_repair(self):
+        result_path = Path("D:/staging/run-OCR成功.json")
+        bound_key = _repair_key(result_path, "bound.jpg")
+        other_key = _repair_key(result_path, "other.jpg")
+        repairs = {
+            bound_key: task("bound.jpg", verified=True, review=False, rule="old_rule"),
+            other_key: task("other.jpg", verified=True, review=False, rule="keep_rule"),
+        }
+
+        dropped = _drop_stale_authority_repairs(repairs, {"bound.jpg"})
+
+        self.assertEqual(dropped, 1)
+        self.assertNotIn(bound_key, repairs)
+        self.assertIn(other_key, repairs)
 
 
 if __name__ == "__main__":

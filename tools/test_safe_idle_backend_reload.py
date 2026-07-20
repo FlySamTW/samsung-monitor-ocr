@@ -51,7 +51,8 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
     def test_verifies_contract_before_success(self):
         self.assertIn('"compact-v2"', self.source)
         self.assertIn('"v19.45*"', self.source)
-        self.assertIn('"20260720.*"', self.source)
+        self.assertIn("EVIDENCE_GUARD_REVISION", self.source)
+        self.assertIn("-ne $expectedRevision", self.source)
         self.assertIn('"fresh_backend_verified"', self.source)
         self.assertIn("runtime health fuse is active", self.source)
         self.assertIn("model benchmark/upgrade lock is active", self.source)

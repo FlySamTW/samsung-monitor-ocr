@@ -536,6 +536,180 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(presentation_event["decision"], "accepted")
         self.assertTrue(presentation_event["result"]["auto_verified"])
 
+    def test_verified_three_pass_stale_upload_blocker_is_requeued(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            trace = root / "trace.jsonl"
+            result_file = root / "result.json"
+            rows = []
+            for attempt in (1, 2, 3):
+                parsed = make_pass(
+                    model=None,
+                    price=None,
+                    count=1,
+                    unique=True,
+                    ownership="matched",
+                    model_validation_failed=attempt == 3,
+                    unlisted_model_candidate=attempt == 3,
+                    official_model_unverified=attempt == 3,
+                )
+                parsed.update({
+                    "file_name": "stale-upload-blocker.jpg",
+                    "source_item_id": "stale-source",
+                    "period": "202601",
+                    "ocr_attempt": attempt,
+                    "timestamp": f"2026-07-21T03:00:0{attempt}",
+                    "run_id": "bounded-run",
+                })
+                if attempt == 3:
+                    parsed["three_pass_adjudicated"] = True
+                    parsed["adjudication_rule"] = "three_pass_single_subject_consensus"
+                rows.append({
+                    "file_name": parsed["file_name"],
+                    "source_item_id": parsed["source_item_id"],
+                    "run_id": parsed["run_id"],
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            result_file.write_text(
+                json.dumps([{
+                    "data": {
+                        "image": str(root / "stale-upload-blocker.jpg"),
+                        "ocr_meta": {
+                            "auto_verified": True,
+                            "auto_review_required": False,
+                            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                            "ocr_attempt": 3,
+                            "view_type": "?格?",
+                            "model": None,
+                            "price": None,
+                            "model_validation_failed": True,
+                        },
+                    },
+                    "annotations": [{"result": []}],
+                }], ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result",
+                return_value=root / "queued.json",
+            ) as enqueue:
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=True,
+                    only_file_names={"stale-upload-blocker.jpg"},
+                )
+
+            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]
+            meta = saved["data"]["ocr_meta"]
+            queued = enqueue.call_args.args[0]
+
+        self.assertEqual(report[0]["status"], "finalized")
+        self.assertFalse(meta["model_validation_failed"])
+        self.assertFalse(meta["unlisted_model_candidate"])
+        self.assertFalse(meta["official_model_unverified"])
+        self.assertFalse(queued["model_validation_failed"])
+        self.assertIsNone(queued["model"])
+        self.assertIsNone(queued["price"])
+
+    def test_pass_one_task_cannot_erase_a_bound_three_call_authority(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        image_hash = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            trace = root / "trace.jsonl"
+            result_file = root / "result.json"
+            rows = []
+            for attempt in (1, 2, 3):
+                parsed = make_pass(
+                    "單機",
+                    "FollowMe Pro M7 43\"",
+                    "17990",
+                    1,
+                    True,
+                    "matched",
+                    [
+                        {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                        {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                    ],
+                    image_hash=image_hash,
+                )
+                parsed.update({
+                    "file_name": "pass-one-overwrite.jpg",
+                    "source_item_id": "known-source",
+                    "period": "202601",
+                    "ocr_attempt": attempt,
+                    "timestamp": f"2026-07-17T08:00:0{attempt}",
+                    "run_id": "capped-run",
+                })
+                rows.append({
+                    "file_name": "pass-one-overwrite.jpg",
+                    "source_item_id": "known-source",
+                    "run_id": "capped-run",
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            result_file.write_text(
+                json.dumps([{
+                    "data": {
+                        "image": str(root / "pass-one-overwrite.jpg"),
+                        "ocr_meta": {
+                            "auto_verified": True,
+                            "auto_review_required": False,
+                            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                            "adjudication_rule": "wrong_pass_one_result",
+                            "ocr_attempt": 1,
+                            "view_type": "單機",
+                            "complete_screen_count": 1,
+                            "model": "FollowMe Pro M7 43\"",
+                            "price": "17990",
+                        },
+                    },
+                    "annotations": [{"result": []}],
+                }], ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result",
+                return_value=root / "queued.json",
+            ):
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=True,
+                    only_file_names={"pass-one-overwrite.jpg"},
+                )
+            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]
+            meta = saved["data"]["ocr_meta"]
+
+        self.assertEqual(report[0]["rule"], "three_call_known_pixel_authority_repair")
+        self.assertEqual(meta["ocr_attempt"], 3)
+        self.assertEqual(meta["complete_screen_count"], 3)
+        self.assertEqual(
+            meta["followme_physical_evidence"],
+            [{
+                "cue": "direct_followme_branding_on_unit",
+                "same_subject": True,
+                "strength": "strong",
+            }],
+        )
+
     def test_targeted_finalizer_never_changes_an_unselected_task(self):
         from tools.finalize_existing_three_pass_reviews import finalize_file
 
@@ -1136,7 +1310,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(current["complete_screen_count"], 1)
 
-    def test_two_followme_passes_reporting_background_complete_monitors_keep_count_three(self):
+    def test_followme_inside_wide_wall_finalizes_as_distant(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
@@ -1159,8 +1333,16 @@ class ThreePassFinalizationTests(unittest.TestCase):
         result = finalize_three_pass_outcome(current, history, unresolved())
 
         self.assertTrue(result["verified"])
-        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_wide_narration_votes_distant_authority",
+        )
+        self.assertEqual(current["view_type"], "遠景")
         self.assertGreaterEqual(current["complete_screen_count"], 3)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertTrue(current["wide_scene_followme_present"])
+        self.assertTrue(current["followme_physical_evidence"])
 
     def test_audited_followme_pixel_authority_replaces_out_of_frame_cues(self):
         image_hash = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
@@ -2064,6 +2246,58 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
         self.assertTrue(current["thinking"].endswith("所以……"))
+
+    def test_identity_free_terminal_result_clears_superseded_upload_blockers(self):
+        history = [
+            make_pass(
+                model=None,
+                price=None,
+                count=1,
+                unique=True,
+                ownership="matched",
+                model_validation_failed=True,
+                unlisted_model_candidate=True,
+                official_model_unverified=True,
+            ),
+            make_pass(
+                model="S34D300GAC",
+                price=None,
+                count=1,
+                unique=True,
+                ownership="matched",
+                model_validation_failed=True,
+                unlisted_model_candidate=True,
+                official_model_unverified=True,
+            ),
+        ]
+        current = make_pass(
+            model=None,
+            price=None,
+            count=1,
+            unique=True,
+            ownership="matched",
+            model_validation_failed=True,
+            unlisted_model_candidate=True,
+            official_model_unverified=True,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_identity_free_single_consensus",
+        )
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertFalse(current["model_validation_failed"])
+        self.assertEqual(current["rejected_model"], "")
+        self.assertFalse(current["price_conflict_detected"])
+        self.assertFalse(current["requires_structured_retry"])
+        self.assertEqual(current["structured_authority_blocked_fields"], [])
+        self.assertFalse(current["unlisted_model_candidate"])
+        self.assertFalse(current["official_model_unverified"])
+        self.assertFalse(current["unlisted_model_photo_consensus"])
 
     def test_identity_free_fallback_never_clears_cross_photo_integrity_flag(self):
         history = [

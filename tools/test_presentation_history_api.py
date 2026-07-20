@@ -227,15 +227,67 @@ class PresentationHistoryTests(unittest.TestCase):
                 return []
 
         previous = backend.orchestrator
+        previous_audit_dir = backend.AUDIT_DIR
         backend.orchestrator = IdleOrchestrator()
         try:
-            response = backend.flask_app.test_client().get("/api/status")
-            self.assertEqual(response.status_code, 200)
-            payload = response.get_json()
-            self.assertEqual(payload["presentation_sequence"], 13321)
-            self.assertTrue(payload["presentation_sequence_durable"])
-            self.assertEqual(payload["presentation_queue"], [])
+            with tempfile.TemporaryDirectory() as tmp:
+                backend.AUDIT_DIR = Path(tmp)
+                backend.EVIDENCE_TRACE_COUNT_CACHE.clear()
+                response = backend.flask_app.test_client().get("/api/status")
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertEqual(payload["presentation_sequence"], 13321)
+                self.assertTrue(payload["presentation_sequence_durable"])
+                self.assertEqual(payload["presentation_queue"], [])
         finally:
+            backend.AUDIT_DIR = previous_audit_dir
+            backend.EVIDENCE_TRACE_COUNT_CACHE.clear()
+            backend.orchestrator = previous
+
+    def test_status_uses_exact_trace_count_instead_of_inflated_transport_sequence(self):
+        class IdleOrchestrator:
+            is_running = False
+            presentation_sequence = 18799922
+            display_queue = []
+            recent_results = []
+            stats = {"total": 0}
+            stream_buffer = ""
+            current_file = None
+            stream_file = None
+            image_dir = None
+            system_logs = []
+
+            def get_performance_metrics(self):
+                return {}
+
+            def get_all_records(self):
+                return []
+
+            def get_all_failed_records(self):
+                return []
+
+        previous = backend.orchestrator
+        previous_audit_dir = backend.AUDIT_DIR
+        backend.orchestrator = IdleOrchestrator()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                backend.AUDIT_DIR = Path(tmp)
+                trace = backend.AUDIT_DIR / "v1945_evidence_trace.jsonl"
+                trace.write_text('{"trace_id":"1"}\n{"trace_id":"2"}\n', encoding="utf-8")
+                backend.EVIDENCE_TRACE_COUNT_CACHE.clear()
+                first = backend.flask_app.test_client().get("/api/status").get_json()
+                self.assertEqual(first["presentation_sequence"], 2)
+                self.assertEqual(first["review_progress"]["cumulative_model_calls"], 2)
+                self.assertEqual(first["presentation_transport_sequence"], 18799922)
+
+                with trace.open("a", encoding="utf-8") as handle:
+                    handle.write('{"trace_id":"3"}\n')
+                second = backend.flask_app.test_client().get("/api/status").get_json()
+                self.assertEqual(second["presentation_sequence"], 3)
+                self.assertEqual(second["review_progress"]["cumulative_model_calls"], 3)
+        finally:
+            backend.AUDIT_DIR = previous_audit_dir
+            backend.EVIDENCE_TRACE_COUNT_CACHE.clear()
             backend.orchestrator = previous
 
     def test_staging_source_map_preserves_original_identity(self):

@@ -1,0 +1,30 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decision_rule": "完整原圖逐像素核對：400 為店內寬景，多台實體螢幕四邊四角完整，FollowMe 僅出現在宣傳板，未見同一實機的白色長直立支架、圓形落地底座與託盤，因此定案遠景且不得帶單一型號或價格。1401 僅右側三星主螢幕四邊四角完整，左側鄰機被照片左邊界裁切；主螢幕正下方同貨位實體價牌清楚標示 S24D300GAC，並同時顯示市價與會員售價 2,990 元，因此定案單機、S24D300GAC、2,990。",
+  "audit_note": "低功耗代理先做篩查，主代理再以原始解析度逐像素覆核；1401 的價牌除市價外，下方亦清楚顯示會員售價 2,990，不應清空價格。每項決定只可透過原圖 SHA256、推論輸入 SHA256、source_item_id 與同一個最多三輪的無記憶 run 綁定，不能成為通用檔名規則。",
+  "decisions": [
+    {
+      "file_name": "M-台中市-豐原區-集雅社-豐原太平洋-400.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-台中市-霧峰區-TK3C-霧峰-1401.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S24D300GAC",
+      "price": 2990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

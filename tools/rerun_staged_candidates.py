@@ -410,8 +410,8 @@ def build_rescued_followme_thinking(record: dict[str, object], evidence: str) ->
     price = str(record.get("price") or record.get("human_price") or "").strip() or NO_PRICE_TEXT
     return (
         f"最終校正：這張判定為{SINGLE_VIEW_TEXT}，型號 {model}，價格 {price}。"
-        "畫面中有 Samsung FollowMe 立式展示/產品標示，因此不能因旁邊賣場環境、"
-        "其他品牌或背景多台螢幕而判為遠景。"
+        "畫面中有 Samsung FollowMe 立式展示/產品標示，且全張原圖完整入鏡螢幕最多兩台；"
+        "若全圖實際有三台以上完整螢幕，必須改判遠景，不能讓 FollowMe 覆蓋全圖幾何。"
     )
 
 

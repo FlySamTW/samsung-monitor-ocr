@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260720.55"
+EVIDENCE_GUARD_REVISION = "20260721.56"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -724,6 +724,9 @@ def apply_human_audited_pixel_authority(
     record["followme_family_confirmed"] = bool(
         expected.get("followme_physical_expected") is True
     )
+    record["wide_scene_followme_present"] = bool(
+        expected.get("wide_scene_followme_present") is True
+    )
     refresh_authoritative_price_comparison(
         record,
         expected.get("model"),
@@ -965,18 +968,17 @@ def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
         return reasons
     view = str(record.get("view_type") or record.get("category") or "")
     # The material safety boundary is whether machine evidence can establish
-    # the foreground FollowMe subject at all. Once a single-unit record already
-    # has two independent same-subject strong cues (or direct branding), an
-    # omitted orientation/card detail remains a review-quality issue but must
-    # not repeatedly fuse the whole batch. Distant answers never get this
-    # allowance because any such foreground evidence changes classification.
-    if "遠景" not in view and has_sufficient_followme_physical_evidence(
+    # the photographed FollowMe unit at all. Once the structured evidence
+    # already has two independent same-subject strong cues (or direct branding),
+    # an omitted orientation/card detail remains a review-quality issue but must
+    # not repeatedly fuse the whole batch. A broad 3+ monitor scene may contain
+    # a real FollowMe unit; that product fact no longer overrides the global
+    # full-frame view classification.
+    if has_sufficient_followme_physical_evidence(
         {"followme_physical_evidence": record.get("followme_physical_evidence") or []}
     ):
         return reasons
     reasons.append("narration_followme_physical_evidence_omitted")
-    if "遠景" in view:
-        reasons.append("distant_narration_followme_physical_conflict")
     return reasons
 
 
@@ -1077,13 +1079,10 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
             errors.append("distant_evidence_inconsistent")
         if ownership == "matched":
             errors.append("distant_owned_label_conflict")
-        if any(
-            item["same_subject"]
-            and item["strength"] in {"strong", "direct"}
-            and item["cue"] not in FOLLOWME_WEAK_CUES
-            for item in normalized_physical
-        ):
-            errors.append("distant_followme_physical_conflict")
+        # A real FollowMe unit can be present inside a broad store wall. The
+        # global view remains distant when the original frame contains 3+
+        # complete monitors and no unique owned subject. Preserve the physical
+        # evidence for audit instead of forcing the whole photo into 單機.
     if view_type == "單機" and unique is not True:
         errors.append("single_unique_main_required")
     model = str(record.get("model") or "")
@@ -1824,18 +1823,6 @@ def immediate_retry_decision(
             reasons.append("遠景缺少三台以上完整入鏡證據")
         if attempt >= max_attempts and not contract["valid"] and not _no_unique_main_evidence(thinking):
             reasons.append("遠景缺少無法鎖定唯一主角規格/價格的證據")
-        compact_thinking = re.sub(r"[^A-Z0-9]", "", thinking.upper())
-        positive_followme = (
-            "FOLLOWME" in compact_thinking
-            or bool(re.search(r"(?:LS|S)?(?:32FM(?:50|70)\d|43FM70\d)[A-Z0-9]*", compact_thinking))
-        )
-        negative_followme = bool(re.search(
-            r"(?:不是|非|沒有看到|未看到|沒有|未見|看不到|無).{0,10}FOLLOW\s*ME",
-            thinking,
-            re.IGNORECASE,
-        ))
-        if positive_followme and not negative_followme:
-            reasons.append("遠景仍含未排除的 FollowMe 線索")
         if quality and quality not in {"無", "正常", "None", "null"}:
             reasons.append(f"遠景與畫質標記需再確認:{quality}")
     elif "單機" in view_type or is_followme_model(model):
@@ -1850,8 +1837,8 @@ def immediate_retry_decision(
         if isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
             if attempt < max_attempts:
                 reasons.append("三台以上入鏡的單機候選必須完成三輪獨立複核")
-            elif not _all_multiscreen_single_consistent(record, history, max_attempts):
-                reasons.append("三台以上入鏡的單機候選三輪核心證據不一致")
+            else:
+                reasons.append("三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景")
 
     non_followme_pixel_authority = bool(
         known_expectation
@@ -1868,7 +1855,12 @@ def immediate_retry_decision(
         # owned model label and store price are all present.  If another rule
         # already escalated the photo, however, every observed FollowMe pass
         # must still agree; a later majority may never wash out a conflict.
-        if current_year and history and not _all_followme_identity_consistent(record, history):
+        if (
+            current_year
+            and history
+            and ("單機" in view_type or is_followme_model(model))
+            and not _all_followme_identity_consistent(record, history)
+        ):
             reasons.append("2026 FollowMe 各輪型號與價格不一致，不得自動驗證")
 
     reasons = list(dict.fromkeys(reasons))
@@ -2159,9 +2151,15 @@ def _three_pass_final_narration(record: Dict[str, Any]) -> str:
 
     if view == "遠景":
         count_text = "沒有完整螢幕" if count == 0 else "至少三台完整螢幕"
+        followme_text = (
+            "；其中可保留 FollowMe 實機存在的物理證據，但它不改變整張照片的遠景分類"
+            if record.get("wide_scene_followme_present") is True
+            else ""
+        )
         return (
             f"我看到三輪獨立判讀已完成交叉核對，畫面屬於{count_text}的整體陳列，"
-            "沒有足以唯一歸屬同一主角的型號與價格，因此定案為遠景、無型號、無價格。所以……"
+            f"沒有足以唯一歸屬同一主角的型號與價格{followme_text}，"
+            "因此定案為遠景、無型號、無價格。所以……"
         )
 
     if count == 1:
@@ -2181,6 +2179,24 @@ def _three_pass_final_narration(record: Dict[str, Any]) -> str:
         f"我看到三輪獨立判讀已完成交叉核對，{count_text}；{model_text}，{price_text}；"
         f"{family_text}，因此定案為單機。所以……"
     )
+
+
+def clear_superseded_terminal_content_flags(record: Dict[str, Any]) -> None:
+    """Clear pass-local blockers after a bounded terminal adjudication.
+
+    The immutable evidence trace retains every rejected candidate. These
+    mutable fields describe the final result and must not strand an otherwise
+    verified row in the upload planner.
+    """
+    record["model_validation_failed"] = False
+    record["rejected_model"] = ""
+    record["price_conflict_detected"] = False
+    record["requires_structured_retry"] = False
+    record["structured_authority_blocked_fields"] = []
+    if not normalize_model_token(record.get("model")):
+        record["unlisted_model_candidate"] = False
+        record["official_model_unverified"] = False
+        record["unlisted_model_photo_consensus"] = False
 
 
 def finalize_three_pass_outcome(
@@ -2573,6 +2589,82 @@ def finalize_three_pass_outcome(
             )
         )
     )
+    # The full original frame is the view authority. Three healthy bound
+    # passes that all report 3+ complete monitors cannot end as a single unit,
+    # even when one foreground product is a real FollowMe with a readable
+    # card. The narrow edge-cut layout is excluded by its explicit one-complete
+    # narration and is handled by the dedicated edge-cut consensus.
+    strict_multiscreen_distant_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and all(
+            isinstance(
+                (item.get("normalized_evidence") or item).get(
+                    "complete_screen_count"
+                ),
+                int,
+            )
+            and not isinstance(
+                (item.get("normalized_evidence") or item).get(
+                    "complete_screen_count"
+                ),
+                bool,
+            )
+            and (item.get("normalized_evidence") or item).get(
+                "complete_screen_count"
+            )
+            >= 3
+            for item in base_integrity
+        )
+        and sum(
+            _narration_supports_only_one_complete_monitor(item)
+            for item in base_integrity
+        )
+        < 2
+    )
+    # A model may mis-copy one structured count as 1 while its own prose still
+    # describes several complete monitors on the background wall. Two such
+    # independent prose observations plus at least one 3+ structured count are
+    # enough to keep the photo in the distant lane after the third and final
+    # call. This is especially important for a real foreground FollowMe inside
+    # a wider television wall.
+    two_wide_narration_distant_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and sum(
+            _narration_reports_additional_complete_monitors(item)
+            for item in base_integrity
+        )
+        >= 2
+        and any(
+            isinstance(
+                (item.get("normalized_evidence") or item).get(
+                    "complete_screen_count"
+                ),
+                int,
+            )
+            and not isinstance(
+                (item.get("normalized_evidence") or item).get(
+                    "complete_screen_count"
+                ),
+                bool,
+            )
+            and (item.get("normalized_evidence") or item).get(
+                "complete_screen_count"
+            )
+            >= 3
+            for item in base_integrity
+        )
+        and sum(
+            _narration_supports_only_one_complete_monitor(item)
+            for item in base_integrity
+        )
+        < 2
+    )
     # Two independent identity-free 3+ screen reads outweigh one isolated
     # nearby-card identity on a broad display wall.  This closes the real 966
     # case without a fourth call: the two wide votes must both be bound to the
@@ -2824,6 +2916,10 @@ def finalize_three_pass_outcome(
         usable = list(base_integrity)
     elif wide_identity_conflict_distant_fallback:
         usable = list(base_integrity)
+    elif strict_multiscreen_distant_fallback:
+        usable = list(base_integrity)
+    elif two_wide_narration_distant_fallback:
+        usable = list(base_integrity)
     elif identity_free_single_majority_fallback:
         usable = list(fully_usable)
     else:
@@ -2875,7 +2971,6 @@ def finalize_three_pass_outcome(
             and (count == 0 or count >= 3)
             and normalized.get("unique_main") is False
             and ownership != "matched"
-            and not strong_followme
         ):
             distant.append(item)
             if count == 0:
@@ -2962,6 +3057,14 @@ def finalize_three_pass_outcome(
         final_view = "遠景"
         supporting = distant
         rule = "two_pass_distant_scene_consensus"
+    elif strict_multiscreen_distant_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "three_pass_complete_screen_count_distant_authority"
+    elif two_wide_narration_distant_fallback:
+        final_view = "遠景"
+        supporting = list(usable)
+        rule = "two_wide_narration_votes_distant_authority"
     elif len(single) >= 2:
         final_view = "單機"
         supporting = single
@@ -3019,7 +3122,24 @@ def finalize_three_pass_outcome(
         )
         record["unique_main"] = False
         record["label_ownership"] = "ambiguous"
-        record["followme_physical_evidence"] = []
+        physical_by_cue: dict[str, Dict[str, Any]] = {}
+        for item in supporting:
+            for physical in (
+                (item.get("normalized_evidence") or item).get(
+                    "followme_physical_evidence"
+                )
+                or []
+            ):
+                if not isinstance(physical, dict):
+                    continue
+                cue = str(physical.get("cue") or "").strip()
+                if cue and physical.get("same_subject") is True:
+                    physical_by_cue.setdefault(cue, dict(physical))
+        record["followme_physical_evidence"] = list(physical_by_cue.values())
+        record["wide_scene_followme_present"] = bool(
+            has_sufficient_followme_physical_evidence(record)
+        )
+        record["followme_family_confirmed"] = False
         result_text = "遠景，無型號，無價格"
     else:
         field_safe = [
@@ -3146,6 +3266,10 @@ def finalize_three_pass_outcome(
             or ("FollowMe（型號未細分）" if record.get("followme_family_confirmed") is True else "無型號")
         )
         result_text = f"單機，{model_text}，{price or '無價格'}"
+
+    # Only identity/price values from the field-safe pass set survive. Remove
+    # blockers that belonged to the superseded pass candidate before enqueue.
+    clear_superseded_terminal_content_flags(record)
 
     record["three_pass_adjudicated"] = True
     record["adjudication_rule"] = rule

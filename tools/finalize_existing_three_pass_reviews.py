@@ -20,6 +20,7 @@ from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     KNOWN_SOURCE_EXPECTATIONS,
     apply_human_audited_pixel_authority,
+    clear_superseded_terminal_content_flags,
     finalize_three_pass_outcome,
     refresh_authoritative_price_comparison,
     validate_evidence_contract,
@@ -839,6 +840,7 @@ def finalize_file(
         if only_file_names is not None and name not in only_file_names:
             continue
         existing_meta = (task.get("data") or {}).get("ocr_meta") or {}
+        calls = groups.get(name) or []
         completed_current_adjudication = bool(
             apply
             and existing_meta.get("auto_verified") is True
@@ -846,7 +848,23 @@ def finalize_file(
             and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
             and existing_meta.get("adjudication_rule")
         )
-        calls = groups.get(name) or []
+        stale_terminal_blocker_repair = bool(
+            apply
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
+            and int(existing_meta.get("ocr_attempt") or 0) == 3
+            and (
+                existing_meta.get("model_validation_failed") is True
+                or existing_meta.get("price_conflict_detected") is True
+            )
+            and len(calls) == 3
+            and calls[-1].get("three_pass_adjudicated") is True
+            and bool(calls[-1].get("adjudication_rule"))
+        )
+        completed_current_adjudication = (
+            completed_current_adjudication or stale_terminal_blocker_repair
+        )
         known_pixel_repair = bool(
             apply
             and existing_meta.get("auto_verified") is True
@@ -878,6 +896,14 @@ def finalize_file(
             ):
                 if field in existing_meta:
                     current[field] = existing_meta.get(field)
+            # A prior guard may have accepted this exact source on pass one
+            # even though an earlier clean, request-bound run already consumed
+            # all three calls.  The hash-bound visual authority is explicitly
+            # tied to that capped run.  Do not let the provisional task's
+            # ``ocr_attempt=1`` erase the three-call proof and make the
+            # authority silently fall back to the old wrong adjudication.
+            if known_pixel_repair:
+                current["ocr_attempt"] = 3
             current["category"] = current.get("view_type")
             decision = {
                 "attempt": 3,
@@ -979,6 +1005,7 @@ def finalize_file(
             "evidence_contract_valid": True,
             "ocr_attempt": 3,
         })
+        clear_superseded_terminal_content_flags(current)
         if not current.get("model") or not current.get("price"):
             current.update({
                 "price_status": "not_compared",
@@ -995,6 +1022,10 @@ def finalize_file(
             "evidence_guard_revision", "evidence_contract_valid", "ocr_attempt",
             "auto_verified", "auto_review_required", "review_status", "auto_retry_reasons",
             "technical_retry_required", "technical_retry_exhausted",
+            "model_validation_failed", "rejected_model", "price_conflict_detected",
+            "requires_structured_retry", "structured_authority_blocked_fields",
+            "unlisted_model_candidate", "official_model_unverified",
+            "unlisted_model_photo_consensus",
         ):
             meta[field] = current.get(field)
         _sync_label_studio_annotation(task, current)

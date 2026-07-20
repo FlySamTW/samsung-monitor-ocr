@@ -1,0 +1,19 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decision_rule": "完整原圖逐像素核對：中央主角上方實體立牌清楚標示 S32DG702EC (32\")；右下與主角空間對齊的實體價牌清楚標示完整碼 LS32DG702ECXZW 與售價 19,900 元。中央主角四邊四角完整入鏡，右側鄰機被照片右邊界裁切，不計完整台數。未見 FollowMe 白色長直立支架、圓形落地底座或託盤。",
+  "audit_note": "低功耗抽查的初步幾何判斷經主代理以原始解析度覆核後更正；此決定只可透過原圖 SHA256、推論輸入 SHA256、source_item_id 與同一個最多三輪的獨立 run 綁定，不能成為通用檔名規則。",
+  "decisions": [
+    {
+      "file_name": "M-台中市-西　區-集雅社-台中廣三SMS-349.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DG702EC",
+      "price": 19900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

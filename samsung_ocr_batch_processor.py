@@ -261,7 +261,7 @@ V1945_OUTPUT_CONTRACT = (
     "A foreground display with a same-subject white round base plus attached tray is a FollowMe candidate regardless of background screens. Screen content is weak, cannot prove FollowMe, and can NEVER negate its hardware. "
     "A round base counts only when the complete physical floor base is visible inside the ORIGINAL frame. A white vertical pole alone is insufficient. A continuous retail shelf price rail is not an attached tray. Smart Monitor M7/M5 or an S32FM SKU alone is a product family, not direct FollowMe branding. "
     "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
-    "MANDATORY FINAL SELF-CHECK: direct FollowMe branding on the unit, or two or more same-subject strong physical cues, forces view_type=單機 and unique_main=true. Never output 遠景 with those evidence items; background screen count cannot override the foreground subject. "
+    "MANDATORY FINAL SELF-CHECK: classify the entire ORIGINAL frame before naming any foreground product. If 3 or more monitor bodies have all four frame edges and all four corners inside the original photo, output 遠景, unique_main=false, model=null, and price=null even when one foreground unit is a real FollowMe; preserve its physical cues only as scene evidence. Direct FollowMe branding or two same-subject strong physical cues forces 單機 only when the original frame contains at most 2 complete monitors. "
     "MANDATORY LAST FRAME CHECK: if narration identifies a centered monitor with its own aligned readable Samsung model/price card and says the left and right neighboring monitors are cut by the ORIGINAL image edges, output 單機, unique_main=true, label_ownership=matched, and complete_screen_count=1; 遠景 or count=3 is impossible."
 )
 
@@ -278,12 +278,12 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕內播放 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是訊號內容，不是螢幕硬體品牌；不能因此否定與中央實體螢幕正下方空間對齊的 Samsung 型號價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "前景直立螢幕若同時連著白色圓形底座與託盤，即使直桿部分被遮住、背景有三台以上電視，仍是 FollowMe 單機候選，絕對不可判遠景。"
+        "前景直立螢幕若同時連著白色圓形底座與託盤，必須如實記錄 FollowMe 實體線索；但全張原圖若另有三台以上完整螢幕，整張仍判遠景，FollowMe 不得覆蓋全圖幾何。"
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
-        "送出前最後檢查：同主體有兩項以上強實體線索時，view_type 必須是單機、unique_main 必須是 true，禁止輸出遠景。"
+        "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令；沒有把握的欄位留空。"
     ),
     3: (
@@ -298,12 +298,12 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕像素內的 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是顯示內容，不是硬體品牌；硬體身分只看外框實體標誌與同主體空間對齊價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "前景直立螢幕若同時連著白色圓形底座與託盤，即使直桿部分被遮住、背景有三台以上電視，仍是 FollowMe 單機候選，絕對不可判遠景。"
+        "前景直立螢幕若同時連著白色圓形底座與託盤，必須如實記錄 FollowMe 實體線索；但全張原圖若另有三台以上完整螢幕，整張仍判遠景，FollowMe 不得覆蓋全圖幾何。"
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
-        "送出前最後檢查：同主體有兩項以上強實體線索時，view_type 必須是單機、unique_main 必須是 true，禁止輸出遠景。"
+        "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令。"
     ),
 }
@@ -1635,12 +1635,53 @@ MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
 MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
 OVERALL_PROGRESS_CACHE = {"mtime": None, "data": None}
+EVIDENCE_TRACE_COUNT_CACHE = {}
 SOURCE_MAP_COUNT_CACHE = {
     "path": None,
     "signature": None,
     "count": 0,
     "original_folder": "",
 }
+
+
+def durable_evidence_trace_count(path):
+    """Return the exact durable model-call count with incremental JSONL reads.
+
+    Presentation sequence values are transport ordering IDs and can contain
+    legacy restart gaps. They must never be displayed as a model-call count.
+    """
+    trace_path = Path(path)
+    cache_key = str(trace_path.resolve())
+    try:
+        stat = trace_path.stat()
+    except OSError:
+        EVIDENCE_TRACE_COUNT_CACHE.pop(cache_key, None)
+        return 0
+    entry = EVIDENCE_TRACE_COUNT_CACHE.get(cache_key) or {}
+    same_file = (
+        entry.get("inode") == getattr(stat, "st_ino", None)
+        and int(entry.get("offset") or 0) <= stat.st_size
+    )
+    offset = int(entry.get("offset") or 0) if same_file else 0
+    count = int(entry.get("count") or 0) if same_file else 0
+    if offset == stat.st_size:
+        return count
+    try:
+        with trace_path.open("rb") as handle:
+            handle.seek(offset)
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+    except OSError:
+        return count
+    EVIDENCE_TRACE_COUNT_CACHE[cache_key] = {
+        "inode": getattr(stat, "st_ino", None),
+        "offset": stat.st_size,
+        "count": count,
+    }
+    return count
 
 
 def _staging_source_metadata(image_dir) -> tuple[int, str]:
@@ -3103,8 +3144,8 @@ def process_single_image(
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
 
     user_prompt += (
-        "\n\n先檢查前景唯一主角，再計算背景螢幕。若同一台前景直立螢幕連著白色圓形落地底座與託盤，"
-        "它就是 FollowMe 單機候選，不得因背景有三台以上完整螢幕而改成遠景。"
+        "\n\n先掃描全張原圖並計算所有完整螢幕，再檢查前景產品身分。若全圖有三台以上完整螢幕，"
+        "整張必須判遠景；即使其中一台前景直立螢幕連著白色圓形落地底座與託盤，也只能如實記錄 FollowMe 存在，不得把全圖改成單機。"
         "完整台數只能看第一張全尺寸照片並只計一次：外框四邊四角全部在照片內才算完整；碰到或穿出照片任一邊界的一律不計。"
         "先依左／中／右、上／中／下逐區掃完整張照片，所有位置四邊四角完整的螢幕都要計入，不可只盯中央主角。"
         "中央一台完整而左右螢幕各被照片邊界裁切時，只有在全圖掃描確認其他區域沒有任何完整螢幕，完整台數才是 1、才判單機候選。"
@@ -4552,6 +4593,15 @@ def get_status():
             "current_pass": current_attempt,
             "current_file": current_file,
         }
+        trace_pass_count = durable_evidence_trace_count(
+            AUDIT_DIR / "v1945_evidence_trace.jsonl"
+        )
+        review_progress["cumulative_model_calls"] = trace_pass_count
+        transport_sequence = max(
+            int(getattr(orchestrator, "presentation_sequence", 0) or 0),
+            int(presentation_queue[-1].get("presentation_sequence", 0) or 0)
+            if presentation_queue else 0,
+        )
 
         status_obj = {
             "version": VERSION,
@@ -4578,12 +4628,9 @@ def get_status():
             # The live queue is intentionally empty while idle.  The durable
             # counter loaded from presentation_history must remain visible
             # across a backend restart instead of falling back to zero.
-            "presentation_sequence": max(
-                int(getattr(orchestrator, "presentation_sequence", 0) or 0),
-                int(presentation_queue[-1].get("presentation_sequence", 0) or 0)
-                if presentation_queue else 0,
-            ),
+            "presentation_sequence": trace_pass_count or transport_sequence,
             "presentation_sequence_durable": True,
+            "presentation_transport_sequence": transport_sequence,
             "presentation_run_id": str(getattr(orchestrator, "current_run_id", "") or ""),
             "lm_logs": list(orchestrator.system_logs)[-200:], # [v11.9 Fix] Limit logs to last 200 to prevent payload bloat
             # Kept for API compatibility, but bounded and stripped of image/raw

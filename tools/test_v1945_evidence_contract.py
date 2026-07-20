@@ -225,8 +225,12 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
 
         third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
-        self.assertTrue(third["verified"])
-        self.assertFalse(third["unresolved"])
+        self.assertFalse(third["verified"])
+        self.assertTrue(third["unresolved"])
+        self.assertIn(
+            "三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景",
+            third["reasons"],
+        )
 
     def test_complete_owned_single_with_partial_neighbor_can_finish_at_count_two(self):
         row = self._multiscreen_single(
@@ -464,7 +468,10 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(dict(row), 3, [dict(row), conflicting], 3)
         self.assertFalse(decision["verified"])
         self.assertTrue(decision["unresolved"])
-        self.assertIn("三台以上入鏡的單機候選三輪核心證據不一致", decision["reasons"])
+        self.assertIn(
+            "三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景",
+            decision["reasons"],
+        )
 
     def test_three_plus_screen_single_guard_applies_to_older_years_too(self):
         row = self._multiscreen_single(period="201901")
@@ -1676,7 +1683,7 @@ class EvidenceContractTests(unittest.TestCase):
             self.assertIn("中央主螢幕與其正下方可讀價牌對齊", focus)
             self.assertIn("白色圓形底座與託盤", focus)
             self.assertIn("followme_physical_evidence", focus)
-            self.assertIn("同主體有兩項以上強實體線索", focus)
+            self.assertIn("同主體兩項以上強實體線索", focus)
         self.assertIn("complete_screen_count 0, 1, or 2 can never be", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("white round base plus attached tray", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Every physical fixture cue stated in narration", batch.V1945_OUTPUT_CONTRACT)
@@ -1704,7 +1711,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(displayed.endswith("所以……"))
         self.assertNotIn("最終校正", displayed)
         source = Path(batch.__file__).read_text(encoding="utf-8")
-        self.assertIn("先檢查前景唯一主角，再計算背景螢幕", source)
+        self.assertIn("先掃描全張原圖並計算所有完整螢幕", source)
         self.assertNotIn("最終校正：這張判定為單機，型號 {final_model}", source)
 
     def test_narrated_followme_fixture_cannot_be_omitted_from_structure(self):
@@ -1724,7 +1731,6 @@ class EvidenceContractTests(unittest.TestCase):
         decision = evidence_contract_decision(row)
         self.assertFalse(decision["valid"])
         self.assertIn("narration_followme_physical_evidence_omitted", decision["reasons"])
-        self.assertIn("distant_narration_followme_physical_conflict", decision["reasons"])
 
     def test_matching_narrated_followme_fixture_is_machine_readable(self):
         physical = [
@@ -1799,7 +1805,7 @@ class EvidenceContractTests(unittest.TestCase):
         ):
             self.assertIn(field, schema)
 
-    def test_distant_cannot_carry_unresolved_followme_physical_evidence_or_sku(self):
+    def test_distant_can_preserve_followme_presence_inside_three_screen_wall(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -1811,11 +1817,12 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(3, False, "not_visible", physical),
         }
         valid, errors, _ = validate_evidence_contract(row)
-        self.assertFalse(valid)
-        self.assertIn("distant_followme_physical_conflict", errors)
+        self.assertTrue(valid)
+        self.assertNotIn("distant_followme_physical_conflict", errors)
         decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
-        self.assertTrue(decision["unresolved"])
-        self.assertIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+        self.assertNotIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
 
     def test_distant_explicitly_negated_followme_word_is_not_a_positive_cue(self):
         row = {
@@ -2164,13 +2171,6 @@ class EvidenceContractTests(unittest.TestCase):
         unsafe_rows = []
         for count, unique, ownership in ((None, False, "not_visible"), (2, False, "not_visible"), (5, None, "not_visible"), (5, True, "not_visible"), (5, False, "matched")):
             unsafe_rows.append({**clean, **evidence(count, unique, ownership)})
-        unsafe_rows.append({
-            **clean,
-            "followme_physical_evidence": [
-                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
-                {"cue": "round_base", "same_subject": True, "strength": "strong"},
-            ],
-        })
         unsafe_rows.append({
             **clean,
             "followme_physical_evidence": [

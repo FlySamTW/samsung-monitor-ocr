@@ -91,6 +91,10 @@ try {
     if ($runners.Count -gt 0) { throw "owned OCR runner still exists" }
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "venv Python missing" }
     if (-not (Test-Path -LiteralPath $backendScript -PathType Leaf)) { throw "backend script missing" }
+    $expectedRevision = (& $python -c "from skills.audit_fields import EVIDENCE_GUARD_REVISION; print(EVIDENCE_GUARD_REVISION)").Trim()
+    if ($expectedRevision -notmatch "^\d{8}\.\d+$") {
+        throw "repository evidence guard revision is invalid"
+    }
 
     $tree = @(Get-BackendProcessTree)
     if ($tree.Count -lt 1) { throw "backend process tree is empty" }
@@ -141,7 +145,7 @@ try {
         [bool]$fresh.is_running -or
         [string]$fresh.version -notlike "v19.45*" -or
         [string]$fresh.status_contract_version -ne "compact-v2" -or
-        [string]$fresh.evidence_guard_revision -notlike "20260720.*"
+        [string]$fresh.evidence_guard_revision -ne $expectedRevision
     ) {
         throw "fresh backend verification failed"
     }

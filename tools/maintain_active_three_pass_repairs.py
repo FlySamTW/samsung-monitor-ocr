@@ -125,6 +125,30 @@ def _save_store(path: Path, repairs: dict[str, dict[str, Any]]) -> None:
     )
 
 
+def _drop_stale_authority_repairs(
+    repairs: dict[str, dict[str, Any]],
+    authority_names: set[str],
+) -> int:
+    """Force exact manifest rows through the newest bound authority again.
+
+    A repair store may contain an older deterministic adjudication for the
+    same filename.  Presence in that store must not suppress a newly supplied
+    source/hash-bound authority manifest.  Removing only exact ``::filename``
+    keys is safe: the finalizer still verifies source identity, source bytes,
+    inference bytes and the clean capped run before it can recreate the row.
+    """
+    if not authority_names:
+        return 0
+    suffixes = tuple(f"::{name}" for name in authority_names)
+    stale_keys = [
+        key for key in repairs
+        if any(str(key).endswith(suffix) for suffix in suffixes)
+    ]
+    for key in stale_keys:
+        repairs.pop(key, None)
+    return len(stale_keys)
+
+
 def _append_event(path: Path, event: str, **details: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {
@@ -220,6 +244,36 @@ def _new_review_names(
         if isinstance(task, dict)
         and _review_required(task)
         and _repair_key(result_path, _task_file_name(task)) not in repairs
+    }
+
+
+def _new_authority_names(
+    result_path: Path,
+    repairs: dict[str, dict[str, Any]],
+    authority_names: set[str],
+) -> set[str]:
+    """Return exact manifest rows that still need their bound pixel repair.
+
+    A prior guard revision can incorrectly mark a row completed while clearing
+    model or price evidence.  Such a row is not returned by
+    ``_new_review_names``.  The authority manifest is already bound to source
+    and inference hashes, so only its exact filenames may bypass the provisional
+    review flag here; the finalizer still re-verifies the immutable hashes.
+    """
+    if not authority_names:
+        return set()
+    try:
+        tasks = _read_json(result_path)
+    except Exception:
+        return set()
+    if not isinstance(tasks, list):
+        return set()
+    return {
+        name
+        for task in tasks
+        if isinstance(task, dict)
+        and (name := _task_file_name(task)) in authority_names
+        and _repair_key(result_path, name) not in repairs
     }
 
 
@@ -350,8 +404,23 @@ def run(args: argparse.Namespace) -> int:
     repairs = _load_store(store_path)
     attempted_review_fingerprints: dict[str, str] = {}
     authority_entries = 0
+    authority_names: set[str] = set()
     if args.authority_manifest:
         authority_entries = load_authority_manifest(args.authority_manifest)
+        payload = _read_json(args.authority_manifest)
+        authority_names = {
+            str(entry.get("file_name") or "")
+            for entry in payload.get("entries") or []
+            if isinstance(entry, dict) and str(entry.get("file_name") or "")
+        }
+        stale_authority_repairs = _drop_stale_authority_repairs(
+            repairs,
+            authority_names,
+        )
+        if stale_authority_repairs:
+            _save_store(store_path, repairs)
+    else:
+        stale_authority_repairs = 0
     _append_event(
         event_path,
         "worker_started",
@@ -359,6 +428,7 @@ def run(args: argparse.Namespace) -> int:
         evidence_guard_revision=EVIDENCE_GUARD_REVISION,
         authority_manifest=str(args.authority_manifest or ""),
         authority_entries=authority_entries,
+        stale_authority_repairs_dropped=stale_authority_repairs,
     )
     try:
         while True:
@@ -400,7 +470,11 @@ def run(args: argparse.Namespace) -> int:
                     count=applied,
                 )
 
-            names = _new_review_names(result_path, repairs)
+            names = _new_review_names(result_path, repairs) | _new_authority_names(
+                result_path,
+                repairs,
+                authority_names,
+            )
             if names:
                 fingerprint = _review_fingerprint(result_path, names)
                 fingerprint_key = str(result_path.resolve())

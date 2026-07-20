@@ -1,0 +1,30 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-台北市-信義區-TK3C-信義-1041.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S24DG302EC",
+      "price": 3690,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false,
+      "visual_basis": "Only the central monitor has all four bezel sides and corners inside the original frame. The left and right neighboring monitors cross the original image borders. The central same-subject card reads S24DG302EC and 3,690."
+    },
+    {
+      "file_name": "M-台北市-信義區-TK3C-信義-1042.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 7,
+      "model": null,
+      "price": null,
+      "label_ownership": "not_applicable",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": true,
+      "visual_basis": "The original full frame is a broad display wall with at least seven complete monitors. A foreground FollowMe unit is present, but it does not override the project-wide distant-scene rule when three or more complete monitor bodies are visible."
+    }
+  ]
+}

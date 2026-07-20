@@ -460,19 +460,48 @@ class RuntimeHealthGateTests(unittest.TestCase):
                 self.assertFalse(decision.allow_processing)
                 self.assertFalse(decision.allow_upload)
 
-    def test_distant_with_strong_followme_evidence_fails_closed(self):
+    def test_distant_with_three_screens_and_followme_fixture_is_healthy(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
         ]
         decision = evaluate_runtime_health(
-            record(view_type="遠景", model=None, price=None, followme_physical_evidence=physical),
+            record(
+                view_type="遠景",
+                model=None,
+                price=None,
+                complete_screen_count=3,
+                unique_main=False,
+                label_ownership="ambiguous",
+                followme_physical_evidence=physical,
+            ),
             "三台完整入鏡，沒有唯一主角。",
+            upstream_upload_authorized=True,
+        )
+        self.assertNotIn("distant_followme_strong_evidence_conflict", decision.reasons)
+        self.assertTrue(decision.allow_processing)
+        self.assertTrue(decision.allow_upload)
+
+    def test_distant_followme_without_wide_geometry_still_fails_closed(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        decision = evaluate_runtime_health(
+            record(
+                view_type="遠景",
+                model=None,
+                price=None,
+                complete_screen_count=1,
+                unique_main=False,
+                label_ownership="ambiguous",
+                followme_physical_evidence=physical,
+            ),
+            "只有一台完整入鏡。",
             upstream_upload_authorized=True,
         )
         self.assertIn("distant_followme_strong_evidence_conflict", decision.reasons)
         self.assertFalse(decision.allow_processing)
-        self.assertFalse(decision.allow_upload)
 
     def test_distant_with_bare_smart_monitor_sku_is_not_called_followme(self):
         decision = evaluate_runtime_health(

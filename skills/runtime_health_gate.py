@@ -339,9 +339,26 @@ def distant_followme_conflict(record: Mapping[str, Any]) -> bool:
     view_type = str(record.get("view_type") or record.get("category") or "")
     if "遠景" not in view_type:
         return False
+    normalized = record.get("normalized_evidence") or record
+    count = normalized.get("complete_screen_count")
+    valid_wide_scene = bool(
+        isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 3
+        and normalized.get("unique_main") is False
+        and normalized.get("label_ownership") != "matched"
+        and not record.get("model")
+        and not record.get("price")
+    )
+    # A real FollowMe may be one product inside a wider 3+ monitor wall. Its
+    # physical evidence is useful audit data and must not turn the full-frame
+    # distant classification into a runtime failure. A distant row that still
+    # owns a model/price, or lacks the required wide geometry, remains unsafe.
+    if valid_wide_scene:
+        return False
     return bool(
         is_followme_model(record.get("model"))
-        or has_sufficient_followme_physical_evidence(dict(record))
+        or has_sufficient_followme_physical_evidence(dict(normalized))
     )
 
 
