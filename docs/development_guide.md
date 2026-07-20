@@ -1065,3 +1065,4 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `.53` 即時監控發現 `台中五權-1143` 與 `公益-1261` 三輪原始 JSON／自然敘述皆讀到同一主角價牌 `S24D362GAC`，且 pipeline 已標記 `unlisted_model_candidate=true`，但後續欄位處理把 `model` 清成空值，三輪定案器因而只看見三個空值並錯誤 verified。這是系統性守門漏洞，不是模型沒讀到。
 - `unlisted_model_candidate` 是 pipeline-owned 標記；若後續層把其型號清空，必須從同輪 `raw_objects` 恢復，而且只接受一個唯一 Samsung 型號、單機、`unique_main=true`、`label_ownership=matched`、自然敘述也明確綁定同主體實體價牌，且沒有型號驗證、結構身分、產品家族或品牌衝突。遠景、多候選、模糊／推測敘述一律不得恢復。
 - 此防線必須同時存在於單輪結果離開後端前及批次定案正規化後；三個獨立輪次因此能用真實型號形成共識。已錯誤清空的 2026 結果不得改字串冒充新版，必須依 source identity、原圖 SHA、input SHA、三輪 request binding 與原始 JSON 零模型呼叫重驗；不能證明者才重新呼叫，總呼叫數仍不得超過三次。
+- 內容監控在照片邊界主動停止尚未完成的批次後，若需要載入修正版後端，只能由 `reload_backend_at_safe_idle.ps1 -AllowIncompleteStoppedBatch` 明確執行。此模式不代表一般 idle：仍必須證明 backend `is_running=false`、沒有任何 owned OCR runner、沒有 fuse／benchmark lock、只有一個 repo-owned port 5002 listener；換版後也不得自行開始批次或開啟瀏覽器。未指定此 switch 時，`processed=total` 的原安全條件維持不變。

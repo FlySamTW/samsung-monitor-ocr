@@ -20,6 +20,19 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
         self.assertIn("auto_rerun_questionable_after_recursive", self.source)
         self.assertIn("owned OCR runner still exists", self.source)
 
+    def test_incomplete_recovery_is_explicit_and_keeps_other_interlocks(self):
+        self.assertIn("[switch]$AllowIncompleteStoppedBatch", self.source)
+        self.assertIn("-not $AllowIncompleteStoppedBatch", self.source)
+        self.assertIn(
+            "incomplete_stopped_batch_recovery=[bool]$AllowIncompleteStoppedBatch",
+            self.source,
+        )
+        running_check = self.source.index("[bool]$status.is_running")
+        incomplete_check = self.source.index("-not $AllowIncompleteStoppedBatch")
+        runner_check = self.source.index("owned OCR runner still exists")
+        self.assertLess(running_check, incomplete_check)
+        self.assertLess(incomplete_check, runner_check)
+
     def test_stops_only_repo_owned_backend_listener_tree(self):
         self.assertIn("Get-BackendProcessTree", self.source)
         self.assertIn("[regex]::Escape($RepoRoot)", self.source)

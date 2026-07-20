@@ -5,7 +5,8 @@ param(
     [string]$BackendUrl = "http://127.0.0.1:5002",
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
-    [int]$VerifyTimeoutSeconds = 60
+    [int]$VerifyTimeoutSeconds = 60,
+    [switch]$AllowIncompleteStoppedBatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,7 +81,10 @@ try {
     if (Test-Path -LiteralPath $benchmarkLock) { throw "model benchmark/upgrade lock is active" }
     $status = Get-Status
     if (-not $status -or [bool]$status.is_running) { throw "backend is not at an idle boundary" }
-    if ([int]$status.stats.processed -ne [int]$status.stats.total) {
+    if (
+        [int]$status.stats.processed -ne [int]$status.stats.total -and
+        -not $AllowIncompleteStoppedBatch
+    ) {
         throw "idle backend has incomplete current work"
     }
     $runners = @(Get-Owned "rerun_staged_candidates\.py|recursive_ocr_flat_export\.py|rerun_questionable_records\.py|auto_rerun_questionable_after_recursive\.ps1")
@@ -92,7 +96,13 @@ try {
     if ($tree.Count -lt 1) { throw "backend process tree is empty" }
     $listenerPid = [int](Get-NetTCPConnection -State Listen -LocalPort $backendPort | Select-Object -First 1 -ExpandProperty OwningProcess)
     $orderedPids = @($listenerPid) + @($tree | ForEach-Object {[int]$_.ProcessId} | Where-Object {$_ -ne $listenerPid})
-    Log-Reload "idle_boundary_proven" @{folder=$status.current_relative_dir;processed=$status.stats.processed;total=$status.stats.total;process_ids=$orderedPids}
+    Log-Reload "idle_boundary_proven" @{
+        folder=$status.current_relative_dir
+        processed=$status.stats.processed
+        total=$status.stats.total
+        process_ids=$orderedPids
+        incomplete_stopped_batch_recovery=[bool]$AllowIncompleteStoppedBatch
+    }
     foreach ($processId in $orderedPids) {
         Stop-Process -Id $processId -ErrorAction SilentlyContinue
     }
