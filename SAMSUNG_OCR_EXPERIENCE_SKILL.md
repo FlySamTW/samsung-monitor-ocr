@@ -631,3 +631,11 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - `↑`, `↓`, and `✓` are deterministic comparisons after photo OCR. A difference from the official reference price alone must not trigger another VLM call. Pre-2026 photos do not perform live official-price lookup.
 - Every judge call sees only the same original image/crops and a new RequestID. Never expose a prior answer, summary, reason, or conversation history. The entire photo remains capped at three model calls.
 - Serial production OCR loads LM Studio with `parallel=1`. A heterogeneous 7B–12B judge must pass the fixed 50-photo blind benchmark and permanent regressions before promotion. Do not load/unload a 27B judge per photo on a 16GB GPU.
+
+## Price-role and de-duplicated progress contract (`20260721.60`)
+
+- Read every amount and its printed role on the same physical card before selecting `price`. Never relabel list/reference MSRP (`市價`, `原價`, `參考價`, `建議售價`) as a current member/sale price. When a prominent current or promotional amount coexists, use that amount; if there is only one amount, say so explicitly.
+- A current-year single unit with a readable model and price but `high/low` official comparison gets one stateless price-role confirmation. If two clean passes disagree on price, consume the third and stop. This targeted gate does not force matching-price easy cases into extra rounds and never permits call four.
+- Retry prompts and supplemental crop labels are neutral geometry only. No prior answer, price, SKU, correction reason, summary, answer template, or leading crop title may enter attempts 2 or 3. Prompt examples must not contain copyable Samsung product/price answers.
+- The canonical regression photo `M-台南市-永康區-TK3C-永康大灣-1415.jpg` is hash-bound to `S27D300GAC`, list price `3,590`, current promotional price `3,290`. Its `.60` acceptance requires exactly three independent calls, final `3,290`, a unique stream receipt, and ID-scoped disposal of the old `3,590` remote object.
+- `initial OCR total` counts unique source photos only. Reviews, offline adjudication, filename corrections, and replacement uploads must not inflate it. During re-review, prove liveness with period progress, live photo/narration/card transitions, and exact upload receipts.

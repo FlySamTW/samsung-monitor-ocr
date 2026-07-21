@@ -26,6 +26,7 @@ from skills.audit_fields import (
     apply_human_audited_pixel_authority,
     enrich_result_for_review,
     finalize_three_pass_outcome,
+    validate_evidence_contract,
 )
 from skills.model_validation import (
     has_photo_label_model_evidence,
@@ -2203,6 +2204,32 @@ class BatchOrchestrator:
                     self.max_auto_attempts,
                 )
                 if review_decision.get("three_pass_adjudicated"):
+                    # The bounded adjudicator may deliberately replace a
+                    # pass-local model/price with a safer family-only or null
+                    # result.  Never retain the pre-adjudication contract
+                    # verdict, and never upload a terminal row that still
+                    # fails the contract after those mutations.
+                    terminal_valid, terminal_errors, terminal_normalized = (
+                        validate_evidence_contract(norm_result)
+                    )
+                    norm_result["normalized_evidence"] = terminal_normalized
+                    norm_result["evidence_contract_valid"] = terminal_valid
+                    norm_result["evidence_contract_errors"] = terminal_errors
+                    if not terminal_valid:
+                        review_decision["retry"] = False
+                        review_decision["unresolved"] = True
+                        review_decision["verified"] = False
+                        review_decision["technical_retry_required"] = True
+                        review_decision["technical_retry_reason"] = (
+                            "terminal_evidence_contract_invalid"
+                        )
+                        review_decision["reasons"] = list(dict.fromkeys(
+                            list(review_decision.get("reasons") or [])
+                            + [
+                                "terminal_evidence_contract_invalid",
+                                *terminal_errors,
+                            ]
+                        ))
                     # Adjudication may select the two-pass model/price rather
                     # than the current pass.  Recompute the comparison badge
                     # so ↑/↓/✓/? can never belong to a superseded guess.

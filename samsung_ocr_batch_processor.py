@@ -250,20 +250,17 @@ V1945_OUTPUT_CONTRACT = (
     "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
     "Count complete_screen_count once from the first original full image. Supplemental crops are duplicate views; never count them or use crop edges as evidence. "
     "A complete monitor has all four outer bezel sides and corners inside the ORIGINAL frame. Any bezel touching, crossing, or missing beyond an original image edge contributes zero. "
-    "Always scan the ENTIRE original image region by region. Visible panels are not complete monitors: one complete centered monitor plus one edge-cut monitor on each side means count=1 only after confirming no other complete monitors anywhere else. "
-    "In that edge-cut case, the count is exactly 1, never 3. Brands rendered inside a screen are signal content, not the physical monitor brand. "
-    "MANDATORY BORDER-CONTACT CHECK: any outer bezel side/corner outside the ORIGINAL frame contributes zero. "
-    "Narration must locate complete and edge-cut panels before reporting the count; a single-unit answer must state no additional complete monitor exists elsewhere. "
-    "Screen-rendered brands or advertisements are signal content, not hardware identity; use the physical bezel and same-subject product card. "
+    "First, scan the ENTIRE original image region by region. For each monitor, state which of its own outer bezel edges actually touches the ORIGINAL frame; never claim an edge is cropped unless it actually touches or crosses that frame. A single view must state no other complete monitor exists. Never reuse a remembered layout. Brands rendered inside a screen are signal content, not the physical monitor brand; use the physical bezel and same-subject card. "
     "Nearby, background, or screen-rendered marketing-family words such as Odyssey, G7, G8, M8, and Smart Monitor may not be assigned to the main unit unless the same-subject physical card proves that ownership; when uncertain, narrate only the exact visible SKU and omit the family name. "
     "Any price explicitly read in narration must have exactly the same digits as structured price. A narration/structured price disagreement is unsafe and must not be finalized. "
+    "Before price, narration must list all same-card amounts with printed roles; never rename 市價/原價/參考價/建議售價 as 會員價/特價. If a prominent current/promo amount coexists, choose it; if only one amount exists, say so. "
     "If narration clearly reads a Samsung SKU and price from the dominant monitor's own spatially aligned card, structured model, price, and label_ownership=matched must report the same evidence; do not narrate readable values and then return null. "
     "A dominant full monitor with its aligned readable label is 單機, unique_main=true, label_ownership=matched; partial neighbors do not change that. "
     "A foreground display with a same-subject white round base plus attached tray is a FollowMe candidate regardless of background screens. Screen content is weak, cannot prove FollowMe, and can NEVER negate its hardware. "
     "A round base counts only when the complete physical floor base is visible inside the ORIGINAL frame. A white vertical pole alone is insufficient. A continuous retail shelf price rail is not an attached tray. Smart Monitor M7/M5 or an S32FM SKU alone is a product family, not direct FollowMe branding. "
     "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
     "MANDATORY FINAL SELF-CHECK: classify the entire ORIGINAL frame before naming any foreground product. If 3 or more monitor bodies have all four frame edges and all four corners inside the original photo, output 遠景, unique_main=false, model=null, and price=null even when one foreground unit is a real FollowMe; preserve its physical cues only as scene evidence. Direct FollowMe branding or two same-subject strong physical cues forces 單機 only when the original frame contains at most 2 complete monitors. "
-    "MANDATORY LAST FRAME CHECK: if narration identifies a centered monitor with its own aligned readable Samsung model/price card and says the left and right neighboring monitors are cut by the ORIGINAL image edges, output 單機, unique_main=true, label_ownership=matched, and complete_screen_count=1; 遠景 or count=3 is impossible."
+    "MANDATORY LAST FRAME CHECK: name each monitor's actual ORIGINAL-frame bezel contact. No contact means not cropped; 3+ complete bodies require 遠景."
 )
 
 REVIEW_FOCUS_PROMPTS = {
@@ -273,8 +270,8 @@ REVIEW_FOCUS_PROMPTS = {
         "完整台數只能從第一張全尺寸照片計算一次；後面的局部裁切都是同一照片的重複定位圖，不是新增螢幕，禁止重複計數。"
         "只有螢幕本體外框四邊與四角全部位於全尺寸照片內才算完整；任何一邊或一角碰到、穿出或消失在照片上下左右邊界，就算只缺一小部分也不計。"
         "不可只檢查中央與左右邊緣；上方、下方、遠處或另一展示架上只要四邊四角完整，也必須逐台計入。"
-        "中央一台完整、左右各一台被照片邊界切掉，只有在逐區掃描確認整張照片其他位置完全沒有完整螢幕時，完整台數才是 1；若其他位置另有完整螢幕必須全部加總。"
-        "三個面板橫向近拍時，若左機左框出界、右機右框出界、中央四邊四角完整，必須逐字核算為『左不完整+中央完整+右不完整=1台完整』，禁止填3。"
+        "逐台寫明其大約位置，以及左／右／上／下哪一條外框真的接觸第一張原圖最外側；沒有實際接觸就不得套用『被裁切』。"
+        "不得把規則中的示意構圖當成當前照片內容；先列實際邊界接觸，再由清冊計算完整台數。"
         "畫面有多個面板時，自然觀察必須先列出完整螢幕的大約位置，再明說哪些螢幕被照片邊界截斷；判單機時還必須明說整張照片其他區域沒有額外完整螢幕。"
         "螢幕內播放 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是訊號內容，不是螢幕硬體品牌；不能因此否定與中央實體螢幕正下方空間對齊的 Samsung 型號價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
@@ -284,6 +281,7 @@ REVIEW_FOCUS_PROMPTS = {
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
+        "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
         "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令；沒有把握的欄位留空。"
     ),
@@ -293,8 +291,8 @@ REVIEW_FOCUS_PROMPTS = {
         "完整台數只能從第一張全尺寸照片計算一次；後面的局部裁切都是同一照片的重複定位圖，不是新增螢幕，禁止重複計數。"
         "逐台檢查外框四邊與四角：任何一邊或一角碰到、穿出或消失在照片上下左右邊界，該台就不完整，不能因大部分面板可見而計入。"
         "不可因中央一台很顯眼就停止搜尋；上方、下方、遠處與其他展示架上的完整螢幕都要計入。"
-        "中央一台完整、左右各一台被照片邊界切掉時，只有在全圖反向稽核確認其他區域沒有任何完整螢幕，完整台數才是 1、視角才是單機候選。"
-        "三個面板橫向近拍時，若左機左框出界、右機右框出界、中央四邊四角完整，必須逐字核算為『左不完整+中央完整+右不完整=1台完整』，禁止填3。"
+        "逐台寫明其大約位置，以及左／右／上／下哪一條外框真的接觸第一張原圖最外側；沒有實際接觸就不得套用『被裁切』。"
+        "不得把規則中的示意構圖當成當前照片內容；先列實際邊界接觸，再由清冊計算完整台數。"
         "自然觀察必須列出完整螢幕的大約位置，再逐一明說哪些螢幕被照片邊界截斷；判單機時必須明說全圖其他區域沒有額外完整螢幕。"
         "螢幕像素內的 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是顯示內容，不是硬體品牌；硬體身分只看外框實體標誌與同主體空間對齊價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
@@ -304,6 +302,7 @@ REVIEW_FOCUS_PROMPTS = {
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
+        "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
         "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令。"
     ),
@@ -1334,20 +1333,49 @@ def structured_narration_price_conflict(structured_price, narration_price):
 
 
 def narration_marks_reference_only_price(structured_price, narration):
-    """Detect an amount explicitly described as list/reference price, not sale price."""
+    """Detect an amount explicitly described as reference-only, not the shown sale price.
+
+    A sole printed ``建議售價`` is still the only visible store-card amount and
+    must be retained for this project. It becomes reference-only only when the
+    same narration identifies another current/promotional amount or explicitly
+    says that it is not the current selling price.
+    """
     digits = "".join(ch for ch in str(structured_price or "") if ch.isdigit())
     text = str(narration or "")
     if not digits or not text:
         return False
     formatted = f"{int(digits):,}" if digits.isdigit() else digits
     price_pattern = rf"(?:{re.escape(digits)}|{re.escape(formatted)})"
-    return bool(
-        re.search(
-            rf"(?:市價|原價|建議售價|參考價).{{0,12}}{price_pattern}",
-            text,
-            re.IGNORECASE,
-        )
+    if re.search(
+        rf"(?:市價|原價|參考價).{{0,12}}{price_pattern}",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    if not re.search(
+        rf"建議售價.{{0,12}}{price_pattern}",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(r"(?:僅供參考|非(?:目前)?售價|不是(?:目前)?售價)", text):
+        return True
+    if re.search(
+        r"(?:另有|另列|下方|上方).{0,18}(?:促銷價|會員價|現金價|特價|優惠價|現價)",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    current_price_pattern = re.compile(
+        r"(?:促銷價|會員價|現金價|特價|優惠價|現價|(?<!建議)售價)"
+        r".{0,12}(\d{1,3}(?:,\d{3})+|\d{4,6})",
+        re.IGNORECASE,
     )
+    for match in current_price_pattern.finditer(text):
+        other_digits = "".join(ch for ch in match.group(1) if ch.isdigit())
+        if other_digits and other_digits != digits:
+            return True
+    return False
 
 
 OTHER_BRAND_ALIASES = (
@@ -1819,6 +1847,16 @@ def load_manual_rule_prompt_section(max_rules: int = 12, max_chars: int = 2400) 
         hint = re.sub(r"\s+", " ", str(row.get("rule_hint") or "")).strip()
         # A filename or a bare corrected value is an example, not a reusable rule.
         if len(hint) < 8 or hint.lower() in {"none", "null"}:
+            continue
+        # Per-photo answers are forbidden in a stateless production prompt.
+        # Even a well-intended human rule can prime the VLM to copy a price or
+        # SKU into an unrelated image.  Keep only abstract rules here; exact
+        # decisions remain hash-bound offline authorities.
+        if (
+            re.search(r"(?:\.jpe?g|\.png|\\|/)", hint, re.IGNORECASE)
+            or re.search(r"\b(?:LS)?S\d{2}[A-Z0-9]{5,}\b", hint, re.IGNORECASE)
+            or re.search(r"(?:NT\s*\$|\$|[元塊])\s*\d|\d{1,3}(?:,\d{3})+|\b\d{4,6}\b", hint, re.IGNORECASE)
+        ):
             continue
         key = hint.casefold()
         if key in seen:
@@ -3028,9 +3066,9 @@ def process_single_image(
     if orchestrator:
         msg = f"▶️ 正在分析圖片: {fname} (Model: {model_name_global})..."
         if label_b64: msg += " (偵測到價牌，啟用雙重視野放大 🔍)"
-        if bottom_label_b64: msg += " (下方整條價牌帶)"
-        if bottom_center_b64: msg += " (下方價牌帶放大)"
-        if bottom_left_center_b64: msg += " (下方偏左中價牌放大)"
+        if bottom_label_b64: msg += " (下方影像區域放大)"
+        if bottom_center_b64: msg += " (下方中央區域放大)"
+        if bottom_left_center_b64: msg += " (下方偏左中區域放大)"
         orchestrator.log_system(msg)
         console.print(f"[cyan]{msg}[/cyan]")
 
@@ -3133,21 +3171,21 @@ def process_single_image(
         if bottom_label_b64:
             user_images.append({
                 "type": "text",
-                "text": "補充圖：這是全尺寸照片下方整條商品標籤/價牌區域的自動裁切，請用它輔助尋找不在正中央的價牌。",
+                "text": "補充圖：這只是全尺寸照片下方區域的自動裁切，可能完全沒有價牌。只有實際看見實體卡片外框、可逐字讀取數字，且回到第一張全尺寸照片確認它屬於主角時，才可輸出型號或價格；不得因為有這張裁切就假設存在價牌。",
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_label_b64}"}})
 
         if bottom_center_b64:
             user_images.append({
                 "type": "text",
-                "text": "補充圖：這是全尺寸照片下方中間商品價牌區域的自動放大裁切，請優先用它讀主角型號與價格。",
+                "text": "補充圖：這只是全尺寸照片下方中央區域的自動放大裁切，不代表其中必然有價牌。沒有實際看見主角自有實體卡片與可逐位讀取的數字時，model 或 price 必須為 null，不得用產品家族常見價、參考價或提示內數字補猜。",
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_center_b64}"}})
 
         if bottom_left_center_b64:
             user_images.append({
                 "type": "text",
-                "text": "補充圖：這是全尺寸照片下方偏左中商品價牌區域的放大裁切，只用於讀取小字；價牌歸屬仍必須回到第一張全尺寸照片確認，且此圖不得用來計算螢幕台數。",
+                "text": "補充圖：這只是全尺寸照片下方偏左中區域的放大裁切，可能完全沒有價牌。價牌存在與歸屬都必須回到第一張全尺寸照片確認；此圖不得用來計算螢幕台數，也不得單獨建立型號或價格。",
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_left_center_b64}"}})
 
@@ -3163,7 +3201,7 @@ def process_single_image(
         "整張必須判遠景；即使其中一台前景直立螢幕連著白色圓形落地底座與託盤，也只能如實記錄 FollowMe 存在，不得把全圖改成單機。"
         "完整台數只能看第一張全尺寸照片並只計一次：外框四邊四角全部在照片內才算完整；碰到或穿出照片任一邊界的一律不計。"
         "先依左／中／右、上／中／下逐區掃完整張照片，所有位置四邊四角完整的螢幕都要計入，不可只盯中央主角。"
-        "中央一台完整而左右螢幕各被照片邊界裁切時，只有在全圖掃描確認其他區域沒有任何完整螢幕，完整台數才是 1、才判單機候選。"
+        "逐台寫明左／右／上／下哪一條外框真的接觸第一張原圖最外側；沒有實際接觸就不得宣稱該螢幕被裁切，也不得套用預設構圖。"
         "所謂被照片邊界裁切，只限外框真的接觸或穿出第一張原圖最外側；被貨架、柱子、前景物或另一台螢幕遮住不算。"
         "緊密近拍例外不得套用到一整排、展示牆、多層貨架或寬廣走道；判只有一台前，必須逐一回答上方、下方、遠處與另一排是否還有完整螢幕。"
         "畫面有多個面板時，自然觀察先列出完整螢幕的大約位置，再說明哪些螢幕被照片邊界截斷；若判單機，必須明說其他區域沒有額外完整螢幕。"

@@ -1414,8 +1414,105 @@ class EvidenceContractTests(unittest.TestCase):
                 "同一張價牌醒目售價 5,990 元，上方另列市價 7,990 元。",
             )
         )
+        self.assertFalse(
+            batch.narration_marks_reference_only_price(
+                "42900",
+                "同一主體價牌唯一明確商品金額為建議售價 42,900 元。",
+            )
+        )
+        self.assertTrue(
+            batch.narration_marks_reference_only_price(
+                "42900",
+                "同一價牌建議售價 42,900 元，下方另有促銷價 39,900 元。",
+            )
+        )
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
-        self.assertIn("市價／原價／建議售價／參考價", prompt)
+        self.assertIn("若價牌只有「建議售價」一個明確商品金額", prompt)
+
+    def test_current_year_price_delta_gets_one_stateless_role_confirmation(self):
+        row = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27D300GAC",
+            "price": "3590",
+            "price_status": "high",
+            "quality_issue": "無",
+            "thinking": (
+                "我看到中央唯一完整螢幕，同主體價牌只看到一個金額 3,590 元，"
+                "型號為 S27D300GAC，其他區域沒有額外完整螢幕，所以……"
+            ),
+            "independent_pass": True,
+            "request_id_verified": True,
+            "request_binding_enforced": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched", []),
+        }
+        first = immediate_retry_decision(dict(row), 1, [], 3)
+        self.assertTrue(first["retry"])
+        self.assertIn(
+            "2026 價差照片需第二輪無記憶核對價牌角色",
+            first["reasons"],
+        )
+
+        repeated = dict(row)
+        repeated["ocr_attempt"] = 2
+        second = immediate_retry_decision(repeated, 2, [dict(row)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
+
+    def test_cross_pass_price_delta_disagreement_consumes_third_call(self):
+        first = {
+            "period": "202601", "ocr_attempt": 1,
+            "view_type": "單機", "category": "單機",
+            "model": "S27D300GAC", "price": "3590", "price_status": "high",
+            "quality_issue": "無", "thinking": "我看到主角價牌金額 3,590 元，所以……",
+            "independent_pass": True, "request_id_verified": True,
+            "request_binding_enforced": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched", []),
+        }
+        second = dict(first)
+        second.update(
+            ocr_attempt=2,
+            price="3290",
+            price_status="match",
+            thinking="我看到價牌小字市價 3,590 與大字限時特價 3,290，所以……",
+        )
+        decision = immediate_retry_decision(second, 2, [first], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn(
+            "2026 同圖獨立輪次價格不一致需完成第三輪定案",
+            decision["reasons"],
+        )
+
+    def test_yongkang_1415_pixel_authority_selects_promotional_price(self):
+        image_hash = "bf077115e26691507086da55921003f5eacd8b2549448c0c4b01d475ef1fc962"
+        authority = KNOWN_SOURCE_EXPECTATIONS[image_hash]
+        self.assertEqual(authority["model"], "S27D300GAC")
+        self.assertEqual(authority["price"], 3290)
+
+        passes = []
+        for attempt in (1, 2, 3):
+            passes.append({
+                "period": "202601", "ocr_attempt": attempt,
+                "input_image_sha256": image_hash,
+                "request_id_verified": True, "request_binding_enforced": True,
+                "independent_pass": True, "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "view_type": "單機", "category": "單機",
+                "model": "S27D300GAC", "price": "3590",
+                **evidence(1, True, "matched", []),
+            })
+        self.assertTrue(apply_human_audited_pixel_authority(passes[2], passes[:2], 3))
+        self.assertEqual(passes[2]["model"], "S27D300GAC")
+        self.assertEqual(passes[2]["price"], 3290)
+
+        full = batch.V1945_OUTPUT_CONTRACT + batch.REVIEW_FOCUS_PROMPTS[2]
+        self.assertIn("never rename 市價", full)
+        self.assertIn("不得把市價改口成會員價", full)
 
     def test_prompt_has_no_copyable_json_answer_templates(self):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
@@ -1429,6 +1526,20 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
+
+    def test_runtime_prompt_has_no_copyable_followme_price_or_panel_examples(self):
+        from skills.followme_reference import build_followme_prompt_section
+
+        prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
+        full, _ = batch.build_runtime_system_prompt(prompt, build_followme_prompt_section())
+        for leaked in ("17,990", "17990", "12,990", "12990", "S32DM702UC", "S32FM703UC"):
+            self.assertNotIn(leaked, full)
+
+    def test_supplemental_crop_labels_do_not_assert_a_price_card_exists(self):
+        source = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
+        self.assertIn("可能完全沒有價牌", source)
+        self.assertIn("不代表其中必然有價牌", source)
+        self.assertNotIn("下方整條商品標籤/價牌區域", source)
 
     def test_actual_runtime_reference_keeps_production_prompt_within_hard_limit(self):
         from skills.followme_reference import build_followme_prompt_section
@@ -1444,17 +1555,16 @@ class EvidenceContractTests(unittest.TestCase):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         source = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_batch_processor.py").read_text(encoding="utf-8")
         self.assertIn("外框四邊與四個外框角全部位於原圖內", prompt)
-        self.assertIn("中央一台完整、左右各一台被原圖邊界切掉", prompt)
+        self.assertIn("沒有實際接觸就不得宣稱「被裁切」", prompt)
         self.assertIn("依左／中／右、上／中／下逐區掃完", prompt)
-        self.assertIn("其他位置另有完整螢幕，必須全部加總", prompt)
+        self.assertIn("其他位置的完整螢幕也必須全部加總", prompt)
         self.assertIn("只限螢幕外框真的接觸或穿出第一張照片最外側", prompt)
         self.assertIn("緊密近拍例外不得套用到一整排、展示牆、多層貨架或寬廣走道", prompt)
-        self.assertIn("左側不完整 + 中央完整 + 右側不完整 = 完整台數 1", prompt)
+        self.assertNotIn("左側不完整 + 中央完整 + 右側不完整 = 完整台數 1", prompt)
         self.assertIn("Supplemental crops are duplicate views", batch.V1945_OUTPUT_CONTRACT)
-        self.assertIn("one complete centered monitor plus one edge-cut monitor on each side", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("state which of its own outer bezel edges actually touches", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("scan the ENTIRE original image region by region", batch.V1945_OUTPUT_CONTRACT)
-        self.assertIn("no other complete monitors anywhere else", batch.V1945_OUTPUT_CONTRACT)
-        self.assertIn("the count is exactly 1, never 3", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("never claim an edge is cropped unless", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("MANDATORY LAST FRAME CHECK", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("rendered inside a screen are signal content, not the physical monitor brand", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("不能決定硬體品牌", source)
@@ -1462,11 +1572,12 @@ class EvidenceContractTests(unittest.TestCase):
             focus = batch.REVIEW_FOCUS_PROMPTS[attempt]
             self.assertIn("第一張全尺寸照片", focus)
             self.assertIn("禁止重複計數", focus)
-            self.assertIn("左右各一台被照片邊界切掉", focus)
+            self.assertIn("沒有實際接觸就不得套用『被裁切』", focus)
+            self.assertNotIn("左不完整+中央完整+右不完整", focus)
             self.assertIn("其他區域", focus)
         self.assertIn("不可把其中物體當成新增螢幕、不可重複計數", source)
         self.assertIn("完整台數只能回到第一張全尺寸照片檢查", source)
-        self.assertIn("下方偏左中商品價牌區域", source)
+        self.assertIn("下方偏左中區域的放大裁切", source)
         self.assertIn("此圖不得用來計算螢幕台數", source)
         self.assertNotIn("補充圖：這是原圖", source)
 
@@ -1964,7 +2075,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("最終它牌結果與原始 Samsung SKU 衝突", decision["reasons"])
         self.assertEqual(decision["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
-    def test_large_official_price_difference_is_annotation_not_retry(self):
+    def test_large_official_price_difference_keeps_badge_and_gets_one_confirmation(self):
         row = {
             "file_name": "M-202605-price-diff.jpg", "view_type": "單機", "category": "單機",
             "model": "S27D392GAC", "price": "4290", "quality_issue": "",
@@ -1973,13 +2084,24 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched"),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertFalse(first["retry"])
-        self.assertTrue(first["verified"])
-        self.assertNotIn("照片價格與官方參考價差異過大，需獨立重讀", first["reasons"])
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("2026 價差照片需第二輪無記憶核對價牌角色", first["reasons"])
+        repeated = dict(row)
+        repeated.update(
+            independent_pass=True,
+            request_id_verified=True,
+            prior_answer_exposed=False,
+            prompt_contamination=False,
+            runtime_health={"healthy": True},
+        )
+        second = immediate_retry_decision(dict(repeated), 2, [dict(repeated)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
         self.assertEqual(row["price_status"], "high")
         self.assertEqual(row["price_diff_percent"], 36.7)
 
-    def test_complete_current_year_followme_can_finish_on_first_pass(self):
+    def test_complete_current_year_followme_requires_one_stateless_confirmation(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -1991,9 +2113,14 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertFalse(first["retry"])
-        self.assertTrue(first["verified"])
-        self.assertEqual(first["reasons"], [])
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
+
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
+        self.assertEqual(second["reasons"], [])
 
     def test_current_year_followme_identity_disagreement_never_becomes_majority_success(self):
         physical = [
@@ -2035,9 +2162,14 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["verified"])
-        self.assertEqual(first["reasons"], [])
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
         self.assertNotIn("FollowMe 缺少同一實機的物理支架證據", first["reasons"])
+
+        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
+        self.assertTrue(second["verified"])
+        self.assertEqual(second["reasons"], [])
 
     def test_structured_evidence_allows_friendly_followme_normalization(self):
         narration_without_physical_keywords = "主角規格牌可讀。"
@@ -2102,9 +2234,13 @@ class EvidenceContractTests(unittest.TestCase):
             "followme_physical_evidence": physical,
         })
         first = immediate_retry_decision(dict(valid), 1, [], 3)
-        self.assertFalse(first["retry"])
-        self.assertTrue(first["verified"])
-        self.assertEqual(first["reasons"], [])
+        self.assertTrue(first["retry"])
+        self.assertFalse(first["verified"])
+        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
+
+        second = immediate_retry_decision(dict(valid), 2, [dict(valid)], 3)
+        self.assertTrue(second["verified"])
+        self.assertEqual(second["reasons"], [])
 
     def test_distant_structured_evidence_still_requires_supporting_narration(self):
         row = {

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import sys
 import unittest
@@ -66,6 +67,101 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_raw_single_model_price_consensus_recovers_sole_suggested_price(self):
+        from tools.finalize_existing_three_pass_reviews import (
+            _raw_single_model_price_consensus,
+        )
+
+        raw = json.dumps(
+            {
+                "narration": (
+                    "我看到唯一主角自己的價牌，型號 S49DG952SC，"
+                    "價牌只有建議售價 42,900，沒有另一個促銷價。"
+                ),
+                "view_type": "單機",
+                "model": "S49DG952SC",
+                "price": "42900",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+            },
+            ensure_ascii=False,
+        )
+        calls = [
+            make_pass(
+                model="S49DG952SC",
+                price=None,
+                raw_objects=[raw],
+                ocr_attempt=attempt,
+            )
+            for attempt in (1, 2, 3)
+        ]
+
+        self.assertEqual(
+            _raw_single_model_price_consensus(calls),
+            ("S49DG952SC", "42900"),
+        )
+
+    def test_raw_single_model_price_consensus_rejects_conflicting_third_pair(self):
+        from tools.finalize_existing_three_pass_reviews import (
+            _raw_single_model_price_consensus,
+        )
+
+        def raw(price):
+            return json.dumps(
+                {
+                    "narration": f"我看到唯一主角型號 S32DM803UC，售價 {int(price):,}。",
+                    "view_type": "單機",
+                    "model": "S32DM803UC",
+                    "price": str(price),
+                    "complete_screen_count": 1,
+                    "unique_main": True,
+                    "label_ownership": "matched",
+                },
+                ensure_ascii=False,
+            )
+
+        calls = [
+            make_pass(
+                model="S32DM803UC",
+                price=None,
+                raw_objects=[raw(price)],
+                ocr_attempt=attempt,
+            )
+            for attempt, price in enumerate((12990, 12990, 12900), start=1)
+        ]
+
+        self.assertIsNone(_raw_single_model_price_consensus(calls))
+
+    def test_raw_single_model_price_consensus_rejects_unqualified_low_price(self):
+        from tools.finalize_existing_three_pass_reviews import (
+            _raw_single_model_price_consensus,
+        )
+
+        raw = json.dumps(
+            {
+                "narration": "我看到唯一主角型號 S32DM702UC，售價 1,990。",
+                "view_type": "單機",
+                "model": "S32DM702UC",
+                "price": "1990",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+            },
+            ensure_ascii=False,
+        )
+        calls = [
+            make_pass(
+                model="S32DM702UC",
+                price=None,
+                raw_objects=[raw],
+                ocr_attempt=attempt,
+            )
+            for attempt in (1, 2, 3)
+        ]
+
+        self.assertIsNone(_raw_single_model_price_consensus(calls))
+
     def test_full_official_sku_consensus_recovers_catalog_short_model(self):
         from tools.finalize_existing_three_pass_reviews import (
             _recover_full_official_sku_consensus,
@@ -180,6 +276,47 @@ class ThreePassFinalizationTests(unittest.TestCase):
         )
         self.assertEqual(current["model"], 'FollowMe Pro M7 43"')
         self.assertEqual(current["price"], "17990")
+
+    def test_followme_physical_consensus_keeps_truthful_family_without_price(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "我看到同一台完整螢幕有白色垂直支架、圓形底座與附著託盤，"
+            "畫面顯示 Smart Monitor M7，但沒有可讀實體價牌，所以……"
+        )
+        history = [
+            make_pass("單機", None, None, 1, True, "not_visible", physical=fixture, thinking=narration),
+            make_pass("單機", None, None, 1, True, "not_visible", physical=fixture, thinking=narration),
+        ]
+        current = make_pass(
+            "單機",
+            'FollowMe M7 32"',
+            None,
+            1,
+            True,
+            "not_visible",
+            physical=fixture + [
+                {
+                    "cue": "direct_followme_branding_on_unit",
+                    "same_subject": True,
+                    "strength": "direct",
+                }
+            ],
+            thinking=narration,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+        self.assertTrue(current["followme_family_confirmed"])
+        valid, errors, _ = validate_evidence_contract(current)
+        self.assertTrue(valid, errors)
 
     def test_live_guard_accepts_third_clean_duplicate_confirmation(self):
         fixture = [
@@ -691,6 +828,107 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertFalse(queued["model_validation_failed"])
         self.assertIsNone(queued["model"])
         self.assertIsNone(queued["price"])
+
+    def test_prior_revision_raw_price_loss_is_repaired_and_requeued(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        raw = json.dumps(
+            {
+                "narration": (
+                    "我看到唯一主角自己的價牌，型號 S49DG952SC，"
+                    "價牌只有建議售價 42,900，沒有另一個促銷價。"
+                ),
+                "view_type": "單機",
+                "model": "S49DG952SC",
+                "price": "42900",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+            },
+            ensure_ascii=False,
+        )
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            trace = root / "trace.jsonl"
+            result_file = root / "result.json"
+            source = root / "price-loss.jpg"
+            source.write_bytes(b"exact-photo-bytes")
+            source_id = hashlib.sha256(
+                str(source.resolve()).casefold().encode("utf-8")
+            ).hexdigest()
+            rows = []
+            for attempt in (1, 2, 3):
+                parsed = make_pass(
+                    model="S49DG952SC",
+                    price=None,
+                    count=1,
+                    unique=True,
+                    ownership="matched",
+                    raw_objects=[raw],
+                    ocr_attempt=attempt,
+                    file_name="price-loss.jpg",
+                    source_item_id=source_id,
+                    source_path=str(source),
+                    original_source_path=str(source),
+                    period="202601",
+                    timestamp=f"2026-07-21T04:00:0{attempt}",
+                    run_id="revision-56-run",
+                )
+                rows.append({
+                    "file_name": parsed["file_name"],
+                    "source_item_id": parsed["source_item_id"],
+                    "run_id": parsed["run_id"],
+                    "timestamp": parsed["timestamp"],
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            result_file.write_text(
+                json.dumps([{
+                    "data": {
+                        "image": str(root / "price-loss.jpg"),
+                        "ocr_meta": {
+                            "auto_verified": True,
+                            "auto_review_required": False,
+                            "evidence_guard_revision": "20260721.56",
+                            "ocr_attempt": 1,
+                            "view_type": "單機",
+                            "model": "S49DG952SC",
+                            "price": None,
+                        },
+                    },
+                    "annotations": [{"result": []}],
+                }], ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result",
+                return_value=root / "queued.json",
+            ) as enqueue:
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=True,
+                )
+
+            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]
+            meta = saved["data"]["ocr_meta"]
+            queued = enqueue.call_args.args[0]
+
+        self.assertEqual(report[0]["status"], "finalized")
+        self.assertEqual(
+            meta["adjudication_rule"],
+            "three_pass_raw_model_price_consensus_repair",
+        )
+        self.assertEqual(meta["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+        self.assertEqual(meta["model"], "S49DG952SC")
+        self.assertEqual(meta["price"], "42900")
+        self.assertEqual(queued["model"], "S49DG952SC")
+        self.assertEqual(queued["price"], "42900")
 
     def test_pass_one_task_cannot_erase_a_bound_three_call_authority(self):
         from tools.finalize_existing_three_pass_reviews import finalize_file
@@ -2058,6 +2296,90 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_one_structural_distant_does_not_override_two_identity_free_single_votes(self):
+        structural = make_pass(
+            view="遠景",
+            model=None,
+            price=None,
+            count=3,
+            unique=False,
+            ownership="not_visible",
+            thinking=(
+                "我看到前景左、中、右三台完整入鏡的螢幕，四邊四角都在原圖內，"
+                "背景另有展示螢幕，無法鎖定唯一主角。"
+            ),
+        )
+        weak_single = make_pass(
+            view="單機",
+            model=None,
+            price=None,
+            count=1,
+            unique=True,
+            ownership="not_visible",
+            thinking="我看到展示櫃上三台螢幕，但猜測只有中央一台完整。",
+        )
+        current = make_pass(
+            view="單機",
+            model=None,
+            price=None,
+            count=1,
+            unique=True,
+            ownership="ambiguous",
+            thinking="我看到寬廣展示區，但猜測中央螢幕是唯一主角。",
+        )
+
+        result = finalize_three_pass_outcome(
+            current, [structural, weak_single], unresolved()
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_identity_free_single_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_two_matched_identity_single_votes_survive_one_bad_distant_count(self):
+        structural = make_pass(
+            view="遠景",
+            model=None,
+            price=None,
+            count=3,
+            unique=False,
+            ownership="not_visible",
+            thinking="我看到三台完整螢幕並排，因此判遠景。",
+        )
+        second = make_pass(
+            view="單機",
+            model="S24F332EAC",
+            price="2390",
+            count=1,
+            unique=True,
+            ownership="matched",
+            thinking="我看到唯一完整主螢幕與其正下方同位價牌 S24F332EAC、2,390 元。",
+        )
+        current = make_pass(
+            view="單機",
+            model="S24F332EAC",
+            price="2390",
+            count=1,
+            unique=True,
+            ownership="matched",
+            thinking="我看到唯一完整主螢幕與其正下方同位價牌 S24F332EAC、2,390 元。",
+        )
+
+        result = finalize_three_pass_outcome(
+            current, [structural, second], unresolved()
+        )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], "S24F332EAC")
+        self.assertEqual(current["price"], "2390")
+
     def test_followme_inside_five_monitor_wall_finishes_as_distant(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -2291,7 +2613,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         history = [
             make_pass(
                 "遠景", None, None, 3, False, "not_visible",
-                thinking="三台完整陳列，沒有唯一主角或可歸屬價牌。",
+                thinking="賣場有螢幕陳列，但本輪沒有提供可核對的幾何證據。",
             ),
             make_pass(
                 "單機", None, None, 1, True, "not_visible",

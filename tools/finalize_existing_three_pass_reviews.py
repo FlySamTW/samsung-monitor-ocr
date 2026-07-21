@@ -22,6 +22,7 @@ from skills.audit_fields import (
     apply_human_audited_pixel_authority,
     clear_superseded_terminal_content_flags,
     finalize_three_pass_outcome,
+    has_sufficient_followme_physical_evidence,
     refresh_authoritative_price_comparison,
     validate_evidence_contract,
 )
@@ -758,6 +759,141 @@ def _recover_full_official_sku_consensus(
     return model
 
 
+def _raw_single_model_price_consensus(
+    calls: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    """Recover a model/price pair lost only after clean structured output.
+
+    This is deliberately narrower than ordinary majority voting.  All three
+    calls must be healthy, independently request-bound views of the same full
+    image, and every usable raw pair must agree.  At least two raw JSON objects
+    must identify the same catalog Samsung SKU and price on the matched unique
+    subject.  Prices at or below 2,000, multiple current-price amounts, and any
+    contradictory raw pair are refused.  A sole ``建議售價`` is accepted because
+    it is the only store-card amount visible in that call.
+    """
+    if len(calls) != 3:
+        return None
+    image_hashes = {
+        str(call.get("input_image_sha256") or "").strip().lower()
+        for call in calls
+    }
+    attempts = sorted(int(call.get("ocr_attempt") or 0) for call in calls)
+    if "" in image_hashes or len(image_hashes) != 1 or attempts != [1, 2, 3]:
+        return None
+    try:
+        valid_models = [
+            line.strip()
+            for line in MODEL_LIST_PATH.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError):
+        return None
+    if not valid_models:
+        return None
+
+    pair_votes: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for call in calls:
+        runtime = call.get("runtime_health") or {}
+        if (
+            call.get("request_id_verified") is not True
+            or call.get("independent_pass") is not True
+            or call.get("prior_answer_exposed") is True
+            or call.get("prompt_contamination") is True
+            or not isinstance(runtime, dict)
+            or runtime.get("healthy") is not True
+        ):
+            return None
+        call_pairs: set[tuple[str, str]] = set()
+        for raw in call.get("raw_objects") or []:
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if (
+                str(payload.get("view_type") or "").strip() != "單機"
+                or payload.get("complete_screen_count") not in {1, 2}
+                or payload.get("unique_main") is not True
+                or str(payload.get("label_ownership") or "").strip() != "matched"
+            ):
+                continue
+            model = strict_known_model(payload.get("model"), valid_models)
+            price = re.sub(r"[^0-9]", "", str(payload.get("price") or ""))
+            if not model or not price or not price.isdigit() or int(price) <= 2000:
+                continue
+            if model.startswith("FollowMe") and not has_sufficient_followme_physical_evidence(
+                payload
+            ):
+                continue
+            narration = str(payload.get("narration") or "")
+            formatted = f"{int(price):,}"
+            if not re.search(
+                rf"(?:{re.escape(price)}|{re.escape(formatted)})", narration
+            ):
+                continue
+            current_amounts = {
+                re.sub(r"[^0-9]", "", match.group(1))
+                for match in re.finditer(
+                    r"(?:促銷價|會員價|現金價|特價|優惠價|現價|(?<!建議)售價)"
+                    r".{0,12}(\d{1,3}(?:,\d{3})+|\d{4,6})",
+                    narration,
+                    re.IGNORECASE,
+                )
+            }
+            if any(amount and amount != price for amount in current_amounts):
+                continue
+            call_pairs.add((model, price))
+        if len(call_pairs) > 1:
+            return None
+        if len(call_pairs) == 1:
+            pair_votes[next(iter(call_pairs))].append(call)
+
+    # Any clean alternative pair is a real conflict, even if another pair has
+    # a two-to-one majority.  Such a photo needs visual authority, not guessing.
+    if len(pair_votes) != 1:
+        return None
+    pair, rows = next(iter(pair_votes.items()))
+    if len(rows) < 2:
+        return None
+    return pair
+
+
+def _calls_bind_to_result_source(
+    calls: list[dict[str, Any]], result_path: Path, file_name: str
+) -> bool:
+    """Prove that cross-staging traces contain the exact current photo bytes."""
+    if len(calls) != 3 or not file_name:
+        return False
+    target = (result_path.resolve().parent / file_name).resolve()
+    source_paths = [Path(str(call.get("source_path") or "")).resolve() for call in calls]
+    original_paths = {
+        Path(str(call.get("original_source_path") or "")).resolve()
+        for call in calls
+    }
+    source_ids = {str(call.get("source_item_id") or "") for call in calls}
+    if (
+        not target.is_file()
+        or any(not path.is_file() or path.name != file_name for path in source_paths)
+        or len(original_paths) != 1
+        or len(source_ids) != 1
+        or "" in source_ids
+    ):
+        return False
+    original = next(iter(original_paths))
+    source_id = next(iter(source_ids))
+    if not original.is_file() or original.name != file_name:
+        return False
+    expected_source_id = hashlib.sha256(
+        str(original).casefold().encode("utf-8")
+    ).hexdigest()
+    if source_id != expected_source_id:
+        return False
+    hashes = {_sha256_file(path) for path in [target, original, *source_paths]}
+    return len(hashes) == 1
+
+
 def _recover_known_authority_after_restart(
     current: dict[str, Any], calls: list[dict[str, Any]], meta: dict[str, Any]
 ) -> bool:
@@ -925,6 +1061,25 @@ def finalize_file(
         existing_meta = (task.get("data") or {}).get("ocr_meta") or {}
         calls = groups.get(name) or []
         recovered_official_sku = _recover_full_official_sku_consensus(calls)
+        recovered_raw_pair = _raw_single_model_price_consensus(calls)
+        raw_calls_bind_same_source = _calls_bind_to_result_source(
+            calls, result_path, name
+        )
+        raw_pair_matches_existing_model = bool(
+            recovered_raw_pair
+            and normalize_model_token(existing_meta.get("model"))
+            in {"", normalize_model_token(recovered_raw_pair[0])}
+        )
+        raw_model_price_repair = bool(
+            apply
+            and recovered_raw_pair
+            and raw_pair_matches_existing_model
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision") == "20260721.56"
+            and len(calls) == 3
+            and raw_calls_bind_same_source
+        )
         official_sku_repair = bool(
             apply
             and recovered_official_sku
@@ -959,6 +1114,7 @@ def finalize_file(
             completed_current_adjudication
             or stale_terminal_blocker_repair
             or official_sku_repair
+            or raw_model_price_repair
         )
         known_pixel_repair = bool(
             apply
@@ -1010,6 +1166,29 @@ def finalize_file(
                 current["adjudication_summary"] = (
                     "三輪原始結構化答案均讀到同一完整官方料號；"
                     "已將完整料號正規化為型號表短碼，不增加第 4 次模型呼叫。"
+                )
+            if raw_model_price_repair:
+                recovered_model, recovered_price = recovered_raw_pair
+                current.update({
+                    "view_type": "單機",
+                    "category": "單機",
+                    "model": recovered_model,
+                    "price": recovered_price,
+                    "quality_issue": "無",
+                    "unique_main": True,
+                    "label_ownership": "matched",
+                    "three_pass_adjudicated": True,
+                    "adjudication_rule": (
+                        "three_pass_raw_model_price_consensus_repair"
+                    ),
+                    "adjudication_summary": (
+                        "三輪均為同圖、無記憶且綁定請求；至少兩輪原始結構化答案"
+                        "一致讀到同一主角的同一型號與價格，已修復後處理誤清空，"
+                        "沒有增加第 4 次模型呼叫。"
+                    ),
+                })
+                refresh_authoritative_price_comparison(
+                    current, recovered_model, recovered_price
                 )
             current["category"] = current.get("view_type")
             decision = {

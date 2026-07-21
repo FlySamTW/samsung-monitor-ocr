@@ -442,6 +442,16 @@ const App = () => {
       stream_buffer: item.full_ai_narration || item.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
       narration: item.full_ai_narration || item.narration || result.narration || item.stream_buffer || result.stream_buffer || result.thinking || "",
       source_item_id: item.source_item_id || result.source_item_id || "",
+      // A bounded three-pass decision may prove the FollowMe family from the
+      // stand/base/unit evidence while deliberately refusing to invent a
+      // size or exact variant.  Show that truthful family result instead of
+      // misleading supervisors with "無型號".
+      model: item.model || result.model || (
+        (item.followme_family_confirmed ?? result.followme_family_confirmed)
+          ? "FollowMe 型號未細分"
+          : ""
+      ),
+      followme_family_confirmed: item.followme_family_confirmed ?? result.followme_family_confirmed,
       pass_index: item.pass_index ?? result.pass_index,
       pass_label: item.pass_label || result.pass_label || "",
       retry_reason: item.retry_reason || result.retry_reason || "",

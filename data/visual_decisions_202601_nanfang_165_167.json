@@ -1,0 +1,34 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "audit_date": "2026-07-21",
+  "audit_method": "full_resolution_dual_visual_review",
+  "reviewers": [
+    "primary_full_resolution_review",
+    "low_power_visual_audit"
+  ],
+  "decisions": [
+    {
+      "file_name": "M-台南市-東　區-集雅社-台南南紡夢時代-165.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "not_visible",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "pixel_basis": "完整原圖是寬廣 Samsung 展示區；前景左、中、右至少三台螢幕的四邊四角均位於原圖內，背景另有多台螢幕，不能以中央一台與左右遭邊界裁切概括，應定案為遠景。"
+    },
+    {
+      "file_name": "M-台南市-東　區-集雅社-台南南紡夢時代-167.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S49DG952SC",
+      "price": 42900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "pixel_basis": "完整原圖只有一台完整曲面主螢幕；同主體右上展示牌與正下方價牌均可讀 S49DG952SC，價牌唯一可見價格為建議售價 42,900 元，沒有另一個促銷價或現價可取代。"
+    }
+  ]
+}

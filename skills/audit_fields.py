@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.56"
+EVIDENCE_GUARD_REVISION = "20260721.60"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -431,6 +431,25 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES[
             "strength": "strong",
         },
     ],
+    "authority": "human_audited_pixel_authority",
+}
+# 永康大灣 1415: the same physical card contains a small reference/market
+# price of 3,590 and a much larger current promotional price of 3,290.  The
+# first .59 pass renamed the small reference amount as a member price and was
+# therefore internally self-consistent but visually wrong.  Bind the audited
+# pixels to the actual current selling amount; the generic price-deviation gate
+# below still protects other photos without turning this into a filename rule.
+KNOWN_SOURCE_AUDIT_AUTHORITIES[
+    "3c3ca38a664f4ca4211c91e1fd67e60517ce63d79b09a4d706adf575682c6dd5"
+] = {
+    "source_file_sha256": "ae801408304cc1353235f3ddaa5c4468cf8283c4dca59110791eaf39544592eb",
+    "input_image_sha256": "bf077115e26691507086da55921003f5eacd8b2549448c0c4b01d475ef1fc962",
+    "view_type": "單機",
+    "complete_screen_count": 1,
+    "model": "S27D300GAC",
+    "price": 3290,
+    "label_ownership": "matched",
+    "followme_physical_expected": False,
     "authority": "human_audited_pixel_authority",
 }
 # Bounded low-power visual audit of nine exhausted 202606 three-call rows.
@@ -1421,14 +1440,6 @@ def _central_monitor_with_two_edge_cut_neighbors(
     ):
         return False
     central_one = bool(re.search(r"中央.{0,8}(?:一台|1\s*台).{0,8}螢幕|中央螢幕", text))
-    paired_neighbors = bool(
-        re.search(r"左右(?:兩)?(?:邊|側)?(?:的)?.{0,8}(?:各有|各|各一台|兩台)?.{0,8}螢幕", text)
-        or re.search(r"左(?:邊|側).{0,12}右(?:邊|側).{0,12}各有?一台螢幕", text)
-    )
-    paired_edge_cut = bool(
-        re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:照片|原圖|畫面).{0,8}邊界.{0,8}(?:裁切|截斷|切掉)", text)
-        or re.search(r"(?:左右|左(?:邊|側).{0,12}右(?:邊|側)).{0,30}(?:被|遭).{0,8}(?:裁切|截斷|切掉)", text)
-    )
     # Models often spell the same physical fact as two separate clauses
     # ("left frame ... clipped" and "right frame ... clipped").  Requiring
     # both words to fit inside one short regex let the 1319/1320/1321 failures
@@ -1442,10 +1453,10 @@ def _central_monitor_with_two_edge_cut_neighbors(
         text,
     ))
     combined_edge_cut = bool(re.search(
-        r"左右(?:兩)?(?:側|邊)?[^\u3002；\n]{0,45}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        r"左右(?:兩)?(?:側|邊|鄰機)?[^\u3002；\n]{0,45}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
         text,
     ))
-    edge_cut = paired_edge_cut or combined_edge_cut or (
+    edge_cut = combined_edge_cut or (
         left_edge_cut and right_edge_cut
     )
     other_complete_matches = re.finditer(
@@ -1456,7 +1467,7 @@ def _central_monitor_with_two_edge_cut_neighbors(
         not re.search(r"(?:沒有|並無|無|未見|看不到|不存在).{0,10}(?:額外|其他)?(?:完整|四邊四角)", match.group(0))
         for match in other_complete_matches
     )
-    return central_one and (paired_neighbors or left_edge_cut or combined_edge_cut) and edge_cut and not other_complete
+    return central_one and edge_cut and not other_complete
 
 
 def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> bool:
@@ -1680,6 +1691,7 @@ def immediate_retry_decision(
     view_type = str(record.get("view_type") or record.get("category") or "")
     model = str(record.get("model") or "").strip()
     price = record.get("price")
+    price_status = str(record.get("price_status") or "").strip().lower()
     quality = str(record.get("quality_issue") or "").strip()
     thinking = str(record.get("thinking") or record.get("raw_response") or "")
     reasons: list[str] = []
@@ -1789,6 +1801,37 @@ def immediate_retry_decision(
     # escalate only when the image evidence itself is ambiguous (for example,
     # model/price ownership conflict or an unreadable label).  A legitimate
     # store promotion can differ substantially from today's reference price.
+    #
+    # One independently read pass is nevertheless insufficient when a 2026
+    # store price differs from the deterministic official reference.  The real
+    # 永康大灣-1415 failure read the small 市價 as the current amount and
+    # still formed a perfectly valid JSON object.  Require one stateless price-
+    # role confirmation for high/low rows.  Matching repeat evidence may close
+    # on pass two; a cross-pass price disagreement consumes the third and is
+    # settled by the existing bounded pair consensus.  Normal ✓ rows keep the
+    # one-pass fast path.
+    price_digits = re.sub(r"[^0-9]", "", str(price or ""))
+    model_key = normalize_model_token(model)
+    if current_year and view_type == "單機" and model_key and price_digits:
+        if price_status in {"high", "low"} and attempt == 1:
+            reasons.append("2026 價差照片需第二輪無記憶核對價牌角色")
+        prior_bound_prices = {
+            (
+                normalize_model_token(item.get("model")),
+                re.sub(r"[^0-9]", "", str(item.get("price") or "")),
+            )
+            for item in history
+            if item.get("independent_pass") is True
+            and item.get("request_id_verified") is True
+            and item.get("prior_answer_exposed") is not True
+            and item.get("prompt_contamination") is not True
+            and (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+        }
+        if any(
+            prior_model == model_key and prior_price and prior_price != price_digits
+            for prior_model, prior_price in prior_bound_prices
+        ):
+            reasons.append("2026 同圖獨立輪次價格不一致需完成第三輪定案")
 
     multiscreen_count = contract["normalized_evidence"].get("complete_screen_count")
     safe_two_count_single = bool(
@@ -1850,11 +1893,14 @@ def immediate_retry_decision(
     ) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
-        # A complete, internally consistent FollowMe single is not inherently
-        # uncertain.  It may finish on pass 1 when the same-subject fixture,
-        # owned model label and store price are all present.  If another rule
-        # already escalated the photo, however, every observed FollowMe pass
-        # must still agree; a later majority may never wash out a conflict.
+        # FollowMe family names and common prices are especially prone to
+        # prompt/prior-knowledge hallucination.  One self-consistent pass is
+        # therefore insufficient even when all fields are populated.  Require
+        # one stateless independent confirmation; ordinary non-FollowMe singles
+        # may still finish on pass 1.  Once escalated, every observed FollowMe
+        # pass must agree and a later majority may never wash out a conflict.
+        if current_year and attempt < 2:
+            reasons.append("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認")
         if (
             current_year
             and history

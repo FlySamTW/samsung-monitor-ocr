@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from skills.model_catalog_rules import FOLLOWME_BUNDLES, FOLLOWME_MODELS
+from skills.model_catalog_rules import FOLLOWME_MODELS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,15 +39,8 @@ def build_followme_prompt_section(path: Path = DEFAULT_REFERENCE_PATH) -> str:
         "Pro 必須在同一台實機或其附著牌面清楚看到 Pro；同一面板 SKU 可能同時用於一般與 Pro 套裝，不得只靠 SKU 升級成 Pro。",
         "若已確認 FollowMe 實機但 M5／M7／尺寸／Pro 仍無法確認，輸出 FollowMe 型號未細分，不得猜最常見款。",
         "可用標準名稱：" + "、".join(FOLLOWME_MODELS) + "。",
-        "面板對照（只在 FollowMe 實機身分先成立後使用）：",
+        "不把面板 SKU 清單放入模型提示；模型只逐字讀當前照片，後端再以型號表對照家族。",
     ]
-    grouped: dict[str, list[str]] = {}
-    for bundle in FOLLOWME_BUNDLES:
-        grouped.setdefault(bundle.family_model, [])
-        if bundle.panel_model not in grouped[bundle.family_model]:
-            grouped[bundle.family_model].append(bundle.panel_model)
-    for family, panel_models in grouped.items():
-        lines.append(f"- {family}：{', '.join(panel_models)}。")
     lines.append(
         f"後端價格參考更新時間：{updated_at}；價格資料不放進型號判定提示，避免模型用常見價猜系列。"
     )

@@ -88,7 +88,9 @@ class ModelCatalogRulesTest(unittest.TestCase):
         self.assertIn("所有 FollowMe 都是 Smart 系列，不需要用 OSD 畫面證明", prompt)
         self.assertIn("價格只能檢查讀值合理性", prompt)
         self.assertIn("價格資料不放進型號判定提示", prompt)
+        self.assertIn("不把面板 SKU 清單放入模型提示", prompt)
         self.assertNotIn("常見售價", prompt)
+        self.assertNotIn("S32FM703UC", prompt)
         self.assertIn('FollowMe M5 27"', prompt)
         self.assertIn('FollowMe Pro M7 32"', prompt)
 
