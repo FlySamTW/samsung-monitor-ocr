@@ -12,6 +12,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +24,24 @@ from skills.audit_fields import EVIDENCE_GUARD_REVISION, KNOWN_SOURCE_AUDIT_AUTH
 
 
 FIELDS = ("source_path", "file_name", "period", "audit_folder", "reason", "source_item_id")
+AUTHORITY_MANIFEST_SCHEMA = "samsung-ocr-bound-visual-authorities/v1"
+# These revisions belong to the same accepted .64 evidence contract.  Later
+# increments only added exact source-bound authorities, recovery bookkeeping,
+# and process interlocks; they did not invalidate already verified .64+ rows.
+# Keep this explicit: a future content-rule revision is not compatible unless
+# it is reviewed and added here.
+BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
+    {
+        "20260721.64",
+        "20260721.65",
+        "20260721.66",
+        "20260721.67",
+        "20260721.68",
+        "20260721.69",
+        "20260721.70",
+        "20260721.71",
+    }
+)
 
 
 def stable_source_id(path: str | Path) -> str:
@@ -47,9 +66,22 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                     decision = item.get("guard_decision") or {}
                     if (
                         item.get("trace_version") != "v19.45"
-                        or item.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION
+                        or item.get("evidence_guard_revision")
+                        not in BACKFILL_COMPATIBLE_GUARD_REVISIONS
                         or decision.get("verified") is not True
                     ):
+                        continue
+                    parsed = item.get("parsed_output") or {}
+                    if (
+                        item.get("evidence_guard_revision") == "20260721.70"
+                        and parsed.get("adjudication_rule")
+                        == "two_wide_geometry_votes_veto_single_identity_outlier"
+                    ):
+                        # .70 had one narrow defect: a pass with
+                        # unique_main=true could be counted as an identity-free
+                        # wide vote. Do not invalidate unrelated .70 photos or
+                        # spend a fourth call; only this exact outcome requires
+                        # a hash-bound authority or zero-model revalidation.
                         continue
                     source_id = str(item.get("source_item_id") or item.get("source_identity") or "").strip()
                     original = str(item.get("original_source_path") or item.get("source_path") or "").strip()
@@ -60,6 +92,69 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
         except (OSError, UnicodeError, ValueError, TypeError):
             continue
     return verified
+
+
+def load_bound_visual_authorities(audit_dir: Path) -> dict[str, dict]:
+    """Load immutable pixel authorities from dedicated audit locations.
+
+    The manifests are accepted only when the source identity, source bytes,
+    inference hash, authority type, and schema are all present.  Conflicting
+    decisions for one source fail closed instead of silently choosing one.
+    """
+    authorities: dict[str, dict] = dict(KNOWN_SOURCE_AUDIT_AUTHORITIES)
+    candidates = list(audit_dir.glob("*bound_visual_authorities*.json"))
+    for directory_name in (
+        "visual_authorities",
+        "visual_authority",
+        "active_three_pass_repairs",
+        "bound_visual_authorities",
+    ):
+        directory = audit_dir / directory_name
+        if directory.is_dir():
+            candidates.extend(directory.glob("*.json"))
+
+    for path in sorted(set(candidates), key=lambda item: str(item).casefold()):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, ValueError, TypeError):
+            continue
+        if payload.get("schema") != AUTHORITY_MANIFEST_SCHEMA:
+            continue
+        entries = list(payload.get("entries") or [])
+        if int(payload.get("entry_count") or 0) != len(entries) or not entries:
+            raise RuntimeError(f"invalid visual authority manifest: {path}")
+        for entry in entries:
+            source_id = str(entry.get("source_item_id") or "").strip().lower()
+            source_hash = str(entry.get("source_file_sha256") or "").strip().lower()
+            input_hash = str(entry.get("input_image_sha256") or "").strip().lower()
+            original = Path(str(entry.get("original_source_path") or "")).resolve()
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", source_id)
+                or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
+                or not re.fullmatch(r"[0-9a-f]{64}", input_hash)
+                or entry.get("authority") != "human_audited_pixel_authority"
+                or str(entry.get("view_type") or "") not in {"單機", "遠景"}
+                or not original.is_file()
+                or stable_source_id(original) != source_id
+                or file_sha256(original) != source_hash
+            ):
+                raise RuntimeError(f"stale or invalid visual authority: {path}")
+            previous = authorities.get(source_id)
+            if previous and any(
+                str(previous.get(field)) != str(entry.get(field))
+                for field in (
+                    "source_file_sha256",
+                    "input_image_sha256",
+                    "view_type",
+                    "model",
+                    "price",
+                )
+            ):
+                raise RuntimeError(
+                    f"conflicting visual authorities for {source_id}: {path}"
+                )
+            authorities[source_id] = dict(entry)
+    return authorities
 
 
 def file_sha256(path: Path) -> str:
@@ -77,7 +172,7 @@ def build_candidates(
 ) -> tuple[list[dict[str, str]], dict]:
     verified = load_verified_source_ids(audit_dir)
     authorities = dict(
-        KNOWN_SOURCE_AUDIT_AUTHORITIES
+        load_bound_visual_authorities(audit_dir)
         if known_source_authorities is None
         else known_source_authorities
     )

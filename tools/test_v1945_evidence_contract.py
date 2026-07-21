@@ -70,6 +70,9 @@ class EvidenceContractTests(unittest.TestCase):
     FRAME_1257_SHA = "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7"
     WIDE_FOLLOWME_1467_SHA = "46dca52b5b33bf720300723703bac2bcab2120ee1b850803ad28b56b2464bab0"
     YOUCHANG_1148_SHA = "688233fe7652e64469feab5e8d4a97dbeae224fd25df778e3221fce6da51c844"
+    TAINAN_438_SHA = "67e134c5a48752627a8445fa0933bc203a2e5c3aa2ef4f10639eeccea4de27c4"
+    TAINAN_1063_SHA = "1066f8575b45442395537bc609adf39b5756c0b3326ba44b34e96fd0f2c9019c"
+    TAINAN_231_SHA = "0886bdb903c560cfd548830f4b89e81c16798e6fc42334e686022a74838d888b"
     SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
     LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
@@ -1558,6 +1561,15 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(passes[2]["model"], "S27D300GAC")
         self.assertEqual(passes[2]["price"], 3290)
 
+    def test_xinwenxin_967_authority_preserves_owned_card_after_consumed_cap(self):
+        image_hash = "2cbd7051bd2e56cb0d4a550adbae8e8d34c471eda0430dd5dd4fbf8aa154a5b2"
+        authority = KNOWN_SOURCE_EXPECTATIONS[image_hash]
+        self.assertEqual(authority["view_type"], "單機")
+        self.assertEqual(authority["complete_screen_count"], 1)
+        self.assertEqual(authority["model"], "S24F332EAC")
+        self.assertEqual(authority["price"], 2590)
+        self.assertEqual(authority["label_ownership"], "matched")
+
     def test_youchang_1148_black_stand_cannot_become_followme(self):
         authority = KNOWN_SOURCE_EXPECTATIONS[self.YOUCHANG_1148_SHA]
         self.assertEqual(authority["view_type"], "單機")
@@ -1587,6 +1599,26 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(passes[2]["model"], "S27D300GAC")
         self.assertEqual(passes[2]["price"], 3290)
         self.assertEqual(passes[2]["followme_physical_evidence"], [])
+
+    def test_consumed_cap_tainan_pixel_authorities_are_exact(self):
+        expected = {
+            self.TAINAN_438_SHA: ("單機", 1, "S32FM803UC", 14990, "matched"),
+            self.TAINAN_1063_SHA: ("遠景", 6, None, None, "ambiguous"),
+            self.TAINAN_231_SHA: ("單機", 1, None, 19900, "matched"),
+        }
+        for image_hash, values in expected.items():
+            authority = KNOWN_SOURCE_EXPECTATIONS[image_hash]
+            self.assertEqual(
+                (
+                    authority["view_type"],
+                    authority["complete_screen_count"],
+                    authority["model"],
+                    authority["price"],
+                    authority["label_ownership"],
+                ),
+                values,
+            )
+            self.assertFalse(authority["followme_physical_expected"])
 
         full = batch.V1945_OUTPUT_CONTRACT + batch.REVIEW_FOCUS_PROMPTS[2]
         self.assertIn("never rename 市價", full)

@@ -119,6 +119,51 @@ def _select_clean_capped_run(
             and all(_clean_call(item) for item in rows)
         ):
             return rows
+    # A backend reload can preserve the durable attempt counter while the
+    # next request receives a new run_id.  Join only clean calls for the exact
+    # same source (the caller already groups by source identity and filename),
+    # full-image hash, and an adjacent capped tail ending at attempt three.
+    # This repairs process-boundary bookkeeping; it cannot mix another photo.
+    flattened = sorted(
+        (row for rows in groups for row in rows),
+        key=lambda item: (
+            str(item.get("timestamp") or ""),
+            int(item.get("ocr_attempt") or 0),
+        ),
+    )
+    for end_index in range(len(flattened) - 1, -1, -1):
+        end = flattened[end_index]
+        image_hash = str(end.get("input_image_sha256") or "").strip().lower()
+        if (
+            int(end.get("ocr_attempt") or 0) != 3
+            or not re.fullmatch(r"[0-9a-f]{64}", image_hash)
+            or not _clean_call(end)
+        ):
+            continue
+        selected = [end]
+        seen_attempts = {3}
+        for previous in reversed(flattened[:end_index]):
+            attempt = int(previous.get("ocr_attempt") or 0)
+            if attempt not in {1, 2} or attempt in seen_attempts:
+                continue
+            if (
+                str(previous.get("input_image_sha256") or "").strip().lower()
+                != image_hash
+                or not _clean_call(previous)
+            ):
+                continue
+            selected.append(previous)
+            seen_attempts.add(attempt)
+            if len(selected) == 3:
+                break
+        if len(selected) >= 2:
+            return sorted(
+                selected,
+                key=lambda item: (
+                    str(item.get("timestamp") or ""),
+                    int(item.get("ocr_attempt") or 0),
+                ),
+            )
     raise RuntimeError("no clean capped run ending at attempt three")
 
 

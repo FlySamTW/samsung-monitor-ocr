@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
-from tools.build_v1945_evidence_backfill import build_candidates, run, stable_source_id
+from tools.build_v1945_evidence_backfill import (
+    BACKFILL_COMPATIBLE_GUARD_REVISIONS,
+    build_candidates,
+    load_bound_visual_authorities,
+    run,
+    stable_source_id,
+)
 
 
 class EvidenceBackfillBuilderTests(unittest.TestCase):
@@ -47,6 +53,93 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual([row["file_name"] for row in rows], ["two.jpg"])
             self.assertEqual(rows[0]["reason"], "v1945_evidence_backfill")
 
+    def test_explicit_64_and_current_compatible_trace_is_not_reprocessed(self):
+        self.assertIn(EVIDENCE_GUARD_REVISION, BACKFILL_COMPATIBLE_GUARD_REVISIONS)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "compatible.jpg"
+            source.write_bytes(b"compatible")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260721.64",
+                        "source_item_id": stable_source_id(source),
+                        "guard_decision": {"verified": True},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["already_verified_year_sources"], 1)
+
+    def test_revision_before_64_is_still_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "old-contract.jpg"
+            source.write_bytes(b"old-contract")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260721.63",
+                        "source_item_id": stable_source_id(source),
+                        "guard_decision": {"verified": True},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+
+    def test_revision_70_safe_rule_remains_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "safe-70.jpg"
+            source.write_bytes(b"safe-70")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps({
+                    "trace_version": "v19.45",
+                    "evidence_guard_revision": "20260721.70",
+                    "source_item_id": stable_source_id(source),
+                    "guard_decision": {"verified": True},
+                    "parsed_output": {"adjudication_rule": "two_pass_single_consensus"},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["already_verified_year_sources"], 1)
+
+    def test_revision_70_offending_geometry_rule_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "unsafe-70.jpg"
+            source.write_bytes(b"unsafe-70")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps({
+                    "trace_version": "v19.45",
+                    "evidence_guard_revision": "20260721.70",
+                    "source_item_id": stable_source_id(source),
+                    "guard_decision": {"verified": True},
+                    "parsed_output": {
+                        "adjudication_rule": "two_wide_geometry_votes_veto_single_identity_outlier"
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+
     def test_human_audited_source_is_excluded_only_when_pixels_match(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -73,6 +166,46 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual(rows, [])
             self.assertEqual(summary["human_audited_year_sources"], 0)
             self.assertEqual(summary["conflicting_sources"], 1)
+
+    def test_bound_visual_authority_manifest_is_loaded_only_with_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "reviewed.jpg"
+            source.write_bytes(b"reviewed-pixels")
+            audit = self.make_audit(root, [source])
+            source_id = stable_source_id(source)
+            manifest_dir = audit / "visual_authorities"
+            manifest_dir.mkdir()
+            manifest = {
+                "schema": "samsung-ocr-bound-visual-authorities/v1",
+                "entry_count": 1,
+                "entries": [
+                    {
+                        "source_item_id": source_id,
+                        "original_source_path": str(source),
+                        "source_file_sha256": hashlib.sha256(
+                            source.read_bytes()
+                        ).hexdigest(),
+                        "input_image_sha256": "f" * 64,
+                        "view_type": "遠景",
+                        "model": None,
+                        "price": None,
+                        "authority": "human_audited_pixel_authority",
+                    }
+                ],
+            }
+            path = manifest_dir / "reviewed.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            authorities = load_bound_visual_authorities(audit)
+            self.assertIn(source_id, authorities)
+            rows, summary = build_candidates(audit, "2026")
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["human_audited_year_sources"], 1)
+
+            manifest["entries"][0]["source_file_sha256"] = "0" * 64
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                load_bound_visual_authorities(audit)
 
     def test_old_v1945_verified_trace_without_guard_revision_is_reprocessed(self):
         with tempfile.TemporaryDirectory() as tmp:

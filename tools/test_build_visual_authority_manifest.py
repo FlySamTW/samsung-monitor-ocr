@@ -5,11 +5,29 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.build_visual_authority_manifest import build_manifest
+from tools.build_visual_authority_manifest import _select_clean_capped_run, build_manifest
 from tools.finalize_existing_three_pass_reviews import load_authority_manifest
 
 
 class VisualAuthorityManifestTests(unittest.TestCase):
+    def test_clean_capped_tail_can_cross_a_process_run_boundary(self):
+        image_hash = "b" * 64
+        base = {
+            "input_image_sha256": image_hash,
+            "request_id_verified": True,
+            "request_binding_enforced": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True, "reasons": []},
+        }
+        groups = [
+            [{**base, "ocr_attempt": 1, "timestamp": "2026-07-21T01:00:00"}],
+            [{**base, "ocr_attempt": 3, "timestamp": "2026-07-21T01:01:00"}],
+        ]
+        selected = _select_clean_capped_run(groups)
+        self.assertEqual([row["ocr_attempt"] for row in selected], [1, 3])
+
     def test_manifest_binds_decision_to_source_and_clean_capped_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -221,7 +221,16 @@ class StreamDriveUploadTests(unittest.TestCase):
             "20260721.69",
         )
 
-    def test_rev68_structural_adjudication_can_migrate_to_rev69(self):
+    def test_rev69_pending_jobs_are_explicitly_compatible_with_rev70(self):
+        self.assertEqual(
+            COMPATIBLE_PENDING_REVISION_MIGRATIONS.get("20260721.69"),
+            "20260721.70",
+        )
+
+    def test_rev70_pending_jobs_do_not_migrate_across_geometry_fix(self):
+        self.assertNotIn("20260721.70", COMPATIBLE_PENDING_REVISION_MIGRATIONS)
+
+    def test_historical_rev68_migration_does_not_chain_into_current_revision(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "M-test-1368.jpg"
@@ -238,9 +247,8 @@ class StreamDriveUploadTests(unittest.TestCase):
             job_path.write_text(
                 json.dumps(job, ensure_ascii=False), encoding="utf-8"
             )
-            self.assertEqual(migrate_compatible_pending_jobs(output), 1)
-            migrated = json.loads(job_path.read_text(encoding="utf-8"))
-            self.assertEqual(migrated["evidence_guard_revision"], "20260721.69")
+            with self.assertRaisesRegex(RuntimeError, "unapproved pending upload revision"):
+                migrate_compatible_pending_jobs(output)
 
     def test_worker_migrates_jobs_that_arrive_after_startup(self):
         loop = Path(__file__).with_name("stream_drive_upload.py").read_text(

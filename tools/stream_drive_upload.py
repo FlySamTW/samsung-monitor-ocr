@@ -62,6 +62,9 @@ COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # interlocking.  It does not change the meaning or target name of any
     # already-finalized .68 job, so queued .68 jobs can migrate losslessly.
     "20260721.68": "20260721.69",
+    # .70 adds three source-hash-bound pixel authorities for already-consumed
+    # three-call recoveries; unrelated finalized .69 jobs are unchanged.
+    "20260721.69": "20260721.70",
 }
 TRANSIENT_UPLOAD_ERROR_MARKERS = (
     "exact remote readback failed",

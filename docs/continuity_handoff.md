@@ -656,10 +656,21 @@
 - 18:51 正式 202601 已恢復並前進至 `1,322/1,478`，verified 1,305、review 17、failed 0、累計模型呼叫 15,622、目前 `M-高雄市-岡山區-SF-岡山-752.jpg` 第 1 輪。stream uploader PID 1128，canonical uploaded 56,224、pending 0、fuse absent。禁止因文件、Git 或舊檔清理停止正式 OCR。
 - 接續順序不變：完成 202601，再閉環其餘全部 2026（含 202606 nonfinal 與 202602–202605/202606 receipts），再 2025→2015，直到 `151,714` 張全部如實終局且逐張有精確 Drive 收據。
 
-## 2026-07-21 `.69` 接手補充：不得重置的總盤與復原規則
+## 2026-07-21 `.70` 接手補充：不得重置的總盤與復原規則
 
 - 目前上方唯一正確總盤為 `66,724 / 151,714`、資料夾 `45 / 137`。它表示唯一來源照片的首次辨識完成量；複核、三輪、修復與重新上傳均不加總。若畫面再次出現 `65,336`，先檢查 202606 canonical summary／discovery 記錄是否遭覆寫，不能把它解讀成 202601 卡住。
 - 主批次必須保持在線；一張如實結案即逐張 enqueue/upload，不等待月份或全年。修復、文件、Git、雲端舊檔清理、抽查都只能在不干擾 OCR、既有 Dashboard 分頁、LM Studio 與唯一 uploader 的前提下進行。
 - 若 safe reload 遇到 incomplete-staging interlock，先復原同一個正式 staging 並 `restart=false` 接續。supervisor 不得建立新 staging、不得重跑已完成照片、不得清掉 call/retry state。interlock 未釋放時只能保留現場並 fail-safe。
 - uploader 更新前和每次 claim 前都須遷移／驗證既有 pending payload；相同來源與相同 Drive ID 是冪等收據確認，絕不得另建重複 Drive 物件。更正照片的舊雲端副本只能在新檔 receipt、雜湊與遠端讀回完全成立後，按精確舊 Drive ID 處理。
 - FollowMe 證據不能放寬：黑色一般支架或黑色底座不等於白色 FollowMe 直立支架與圓形落地底座；螢幕內畫面也不是實體硬體。`高雄楠梓右昌-1148` 的 hash-bound 終局是 `單機 / S27D300GAC / 3,290`，不允許因黑色支架／底座改判為 FollowMe，也不得新增第 4 輪。
+
+## 2026-07-21 `.71`：文心 645 完整螢幕誤算止損與半日監督
+
+- 23:46 每半天內容抽查抓到 `M-台中市-北屯區-SF-文心-645.jpg` 被 `.70` 錯誤定案為遠景。原圖只有中央一台螢幕四邊四角完整，左右鄰機都被原圖邊界裁切；中央機身貼紙及同列實體價牌支持 `S27CG552EC / 4,990`，且沒有 FollowMe 實體。OCR 已在下一張照片邊界停止，port 5002 Dashboard、LM Studio 與逐張 uploader 保持在線。
+- 根因是 `identity_free_wide_candidates` 漏檢 `unique_main is False`；因此第一輪雖明示唯一主角，仍可能被錯算成第二張「無主角寬景票」。`.71` 同時要求真正寬景票的 `unique_main=false`，並要求嚴格 3+／寬景敘述備援至少有兩輪 `unique_main=false`。回歸固定保護「一張真寬景票不得否決兩張唯一主角單機票」；照片總呼叫上限仍為三次。
+- 645 已用 source item、原圖 SHA 與 input SHA 綁定的像素權威零新增模型呼叫更正為 `單機 / S27CG552EC / 4,990 / ✓`。正確 Drive ID `13o4fzza7rWvGE7oC0aSEOIWC1E3Sd-FP` 已以 SHA-256 `6a977069de80130595594384100284b792d95224908abc444d036a33b29d2bad` 回讀；錯誤遠景副本 ID `1vNba5Lamr-G1VL21bWokBjHSvsJyD89O` 已精確刪除。
+- 665、669 的正確 canonical Drive IDs 分別為 `1AkSlmr5ZXnguBBhUOLeZMV-y1Ae2esUb`、`1ckvwD1V76hwH2qvg3lfHBnZobJJChHAK`，正確 SHA-256 已回讀；兩個「型號未辨識／無價格」錯名副本 IDs `1rPF5ozyjwiZsHfHLSr-47m5Q_JAZW7o3`、`1tIYLsEhFN1TWX9OnC9m6SiiPzSFPTOju` 已精確刪除。
+- `.70` 只有使用 `two_wide_geometry_votes_veto_single_identity_outlier` 的終局不得直接視為相容；其他 `.70` 結果沒有走到該缺陷規則，可直接沿用以避免超過三輪或白跑。問題照片只能零模型重驗或由精確 hash-bound authority 結案；文心 645 是目前 trace 中唯一命中該規則者。
+- 人工／代理監督改為每日 09:00、21:00 各一次。每次必須報總盤、當前批次、verified/upload 增量、median/P90、平均呼叫、首輪結案率、review/failed、GPU/parallel 與至少三張原圖／敘述／結構／終局一致性；平時不輪詢、不洗版。發現系統性跑歪時仍立即照片邊界停止，不能等下個時段。
+- `.71` 已在不新增第 4 次模型呼叫下復原 `新文心-967=單機/S24F332EAC/2,590`；Drive receipt ID `1SUhHE9_b4Jexo2eqsTiyLE2kDZ44VuRg`。builder 重建結果為 2026 唯一來源 5,951、相容 verified 176、hash-bound human audited 88、待續跑 5,692、missing/conflicting/invalid 均 0。
+- 00:04 已由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 接回原 `20260721_233817/202601_...`，不重建 staging、不重跑既有 14 張。接回後 966 正確遠景、967 正確單機、968 正確 `FollowMe M7 32吋/12,990` 且三張皆逐張上傳；後續順序仍為完成全部 2026（含 202606），再 2025→2015。

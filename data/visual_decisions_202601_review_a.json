@@ -1,0 +1,133 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-高雄市-鼓山區-TK3C-華榮-1071.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-三民區-SF-高雄-748.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32FG502EC",
+      "price": 7490,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-中壢區-秀翔培芝-大江三星-111.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DG502EC",
+      "price": 6990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-龍潭區-神腦-龍潭-134.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "round_base", "same_subject": true, "strength": "strong"}
+      ],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-雲林縣-虎尾鎮-TK3C-虎尾-949.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-桃園區-集雅社-桃園新光-242.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27FG502SC",
+      "price": null,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-前鎮區-SF-前鎮-769.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-岡山區-SF-岡山-758.jpg",
+      "view_type": "遠景",
+      "complete_screen_count": 3,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-林園區-SF-林園-762.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32FG532EC",
+      "price": 4990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-中壢區-集雅社-中壢SOGO-311.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DM803UC",
+      "price": 14900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-鼓山區-TK3C-至美超越-936.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DM803UC",
+      "price": 14900,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "round_base", "same_subject": true, "strength": "strong"}
+      ],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

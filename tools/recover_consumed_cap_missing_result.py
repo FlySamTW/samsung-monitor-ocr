@@ -1,9 +1,11 @@
 """Close a missing result after the three-call budget is already consumed.
 
-This recovery performs no model inference. It requires two clean, request-bound
-outputs in the evidence trace, a durable attempt counter of exactly three, and
-an exact visual authority bound to both source bytes and full-image inference
-bytes. The unavailable third output is recorded honestly; no call four occurs.
+This recovery performs no model inference. It requires two request-bound outputs
+in the evidence trace, a durable attempt counter of exactly three, and an exact
+visual authority bound to both source bytes and full-image inference bytes. At
+least one output must be clean; at most one may be a narrowly contained,
+non-contaminating same-photo presentation conflict. The unavailable third output
+is recorded honestly; no call four occurs.
 """
 
 from __future__ import annotations
@@ -32,6 +34,15 @@ from tools.stream_drive_upload import enqueue_finalized_result
 
 
 RECOVERY_RULE = "two_clean_outputs_plus_consumed_cap_visual_authority"
+CONTAINED_RECOVERY_RULE = (
+    "one_clean_plus_one_contained_output_plus_consumed_cap_visual_authority"
+)
+ALLOWED_CONTAINED_RUNTIME_REASONS = frozenset(
+    {
+        "structured_narration_followme_conflict",
+        "ui_narration_contains_raw_structure",
+    }
+)
 
 
 def _read_json(path: Path) -> Any:
@@ -46,8 +57,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _clean_bound_call(row: dict[str, Any], image_hash: str) -> bool:
-    runtime = row.get("runtime_health") or {}
+def _base_bound_call(row: dict[str, Any], image_hash: str) -> bool:
     return bool(
         str(row.get("input_image_sha256") or "").strip().lower() == image_hash
         and row.get("request_id_verified") is True
@@ -55,9 +65,47 @@ def _clean_bound_call(row: dict[str, Any], image_hash: str) -> bool:
         and row.get("independent_pass") is True
         and row.get("prior_answer_exposed") is not True
         and row.get("prompt_contamination") is not True
+    )
+
+
+def _clean_bound_call(row: dict[str, Any], image_hash: str) -> bool:
+    runtime = row.get("runtime_health") or {}
+    return bool(
+        _base_bound_call(row, image_hash)
         and isinstance(runtime, dict)
         and runtime.get("healthy") is True
+        and not (runtime.get("reasons") or [])
     )
+
+
+def _contained_bound_call(row: dict[str, Any], image_hash: str) -> bool:
+    runtime = row.get("runtime_health") or {}
+    reasons = {
+        str(reason).strip()
+        for reason in (runtime.get("reasons") or [])
+        if str(reason).strip()
+    }
+    return bool(
+        _base_bound_call(row, image_hash)
+        and isinstance(runtime, dict)
+        and runtime.get("healthy") is False
+        and reasons
+        and reasons <= ALLOWED_CONTAINED_RUNTIME_REASONS
+    )
+
+
+def _classify_bound_calls(
+    rows: list[dict[str, Any]], image_hash: str
+) -> tuple[int, int]:
+    clean_count = sum(_clean_bound_call(row, image_hash) for row in rows)
+    contained_count = sum(_contained_bound_call(row, image_hash) for row in rows)
+    if clean_count + contained_count != len(rows):
+        raise RuntimeError(
+            "outputs include contamination, identity failure, or an unapproved runtime failure"
+        )
+    if clean_count < 1 or contained_count > 1:
+        raise RuntimeError("recovery requires at least one clean and at most one contained output")
+    return clean_count, contained_count
 
 
 def _load_trace_calls(
@@ -106,7 +154,10 @@ def _apply_authority(
     authority: dict[str, Any],
     *,
     image_hash: str,
+    clean_count: int,
+    contained_count: int,
 ) -> None:
+    recovery_rule = CONTAINED_RECOVERY_RULE if contained_count else RECOVERY_RULE
     view = str(authority["view_type"])
     current.update(
         {
@@ -124,9 +175,11 @@ def _apply_authority(
             "human_pixel_authority_applied": True,
             "human_pixel_authority_sha256": image_hash,
             "three_pass_adjudicated": True,
-            "adjudication_rule": RECOVERY_RULE,
+            "adjudication_rule": recovery_rule,
             "hard_cap_consumed_attempts": 3,
-            "model_outputs_available": 2,
+            "model_outputs_available": clean_count,
+            "model_outputs_observed": clean_count + contained_count,
+            "contained_failed_outputs": contained_count,
             "third_output_missing_at_process_boundary": True,
         }
     )
@@ -166,6 +219,14 @@ def _apply_authority(
         )
     current["thinking"] = narration
     current["narration"] = narration
+    if contained_count:
+        narration = (
+            "本張已用滿三次模型呼叫額度；其中一份輸出通過完整守門，"
+            "一份同照片輸出因結構與敘述衝突被隔離，第三份輸出於程序邊界遺失。"
+            "未進行第四輪；最終結果依原圖雜湊綁定的人工像素權威結案。"
+        )
+        current["thinking"] = narration
+        current["narration"] = narration
 
 
 def recover(
@@ -214,18 +275,23 @@ def recover(
     if int(attempts.get(file_name) or 0) != 3:
         raise RuntimeError("retry state does not prove exactly three consumed calls")
     durable_history = list(histories.get(file_name) or [])
-    if len(durable_history) != 2 or not all(
-        _clean_bound_call(dict(item), image_hash) for item in durable_history
-    ):
-        raise RuntimeError("retry state does not contain exactly two clean bound outputs")
+    if len(durable_history) != 2:
+        raise RuntimeError("retry state does not contain exactly two bound outputs")
+    durable_clean_count, durable_contained_count = _classify_bound_calls(
+        [dict(item) for item in durable_history], image_hash
+    )
 
     calls = _load_trace_calls(
         trace_path,
         source_item_id=source_item_id,
         file_name=file_name,
     )
-    if not all(_clean_bound_call(item, image_hash) for item in calls):
-        raise RuntimeError("trace calls are not clean, independent, and image-bound")
+    trace_clean_count, trace_contained_count = _classify_bound_calls(calls, image_hash)
+    if (trace_clean_count, trace_contained_count) != (
+        durable_clean_count,
+        durable_contained_count,
+    ):
+        raise RuntimeError("trace and durable history output classifications disagree")
     if len({str(item.get("run_id") or "") for item in calls}) != 1:
         raise RuntimeError("trace calls do not belong to one run")
 
@@ -255,7 +321,13 @@ def recover(
             "prompt_contamination": False,
         }
     )
-    _apply_authority(current, authority, image_hash=image_hash)
+    _apply_authority(
+        current,
+        authority,
+        image_hash=image_hash,
+        clean_count=durable_clean_count,
+        contained_count=durable_contained_count,
+    )
     current["runtime_health"] = {
         "healthy": True,
         "allow_processing": True,
@@ -296,9 +368,13 @@ def recover(
         "price": current.get("price"),
         "complete_screen_count": current.get("complete_screen_count"),
         "model_calls_consumed": 3,
-        "model_outputs_available": 2,
+        "model_outputs_available": durable_clean_count,
+        "model_outputs_observed": durable_clean_count + durable_contained_count,
+        "contained_failed_outputs": durable_contained_count,
         "fourth_call_made": False,
-        "adjudication_rule": RECOVERY_RULE,
+        "adjudication_rule": (
+            CONTAINED_RECOVERY_RULE if durable_contained_count else RECOVERY_RULE
+        ),
     }
     if not apply:
         return report

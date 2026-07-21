@@ -1,0 +1,136 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-台南市-北　區-TK3C-文賢-1547.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 10,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "round_base", "same_subject": true, "strength": "strong"}
+      ],
+      "wide_scene_followme_present": true
+    },
+    {
+      "file_name": "M-新竹市-東　區-集雅社-新竹大遠百-474.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 69900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-前鎮區-SF-前鎮-771.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32CG552EC",
+      "price": 6990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-蘆竹區-TK3C-大竹-1120.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27D300GAC",
+      "price": 3290,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-左營區-TK3C-自由-1473.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 12990,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "round_base", "same_subject": true, "strength": "strong"}
+      ],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-新竹縣-竹北市-SF-竹北-622.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 9990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-桃園市-中壢區-秀翔培芝-大江三星-113.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": null,
+      "label_ownership": "ambiguous",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "round_base", "same_subject": true, "strength": "strong"}
+      ],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-高雄市-鼓山區-TK3C-華榮-1077.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S57CG952NC",
+      "price": 54900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-新竹市-東　區-TK3C-光復-1185.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27D300GAC",
+      "price": 3290,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-雲林縣-北港鎮-SF-北港-683.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 5790,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-新竹市-東　區-SF-新竹-601.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 29900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

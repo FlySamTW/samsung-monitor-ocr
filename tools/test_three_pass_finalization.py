@@ -1390,7 +1390,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
             None,
             None,
             3,
-            True,
+            False,
             "not_visible",
             thinking=wide_narration,
         )
@@ -1406,6 +1406,53 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["complete_screen_count"], 3)
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
+
+    def test_one_true_wide_vote_cannot_veto_two_single_unique_main_votes(self):
+        mistaken_wide = (
+            "我看到三台完整入鏡的螢幕，無法鎖定唯一主角及其規格與價格，所以……"
+        )
+        owned_single = (
+            "我看到中央主螢幕與正下方空間對齊的價牌，型號 S27CG552EC，"
+            "價格 4,990 元；沒有 FollowMe 實體，所以……"
+        )
+        history = [
+            make_pass(
+                "單機",
+                None,
+                None,
+                3,
+                True,
+                "not_visible",
+                thinking=mistaken_wide,
+            ),
+            make_pass(
+                "遠景",
+                None,
+                None,
+                3,
+                False,
+                "not_visible",
+                thinking=mistaken_wide,
+            ),
+        ]
+        current = make_pass(
+            "單機",
+            "S27CG552EC",
+            "4990",
+            3,
+            True,
+            "matched",
+            thinking=owned_single,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertNotEqual(
+            result.get("adjudication_rule"),
+            "two_wide_geometry_votes_veto_single_identity_outlier",
+        )
+        self.assertEqual(current["view_type"], "單機")
 
     def test_two_edge_cut_reads_preserve_owned_non_followme_identity(self):
         edge_cut = (

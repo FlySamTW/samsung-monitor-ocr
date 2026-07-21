@@ -1,0 +1,17 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-台中市-北屯區-SF-文心-645.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27CG552EC",
+      "price": 4990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

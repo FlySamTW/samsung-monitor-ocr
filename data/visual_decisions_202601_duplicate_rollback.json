@@ -1,0 +1,28 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-南投縣-南投市-SF-南投-665.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DG802SC",
+      "price": 29900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    },
+    {
+      "file_name": "M-南投縣-南投市-SF-南投-669.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S27F612EAC",
+      "price": 4740,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false
+    }
+  ]
+}

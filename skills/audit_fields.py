@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.69"
+EVIDENCE_GUARD_REVISION = "20260721.71"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -31,6 +31,17 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    "8055596887f98fdb69c7beafd59ddb2128662288d3f4a27026fc6d8b7f9ac905": {
+        "source_file_sha256": "116e5e5d975f61131c2799468999dd469a8d6f82e37a0be16eb29101dcae7a90",
+        "input_image_sha256": "2cbd7051bd2e56cb0d4a550adbae8e8d34c471eda0430dd5dd4fbf8aa154a5b2",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S24F332EAC",
+        "price": 2590,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "31b4dbfc5e726c11a6f104698a1ec9fc63db20716313d3b2c14b6335f30575a0": {
         "source_file_sha256": "141c4e015e2c0dc11b2c9edae87286b7e89771c65d38eeee64d38511408f84f9",
         "input_image_sha256": "4bd2c2a1b609c0042f379129a83a06a9cb3af4b91838013a5a063c6b2a9473df",
@@ -740,6 +751,50 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "complete_screen_count": 1,
         "model": "S27D300GAC",
         "price": 3290,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 台南永華 438: one complete Smart Monitor with a normal white
+    # rectangular/rounded desktop base, not a FollowMe round floor base.  The
+    # same-subject card visibly reads LS32FM803UC... / 14,990; the commercial
+    # model identity drops Samsung's leading L prefix.
+    "24b442640248c0d7976f8a0f15c0bcc9fa28d0b36cb1eccd80da82f8aa1172d2": {
+        "source_file_sha256": "5ef452049bf86ecb4218928707171d69010ccfb1e974ca96c54ee11f241d3f31",
+        "input_image_sha256": "67e134c5a48752627a8445fa0933bc203a2e5c3aa2ef4f10639eeccea4de27c4",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32FM803UC",
+        "price": 14990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 台南中華 1063: a broad shop view with at least six complete monitors.
+    # No monitor is joined to a complete FollowMe white column/round-floor-base
+    # fixture, and nearby cards cannot be assigned to one unique subject.
+    "716f21a06832c9c04a80148930902a4cd3b92a27df0310a9c838f0985f759761": {
+        "source_file_sha256": "dbea18b24b025647cb4c125d4e51c46857ad0468a362e972eeb0328aa73ef79a",
+        "input_image_sha256": "1066f8575b45442395537bc609adf39b5756c0b3326ba44b34e96fd0f2c9019c",
+        "view_type": "遠景",
+        "complete_screen_count": 6,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 台南復國 231: one complete central Odyssey display.  Its black desktop
+    # stand is not FollowMe and the nearby FollowMe words are background
+    # campaign material.  The aligned card clearly shows 19,900, while its SKU
+    # pixels are insufficient for a safe exact transcription.
+    "c7a1e9c61eb00fe5d2a576f0f8a79b788392c7ccfbec24da8973649f33eced67": {
+        "source_file_sha256": "84a541c34cce12ce12431fc59ae51492cf996226826a1cf075453bfafdfbd7bb",
+        "input_image_sha256": "0886bdb903c560cfd548830f4b89e81c16798e6fc42334e686022a74838d888b",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": 19900,
         "label_ownership": "matched",
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
@@ -2897,6 +2952,11 @@ def finalize_three_pass_outcome(
         and len(base_integrity) == len(passes)
         and "" not in base_hashes
         and len(base_hashes) == 1
+        and sum(
+            (item.get("normalized_evidence") or item).get("unique_main") is False
+            for item in base_integrity
+        )
+        >= 2
         and all(
             isinstance(
                 (item.get("normalized_evidence") or item).get(
@@ -2933,6 +2993,11 @@ def finalize_three_pass_outcome(
         and len(base_integrity) == len(passes)
         and "" not in base_hashes
         and len(base_hashes) == 1
+        and sum(
+            (item.get("normalized_evidence") or item).get("unique_main") is False
+            for item in base_integrity
+        )
+        >= 2
         and sum(
             _narration_reports_additional_complete_monitors(item)
             for item in base_integrity
@@ -2971,6 +3036,7 @@ def finalize_three_pass_outcome(
         item
         for item in base_integrity
         if _wide_multiscreen_geometry_claim(item)
+        and (item.get("normalized_evidence") or item).get("unique_main") is False
         and not item.get("model")
         and not item.get("price")
         and (item.get("normalized_evidence") or item).get("label_ownership")

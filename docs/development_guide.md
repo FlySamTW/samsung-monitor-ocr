@@ -12,12 +12,12 @@
 
 ## 固定防走偏節奏
 
-這不是建議，而是每次接手、修復、續跑與三小時完整監控都必須執行的清單：
+這不是建議，而是每次接手、修復、續跑與每半天完整監督都必須執行的清單：
 
 1. 動手前重讀本手冊、`docs/continuity_handoff.md` 與 `docs/three_layer_accuracy_gate.md` 的相關章節；先確認目前正式工作目錄、守門修訂碼、保留中的 lock／fuse，以及不可改動的 Dashboard 版面與上傳隔離條件。
 2. 修正前先寫清楚「觀察到的錯誤、真正根因、不可退步的既有規則」。不得為解一個畫面或個案而放寬三層證據、把上一輪答案帶進下一輪，或改變已定稿的 50/50 主畫面配置。
 3. 修正後必須做相稱的回歸驗證；涉及 OCR／守門時比對同一獨立輪次的原始結構欄位與最終欄位，涉及 Dashboard 時核對主圖、自然語句 AI 判讀、右欄處理中卡與頂部目前檔案屬於同一張照片。只看到進度增加不算健康。
-4. 正式運行中每三小時做一次四維完整核對：進度確實前進、內容沒有跑歪、介面持續同步且無裸 JSON／亂碼、上傳仍被正確隔離。中間只在出現異常時報告，禁止用「等待三小時」訊息洗版。三小時自動監控的名稱、提示與文字編碼也屬健康範圍；不得沿用亂碼提示或把舊 `evidence_guard_revision` 寫死，必須先讀本手冊與現行程式定義再判斷。
+4. 正式運行中只在每日 09:00、21:00 做一次四維完整核對：進度確實前進、內容沒有跑歪、介面持續同步且無裸 JSON／亂碼、逐張上傳持續閉環。中間不重複輪詢、不洗版；只有發現卡住、介面不同步、記憶污染、超過三輪或系統性內容錯誤才立即通知並依照片邊界 fail-safe。自動監督的名稱、提示與文字編碼也屬健康範圍；不得把舊 `evidence_guard_revision` 寫死，必須先讀本手冊與現行程式定義再判斷。
 5. 發現實質結構改寫、跨輪記憶污染、原始／最終內容漂移、介面照片與判讀錯配、右欄不累積、重複瀏覽器分頁、可見終端機反覆彈出、runtime fuse 或未授權 uploader 時，立即停止該批 runner 並保留 backend／既有 Dashboard 供查證；不得自動重啟掩蓋問題。
 6. 每次查到新的根因、守門例外或舊錯重犯路徑，都要在同一修正中同步更新本手冊、移交文件或專案 SKILL，並新增能重現該錯誤的測試。文件內容若與實際程式行為不同，以失敗封閉處理，先停下核對，不可猜測後繼續跑。
 
@@ -1153,10 +1153,19 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 五張正式已知錯誤以原圖雜湊綁定、零新增模型呼叫更正並逐張取得 `.64` Drive receipt：`高雄大立-408=S32DG802SC／36,900`、`高雄大立-412/413=FollowMe 單機／型號未細分／無價格`、`前鎮-766=FollowMe 單機／型號未細分／無價格`、`前鎮-768=S32FM703UC／9,990`。新 Drive IDs 依序為 `1fvL-Cn0DDi5FqxGac3qs4Y2AlTBCPevY`、`1QHB1kjhU4YWebYgml-bK0lYZTkegvemT`、`1vSLkgAW4KrbUKDusNfeqwyQp6aDLYrZG`、`1t_RzxnXY_4THXLPhKsf7aqv0y79fK97F`、`1YsI6l87nMdzVrczRiT-qvZvCgzbWXdU8`。全域更正帳本目前仍有 4 筆 mapping error，故舊錯名只可等精確帳本修復後按 Drive ID 清理；不得為清舊檔放寬 gate 或延誤 OCR／新檔逐張上傳。
 - 65,336 回退是 202606 summary 被覆寫成 processed=5 的總盤錯誤；現行唯一正確上方數字是 `66,724/151,714`、`45/137`。隔離 smoke 不計正式總數，202601 二、三輪也不重複計數。18:51 既有 Dashboard 已同步顯示 `202601 1,322/1,478`、verified 1,305、review 17、failed 0、上傳 56,224／待傳 0、目前檔案 `岡山-752`，正式 OCR、LLM 自然語言、右側卡片與逐張 uploader 持續前進。
 
-## 2026-07-21 `.69`：總盤、不中斷復原與逐張上傳鐵律
+## 2026-07-21 `.70`：總盤、不中斷復原與逐張上傳鐵律
 
 - 上方「初次辨識總進度」是**唯一來源照片**的去重計數，不是模型呼叫數、複核輪次或上傳數。現行 inventory 權威為 `66,724 / 151,714`、`45 / 137`；`65,336` 是未納入 202606 的歷史錯值。202601 的第二、第三輪、離線定案、更正改名與同一來源重新上傳均不得重複加總。Dashboard 必須同時保留當前資料夾／輪次進度，讓複核期間仍能看見實際前進。
 - 正式批次的首要要求是「不中斷、正確顯示、照片邊界安全」。一張取得如實終局就立刻 enqueue，stream uploader 逐張上傳；不得等待整月、整年或人工累積。任何修復、文件、Git、清理或低功耗稽核都不可停止正式 OCR、既有 Dashboard 分頁或唯一 uploader。
+
+## 2026-07-21 `.71`：真正無主角寬景票與完整螢幕邊界
+
+- `identity_free_wide_candidates` 的每一票都必須同時滿足 `unique_main=false`、無型號、無價格、價牌非 matched、無 FollowMe 實體及 3+ 完整螢幕寬景敘述。欄位名叫 identity-free 就不能接受 `unique_main=true`；否則一張有唯一主角但暫時沒讀出型號／價格的單機票，會被錯算成寬景多數。
+- `strict_multiscreen_distant_fallback` 與 `two_wide_narration_distant_fallback` 也必須至少有兩輪 `unique_main=false`。三輪都把被原圖左右邊界裁切的鄰機誤寫成完整，不得只憑錯誤 count=3 抹除唯一主角與同主體價牌。
+- 永久回歸 `文心-645`：第一輪 `單機/unique_main=true`、第二輪真寬景票、第三輪 `單機/S27CG552EC/4,990/matched`，不得使用 `two_wide_geometry_votes_veto_single_identity_outlier`。原始解析度像素權威固定為只有中央一台完整螢幕；左右鄰機碰原圖邊界不計，終局為 `單機/S27CG552EC/4,990/✓`。
+- `.70` 只有 `two_wide_geometry_votes_veto_single_identity_outlier` 終局不得直接跳過 `.71` backfill；其他 `.70` 結果未經此缺陷路徑，仍可相容沿用。問題照片只能用零模型規則重驗或精確 source item + source SHA + input SHA 視覺權威結案，不得因升版增加第 4 次模型呼叫。
+- `新文心-967` 在安全停止邊界已消耗第三次呼叫但尚未落盤，因此只能用兩次乾淨同圖輸出加精確 source item／原圖 SHA／input SHA 像素權威零模型復原；不得再呼叫第四次。終局固定為 `單機/S24F332EAC/2,590`，Drive 收據 ID `1SUhHE9_b4Jexo2eqsTiyLE2kDZ44VuRg` 並保留 `ocr_attempt=3`。此 consumed-cap 路徑不能泛化成跳過第三輪的捷徑。
+- 發現此類系統性定案漏洞時，持續運轉鐵律的正確動作是「在照片邊界停止 OCR、保持 Dashboard/LM Studio/uploader 在線、先修與回歸，再從保存斷點續跑」；繼續跑錯比短暫安全停下更違反專案目標。
 - `reload_backend_at_safe_idle.ps1` 對 incomplete staging 的 interlock 是資料保護機制：helper 尚未明確釋放前，必須先恢復原正式 staging，並以 `restart=false` 保留已消耗輪次／retry state。此時 supervisor **禁止**建立新的 staging、禁止將中斷批次誤當可重開的新批次；只有原位恢復失敗且保留完整證據時才可 fail-safe。
 - uploader 升版必須相容既有 pending jobs：每一輪 claim 前先以現行 schema 遷移 pending payload，再比對 source identity、來源／發布雜湊、目標檔名與既有 Drive receipt。已存在相同 Drive ID 的冪等確認只可更新本地收據，不得產生第二個雲端物件；同一照片的更正副本仍須取得新檔精確 receipt、讀回驗證後，才可依舊 Drive ID 清理舊錯名。
 - FollowMe 的實體證據是嚴格幾何關係：必須是與同一主體相連、位於螢幕像素外的**白色**直立支架與完整圓形落地底座，或直接附著的 FollowMe 品牌。一般黑色支架、黑色圓底座、桌架、輪架或螢幕內廣告都不是 FollowMe 證據，絕不可把它們冒充為白色實體裝置。

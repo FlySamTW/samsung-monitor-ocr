@@ -5,10 +5,44 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.recover_consumed_cap_missing_result import recover
+from tools.recover_consumed_cap_missing_result import _classify_bound_calls, recover
 
 
 class ConsumedCapMissingResultRecoveryTests(unittest.TestCase):
+    def test_one_clean_plus_one_contained_same_photo_output_is_narrowly_allowed(self):
+        image_hash = "b" * 64
+        base = {
+            "input_image_sha256": image_hash,
+            "request_id_verified": True,
+            "request_binding_enforced": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+        }
+        clean = {**base, "runtime_health": {"healthy": True, "reasons": []}}
+        contained = {
+            **base,
+            "runtime_health": {
+                "healthy": False,
+                "reasons": ["structured_narration_followme_conflict"],
+            },
+        }
+        self.assertEqual(_classify_bound_calls([contained, clean], image_hash), (1, 1))
+
+        contaminated = {**contained, "prompt_contamination": True}
+        with self.assertRaises(RuntimeError):
+            _classify_bound_calls([contaminated, clean], image_hash)
+
+        unrelated_failure = {
+            **base,
+            "runtime_health": {
+                "healthy": False,
+                "reasons": ["model_endpoint_failed"],
+            },
+        }
+        with self.assertRaises(RuntimeError):
+            _classify_bound_calls([unrelated_failure, clean], image_hash)
+
     def test_two_clean_outputs_and_consumed_cap_finalize_without_call_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
