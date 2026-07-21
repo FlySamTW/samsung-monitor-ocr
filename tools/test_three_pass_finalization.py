@@ -993,6 +993,27 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            before_dry_run = result_file.read_text(encoding="utf-8")
+            with patch(
+                "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result"
+            ) as dry_enqueue:
+                dry_report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=False,
+                    only_file_names={"pass-one-overwrite.jpg"},
+                )
+            self.assertEqual(dry_report[0]["status"], "would_finalize")
+            self.assertEqual(
+                dry_report[0]["rule"],
+                "three_call_known_pixel_authority_repair",
+            )
+            self.assertEqual(
+                result_file.read_text(encoding="utf-8"), before_dry_run
+            )
+            dry_enqueue.assert_not_called()
+
             with patch(
                 "tools.finalize_existing_three_pass_reviews.enqueue_finalized_result",
                 return_value=root / "queued.json",
@@ -1431,7 +1452,9 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["view_type"], "單機")
         self.assertEqual(current["complete_screen_count"], 1)
         self.assertEqual(current["model"], "S27D300GAC")
-        self.assertEqual(current["price"], "3290")
+        # The third pass marks ownership ambiguous, so only one safe price vote
+        # remains.  Keep the model consensus but do not attach an unsafe price.
+        self.assertIsNone(current["price"])
 
     def test_one_or_two_complete_screens_still_cannot_claim_distant(self):
         for count in (1, 2):
@@ -1619,7 +1642,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(current["complete_screen_count"], 1)
 
-    def test_followme_inside_wide_wall_finalizes_as_distant(self):
+    def test_followme_inside_wide_wall_finalizes_as_followme_subject(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
@@ -1644,13 +1667,13 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(
             result["adjudication_rule"],
-            "two_wide_narration_votes_distant_authority",
+            "two_pass_followme_physical_consensus",
         )
-        self.assertEqual(current["view_type"], "遠景")
+        self.assertEqual(current["view_type"], "單機")
         self.assertGreaterEqual(current["complete_screen_count"], 3)
-        self.assertIsNone(current["model"])
-        self.assertIsNone(current["price"])
-        self.assertTrue(current["wide_scene_followme_present"])
+        self.assertEqual(current["model"], 'FollowMe M7 32"')
+        self.assertEqual(current["price"], "14990")
+        self.assertTrue(current["followme_family_confirmed"])
         self.assertTrue(current["followme_physical_evidence"])
 
     def test_audited_followme_pixel_authority_replaces_out_of_frame_cues(self):
@@ -1782,6 +1805,16 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 "S27F612EAC",
                 4480,
             ),
+            (
+                "aaeb56c3d6e8739ae0027cbeb8275c124ba421319c4627ae9e65c5ee98675a23",
+                "S32FM703UC",
+                9990,
+            ),
+            (
+                "ac0bdb9a1273eefe5d7f7e34908dfa49f2b6de2246a837b7e7330e29a078bd99",
+                "S32DG802SC",
+                36900,
+            ),
         ]
         misleading_physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -1816,6 +1849,37 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 self.assertNotIn("健康閘收回", passes[-1]["thinking"])
                 self.assertTrue(passes[-1]["thinking"].startswith("我看到"))
                 self.assertTrue(passes[-1]["thinking"].endswith("所以……"))
+
+    def test_audited_wide_scene_followme_pixels_override_false_distant_calls(self):
+        for image_hash in (
+            "87117a30dd8546152994366d43da2bfb20fe9825b1d1dae5c510d403c992113b",
+            "48027d9a9f229514b85895ffa6fdf7e44681bbd4209fd41e831501d37ae1398b",
+            "dfba3f110111a1804cd663c1828ad701d0f73e5cd6506f5d2f0d16f1aac60b98",
+        ):
+            with self.subTest(image_hash=image_hash):
+                passes = [
+                    make_pass(
+                        "遠景", None, None, 5, False, "not_visible", [],
+                        image_hash=image_hash,
+                    )
+                    for _ in range(3)
+                ]
+                passes[-1]["ocr_attempt"] = 3
+
+                applied = apply_human_audited_pixel_authority(
+                    passes[-1], passes[:-1], max_attempts=3
+                )
+                result = finalize_three_pass_outcome(
+                    passes[-1], passes[:-1], unresolved(), max_attempts=3
+                )
+
+                self.assertTrue(applied)
+                self.assertTrue(result["verified"])
+                self.assertEqual(passes[-1]["view_type"], "單機")
+                self.assertTrue(passes[-1]["followme_family_confirmed"])
+                self.assertTrue(passes[-1]["followme_physical_evidence"])
+                self.assertIsNone(passes[-1]["model"])
+                self.assertIsNone(passes[-1]["price"])
 
     def test_edge_cut_rule_does_not_hide_other_complete_display_rows(self):
         text = (
@@ -2380,7 +2444,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["model"], "S24F332EAC")
         self.assertEqual(current["price"], "2390")
 
-    def test_followme_inside_five_monitor_wall_finishes_as_distant(self):
+    def test_followme_inside_five_monitor_wall_finishes_as_followme_subject(self):
         fixture = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -2430,12 +2494,28 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertFalse(result["unresolved"])
         self.assertEqual(
             result["adjudication_rule"],
-            "distant_structural_veto_over_wide_geometry_single_votes",
+            "two_pass_followme_physical_consensus",
         )
-        self.assertEqual(current["view_type"], "遠景")
-        self.assertIsNone(current["model"])
-        self.assertIsNone(current["price"])
-        self.assertFalse(current.get("followme_family_confirmed", False))
+        self.assertEqual(current["view_type"], "單機")
+        self.assertTrue(current.get("followme_family_confirmed", False))
+        self.assertEqual(current["model"], 'FollowMe M7 32"')
+        self.assertEqual(current["price"], "12618")
+        self.assertGreaterEqual(current["complete_screen_count"], 3)
+
+    def test_distant_with_strong_followme_hardware_is_contract_conflict(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        record = make_pass(
+            "遠景", None, None, 5, False, "not_visible", fixture,
+            thinking="我看到右側實機在螢幕像素外連著白色直立支架與完整圓形落地底座。",
+        )
+
+        valid, errors, _normalized = validate_evidence_contract(record)
+
+        self.assertFalse(valid)
+        self.assertIn("distant_followme_physical_conflict", errors)
 
     def test_followme_poster_in_five_monitor_wall_does_not_create_single_subject(self):
         history = [
@@ -2495,6 +2575,44 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+
+    def test_followme_variant_disagreement_keeps_independent_price_consensus(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                model='FollowMe Pro M7 32"',
+                price="17990",
+                count=3,
+                physical=fixture,
+                thinking='我看到同一主體規格牌寫著 FollowMe Pro M7 32"，價牌為 17,990 元，所以……',
+            ),
+            make_pass(
+                model='FollowMe M7 32"',
+                price="17990",
+                count=1,
+                physical=fixture,
+                thinking='我看到同一主體 FollowMe M7 32"，附著價牌為 17,990 元，所以……',
+            ),
+        ]
+        current = make_pass(
+            model=None,
+            price="17990",
+            count=3,
+            physical=fixture,
+            thinking="我看到同一台實體 FollowMe 與附著價牌 17,990 元，但型號未能細分，所以……",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertIsNone(current["model"])
+        self.assertEqual(current["price"], "17990")
 
     def test_two_followme_narrations_with_incomplete_background_set_count_one(self):
         fixture = [

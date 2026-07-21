@@ -1141,7 +1141,7 @@ def finalize_file(
             or raw_model_price_repair
         )
         known_pixel_repair = bool(
-            apply
+            (apply or only_file_names is not None)
             and existing_meta.get("auto_verified") is True
             and existing_meta.get("auto_review_required") is not True
             and calls

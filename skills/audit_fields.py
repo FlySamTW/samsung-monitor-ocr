@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.62"
+EVIDENCE_GUARD_REVISION = "20260721.64"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -596,6 +596,88 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 高雄大立 412/413 and 前鎮 766: the business target is the physically
+    # present FollowMe unit, even when the same full frame also contains a TV or
+    # monitor wall.  Each image was inspected at original resolution after the
+    # .62 distant-first adjudicator uploaded the wrong classification.
+    "85df85dbb98b42ec5f388de755f9e494038d5d3ba90be43b4083ca847b95c55d": {
+        "source_file_sha256": "e272b76e7663bec2a6970fa8871c187d4c750c4959a780d229880e3ec1d2150f",
+        "input_image_sha256": "87117a30dd8546152994366d43da2bfb20fe9825b1d1dae5c510d403c992113b",
+        "view_type": "單機",
+        "complete_screen_count": 4,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "portrait_display", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    "5576e415720823eaf2e120ce4a1031189a2f259a3f920809fa478bb0461cffda": {
+        "source_file_sha256": "84f8c521ba050464abab67e2f6c6196531761dac6fdb11cc37ee51856285a067",
+        "input_image_sha256": "48027d9a9f229514b85895ffa6fdf7e44681bbd4209fd41e831501d37ae1398b",
+        "view_type": "單機",
+        "complete_screen_count": 5,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "portrait_display", "same_subject": True, "strength": "strong"},
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    "f7742683a121742db4903ea5d3ec7c0be4ab18b81edc8c9d9bdad7b1cc2d8e4f": {
+        "source_file_sha256": "180571e35101f25f464410bbfc6e4b35190e577b30ce3b713c9119493f89c939",
+        "input_image_sha256": "dfba3f110111a1804cd663c1828ad701d0f73e5cd6506f5d2f0d16f1aac60b98",
+        "view_type": "單機",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": True,
+        "followme_physical_evidence": [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "portrait_display", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    # 前鎮 768 is an ordinary desktop Smart Monitor M7.  The rolling stand is
+    # visible only inside the illuminated screen content; it is not physical
+    # FollowMe hardware in the photographed store scene.
+    "165dba4ad2fec7cbd96c8aacb0dc2113809b372a3d2b353da4b425acc199377a": {
+        "source_file_sha256": "e04ce1011c3f81c6e9832e6ed25d28cb5e1e5fc9f30844c39eef66f5f11089fb",
+        "input_image_sha256": "aaeb56c3d6e8739ae0027cbeb8275c124ba421319c4627ae9e65c5ee98675a23",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32FM703UC",
+        "price": 9990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 高雄大立 408 is an ordinary Odyssey G8 single unit.  The FollowMe words
+    # are on nearby campaign material, while the main monitor's own aligned
+    # card visibly reads S32DG802SC/DE and 36,900.
+    "1290e9e9961e37a6486fe7f09aea12a787d7d2f8263cfc825a0403a3e8e54df4": {
+        "source_file_sha256": "a954addb937ee9b615eb4f262afe20124ff4957d6e7d0cc2d193598a5086ccfd",
+        "input_image_sha256": "ac0bdb9a1273eefe5d7f7e34908dfa49f2b6de2246a837b7e7330e29a078bd99",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32DG802SC",
+        "price": 36900,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 })
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
@@ -990,9 +1072,9 @@ def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
     # the photographed FollowMe unit at all. Once the structured evidence
     # already has two independent same-subject strong cues (or direct branding),
     # an omitted orientation/card detail remains a review-quality issue but must
-    # not repeatedly fuse the whole batch. A broad 3+ monitor scene may contain
-    # a real FollowMe unit; that product fact no longer overrides the global
-    # full-frame view classification.
+    # not repeatedly fuse the whole batch.  The separate evidence contract then
+    # requires the real FollowMe unit to become the business subject even inside
+    # a broad 3+ monitor scene.
     if has_sufficient_followme_physical_evidence(
         {"followme_physical_evidence": record.get("followme_physical_evidence") or []}
     ):
@@ -1098,10 +1180,13 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
             errors.append("distant_evidence_inconsistent")
         if ownership == "matched":
             errors.append("distant_owned_label_conflict")
-        # A real FollowMe unit can be present inside a broad store wall. The
-        # global view remains distant when the original frame contains 3+
-        # complete monitors and no unique owned subject. Preserve the physical
-        # evidence for audit instead of forcing the whole photo into 單機.
+        # This project rechecks broad scenes specifically to recover FollowMe
+        # units that were hidden among surrounding monitors.  Once the same
+        # photographed unit has direct branding or two independent strong
+        # hardware cues, it is the business subject and cannot be discarded as
+        # a distant wall merely because other screens are also complete.
+        if has_sufficient_followme_physical_evidence(normalized):
+            errors.append("distant_followme_physical_conflict")
     if view_type == "單機" and unique is not True:
         errors.append("single_unique_main_required")
     model = str(record.get("model") or "")
@@ -1619,34 +1704,25 @@ def _wide_multiscreen_geometry_claim(record: Dict[str, Any]) -> bool:
 
 
 def _followme_single_subject_geometry_not_contradicted(record: Dict[str, Any]) -> bool:
-    """Reject a FollowMe single vote that explicitly describes a wide wall."""
-    view = str(record.get("view_type") or record.get("category") or "").strip()
+    """Accept strong physical FollowMe evidence anywhere in the full frame.
+
+    Surrounding complete monitors are not a contradiction for this project's
+    target.  Screen content and nearby signage remain weak cues and therefore
+    cannot satisfy ``has_sufficient_followme_physical_evidence``.
+    """
     normalized = record.get("normalized_evidence") or record
     return bool(
-        view == "單機"
-        and normalized.get("unique_main") is True
-        and has_sufficient_followme_physical_evidence(normalized)
-        and not _narration_reports_additional_complete_monitors(record)
-        and not _wide_multiscreen_geometry_claim(record)
+        has_sufficient_followme_physical_evidence(normalized)
     )
 
 
 def _followme_single_subject_geometry_supported(record: Dict[str, Any]) -> bool:
-    """Require at least one positive single-subject geometry observation.
+    """Strong same-subject FollowMe hardware establishes the business target.
 
-    Two calls that both identify a real FollowMe unit may still describe a wide
-    photo containing several other complete monitors.  Those calls confirm that
-    a FollowMe exists in the scene, but do not turn the photo into a single-unit
-    view.  Only 1–2 complete screens, or an explicit same-pass statement that all
-    neighbours are incomplete/cropped, may enter the FollowMe single lane.
+    The full-frame complete-screen count remains recorded for audit, but it no
+    longer vetoes a real FollowMe unit found during the distant-scene review.
     """
-    normalized = record.get("normalized_evidence") or record
-    count = normalized.get("complete_screen_count")
-    if not _followme_single_subject_geometry_not_contradicted(record):
-        return False
-    if isinstance(count, int) and not isinstance(count, bool) and count in {1, 2}:
-        return True
-    return _narration_supports_only_one_complete_monitor(record)
+    return _followme_single_subject_geometry_not_contradicted(record)
 
 
 def _is_samsung_sku_like(value: Any) -> bool:
@@ -1884,13 +1960,23 @@ def immediate_retry_decision(
             reasons.append("2026 單機缺價格")
         if quality and quality not in {"無", "正常", "None", "null"}:
             reasons.append(f"單機仍有品質疑慮:{quality}")
-        if _explicit_three_complete(thinking) and _no_unique_main_evidence(thinking):
+        strong_followme_subject = has_sufficient_followme_physical_evidence(
+            contract["normalized_evidence"]
+        )
+        if (
+            _explicit_three_complete(thinking)
+            and _no_unique_main_evidence(thinking)
+            and not strong_followme_subject
+        ):
             reasons.append("單機結果與三台以上完整陳列衝突")
         if isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
-            if attempt < max_attempts:
+            if strong_followme_subject:
+                if attempt < max_attempts:
+                    reasons.append("寬景中的 FollowMe 實體必須完成三輪獨立複核")
+            elif attempt < max_attempts:
                 reasons.append("三台以上入鏡的單機候選必須完成三輪獨立複核")
             else:
-                reasons.append("三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景")
+                reasons.append("沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景")
 
     non_followme_pixel_authority = bool(
         known_expectation
@@ -2941,6 +3027,8 @@ def finalize_three_pass_outcome(
         usable = list(passes)
     elif binding_discarded_head_fallback:
         usable = prior_bound_passes
+    elif followme_local_base_fallback or mixed_followme_local_base_fallback:
+        usable = list(single_local_integrity)
     elif distant_majority:
         usable = [
             item
@@ -2954,10 +3042,6 @@ def finalize_three_pass_outcome(
     elif single_identity_base_fallback:
         usable = list(single_local_integrity)
     elif single_view_base_fallback:
-        usable = list(single_local_integrity)
-    elif followme_local_base_fallback:
-        usable = list(single_local_integrity)
-    elif mixed_followme_local_base_fallback:
         usable = list(single_local_integrity)
     elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
@@ -3049,6 +3133,14 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(winning_non_followme_pairs[0][1])
         rule = "two_pass_non_followme_identity_consensus"
+    elif followme_local_base_fallback or mixed_followme_local_base_fallback:
+        final_view = "單機"
+        supporting = [
+            item
+            for item in usable
+            if _followme_single_subject_geometry_supported(item)
+        ]
+        rule = "two_pass_followme_physical_consensus"
     elif mixed_wide_distant_base_fallback:
         final_view = "遠景"
         supporting = list(usable)
@@ -3239,21 +3331,27 @@ def finalize_three_pass_outcome(
             model,
             price,
         )
-        if rule == "two_pass_followme_physical_consensus" and len(
-            {
-                (
-                    str(followme_identity_key(item.get("model")) or ""),
-                    re.sub(r"[^0-9]", "", str(item.get("price") or "")),
-                )
-                for item in supporting
-                if item.get("model") or item.get("price")
-            }
-        ) > 1:
+        if rule == "two_pass_followme_physical_consensus":
             # A FollowMe stand can carry several nearby variant/price cards.
-            # Any cross-pass pair disagreement proves only the family, never a
-            # particular M5/M7/Pro variant or its price.
-            model = None
-            price = None
+            # Resolve each independently from the same field-safe passes:
+            # variant disagreement proves only the family, but must not erase
+            # an identical price read independently at least twice.  Price
+            # disagreement still clears price, and the earlier exact-pair gate
+            # continues to forbid combining unrelated model/price majorities.
+            followme_model_keys = {
+                str(followme_identity_key(item.get("model")) or "")
+                for item in field_safe
+                if followme_identity_key(item.get("model"))
+            }
+            followme_price_keys = {
+                re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+                for item in field_safe
+                if re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+            }
+            if len(followme_model_keys) > 1:
+                model = None
+            if len(followme_price_keys) > 1:
+                price = None
         # A structured ``matched`` flag is not an ownership vote when that
         # pass's own narration says the card cannot be tied to the subject.
         # Count only the same pass set that is eligible to contribute identity

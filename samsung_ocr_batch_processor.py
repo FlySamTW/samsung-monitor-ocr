@@ -256,11 +256,11 @@ V1945_OUTPUT_CONTRACT = (
     "Before price, narration must list all same-card amounts with printed roles; never rename 市價/原價/參考價/建議售價 as 會員價/特價. If a prominent current/promo amount coexists, choose it; if only one amount exists, say so. "
     "If narration clearly reads a Samsung SKU and price from the dominant monitor's own spatially aligned card, structured model, price, and label_ownership=matched must report the same evidence; do not narrate readable values and then return null. "
     "A dominant full monitor with its aligned readable label is 單機, unique_main=true, label_ownership=matched; partial neighbors do not change that. "
-    "A foreground display with a same-subject white round base plus attached tray is a FollowMe candidate regardless of background screens. Screen content is weak, cannot prove FollowMe, and can NEVER negate its hardware. "
+    "PROJECT TARGET PRIORITY: Scan the full original for physical FollowMe before the distant rule. Direct same-unit FollowMe branding, or a display physically joined outside its screen pixels to both a white vertical stand and a complete round floor base, makes that unit the 單機 business subject regardless of surrounding screens; retain full-frame complete_screen_count. Screen content cannot prove and can NEVER negate hardware. "
     "A round base counts only when the complete physical floor base is visible inside the ORIGINAL frame. A white vertical pole alone is insufficient. A continuous retail shelf price rail is not an attached tray. Smart Monitor M7/M5 or an S32FM SKU alone is a product family, not direct FollowMe branding. "
     "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
-    "MANDATORY FINAL SELF-CHECK: classify the entire ORIGINAL frame before naming any foreground product. If 3 or more monitor bodies have all four frame edges and all four corners inside the original photo, output 遠景, unique_main=false, model=null, and price=null even when one foreground unit is a real FollowMe; preserve its physical cues only as scene evidence. Direct FollowMe branding or two same-subject strong physical cues forces 單機 only when the original frame contains at most 2 complete monitors. "
-    "MANDATORY LAST FRAME CHECK: name each monitor's actual ORIGINAL-frame bezel contact. No contact means not cropped; 3+ complete bodies require 遠景."
+    "PHYSICAL/PIXEL CHECK: every claimed stand, pole, tray, or base must be outside the illuminated screen rectangle. Screen-only video, advertising, or UI gets screen_content_only, same_subject=false, and no strong cue. "
+    "MANDATORY FINAL SELF-CHECK: sufficient same-subject physical FollowMe anywhere means 單機, unique_main=true even with 3+ complete monitors; unsupported variant or price stays null. Without physical FollowMe, 3+ complete monitors means 遠景, unique_main=false, model=null, price=null. MANDATORY LAST FRAME CHECK: name each actual original-frame bezel contact; no contact means not cropped."
 )
 
 REVIEW_FOCUS_PROMPTS = {
@@ -276,13 +276,14 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕內播放 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是訊號內容，不是螢幕硬體品牌；不能因此否定與中央實體螢幕正下方空間對齊的 Samsung 型號價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "前景直立螢幕若同時連著白色圓形底座與託盤，必須如實記錄 FollowMe 實體線索；但全張原圖若另有三台以上完整螢幕，整張仍判遠景，FollowMe 不得覆蓋全圖幾何。"
+        "逐區先找實體 FollowMe：同一台螢幕若有直接 FollowMe 品牌，或在螢幕像素範圍外實際連著白色直立支架與完整圓形落地底座，就以該 FollowMe 為商業主角判單機，不受背景完整螢幕台數影響；完整台數仍照實填供稽核。"
+        "若支架、輪架、圓底座或託盤只出現在發亮螢幕內的影片／廣告畫面，必須填 screen_content_only、same_subject=false，禁止填任何強實體線索。"
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
         "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
-        "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
+        "送出前最後檢查：先完成全張 FollowMe 實體搜尋；找到同主體白色直立支架＋完整圓形落地底座或直接品牌時走 FollowMe 單機。只有完全沒有實體 FollowMe 候選時，三台以上完整才判遠景。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令；沒有把握的欄位留空。"
     ),
     3: (
@@ -297,13 +298,14 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕像素內的 Lenovo、LOQ、ASUS、ROG、LG、AMD、Intel、遊戲或電腦廣告只是顯示內容，不是硬體品牌；硬體身分只看外框實體標誌與同主體空間對齊價牌。"
         "完整台數只有 0、1、2 時絕對不可判遠景；中央主螢幕與其正下方可讀價牌對齊時，"
         "即使旁邊另有局部螢幕也要判為單機候選。"
-        "前景直立螢幕若同時連著白色圓形底座與託盤，必須如實記錄 FollowMe 實體線索；但全張原圖若另有三台以上完整螢幕，整張仍判遠景，FollowMe 不得覆蓋全圖幾何。"
+        "逐區先找實體 FollowMe：同一台螢幕若有直接 FollowMe 品牌，或在螢幕像素範圍外實際連著白色直立支架與完整圓形落地底座，就以該 FollowMe 為商業主角判單機，不受背景完整螢幕台數影響；完整台數仍照實填供稽核。"
+        "若支架、輪架、圓底座或託盤只出現在發亮螢幕內的影片／廣告畫面，必須填 screen_content_only、same_subject=false，禁止填任何強實體線索。"
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
         "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
-        "送出前最後檢查：先以全張原圖完整台數決定視角；三台以上完整必須遠景。只有完整台數最多兩台時，同主體兩項以上強實體線索才走 FollowMe 單機。"
+        "送出前最後檢查：先完成全張 FollowMe 實體搜尋；找到同主體白色直立支架＋完整圓形落地底座或直接品牌時走 FollowMe 單機。只有完全沒有實體 FollowMe 候選時，三台以上完整才判遠景。"
         "narration 只用二到四句直接描述當前影像，不得抄寫規則或操作指令。"
     ),
 }
@@ -392,6 +394,18 @@ def infer_period_from_text(*parts):
         if year_match:
             return year_match.group(1)
     return ""
+
+
+def review_context_for_path(path_text):
+    """Return a truthful Dashboard label for formal reruns and isolated trials."""
+    text = str(path_text or "")
+    lowered = text.lower()
+    if "_ocr_staging" in lowered and "runtime_health_smoke" in lowered:
+        return "runtime_health_trial", "隔離驗證"
+    return (
+        "current_year_review" if "_ocr_staging" in lowered else "initial_ocr",
+        infer_period_from_text(text),
+    )
 
 
 def should_compare_official_price(fname=""):
@@ -3208,8 +3222,8 @@ def process_single_image(
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
 
     user_prompt += (
-        "\n\n先掃描全張原圖並計算所有完整螢幕，再檢查前景產品身分。若全圖有三台以上完整螢幕，"
-        "整張必須判遠景；即使其中一台前景直立螢幕連著白色圓形落地底座與託盤，也只能如實記錄 FollowMe 存在，不得把全圖改成單機。"
+        "\n\n先掃描全張原圖，逐區搜尋實體 FollowMe，再計算所有完整螢幕。任何同一實機在發亮螢幕像素範圍外可見直接 FollowMe 品牌，或實際連著白色直立支架與完整圓形落地底座，就以該實體為商業主角判單機、unique_main=true；背景完整螢幕不否決它，完整台數仍照實填。"
+        "若支架、輪架、圓底座或託盤只存在於螢幕播放內容，必須記為 screen_content_only、same_subject=false，禁止當成實體 FollowMe。只有完全沒有實體 FollowMe 候選時，三台以上完整螢幕才判遠景。"
         "完整台數只能看第一張全尺寸照片並只計一次：外框四邊四角全部在照片內才算完整；碰到或穿出照片任一邊界的一律不計。"
         "先依左／中／右、上／中／下逐區掃完整張照片，所有位置四邊四角完整的螢幕都要計入，不可只盯中央主角。"
         "逐台寫明左／右／上／下哪一條外框真的接觸第一張原圖最外側；沒有實際接觸就不得宣稱該螢幕被裁切，也不得套用預設構圖。"
@@ -4658,10 +4672,20 @@ def get_status():
         # while idle makes the dashboard request deleted staging paths.
         presentation_queue = _presentation_payload(orchestrator)
         current_dir_text = str(getattr(orchestrator, 'image_dir', None) or "")
-        review_period = infer_period_from_text(current_dir_text)
+        review_mode, review_period = review_context_for_path(current_dir_text)
+        current_relative_dir = (
+            "隔離驗證（不計正式進度）"
+            if review_mode == "runtime_health_trial"
+            else (
+                str(Path(current_dir_text).resolve().relative_to(SOURCE_ROOT.resolve()))
+                if current_dir_text
+                and str(Path(current_dir_text).resolve()).startswith(str(SOURCE_ROOT.resolve()))
+                else current_dir_text or None
+            )
+        )
         current_attempt = int((getattr(orchestrator, "auto_attempts", {}) or {}).get(current_file, 0) or 0)
         review_progress = {
-            "mode": "current_year_review" if "_ocr_staging" in current_dir_text else "initial_ocr",
+            "mode": review_mode,
             "period": review_period,
             "processed": stats["processed"],
             "success": stats["success"],
@@ -4720,7 +4744,7 @@ def get_status():
             "is_running": orchestrator.is_running,
             "image_dir": getattr(orchestrator, 'image_dir', None), # [v19.8] Current source folder for dashboard
             "source_root": str(SOURCE_ROOT),
-            "current_relative_dir": str(Path(getattr(orchestrator, 'image_dir', '')).resolve().relative_to(SOURCE_ROOT.resolve())) if getattr(orchestrator, 'image_dir', None) and str(Path(getattr(orchestrator, 'image_dir')).resolve()).startswith(str(SOURCE_ROOT.resolve())) else getattr(orchestrator, 'image_dir', None),
+            "current_relative_dir": current_relative_dir,
             "resources": {
                 "cpu": psutil.cpu_percent(interval=0.1),
                 "ram": psutil.virtual_memory().percent

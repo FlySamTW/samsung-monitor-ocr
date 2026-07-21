@@ -233,7 +233,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(third["verified"])
         self.assertTrue(third["unresolved"])
         self.assertIn(
-            "三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景",
+            "沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景",
             third["reasons"],
         )
 
@@ -474,7 +474,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(decision["verified"])
         self.assertTrue(decision["unresolved"])
         self.assertIn(
-            "三台以上完整螢幕不得定案為單機，必須依全圖幾何定案遠景",
+            "沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景",
             decision["reasons"],
         )
 
@@ -1858,11 +1858,14 @@ class EvidenceContractTests(unittest.TestCase):
             focus = batch.REVIEW_FOCUS_PROMPTS[attempt]
             self.assertIn("完整台數只有 0、1、2 時絕對不可判遠景", focus)
             self.assertIn("中央主螢幕與其正下方可讀價牌對齊", focus)
-            self.assertIn("白色圓形底座與託盤", focus)
+            self.assertIn("白色直立支架＋完整圓形落地底座", focus)
             self.assertIn("followme_physical_evidence", focus)
-            self.assertIn("同主體兩項以上強實體線索", focus)
+            self.assertIn("只有完全沒有實體 FollowMe 候選時", focus)
+            self.assertIn("screen_content_only、same_subject=false", focus)
         self.assertIn("complete_screen_count 0, 1, or 2 can never be", batch.V1945_OUTPUT_CONTRACT)
-        self.assertIn("white round base plus attached tray", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("PROJECT TARGET PRIORITY", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("regardless of surrounding screens", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("outside the illuminated screen rectangle", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("Every physical fixture cue stated in narration", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("MANDATORY FINAL SELF-CHECK", batch.V1945_OUTPUT_CONTRACT)
         self.assertIn("can NEVER negate", batch.V1945_OUTPUT_CONTRACT)
@@ -1888,7 +1891,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(displayed.endswith("所以……"))
         self.assertNotIn("最終校正", displayed)
         source = Path(batch.__file__).read_text(encoding="utf-8")
-        self.assertIn("先掃描全張原圖並計算所有完整螢幕", source)
+        self.assertIn("先掃描全張原圖，逐區搜尋實體 FollowMe，再計算所有完整螢幕", source)
         self.assertNotIn("最終校正：這張判定為單機，型號 {final_model}", source)
 
     def test_narrated_followme_fixture_cannot_be_omitted_from_structure(self):
@@ -1982,7 +1985,7 @@ class EvidenceContractTests(unittest.TestCase):
         ):
             self.assertIn(field, schema)
 
-    def test_distant_can_preserve_followme_presence_inside_three_screen_wall(self):
+    def test_strong_followme_inside_three_screen_wall_becomes_business_subject(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
@@ -1991,15 +1994,34 @@ class EvidenceContractTests(unittest.TestCase):
             "file_name": "M-202605-distant-followme.jpg", "view_type": "遠景", "category": "遠景",
             "model": None, "price": None, "quality_issue": "",
             "thinking": "三台完整入鏡，沒有唯一主角；其中可見 S32FM703UC 的白色垂直支架與圓形底座。",
+            "ocr_attempt": 3,
+            "input_image_sha256": "c" * 64,
+            "request_binding_enforced": True,
+            "request_id_verified": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {
+                "healthy": False,
+                "allow_processing": True,
+                "allow_upload": False,
+                "reasons": ["distant_followme_strong_evidence_conflict"],
+            },
             **evidence(3, False, "not_visible", physical),
         }
         valid, errors, _ = validate_evidence_contract(row)
-        self.assertTrue(valid)
-        self.assertNotIn("distant_followme_physical_conflict", errors)
-        decision = immediate_retry_decision(row, 3, [dict(row), dict(row)], 3)
+        self.assertFalse(valid)
+        self.assertIn("distant_followme_physical_conflict", errors)
+        history = [dict(row), dict(row)]
+        decision = immediate_retry_decision(row, 3, history, 3)
+        self.assertTrue(decision["unresolved"])
+        decision = finalize_three_pass_outcome(row, history, decision, 3)
         self.assertTrue(decision["verified"])
         self.assertFalse(decision["unresolved"])
-        self.assertNotIn("遠景仍含未排除的 FollowMe 線索", decision["reasons"])
+        self.assertEqual(row["view_type"], "單機")
+        self.assertTrue(row["followme_family_confirmed"])
+        self.assertIsNone(row["model"])
+        self.assertIsNone(row["price"])
 
     def test_distant_explicitly_negated_followme_word_is_not_a_positive_cue(self):
         row = {

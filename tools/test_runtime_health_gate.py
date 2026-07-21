@@ -274,6 +274,21 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertIn("runtime_health_fuse_active", proof)
         self.assertIn("ensure_runtime_health_fuse_clear", uploader)
 
+    def test_runtime_health_smoke_never_masquerades_as_a_business_month(self):
+        from samsung_ocr_batch_processor import review_context_for_path
+
+        mode, label = review_context_for_path(
+            r"D:\00_商化\00_已OCR照片\_ocr_staging\runtime_health_smoke_followme_rev63_20260721_1708"
+        )
+        self.assertEqual(mode, "runtime_health_trial")
+        self.assertEqual(label, "隔離驗證")
+        self.assertEqual(
+            review_context_for_path(
+                r"D:\00_商化\00_已OCR照片\_ocr_staging\20260720_205254\202601_商化照片"
+            ),
+            ("current_year_review", "202601"),
+        )
+
     def test_fuse_blocks_proof_builder_and_uploader(self):
         with TemporaryDirectory() as temp:
             output = Path(temp)

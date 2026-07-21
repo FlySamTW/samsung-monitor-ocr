@@ -645,3 +645,13 @@
 - backend port 5002 為 `.62`、LM Studio 1234 不動；uploader 已以唯一隱藏 parent/child tree 熱換到 `.62`，沒有終端機視窗。既有 Dashboard 分頁可視核對於 15:08 為 `202601 1,263/1,478`、上傳總數 `56,198`、待上傳 1、正在執行，照片／檔名／LLM 自然文字／輪次／右側累積卡片一致。
 - 目前批次仍持續前進，禁止為文件或 Git 中斷。右側曾出現高雄 748 的三輪技術終局卡：三輪 request binding 與 input SHA 都正常，但 label ownership／model-price 自相矛盾，因此沒有上傳錯名；它屬 photo-local 待 deterministic 零模型定案，不得做第 4 次。這不阻塞後續照片，也不構成解除全域 fuse 的理由。
 - 下一步仍是：完成 202601，處理 202606 的 43 個 nonfinal 與 202602–202605/202606 Drive 精確收據，閉環全部 2026；接著依 2025→2015 完成全案 151,714。每張 verified 即 enqueue，不等月份完成。
+
+## 2026-07-21 18:51 `.64` 最新接手基準（高於前述 `.62`）
+
+- 上方去重總盤已固定為 `66,724/151,714`、`45/137`、剩餘 `84,990`；`65,336` 是漏算 202606 的舊錯值，不得再引用。隔離 smoke 與 202601 第二／三輪都不增加此數字。
+- `.64` 已取代 `.56` 的 3+ 螢幕絕對遠景規則：先找原圖中的實體 FollowMe。直接同機品牌，或螢幕像素外同機白色直桿＋完整圓底座，固定以該 FollowMe 為商業主角判單機；只有沒有實體 FollowMe 候選時才以 3+ 完整螢幕判遠景。螢幕播放內容中的支架／底座固定 `screen_content_only`，不得當硬體。
+- `.64` acceptance run `20260721_183113_327069`：7 張、18 calls、7 verified、0 review、0 failed、0 runtime/binding/memory invariant。939 正確為實體 FollowMe 單機且價牌 17,990；701 原圖也有實體白色直桿與完整圓底座，舊文件所稱 701 遠景已失效。
+- fuse 已依 `_ocr_audit/runtime_health_fuse_clearance/smoke_20260721_183541_314681.json` 封存，benchmark lock 已解除。port 5002 backend 與唯一隱藏 uploader 均為 `.64`，既有 Dashboard 分頁未重開／重載。
+- 408、412、413、766、768 五張已用 hash-bound pixel authority 零額外模型呼叫更正，正確新檔均取得 `.64` Drive receipt；上傳總數 `56,217→56,222`。全域舊檔更正帳本尚有 4 筆 mapping error，所以舊錯名暫不批次刪除；先保留新舊雙份比冒險遺失安全，之後只以精確 Drive ID 清理。
+- 18:51 正式 202601 已恢復並前進至 `1,322/1,478`，verified 1,305、review 17、failed 0、累計模型呼叫 15,622、目前 `M-高雄市-岡山區-SF-岡山-752.jpg` 第 1 輪。stream uploader PID 1128，canonical uploaded 56,224、pending 0、fuse absent。禁止因文件、Git 或舊檔清理停止正式 OCR。
+- 接續順序不變：完成 202601，再閉環其餘全部 2026（含 202606 nonfinal 與 202602–202605/202606 receipts），再 2025→2015，直到 `151,714` 張全部如實終局且逐張有精確 Drive 收據。
