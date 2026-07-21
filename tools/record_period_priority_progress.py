@@ -291,8 +291,14 @@ def record_progress(
         )
 
     summary_fields, summary_rows = _read_csv(summary_path)
-    if summary_fields != SUMMARY_FIELDS:
-        raise RuntimeError("folder summary schema does not match the expected ledger")
+    missing_summary_fields = [
+        field for field in SUMMARY_FIELDS if field not in summary_fields
+    ]
+    if missing_summary_fields:
+        raise RuntimeError(
+            "folder summary schema does not match the expected ledger: "
+            f"missing={missing_summary_fields}"
+        )
     matching_indexes = [
         index
         for index, row in enumerate(summary_rows)
@@ -306,13 +312,20 @@ def record_progress(
         / "period_priority_progress"
         / f"{period}_{next(iter(sorted(source_ids)))[:12]}.json"
     )
-    row = {field: "" for field in SUMMARY_FIELDS}
+    # The recursive runner owns the canonical ledger and may add identity
+    # columns such as folder_id/source_inventory_sha256.  Preserve that
+    # superset instead of rejecting it or silently downgrading the file.
+    row = {field: "" for field in summary_fields}
     row.update(
         {
+            "folder_id": str(discovery.get("folder_id") or ""),
             "folder": str(source_folder),
             "period": period,
             "image_count": str(expected_count),
             "source_latest_mtime": str(discovery.get("latest_mtime") or ""),
+            "source_inventory_sha256": str(
+                discovery.get("source_inventory_sha256") or ""
+            ),
             "success_records": "0",
             "status": "period_priority_processed_unexported",
             "copied_count": "0",

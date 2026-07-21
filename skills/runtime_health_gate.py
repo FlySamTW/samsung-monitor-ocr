@@ -170,6 +170,7 @@ def trip_runtime_health_fuse(
                 "structured_authority_blocked_fields", "independent_pass",
                 "prior_answer_exposed", "prompt_contamination",
                 "request_id_verified", "request_binding_enforced",
+                "request_binding_expected", "request_binding_actual",
                 "input_image_sha256", "source_item_id",
             )
             if key in source

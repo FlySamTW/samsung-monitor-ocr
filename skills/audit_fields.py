@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.60"
+EVIDENCE_GUARD_REVISION = "20260721.62"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -1336,6 +1336,15 @@ def _label_ownership_conflicts_with_narration(text: str) -> bool:
         r"(?:規格牌|價格牌|標籤).{0,16}(?:屬於|對應)(?:旁邊|鄰近|另一台|其他)(?:商品|螢幕|顯示器|機台)?",
         r"(?:規格牌|價格牌|標籤).{0,16}(?:不能|無法|不可).{0,6}歸屬",
         r"(?:規格牌|價格牌|標籤).{0,16}(?:與主角無關|不是主角自己的|歸屬不明|歸屬模糊)",
+        # Real 嘉義新光-199 wording: the model emitted
+        # label_ownership=matched and 19,900 even though its own narration said
+        # the card could not be confirmed as spatially aligned with the main
+        # monitor.  The amount belonged to the adjacent Harman Kardon speaker.
+        # Treat these equivalent uncertainty phrases as an explicit ownership
+        # conflict; a two-out-of-three vote must never launder a neighbour's
+        # price into the final monitor filename.
+        r"(?:規格牌|價格牌|價牌|標籤).{0,28}(?:無法|不能|不可).{0,12}(?:確認|判定).{0,20}(?:屬於|對應|歸屬|空間對齊)",
+        r"(?:無法|不能|不可).{0,12}(?:確認|判定).{0,24}(?:規格牌|價格牌|價牌|標籤).{0,20}(?:屬於|對應|歸屬|空間對齊)",
     )
     return any(re.search(pattern, normalized) for pattern in conflict_patterns)
 
@@ -3190,7 +3199,11 @@ def finalize_three_pass_outcome(
     else:
         field_safe = [
             item for item in supporting
-            if item.get("model_validation_failed") is not True
+            if (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+            and not _label_ownership_conflicts_with_narration(
+                str(item.get("thinking") or item.get("narration") or "")
+            )
+            and item.get("model_validation_failed") is not True
             and item.get("price_conflict_detected") is not True
             and item.get("brand_evidence_conflict") is not True
             and not followme_variant_evidence_reasons(item)
@@ -3241,10 +3254,12 @@ def finalize_three_pass_outcome(
             # particular M5/M7/Pro variant or its price.
             model = None
             price = None
-        matched_votes = sum(
-            (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
-            for item in supporting
-        )
+        # A structured ``matched`` flag is not an ownership vote when that
+        # pass's own narration says the card cannot be tied to the subject.
+        # Count only the same pass set that is eligible to contribute identity
+        # fields.  This keeps the terminal photo result truthful while still
+        # allowing the three-call view decision to finish.
+        matched_votes = len(field_safe)
         if matched_votes < 2:
             model = None
             price = None

@@ -6,7 +6,8 @@ param(
     [string]$ApiBase = "http://127.0.0.1:1234/v1",
     [string]$Model = "qwen/qwen3-vl-8b",
     [int]$VerifyTimeoutSeconds = 60,
-    [switch]$AllowIncompleteStoppedBatch
+    [switch]$AllowIncompleteStoppedBatch,
+    [switch]$RuntimeHealthTrialReload
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,8 +78,17 @@ try {
         repo_root=$RepoRoot
     } | ConvertTo-Json -Compress | Set-Content -LiteralPath $lockPath -Encoding UTF8
 
-    if (Test-Path -LiteralPath $runtimeHealthFuse) { throw "runtime health fuse is active" }
-    if (Test-Path -LiteralPath $benchmarkLock) { throw "model benchmark/upgrade lock is active" }
+    if ($RuntimeHealthTrialReload) {
+        if (-not (Test-Path -LiteralPath $runtimeHealthFuse)) {
+            throw "runtime-health trial reload requires an active fuse"
+        }
+        if (-not (Test-Path -LiteralPath $benchmarkLock)) {
+            throw "runtime-health trial reload requires the benchmark lock"
+        }
+    } else {
+        if (Test-Path -LiteralPath $runtimeHealthFuse) { throw "runtime health fuse is active" }
+        if (Test-Path -LiteralPath $benchmarkLock) { throw "model benchmark/upgrade lock is active" }
+    }
     $status = Get-Status
     if (-not $status -or [bool]$status.is_running) { throw "backend is not at an idle boundary" }
     if (
@@ -91,7 +101,11 @@ try {
     if ($runners.Count -gt 0) { throw "owned OCR runner still exists" }
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "venv Python missing" }
     if (-not (Test-Path -LiteralPath $backendScript -PathType Leaf)) { throw "backend script missing" }
-    $expectedRevision = (& $python -c "from skills.audit_fields import EVIDENCE_GUARD_REVISION; print(EVIDENCE_GUARD_REVISION)").Trim()
+    # The project venv launcher delegates to the bundled isolated Python, whose
+    # ``-c`` mode does not automatically add the working directory to sys.path.
+    # Pass the resolved repository explicitly so revision verification works
+    # from both the canonical Unicode path and an ASCII maintenance junction.
+    $expectedRevision = (& $python -c "import sys; sys.path.insert(0, sys.argv[1]); from skills.audit_fields import EVIDENCE_GUARD_REVISION; print(EVIDENCE_GUARD_REVISION)" $RepoRoot).Trim()
     if ($expectedRevision -notmatch "^\d{8}\.\d+$") {
         throw "repository evidence guard revision is invalid"
     }
@@ -106,6 +120,7 @@ try {
         total=$status.stats.total
         process_ids=$orderedPids
         incomplete_stopped_batch_recovery=[bool]$AllowIncompleteStoppedBatch
+        runtime_health_trial_reload=[bool]$RuntimeHealthTrialReload
     }
     foreach ($processId in $orderedPids) {
         Stop-Process -Id $processId -ErrorAction SilentlyContinue
@@ -145,7 +160,8 @@ try {
         [bool]$fresh.is_running -or
         [string]$fresh.version -notlike "v19.45*" -or
         [string]$fresh.status_contract_version -ne "compact-v2" -or
-        [string]$fresh.evidence_guard_revision -ne $expectedRevision
+        [string]$fresh.evidence_guard_revision -ne $expectedRevision -or
+        ($RuntimeHealthTrialReload -and -not $fresh.runtime_health_fuse)
     ) {
         throw "fresh backend verification failed"
     }
@@ -153,6 +169,7 @@ try {
         version=$fresh.version
         evidence_guard_revision=$fresh.evidence_guard_revision
         frontend_asset_fingerprint=$fresh.frontend_asset_fingerprint
+        runtime_health_trial_reload=[bool]$RuntimeHealthTrialReload
     }
 } catch {
     Log-Reload "safe_idle_reload_failed" @{error=$_.Exception.Message}

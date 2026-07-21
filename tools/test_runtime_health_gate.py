@@ -224,6 +224,8 @@ class RuntimeHealthGateTests(unittest.TestCase):
                     "view_type": "遠景",
                     "model": None,
                     "price": None,
+                    "request_binding_expected": "a" * 32,
+                    "request_binding_actual": "b" * 32,
                     "thinking": "中央直立螢幕下方有白色圓形底座與託盤。",
                     "raw_model_output": "x" * 9000,
                 },
@@ -237,6 +239,12 @@ class RuntimeHealthGateTests(unittest.TestCase):
             self.assertEqual(payload["record_snapshot"]["view_type"], "遠景")
             self.assertIn("白色圓形底座", payload["record_snapshot"]["narration"])
             self.assertEqual(len(payload["record_snapshot"]["raw_model_output"]), 8000)
+            self.assertEqual(
+                payload["record_snapshot"]["request_binding_expected"], "a" * 32
+            )
+            self.assertEqual(
+                payload["record_snapshot"]["request_binding_actual"], "b" * 32
+            )
             trip_runtime_health_fuse(temp, reasons=["second_incident"], source_file="next.jpg")
             history = list(Path(temp, "runtime_health_fuse_history").glob("*.json"))
             self.assertEqual(len(history), 1)

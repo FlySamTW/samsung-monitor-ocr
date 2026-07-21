@@ -1130,3 +1130,15 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `tools/maintain_active_three_pass_repairs.py` 可在舊 live backend 持續寫正式 result JSON 時，以單一隱藏 worker 冪等重套上述精確權威；它不得停止 OCR、backend、Dashboard、LM Studio 或 uploader，不得開終端機／瀏覽器，也不得產生新模型呼叫。當 evidence revision 改變時必須自行退出。
 - 修復驗收不能只看 result JSON：必須同時證明正式結果、輸出檔名、逐張上傳收據、舊錯名處置帳本與遠端二次讀回；任何一層尚未完成都不得宣稱閉環。
 - 修正後低功耗唯讀抽查 `比漾廣場-379/380`、`汐止-1364`：原圖、三輪敘述、結構、終局檔名一致，全部 `prior_answer_exposed=false`、`prompt_contamination=false` 且最多三輪；379/1364 的多螢幕遠景與 380 的單一 FollowMe 直立主體均合理，未發現新的系統性跑歪或鄰牌誤綁。
+
+## 2026-07-21 `.62`：66,724 總盤復原、回覆綁定尾錨與鄰商品價格否決
+
+- Dashboard 曾回退到 `65,336/151,714` 的根因不是 202601 複核不算進初辨識，而是 canonical `folder_summary.csv` 的 202606 列被覆寫成 `blocked/processed=5`，同時 `folder_discovery.csv` 遺失 202606 的 deterministic folder ID。202606 priority staging 已有 1,393 個唯一 durable tasks；經來源集合、source map、任務集合與 current-guard 狀態精確交叉驗證後，正確去重 processed 為 `65,331 + 1,393 = 66,724`。
+- 202606 folder ID 固定為 `sha256("商化照片-202606".casefold()) = 8ae67c526e285b524d08822d0767b17ea82d9a48c630542d8c5dc3cc0c593c20`。`record_period_priority_progress.py` 必須接受 canonical summary 的欄位超集並保留 `folder_id`、`source_inventory_sha256` 等額外欄位；不得因 schema 已擴充就拒寫或退回舊列。精確 proof 為 `processed_tasks=1,393`、`current_guard_final_tasks=1,350`、`nonfinal_tasks=43`、`stale_guard_tasks=40`；這只修正 processed 總盤，不冒充 202606 Drive 完成。
+- 兩張不同正式照片先後出現 `request_id_mismatch`，證明不是單一照片內容問題。每輪 prompt 現在必須把完整 32 字元 request ID 另以最後一個文字項目尾錨送出；回覆仍須逐字相等，禁止放寬、截短或猜測。fuse snapshot 必須保存 expected/actual binding ID，供事故稽核使用。
+- runtime fuse 存在時，backend 換版只允許 `reload_backend_at_safe_idle.ps1 -RuntimeHealthTrialReload`，且 active fuse 與 `model_benchmark.lock` 必須同時存在；試跑只允許 1–15 張新的 `runtime_health_smoke...` 隔離資料匣與明示 `runtime_health_trial=true`，Drive 上傳仍被 lock 阻擋。一般正式路徑、續跑按鈕、supervisor 與 uploader 不得繞過 fuse。
+- 嘉義新光 199 的完整原圖證實 `19,900` 是左側 Harman Kardon 喇叭價牌，不屬於中央 Samsung 螢幕。即使 structured `label_ownership=matched`，同輪自然敘述只要寫出「無法確認屬於主角／無法確認對應／無法確認空間對齊」，該輪的 model/price 與 matched 票都不得進入三輪多數決。視角仍可在三輪內如實結案，但不確定的身分欄位必須清為空，禁止把相鄰商品價格寫進檔名。
+- `.62` 完整 critical regressions 退出碼 0。新的 5 張隔離實圖驗證共 15 次模型呼叫，5/5 verified、0 review、0 failed；每次 `request_id_verified=true`、`request_binding_enforced=true`、`independent_pass=true`、`prior_answer_exposed=false`、`prompt_contamination=false`、runtime healthy，且每張三輪 input SHA 一致。199 終局已正確成為 `單機／無型號／無價格`，沒有讓 19,900 或 12,990 進入終局。
+- fuse 只能由 `clear_runtime_health_fuse_after_smoke.py` 在上述 proof、人工核對案例、revision、benchmark lock 與 trace 全部一致後封存；正式 retry state 不得被清除，也不得授權第 4 輪。此次 fuse receipt 為 `_ocr_audit/runtime_health_fuse_clearance/smoke_20260721_150050_531709.json`，history 為 `_ocr_audit/runtime_health_fuse_history/smoke_20260721_150050_531709.json`。
+- 正式批次在既有分頁、同一 port 5002 與唯一隱藏 uploader 下，從高雄 747 已消耗的第 2 輪原位接到第 3 輪；747 正確結案 `S24F332EAC／2,390` 並取得逐張上傳，沒有重跑 1,245 張。既有 Chrome Dashboard 目視驗收顯示 `66,724/151,714`、`45/137`、`202601 1,263/1,478`、上傳總數 `56,198`、`正在執行`，目前照片、自然語言 LLM 區與右側累積卡片同步，沒有新增分頁或視窗。
+- `66,724` 是目前正確的去重 processed 總盤，不得再引用 `.56/.60` 時期的 `65,336` 當作現況。202601 複核本身不重複增加此數字；之後進入未初辨識的歷史年份才會繼續增加。202606 的 43 個 nonfinal 與全部 Drive 精確收據仍要在 2026 閉環中完成，之後照 2025→2015 接續至全案 `151,714`。

@@ -925,6 +925,10 @@ def _recover_known_authority_after_restart(
             return False
     expected_view = expected["view_type"]
     is_distant = expected_view == "遠景"
+    expected_followme = bool(expected.get("followme_physical_expected") is True)
+    expected_followme_evidence = [
+        dict(item) for item in expected.get("followme_physical_evidence") or []
+    ]
     current.update({
         "view_type": expected_view,
         "category": expected_view,
@@ -933,7 +937,11 @@ def _recover_known_authority_after_restart(
         "model": expected.get("model"),
         "price": expected.get("price"),
         "label_ownership": expected.get("label_ownership", "matched"),
-        "followme_physical_evidence": [],
+        "followme_physical_evidence": expected_followme_evidence,
+        "followme_family_confirmed": expected_followme,
+        "wide_scene_followme_present": bool(
+            expected.get("wide_scene_followme_present") is True
+        ),
         "screen_status": "" if is_distant else "正常",
         "quality_issue": "無",
         "human_pixel_authority_applied": True,
@@ -946,7 +954,23 @@ def _recover_known_authority_after_restart(
             + (
                 "依人工核對且綁定完整影像雜湊的像素事實，定案為遠景、無型號、無價格，"
                 if is_distant
-                else f"依人工核對且綁定完整影像雜湊的像素事實定案為 {expected.get('model')}／{expected.get('price')} 元，"
+                else (
+                    "依人工核對且綁定完整影像雜湊的像素事實，確認實體 FollowMe 主角；"
+                    + (
+                        f"型號為 {expected.get('model')}，"
+                        if expected.get("model")
+                        else "型號沒有足夠證據，"
+                    )
+                    + (
+                        f"價格為 {int(expected.get('price')):,} 元，"
+                        if expected.get("price")
+                        else "價格沒有足夠證據，"
+                    )
+                    if expected_followme
+                    else (
+                        f"依人工核對且綁定完整影像雜湊的像素事實定案為 {expected.get('model')}／{expected.get('price')} 元，"
+                    )
+                )
             )
             + "沒有進行第 4 次呼叫。"
         ),

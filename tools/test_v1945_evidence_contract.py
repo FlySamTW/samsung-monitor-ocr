@@ -40,7 +40,12 @@ from skills.model_validation import (
     resolve_photo_label_model_candidate,
     unique_known_model_completion,
 )
-from samsung_ocr_batch_processor import _merge_v1945_json_objects, validate_request_binding, new_request_id
+from samsung_ocr_batch_processor import (
+    _merge_v1945_json_objects,
+    new_request_id,
+    request_binding_tail,
+    validate_request_binding,
+)
 
 
 def evidence(count, unique, ownership="not_visible", physical=None):
@@ -696,6 +701,39 @@ class EvidenceContractTests(unittest.TestCase):
             "three_call_known_pixel_authority_restart_recovery",
         )
 
+    def test_restart_recovery_preserves_audited_followme_physical_evidence(self):
+        followme_sha = "4b069632c9af4da183fa5ff7e1ec616331f59ede149b7d9ea27b571be19213c5"
+        calls = [
+            {
+                "period": "202601",
+                "view_type": "單機",
+                "category": "單機",
+                "ocr_attempt": attempt,
+                "input_image_sha256": followme_sha,
+                "request_id_verified": True,
+                "request_binding_enforced": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True, "reasons": []},
+                **evidence(1, True, "matched", []),
+            }
+            for attempt in (1, 3)
+        ]
+        current = dict(calls[-1])
+
+        recovered = _recover_known_authority_after_restart(
+            current,
+            calls,
+            {"auto_retry_reasons": "three_call_hard_limit_reached"},
+        )
+
+        self.assertTrue(recovered)
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertTrue(current["followme_physical_evidence"])
+        self.assertEqual(current["model"], "FollowMe Pro M7 43\"")
+        self.assertIn("實體 FollowMe 主角", current["thinking"])
+
     def test_two_clean_single_tail_calls_keep_only_repeated_fields(self):
         calls = []
         for attempt, model, count in ((2, "S32DM803UC", 1), (3, None, 2)):
@@ -861,6 +899,14 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(len(values), 1000)
         self.assertTrue(all(len(value) == 32 for value in values))
         self.assertTrue(all(all(ch in "0123456789abcdef" for ch in value) for value in values))
+
+    def test_request_binding_tail_keeps_full_current_token_at_prompt_end(self):
+        request_id = "0123456789abcdef0123456789abcdef"
+        tail = request_binding_tail(request_id)
+        self.assertTrue(tail.endswith(request_id))
+        self.assertEqual(tail.count(request_id), 1)
+        with self.assertRaises(ValueError):
+            request_binding_tail("too-short")
 
     def test_adjacent_duplicate_core_forces_only_first_pass_retry(self):
         previous = {
@@ -2045,6 +2091,56 @@ class EvidenceContractTests(unittest.TestCase):
         decision = immediate_retry_decision(row, 1, [], 3)
         self.assertTrue(decision["retry"])
         self.assertIn("標籤歸屬與敘述衝突", decision["reasons"])
+
+    def test_three_pass_adjudication_drops_adjacent_price_when_narration_denies_alignment(self):
+        common = {
+            "period": "202601",
+            "file_name": "M-嘉義市-西　區-集雅社-嘉義新光-199.jpg",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "quality_issue": "不合格-沒有規格牌",
+            "input_image_sha256": "b" * 64,
+            "request_id_verified": True,
+            "request_binding_enforced": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True, "reasons": []},
+            **evidence(1, True, "matched", []),
+        }
+        first = {
+            **common,
+            "price": "19900",
+            "thinking": "中央主角正下方有實體價牌，結構回傳為 matched。",
+        }
+        second = {
+            **common,
+            "price": None,
+            "label_ownership": "ambiguous",
+            "thinking": "螢幕下方有實體價牌，但無法確認是否屬於這台螢幕。",
+        }
+        third = {
+            **common,
+            "price": "19900",
+            "thinking": "螢幕下方有實體價牌，但無法確認是否與主角螢幕空間對齊。",
+        }
+
+        conflict = immediate_retry_decision(dict(third), 3, [dict(first), dict(second)], 3)
+        self.assertIn("標籤歸屬與敘述衝突", conflict["reasons"])
+
+        outcome = finalize_three_pass_outcome(
+            third,
+            [first, second],
+            {"attempt": 3, "unresolved": True, "verified": False, "reasons": conflict["reasons"]},
+            3,
+        )
+        self.assertTrue(outcome["verified"])
+        self.assertFalse(outcome["unresolved"])
+        self.assertEqual(third["view_type"], "單機")
+        self.assertIsNone(third["model"])
+        self.assertIsNone(third["price"])
+        self.assertEqual(third["label_ownership"], "ambiguous")
 
     def test_screen_content_brand_does_not_override_samsung_sku(self):
         narration = "這台是 Samsung S27D392GAC，螢幕顯示 ASUS Demo 畫面，價牌為 4,290 元。"

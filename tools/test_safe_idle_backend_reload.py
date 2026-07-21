@@ -33,6 +33,23 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
         self.assertLess(running_check, incomplete_check)
         self.assertLess(incomplete_check, runner_check)
 
+    def test_runtime_health_trial_reload_requires_both_interlocks(self):
+        self.assertIn("[switch]$RuntimeHealthTrialReload", self.source)
+        self.assertIn(
+            "runtime-health trial reload requires an active fuse", self.source
+        )
+        self.assertIn(
+            "runtime-health trial reload requires the benchmark lock", self.source
+        )
+        self.assertIn(
+            "$RuntimeHealthTrialReload -and -not $fresh.runtime_health_fuse",
+            self.source,
+        )
+
+    def test_revision_probe_explicitly_imports_from_repo_root(self):
+        self.assertIn("sys.path.insert(0, sys.argv[1])", self.source)
+        self.assertIn('print(EVIDENCE_GUARD_REVISION)" $RepoRoot', self.source)
+
     def test_stops_only_repo_owned_backend_listener_tree(self):
         self.assertIn("Get-BackendProcessTree", self.source)
         self.assertIn("[regex]::Escape($RepoRoot)", self.source)

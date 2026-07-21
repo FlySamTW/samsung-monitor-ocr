@@ -2744,6 +2744,17 @@ def new_request_id():
     return uuid.uuid4().hex
 
 
+def request_binding_tail(request_id):
+    """Place the current call token last so the VLM can copy it reliably."""
+    value = str(request_id or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError("request binding token must be 128-bit lowercase hex")
+    return (
+        "本次只輸出一個 JSON 物件；其中 request_id 必須逐字等於以下本次識別碼："
+        f"{value}"
+    )
+
+
 def _extract_balanced_json(text):
     """Backward-compatible single-object accessor."""
     parsed, objects, _, _ = _merge_v1945_json_objects(text)
@@ -3219,7 +3230,15 @@ def process_single_image(
     # Per-photo OCR must remain stateless.  Historical wrong/correct answers
     # belong in offline regression fixtures, never in a live model prompt.
 
-    user_content = [{"type": "text", "text": user_prompt}] + user_images
+    # Keep a second copy of the per-call token as the final multimodal item.
+    # Long image/crop prompts occasionally made the model copy an earlier
+    # token incorrectly.  The response is still rejected unless the full
+    # 128-bit value matches exactly.
+    user_content = (
+        [{"type": "text", "text": user_prompt}]
+        + user_images
+        + [{"type": "text", "text": request_binding_tail(random_salt)}]
+    )
 
     messages = build_ocr_messages(system_prompt, user_content, ocr_attempt, previous_results)
     prompt_health_reasons = review_prompt_leak_reasons(
@@ -3379,6 +3398,10 @@ def process_single_image(
                             "model": None,
                             "price": None,
                             "input_image_sha256": input_image_sha256,
+                            "request_binding_expected": random_salt,
+                            "request_binding_actual": str(
+                                parsed.get("request_id") or ""
+                            ).strip(),
                         }
                     parsed.pop("request_id", None)
                     parsed["request_id_verified"] = True
@@ -3584,6 +3607,10 @@ def process_single_image(
                         "model": None,
                         "price": None,
                         "input_image_sha256": input_image_sha256,
+                        "request_binding_expected": random_salt,
+                        "request_binding_actual": str(
+                            parsed.get("request_id") or ""
+                        ).strip(),
                     }
                 parsed.pop("request_id", None)
                 parsed["request_id_verified"] = True

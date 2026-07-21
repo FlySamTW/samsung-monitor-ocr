@@ -200,6 +200,55 @@ class PeriodPriorityProgressTests(unittest.TestCase):
             self.assertEqual(row["processed"], "2")
             self.assertEqual(row["ready"], "0")
 
+    def test_canonical_recursive_summary_superset_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output, source, staging = self._fixture(Path(tmp))
+            audit = output / "_ocr_audit"
+            canonical_fields = [
+                "folder_id",
+                *SUMMARY_FIELDS[:4],
+                "source_inventory_sha256",
+                *SUMMARY_FIELDS[4:],
+            ]
+            with (audit / "folder_summary.csv").open(
+                "w", encoding="utf-8-sig", newline=""
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=canonical_fields)
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "folder_id": "",
+                        "folder": str(source),
+                        "period": "202606",
+                        "image_count": "2",
+                        "status": "blocked",
+                        "processed": "1",
+                        "failed": "1",
+                    }
+                )
+
+            report = record_progress(
+                output_dir=output,
+                staging_dir=staging,
+                source_folder=source,
+                period="202606",
+                apply=True,
+            )
+
+            self.assertEqual(report["processed_tasks"], 2)
+            with (audit / "folder_summary.csv").open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as handle:
+                reader = csv.DictReader(handle)
+                self.assertEqual(reader.fieldnames, canonical_fields)
+                row = next(reader)
+            self.assertEqual(row["folder_id"], "f" * 64)
+            self.assertEqual(row["processed"], "2")
+            self.assertEqual(row["failed"], "0")
+            self.assertEqual(
+                row["status"], "period_priority_processed_unexported"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

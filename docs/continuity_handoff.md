@@ -636,3 +636,12 @@
 - 11:09 正式批次仍在前進：202601 `967/1,478`、verified `940`、review `27`、failed `0`；current file `林口三井-294`。canonical uploaded `56,080`，逐張 uploader PID `10960` 在線。上方 `65,336/151,714` 是去重初次辨識數，202601 重驗期間不增加並非卡住。
 - 後續仍先完成 202601 與其餘 2026（含 202606），逐張 closed-loop 上傳；再依 2025→2015 接續。`202606` 在總盤若仍顯示 blocked，不得略過，必須在 202601 安全閉環後由精確 inventory/guard 證據解除，而不是直接修改狀態字串。
 - 修正後低功耗唯讀抽查 `比漾廣場-379/380` 與 `汐止-1364` 全部 PASS：原圖、每輪敘述、結構終局與檔名一致，無 prior-answer exposure、無 prompt contamination、沒有超過三輪；暫無新的系統性內容漂移證據。
+
+## 2026-07-21 15:08 `.62` 接手基準：總盤 66,724、正式 OCR 與逐張上傳已恢復
+
+- 介面停在 65,336 的根因已證實為 canonical audit ledger regression：202606 的 1,393 個 durable processed tasks 被 summary 覆寫成 5，且 discovery row 遺失 folder ID。已用 deterministic ID `8ae67c526e285b524d08822d0767b17ea82d9a48c630542d8c5dc3cc0c593c20` 與 exact recorder proof 修回；API 與既有 Chrome 分頁現均顯示 `66,724/151,714`、`45/137`、剩餘 `84,990`。`record_period_priority_progress.py` 現接受並保留 canonical schema 超集，回歸測試已覆蓋。
+- request binding 已升為 `.61` 尾錨，嘉義新光 199 的鄰商品價格污染否決再升為 `.62`。完整 critical regressions exit 0；`.62` 隔離 smoke run `20260721_145159_326953` 為 5 張、15 次呼叫、0 個 binding／memory／runtime invariant 錯誤，199 終局是 `單機／無型號／無價格`。
+- 舊 fuse 已依 receipt `runtime_health_fuse_clearance/smoke_20260721_150050_531709.json` 封存；benchmark lock 已解除。正式 staging 仍是 `D:\00_商化\00_已OCR照片\_ocr_staging\20260720_205254\202601_商化照片-202601_6403a632`。高雄 747 保留 call 2 狀態並只使用剩餘 call 3，正確定案 `S24F332EAC／2,390` 後逐張上傳；沒有第 4 輪、沒有重跑前 1,245 張。
+- backend port 5002 為 `.62`、LM Studio 1234 不動；uploader 已以唯一隱藏 parent/child tree 熱換到 `.62`，沒有終端機視窗。既有 Dashboard 分頁可視核對於 15:08 為 `202601 1,263/1,478`、上傳總數 `56,198`、待上傳 1、正在執行，照片／檔名／LLM 自然文字／輪次／右側累積卡片一致。
+- 目前批次仍持續前進，禁止為文件或 Git 中斷。右側曾出現高雄 748 的三輪技術終局卡：三輪 request binding 與 input SHA 都正常，但 label ownership／model-price 自相矛盾，因此沒有上傳錯名；它屬 photo-local 待 deterministic 零模型定案，不得做第 4 次。這不阻塞後續照片，也不構成解除全域 fuse 的理由。
+- 下一步仍是：完成 202601，處理 202606 的 43 個 nonfinal 與 202602–202605/202606 Drive 精確收據，閉環全部 2026；接著依 2025→2015 完成全案 151,714。每張 verified 即 enqueue，不等月份完成。
