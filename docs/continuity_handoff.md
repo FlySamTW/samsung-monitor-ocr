@@ -625,3 +625,14 @@
 - 完整離線回歸 `557/557` 與 critical regressions 均通過。既有 Chrome 分頁目視確認照片、檔名、LLM 逐字內容、輪次、右側縮圖、月份複核及上傳數同步，畫面由 `757→758`，沒有新開或重整分頁。
 - `.60` 復跑後低功耗唯讀抽查 `嘉義-701/702/703/704`、`嘉義新光-199`，五張皆為原圖／trace／終局／receipt 一致、無前輪暴露、無 prompt 污染、最多三輪且已上傳。701–703 為正確遠景、704 為首輪正確單機 `S27CG552EC／4,990`；199 的兩張錯票被第三輪終局保守排除，未形成錯名上傳。暫無系統性跑歪證據。
 - 下一步：持續完成 202601，並由低功耗唯讀抽查最近 `.60` 原圖／敘述／結構／檔名／receipt 是否一致；若發現新系統性內容錯誤，只在照片邊界停 OCR，保留 backend、Dashboard、LM Studio 與 uploader 在線。2026 全部閉環後按既定順序處理 2025→2015，直到 `151,714` 張與全部精確 Drive 收據完成。
+
+## 2026-07-21 11:09 四張像素權威修正與雲端舊副本閉環
+
+- `data/visual_authorities_202601_pingdong_changhua_20260721.json` 已精確綁定四張正式 202601 原圖、source item、原始 SHA、實際 input SHA 與三次乾淨獨立呼叫。終局為：`屏東新中正-1008=單機/S43FM702UC/13,990`、`1011=單機/FollowMe Pro M7 43吋/17,990`、`屏東太平洋-434=單機/FollowMe 型號未細分/無價格`、`彰化中山-234=一般單機/無型號/無價格`；四張均 verified、非 review、已完成，沒有第 4 次模型呼叫。
+- `屏東新中正-1009` 經完整原圖再查維持 `單機/S27D300GAC/3,290`；左側 `S27CG552EC` 價牌屬於被裁切鄰機，不能污染中央主體。這一張不是錯誤，不得改名。
+- 四個正確新檔均已逐張取得 Drive receipt：1008=`1RX2airHlkuxiCzZk1gztGXLMr-b2Eg2S`、1011=`1_YoSQpMjvXlp_LYyre4Tqhc67YN1jBo0`、434=`1eHX9ddLhN1d9BOMTy0y9igUjNfdKtb21`、234=`17J0gZssmTMA-IRpm_laTFBQPSY2Pf61K`。
+- `434` 的兩個舊錯名 Drive ID `1eXdzABRaAA0VzR0Ncch9E0KYhQZlNEX6`、`1NMFO8KVxU_NNQLO_XHCjBiBDesdAJydn`，以及 `234` 的舊錯名 ID `1A2xjw4SkxfYLJj9P3SlxYEJQ4005tvDu` 已由精確更正帳本移入垃圾桶並讀回為 `old_trashed_verified`；正確新檔 ID、size、MD5/SHA 仍存在且一致。
+- 隱藏 active repair bridge PID `12932` 持續在線，只在 live backend 重寫同一正式結果檔時冪等重套精確修復；不重啟、不開視窗、不呼叫模型。三輪定案／修復相關測試 `84/84` 通過。
+- 11:09 正式批次仍在前進：202601 `967/1,478`、verified `940`、review `27`、failed `0`；current file `林口三井-294`。canonical uploaded `56,080`，逐張 uploader PID `10960` 在線。上方 `65,336/151,714` 是去重初次辨識數，202601 重驗期間不增加並非卡住。
+- 後續仍先完成 202601 與其餘 2026（含 202606），逐張 closed-loop 上傳；再依 2025→2015 接續。`202606` 在總盤若仍顯示 blocked，不得略過，必須在 202601 安全閉環後由精確 inventory/guard 證據解除，而不是直接修改狀態字串。
+- 修正後低功耗唯讀抽查 `比漾廣場-379/380` 與 `汐止-1364` 全部 PASS：原圖、每輪敘述、結構終局與檔名一致，無 prior-answer exposure、無 prompt contamination、沒有超過三輪；暫無新的系統性內容漂移證據。

@@ -1120,3 +1120,13 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 既有 Chrome Dashboard 分頁目視驗收：同畫面可見 `正在執行`、目前照片與檔名、LLM 自然語言逐字區、同輪標籤、右側累積縮圖卡、202601 複核與逐張上傳；畫面由 `757→758/1,478`，沒有另開分頁。09:16 後端已到 `769/1,478`、verified `747`、review `22`、failed `0`、上傳總數 `56,004`、pending/working `0/0`，近期平均 `12.94` 秒。
 - 低功耗唯讀稽核再抽查 `.60` 最新五張 `嘉義-701/702/703/704` 與 `嘉義新光-199`：原圖、每輪 trace、終局欄位、上傳檔名及 Drive receipt 全一致，全部 `prior_answer_exposed=false`、`prompt_contamination=false`、最多三輪並已逐張上傳。704 的單一價牌 `S27CG552EC／4,990` 首輪正確結案；199 前兩輪各有錯票，第三輪仍能保守排除為單機／無型號／無價格，沒有讓錯票冒充終局。此樣本未發現系統性跑歪；雙價牌壓力的正式權威仍以永康大灣 1415 為準。
 - 上方 `65,336/151,714` 維持不動是正確語意：它只計去重後首次辨識完成的來源照片。202601 的第二／第三輪、離線修復、重新命名與取代上傳都不能重複加總；本階段實際進度看 `202601 複核 processed/1,478` 與上傳總數。完成 2026 並進入尚未首次辨識的歷史年份後，65,336 才會再次增加。
+
+## 2026-07-21 `.60` 完整原圖權威、更正副本閉環與鄰牌防誤綁
+
+- 三輪都已使用完、request-bound、相同 input SHA 且無前輪答案／prompt 污染的照片，不得呼叫第 4 次。若完整原圖人工稽核能確定實體幾何與同主體價牌，使用 `samsung-ocr-bound-visual-authorities/v1` 以 `source_item_id + source_file_sha256 + input_image_sha256` 三重綁定後零模型呼叫定案；未精確綁定者不得套用。
+- 本次正式權威清冊為 `data/visual_authorities_202601_pingdong_changhua_20260721.json`：屏東新中正 `1008=單機/S43FM702UC/13,990`、`1011=單機/FollowMe Pro M7 43吋/17,990`、屏東太平洋 `434=單機/FollowMe 型號未細分/無價格`、彰化中山 `234=一般單機/無型號/無價格`。四張均保持三次模型呼叫上限，終局為 `auto_verified=true`、`auto_review_required=false`、`review_status=已完成`。
+- `屏東新中正-1009` 不在更正清冊：中央主體價牌清楚屬於 `S27D300GAC/3,290`；左側 `S27CG552EC` 是被裁切鄰機的牌。抽查發現鄰牌候選時，必須先確認價牌與主螢幕的物理歸屬，不能因另一型號較醒目就覆寫已正確的中央主體。
+- 每次內容更正都必須逐張立即上傳正確新檔，取得唯一 Drive ID、size、MD5/SHA 讀回後，再依舊 Drive ID 精確移入垃圾桶；禁止以模糊檔名刪除。`434` 的兩個舊錯名 ID `1eXdzABRaAA0VzR0Ncch9E0KYhQZlNEX6`、`1NMFO8KVxU_NNQLO_XHCjBiBDesdAJydn`，以及 `234` 的舊錯名 ID `1A2xjw4SkxfYLJj9P3SlxYEJQ4005tvDu` 均已 `old_trashed_verified`。正確新檔仍分別存在於 ID `1eHX9ddLhN1d9BOMTy0y9igUjNfdKtb21` 與 `17J0gZssmTMA-IRpm_laTFBQPSY2Pf61K`，位元組大小及雜湊讀回一致。
+- `tools/maintain_active_three_pass_repairs.py` 可在舊 live backend 持續寫正式 result JSON 時，以單一隱藏 worker 冪等重套上述精確權威；它不得停止 OCR、backend、Dashboard、LM Studio 或 uploader，不得開終端機／瀏覽器，也不得產生新模型呼叫。當 evidence revision 改變時必須自行退出。
+- 修復驗收不能只看 result JSON：必須同時證明正式結果、輸出檔名、逐張上傳收據、舊錯名處置帳本與遠端二次讀回；任何一層尚未完成都不得宣稱閉環。
+- 修正後低功耗唯讀抽查 `比漾廣場-379/380`、`汐止-1364`：原圖、三輪敘述、結構、終局檔名一致，全部 `prior_answer_exposed=false`、`prompt_contamination=false` 且最多三輪；379/1364 的多螢幕遠景與 380 的單一 FollowMe 直立主體均合理，未發現新的系統性跑歪或鄰牌誤綁。

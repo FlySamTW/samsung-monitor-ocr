@@ -1,0 +1,122 @@
+{
+  "schema": "samsung-ocr-bound-visual-authorities/v1",
+  "period": "202601",
+  "audit_date": "2026-07-21",
+  "audit_method": "full_resolution_primary_review_plus_low_power_sample_audit",
+  "staging_dir": "D:\\00_商化\\00_已OCR照片\\_ocr_staging\\20260720_205254\\202601_商化照片-202601_6403a632",
+  "trace_path": "D:\\00_商化\\00_已OCR照片\\_ocr_audit\\v1945_evidence_trace.jsonl",
+  "entry_count": 4,
+  "entries": [
+    {
+      "file_name": "M-屏東縣-屏東市-TK3C-屏東新中正-1008.jpg",
+      "source_item_id": "32e691e7fbcc26fba39caeeac799b064cb7c246db4b65ec0f986f4ed655273db",
+      "original_source_path": "D:\\00_商化\\00_未整理商化照片\\商化照片-202601\\M-屏東縣-屏東市-TK3C-屏東新中正-1008.jpg",
+      "source_file_sha256": "1cb779c61663a76042eb5368eb6daee166ded290a6ee53d8dc7d90fc416f6ad6",
+      "input_image_sha256": "41fffc128b9375da8f1002a552cda36dabc25de56d354fb7771f150629621b98",
+      "period": "202601",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S43FM702UC",
+      "price": 13990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false,
+      "authority": "human_audited_pixel_authority",
+      "pixel_basis": "完整原圖只有中央 43 吋螢幕四邊四角完整；左側、右側及下方鄰機均被原圖邊界裁切。中央同主體限時特價牌清楚可讀 S43FM702UC 與 13,990 元。",
+      "clean_model_outputs": 3,
+      "model_call_cap": 3,
+      "fourth_call_made": false
+    },
+    {
+      "file_name": "M-屏東縣-屏東市-TK3C-屏東新中正-1011.jpg",
+      "source_item_id": "9c8332fe1caae07d16eb55b1a2a6583da3aee8891aac63bba8a71e67c04f6c5b",
+      "original_source_path": "D:\\00_商化\\00_未整理商化照片\\商化照片-202601\\M-屏東縣-屏東市-TK3C-屏東新中正-1011.jpg",
+      "source_file_sha256": "13cfcb53ee7614acce1081c42f749bcda69b92bd3bdce930828fdc6c038f35bb",
+      "input_image_sha256": "55ed8e340ff1f8ba2d3c0f839cc204c5e228228ebb1ce120a002ab35e191b303",
+      "period": "202601",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "FollowMe Pro M7 43\"",
+      "price": 17990,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {
+          "cue": "portrait_display",
+          "same_subject": true,
+          "strength": "strong"
+        },
+        {
+          "cue": "attached_followme_product_card",
+          "same_subject": true,
+          "strength": "strong"
+        },
+        {
+          "cue": "attached_price_tray",
+          "same_subject": true,
+          "strength": "strong"
+        }
+      ],
+      "wide_scene_followme_present": false,
+      "authority": "human_audited_pixel_authority",
+      "pixel_basis": "完整原圖只有中央直立螢幕完整入鏡；同一展示主體上方明示 FollowMe Pro 4K (32/43)，附著價牌明示 Samsung Follow Me Pro 43 型與 17,990 元，產品卡與價牌均和主角同一展示架。",
+      "clean_model_outputs": 3,
+      "model_call_cap": 3,
+      "fourth_call_made": false
+    },
+    {
+      "file_name": "M-屏東縣-屏東市-集雅社-屏東太平洋-434.jpg",
+      "source_item_id": "f788b178313a50d8f7d270c2f3ef13a56f8f7c704f3a98bcfd233d30c26b0a40",
+      "original_source_path": "D:\\00_商化\\00_未整理商化照片\\商化照片-202601\\M-屏東縣-屏東市-集雅社-屏東太平洋-434.jpg",
+      "source_file_sha256": "1f03d7ae83ea0f151a0743b66aec946eef36a10a2f78e21bb420f0f13a55ff75",
+      "input_image_sha256": "c1eb862413e67aadf0566243ae0afd892a7754cbdd946d501748dc440fec789a",
+      "period": "202601",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "FollowMe 型號未細分",
+      "price": null,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {
+          "cue": "portrait_display",
+          "same_subject": true,
+          "strength": "strong"
+        },
+        {
+          "cue": "attached_followme_product_card",
+          "same_subject": true,
+          "strength": "strong"
+        }
+      ],
+      "wide_scene_followme_present": false,
+      "authority": "human_audited_pixel_authority",
+      "pixel_basis": "完整原圖只有前景直立 FollowMe 主角完整入鏡；左側與最右側螢幕均被原圖邊界截斷。主角同一展示架有 Samsung Follow Me 4K 標示與附著產品卡，但沒有足夠像素安全細分型號或價格。",
+      "clean_model_outputs": 3,
+      "model_call_cap": 3,
+      "fourth_call_made": false
+    },
+    {
+      "file_name": "M-彰化市-彰化市-集雅社-彰化中山-234.jpg",
+      "source_item_id": "e6b85baa98ec3589edbf79f6388239f92e4fa5e3b8b91c26b482f81a21c73ce9",
+      "original_source_path": "D:\\00_商化\\00_未整理商化照片\\商化照片-202601\\M-彰化市-彰化市-集雅社-彰化中山-234.jpg",
+      "source_file_sha256": "c7133b8fc8467975f6cca1c953141c67e42a797dcef19076c7a24bd2cc331341",
+      "input_image_sha256": "f8a38f32e21f0e01c3047e64f70c4b37008d382beacd3e1ecf188a0415423e8d",
+      "period": "202601",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": null,
+      "label_ownership": "not_visible",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false,
+      "authority": "human_audited_pixel_authority",
+      "pixel_basis": "完整原圖只有右下方一台螢幕完整入鏡；右側 FollowMe 立牌是背景宣傳物，主角沒有白色移動支架、圓底座或同主體型號價牌，因此定案一般單機、無型號、無價格。",
+      "clean_model_outputs": 3,
+      "model_call_cap": 3,
+      "fourth_call_made": false
+    }
+  ]
+}
