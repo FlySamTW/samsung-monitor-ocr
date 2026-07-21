@@ -33,6 +33,18 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
         self.assertLess(running_check, incomplete_check)
         self.assertLess(incomplete_check, runner_check)
 
+    def test_incomplete_reload_resumes_original_staging_before_helper_exits(self):
+        self.assertIn('$resumeIncompleteDir = ""', self.source)
+        self.assertIn('Join-Path $OutputDir "_ocr_staging"', self.source)
+        self.assertIn('"$BackendUrl/api/start_batch"', self.source)
+        self.assertIn('dir=$resumeIncompleteDir', self.source)
+        self.assertIn('restart=$false', self.source)
+        self.assertIn('confirmed=$true', self.source)
+        self.assertIn('"incomplete_staging_resumed"', self.source)
+        verified = self.source.index('"fresh_backend_verified"')
+        resume = self.source.index('"$BackendUrl/api/start_batch"')
+        self.assertLess(verified, resume)
+
     def test_runtime_health_trial_reload_requires_both_interlocks(self):
         self.assertIn("[switch]$RuntimeHealthTrialReload", self.source)
         self.assertIn(

@@ -97,6 +97,21 @@ try {
     ) {
         throw "idle backend has incomplete current work"
     }
+    $resumeIncompleteDir = ""
+    if (
+        $AllowIncompleteStoppedBatch -and
+        [int]$status.stats.processed -lt [int]$status.stats.total
+    ) {
+        $candidate = [System.IO.Path]::GetFullPath([string]$status.image_dir)
+        $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $OutputDir "_ocr_staging"))
+        if (
+            -not $candidate.StartsWith($stagingRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-Path -LiteralPath $candidate -PathType Container)
+        ) {
+            throw "incomplete recovery directory is not a live OCR staging folder"
+        }
+        $resumeIncompleteDir = $candidate
+    }
     $runners = @(Get-Owned "rerun_staged_candidates\.py|recursive_ocr_flat_export\.py|rerun_questionable_records\.py|auto_rerun_questionable_after_recursive\.ps1")
     if ($runners.Count -gt 0) { throw "owned OCR runner still exists" }
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "venv Python missing" }
@@ -170,6 +185,36 @@ try {
         evidence_guard_revision=$fresh.evidence_guard_revision
         frontend_asset_fingerprint=$fresh.frontend_asset_fingerprint
         runtime_health_trial_reload=[bool]$RuntimeHealthTrialReload
+    }
+    # Keep the reload helper alive while restoring an explicitly allowed
+    # incomplete staging batch.  The continuity supervisor sees this helper's
+    # interlock and therefore cannot create a second staging run in the gap
+    # between backend reload and batch resume.
+    if ($resumeIncompleteDir -and -not $RuntimeHealthTrialReload) {
+        $resumeBody = @{
+            dir=$resumeIncompleteDir
+            restart=$false
+            confirmed=$true
+            reprocess_last_n=0
+        } | ConvertTo-Json
+        $resume = Invoke-RestMethod -Uri "$BackendUrl/api/start_batch" -Method Post `
+            -ContentType "application/json; charset=utf-8" -Body $resumeBody -TimeoutSec 30
+        if ([string]$resume.status -ne "started") {
+            throw "fresh backend did not resume the preserved incomplete staging batch"
+        }
+        $resumed = Get-Status
+        if (
+            -not $resumed -or
+            -not [bool]$resumed.is_running -or
+            [System.IO.Path]::GetFullPath([string]$resumed.image_dir) -ne $resumeIncompleteDir
+        ) {
+            throw "preserved incomplete staging batch resume verification failed"
+        }
+        Log-Reload "incomplete_staging_resumed" @{
+            image_dir=$resumeIncompleteDir
+            processed=$resumed.stats.processed
+            total=$resumed.stats.total
+        }
     }
 } catch {
     Log-Reload "safe_idle_reload_failed" @{error=$_.Exception.Message}

@@ -13,6 +13,7 @@ from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     apply_human_audited_pixel_authority,
     finalize_three_pass_outcome,
+    has_sufficient_followme_physical_evidence,
     immediate_retry_decision,
     validate_evidence_contract,
 )
@@ -1031,6 +1032,8 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(report[0]["rule"], "three_call_known_pixel_authority_repair")
         self.assertEqual(meta["ocr_attempt"], 3)
         self.assertEqual(meta["complete_screen_count"], 3)
+        self.assertEqual(meta["screen_status"], "正常")
+        self.assertEqual(meta["quality_issue"], "無")
         self.assertEqual(
             meta["followme_physical_evidence"],
             [{
@@ -1455,6 +1458,111 @@ class ThreePassFinalizationTests(unittest.TestCase):
         # The third pass marks ownership ambiguous, so only one safe price vote
         # remains.  Keep the model consensus but do not attach an unsafe price.
         self.assertIsNone(current["price"])
+
+    def test_two_narrated_fixture_passes_override_structured_wide_distant_votes(self):
+        second_narration = (
+            "我看到中央偏左有白色立柱與圓形底座，但沒有螢幕連接，"
+            "沒有可讀型號與價格，所以……"
+        )
+        current_narration = (
+            "我看到中央偏左有一台螢幕，其正下方有白色直立支架與圓形底座，"
+            "但沒有可讀的型號或價格牌，所以……"
+        )
+        first = make_pass(
+            "遠景", None, None, 3, False, "not_visible",
+            thinking="我看到寬廣賣場中三台完整螢幕，沒有實體 FollowMe，所以……",
+        )
+        second = make_pass(
+            "遠景", None, None, 0, False, "not_visible",
+            thinking="AI 判讀文字已由健康閘收回；這張照片必須重新獨立判讀。",
+            narration=second_narration,
+        )
+        current = make_pass(
+            "遠景", None, None, 3, False, "not_visible",
+            thinking="我看到三輪獨立判讀已完成交叉核對，最後定案為遠景，所以……",
+            narration=current_narration,
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_narrated_followme_fixture_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 3)
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertTrue(has_sufficient_followme_physical_evidence(current))
+        self.assertIsNone(current["model"])
+        self.assertIsNone(current["price"])
+
+    def test_structured_followme_consensus_precedes_narration_only_fallback(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_followme_product_card", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "我看到唯一主角螢幕正下方連著白色直立支架與完整圓形底座，"
+            "附著價牌可讀 FollowMe Pro M7 43 吋與 17,990，所以……"
+        )
+        history = [
+            make_pass(
+                "單機", 'FollowMe Pro M7 43"', "17990", 3, True, "matched",
+                physical, thinking=narration, narration=narration,
+            ),
+            make_pass(
+                "單機", 'FollowMe Pro M7 43"', "17990", 3, True, "matched",
+                physical, thinking=narration, narration=narration,
+            ),
+        ]
+        current = make_pass(
+            "單機", "FollowMe 型號未細分", "17990", 3, True, "matched",
+            physical, thinking=narration, narration=narration,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertEqual(current["model"], 'FollowMe Pro M7 43"')
+        self.assertEqual(current["price"], "17990")
+        self.assertTrue(current["followme_family_confirmed"])
+
+    def test_one_detailed_edge_cut_read_and_three_clean_pair_votes_finish_single(self):
+        detailed_edge_cut = (
+            "我看到中央一台螢幕四邊四角完整，右側螢幕被照片邊界截斷，"
+            "左側螢幕外框左邊被截斷，全圖其他區域沒有額外完整螢幕。"
+            "中央自有價牌為 S27F612EAC 與 4,990，所以……這是一般單機。"
+        )
+        history = [
+            make_pass(
+                "單機", "S27F612EAC", "4990", 3, True, "matched",
+                thinking="我看到中央單機與自有價牌 S27F612EAC、4,990，所以……",
+            ),
+            make_pass(
+                "單機", "S27F612EAC", "4990", 3, True, "matched",
+                thinking=detailed_edge_cut,
+            ),
+        ]
+        current = make_pass(
+            "單機", "S27F612EAC", "4990", 3, True, "matched",
+            thinking="我看到中央單機與自有價牌 S27F612EAC、4,990，所以……",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            result["adjudication_rule"],
+            "two_pass_edge_cut_identity_consensus",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertEqual(current["model"], "S27F612EAC")
+        self.assertEqual(current["price"], "4990")
 
     def test_one_or_two_complete_screens_still_cannot_claim_distant(self):
         for count in (1, 2):

@@ -80,14 +80,19 @@ class ImageProcessor:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     def _scene_tile_specs(self, width: int, height: int, attempt: int):
-        """Do not duplicate physical monitors across scene images.
+        """Return one bounded third-pass crop for small physical FollowMe rigs.
 
-        The pristine full image is present in every request. Isolated replay of
-        a full-center monitor with edge-cut neighbors proved that even one
-        full-height scene tile can make the vision model count the same unit
-        twice. High-resolution label crops remain available separately.
+        Wide retail scenes can shrink a real white stand and round floor base
+        below the model's attention threshold.  Earlier passes keep only the
+        pristine full frame.  The final pass gets one central full-height
+        locator crop; its accompanying prompt forbids monitor recounting, so it
+        is evidence for physical structure only, never a second scene.
         """
-        return []
+        if int(attempt or 1) < 3:
+            return []
+        x = int(width * 0.30)
+        tile_width = max(1, int(width * 0.40))
+        return [("followme_structure_center", (x, 0, tile_width, height))]
 
     def crop_bottom_label_strip(self, img_array: np.ndarray) -> tuple:
         """

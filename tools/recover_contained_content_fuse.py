@@ -2,8 +2,8 @@
 
 The consumed image-bound call is appended to durable history, the absolute call
 counter is preserved, and the same photo is requeued for its remaining pass.
-Only the two FollowMe scene-consistency reasons covered by the runtime gate are
-eligible. No counter reset and no fourth call are possible.
+Only the bounded same-photo narration/scene-consistency reasons covered by the
+runtime gate are eligible. No counter reset and no fourth call are possible.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from skills.audit_fields import validate_evidence_contract
 ALLOWED_REASONS = {
     "distant_followme_strong_evidence_conflict",
     "structured_narration_followme_conflict",
+    "ui_narration_contains_raw_structure",
 }
 RECOVERY_RULE = "same_photo_followme_scene_conflict_preserve_call_and_retry"
 

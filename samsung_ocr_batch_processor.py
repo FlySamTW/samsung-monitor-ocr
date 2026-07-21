@@ -248,9 +248,9 @@ V1945_OUTPUT_CONTRACT = (
     "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
     "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object. "
     "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
-    "Count complete_screen_count once from the first original full image. Supplemental crops are duplicate views; never count them or use crop edges as evidence. "
-    "A complete monitor has all four outer bezel sides and corners inside the ORIGINAL frame. Any bezel touching, crossing, or missing beyond an original image edge contributes zero. "
-    "First, scan the ENTIRE original image region by region. For each monitor, state which of its own outer bezel edges actually touches the ORIGINAL frame; never claim an edge is cropped unless it actually touches or crosses that frame. A single view must state no other complete monitor exists. Never reuse a remembered layout. Brands rendered inside a screen are signal content, not the physical monitor brand; use the physical bezel and same-subject card. "
+    "Count once from the first original full image; Supplemental crops are duplicate views and crop edges are never evidence. "
+    "A complete monitor has all four outer bezel sides and corners inside the ORIGINAL frame. Check its first/last pixel rows and columns: a missing, touching, crossing, or outward-continuing bezel contributes zero; scan the ENTIRE original image region by region. "
+    "For each monitor, state which of its own outer bezel edges actually touches the frame; never claim an edge is cropped unless it actually touches or crosses that frame; never infer one from a remembered layout. A single view must state no other complete monitor exists. Brands rendered inside a screen are signal content, not the physical monitor brand; use the physical bezel and same-subject card. "
     "Nearby, background, or screen-rendered marketing-family words such as Odyssey, G7, G8, M8, and Smart Monitor may not be assigned to the main unit unless the same-subject physical card proves that ownership; when uncertain, narrate only the exact visible SKU and omit the family name. "
     "Any price explicitly read in narration must have exactly the same digits as structured price. A narration/structured price disagreement is unsafe and must not be finalized. "
     "Before price, narration must list all same-card amounts with printed roles; never rename 市價/原價/參考價/建議售價 as 會員價/特價. If a prominent current/promo amount coexists, choose it; if only one amount exists, say so. "
@@ -3196,14 +3196,14 @@ def process_single_image(
         if bottom_label_b64:
             user_images.append({
                 "type": "text",
-                "text": "補充圖：這只是全尺寸照片下方區域的自動裁切，可能完全沒有價牌。只有實際看見實體卡片外框、可逐字讀取數字，且回到第一張全尺寸照片確認它屬於主角時，才可輸出型號或價格；不得因為有這張裁切就假設存在價牌。",
+                "text": "補充圖：這只是全尺寸照片下方區域的自動裁切，可能完全沒有價牌。用它放大搜尋白色直桿與完整圓形底座，發現後必須回第一張全圖確認是否連到同一實機；只有實際看見實體卡片外框、可逐字讀取數字，且確認屬於主角時，才可輸出型號或價格。此圖不得重算螢幕台數。",
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_label_b64}"}})
 
         if bottom_center_b64:
             user_images.append({
                 "type": "text",
-                "text": "補充圖：這只是全尺寸照片下方中央區域的自動放大裁切，不代表其中必然有價牌。沒有實際看見主角自有實體卡片與可逐位讀取的數字時，model 或 price 必須為 null，不得用產品家族常見價、參考價或提示內數字補猜。",
+                "text": "補充圖：這只是全尺寸照片下方中央區域的自動放大裁切，不代表其中必然有價牌。先找白色直桿與完整圓形底座並回第一張全圖確認是否連到同一實機；不得重算螢幕台數。沒有主角自有實體卡片與可逐位讀取數字時，model 或 price 必須為 null，不得補猜。",
             })
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{bottom_center_b64}"}})
 
@@ -3218,11 +3218,20 @@ def process_single_image(
         # retries add overlapping left/center/right full-height ownership views.
         # object ownership while staying within a deterministic image budget.
         for tile in scene_tiles[:3]:
-            user_images.append({"type": "text", "text": f"補充圖：{tile['label']}，這是第一張全尺寸照片的重複裁切定位圖，bbox={tile['bbox']}。不可把其中物體當成新增螢幕、不可重複計數，也不可用此裁切邊界判斷完整入鏡；完整台數只能回到第一張全尺寸照片檢查。"})
+            if str(tile.get("label") or "").startswith("followme_structure"):
+                tile_instruction = (
+                    f"補充圖：{tile['label']}，這是第一張全尺寸照片中央區域的重複定位圖，bbox={tile['bbox']}。"
+                    "只用來搜尋發亮螢幕像素外、同一實機相連的白色直桿與完整圓形落地底座；找到後回第一張全圖確認主體。"
+                    "不可把其中物體當成新增螢幕、不可重複計數，也不可用此裁切邊界判斷完整入鏡。"
+                )
+            else:
+                tile_instruction = f"補充圖：{tile['label']}，這是第一張全尺寸照片的重複裁切定位圖，bbox={tile['bbox']}。不可把其中物體當成新增螢幕、不可重複計數，也不可用此裁切邊界判斷完整入鏡；完整台數只能回到第一張全尺寸照片檢查。"
+            user_images.append({"type": "text", "text": tile_instruction})
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
 
     user_prompt += (
         "\n\n先掃描全張原圖，逐區搜尋實體 FollowMe，再計算所有完整螢幕。任何同一實機在發亮螢幕像素範圍外可見直接 FollowMe 品牌，或實際連著白色直立支架與完整圓形落地底座，就以該實體為商業主角判單機、unique_main=true；背景完整螢幕不否決它，完整台數仍照實填。"
+        "FollowMe 盲點檢查必須從全圖地面區域的白色圓形底座向上追蹤直桿與螢幕，特別檢查中央偏左、中央與中央偏右；物件較小或位在廣景中不得省略。"
         "若支架、輪架、圓底座或託盤只存在於螢幕播放內容，必須記為 screen_content_only、same_subject=false，禁止當成實體 FollowMe。只有完全沒有實體 FollowMe 候選時，三台以上完整螢幕才判遠景。"
         "完整台數只能看第一張全尺寸照片並只計一次：外框四邊四角全部在照片內才算完整；碰到或穿出照片任一邊界的一律不計。"
         "先依左／中／右、上／中／下逐區掃完整張照片，所有位置四邊四角完整的螢幕都要計入，不可只盯中央主角。"

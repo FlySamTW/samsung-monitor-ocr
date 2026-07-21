@@ -68,6 +68,8 @@ class EvidenceContractTests(unittest.TestCase):
     FRAME_673_SHA = "76e461cddc915c2e3b92bdc942e2c94cf27d013fe0ca9021c95f3c52094d0016"
     FRAME_674_SHA = "c9bbac284fec04529de8991134f14020cd74edebd597405a9a0612670173caf0"
     FRAME_1257_SHA = "d48231cb464540aa0ea5816fe9e6b238547a6292254c6513606d786f101fc4a7"
+    WIDE_FOLLOWME_1467_SHA = "46dca52b5b33bf720300723703bac2bcab2120ee1b850803ad28b56b2464bab0"
+    YOUCHANG_1148_SHA = "688233fe7652e64469feab5e8d4a97dbeae224fd25df778e3221fce6da51c844"
     SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
     LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
@@ -1556,6 +1558,36 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(passes[2]["model"], "S27D300GAC")
         self.assertEqual(passes[2]["price"], 3290)
 
+    def test_youchang_1148_black_stand_cannot_become_followme(self):
+        authority = KNOWN_SOURCE_EXPECTATIONS[self.YOUCHANG_1148_SHA]
+        self.assertEqual(authority["view_type"], "單機")
+        self.assertEqual(authority["complete_screen_count"], 1)
+        self.assertEqual(authority["model"], "S27D300GAC")
+        self.assertEqual(authority["price"], 3290)
+        self.assertFalse(authority["followme_physical_expected"])
+
+        passes = []
+        for attempt in (1, 2, 3):
+            passes.append({
+                "period": "202601", "ocr_attempt": attempt,
+                "input_image_sha256": self.YOUCHANG_1148_SHA,
+                "request_id_verified": True, "request_binding_enforced": True,
+                "independent_pass": True, "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "view_type": "單機", "category": "單機",
+                "model": "FollowMe M7 32\"", "price": "17990",
+                **evidence(3, True, "matched", [
+                    {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                ]),
+            })
+        self.assertTrue(apply_human_audited_pixel_authority(passes[2], passes[:2], 3))
+        self.assertEqual(passes[2]["view_type"], "單機")
+        self.assertEqual(passes[2]["complete_screen_count"], 1)
+        self.assertEqual(passes[2]["model"], "S27D300GAC")
+        self.assertEqual(passes[2]["price"], 3290)
+        self.assertEqual(passes[2]["followme_physical_evidence"], [])
+
         full = batch.V1945_OUTPUT_CONTRACT + batch.REVIEW_FOCUS_PROMPTS[2]
         self.assertIn("never rename 市價", full)
         self.assertIn("不得把市價改口成會員價", full)
@@ -2022,6 +2054,34 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(row["followme_family_confirmed"])
         self.assertIsNone(row["model"])
         self.assertIsNone(row["price"])
+
+    def test_human_audited_1467_pixels_preserve_wide_scene_followme_subject(self):
+        wrong = {
+            "period": "202601", "view_type": "遠景", "category": "遠景",
+            "model": None, "price": None,
+            "input_image_sha256": self.WIDE_FOLLOWME_1467_SHA,
+            "thinking": "寬廣賣場中三台完整螢幕，沒有唯一主角。",
+            "request_id_verified": True, "independent_pass": True,
+            "prior_answer_exposed": False, "prompt_contamination": False,
+            **evidence(3, False, "not_visible", []),
+        }
+        first = dict(wrong, ocr_attempt=1)
+        second = dict(wrong, ocr_attempt=2)
+        third = dict(wrong, ocr_attempt=3)
+
+        self.assertTrue(
+            apply_human_audited_pixel_authority(third, [first, second], 3)
+        )
+        self.assertEqual(third["view_type"], "單機")
+        self.assertEqual(third["complete_screen_count"], 3)
+        self.assertIsNone(third["model"])
+        self.assertIsNone(third["price"])
+        self.assertTrue(third["followme_family_confirmed"])
+        self.assertTrue(third["wide_scene_followme_present"])
+        self.assertEqual(
+            {item["cue"] for item in third["followme_physical_evidence"]},
+            {"white_vertical_stand", "round_base", "portrait_display"},
+        )
 
     def test_distant_explicitly_negated_followme_word_is_not_a_positive_cue(self):
         row = {

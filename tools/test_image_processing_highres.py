@@ -48,14 +48,20 @@ class HighResolutionEvidenceTests(unittest.TestCase):
             self.assertIsNotNone(first["bottom_left_center_base64"])
             self.assertEqual(first["scene_tiles"], [])
             self.assertEqual(second["scene_tiles"], [])
-            self.assertEqual(third["scene_tiles"], [])
+            self.assertEqual(len(third["scene_tiles"]), 1)
+            self.assertEqual(third["scene_tiles"][0]["label"], "followme_structure_center")
+            self.assertEqual(third["scene_tiles"][0]["bbox"], (1209, 0, 1612, 2268))
             self.assertIsNotNone(second["bottom_center_base64"])
             self.assertIsNotNone(third["bottom_center_base64"])
             self.assertIsNotNone(second["bottom_left_center_base64"])
             self.assertIsNotNone(third["bottom_left_center_base64"])
             self.assertEqual(first["metadata"]["scene_tiles"], [])
             self.assertEqual(second["metadata"]["scene_tiles"], [])
-            self.assertEqual(third["metadata"]["scene_tiles"], [])
+            self.assertEqual(len(third["metadata"]["scene_tiles"]), 1)
+            self.assertEqual(
+                third["metadata"]["scene_tiles"][0]["label"],
+                "followme_structure_center",
+            )
             self.assertTrue(first["metadata"]["bottom_left_center_zoom"])
             self.assertTrue(second["metadata"]["bottom_left_center_zoom"])
             self.assertTrue(third["metadata"]["bottom_left_center_zoom"])

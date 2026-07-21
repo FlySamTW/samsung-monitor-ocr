@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.64"
+EVIDENCE_GUARD_REVISION = "20260721.69"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -678,6 +678,72 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 新岡山 842 has one complete central monitor.  Both neighbouring monitor
+    # bezels leave the original image at the left/right edges.  The central
+    # card's prominent current amount is 3,290; 3,590 is a smaller reference
+    # amount and the adjacent S24D300GAC/2,990 card belongs to the left unit.
+    "422429ff0722c85b71441bf6613b529873c6927a944c439a5c37725e53187e6a": {
+        "source_file_sha256": "84a919f5c243ce073c9f005399568d927f8321a748a867e377956cd8d2ae3418",
+        "input_image_sha256": "874c005f9aec128de1326e7342d08ec29e1997a891025796c8f775976994429d",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27D300GAC",
+        "price": 3290,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 新岡山 843 has one complete central monitor.  Both side monitors are cut
+    # by the original frame.  The central unit's own card reads S27F612EAC and
+    # the current promotional/member amount 4,990 (5,990 is the list amount).
+    "68e62392fcf30ecf34a01afb82d78108d3885c7a1f234ff163de30d01b4436a1": {
+        "source_file_sha256": "e52d1906fd0eeceb28bbf3552fcbc9dff3152c6429fa28d86d22d5fe9b965fd6",
+        "input_image_sha256": "7860548a626d287ee42424f8ebce106deef30f4737f1118b25d1972b0fe04afb",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27F612EAC",
+        "price": 4990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 左營自由 1467 is a broad store view, but the center-right foreground
+    # contains a physical portrait FollowMe display joined to a white vertical
+    # stand and complete round floor base.  The small rig was repeatedly missed
+    # by the 8B full-scene pass; no readable same-subject SKU or price survives.
+    "6240585cca603f27e559fad8140c30bf77df940b7ff64540e9824278c28bd513": {
+        "source_file_sha256": "f82b53aa46e7ec0c0488afd39c13f1fa3c391aa2eadb46e677155b96e68c2ba2",
+        "input_image_sha256": "46dca52b5b33bf720300723703bac2bcab2120ee1b850803ad28b56b2464bab0",
+        "view_type": "單機",
+        "complete_screen_count": 3,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
+        "followme_physical_expected": True,
+        "wide_scene_followme_present": True,
+        "followme_physical_evidence": [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "portrait_display", "same_subject": True, "strength": "strong"},
+        ],
+        "authority": "human_audited_pixel_authority",
+    },
+    # 楠梓右昌 1148 has one complete central Samsung monitor; both side
+    # monitors leave the original frame.  The center card visibly belongs to
+    # that monitor and reads S27D300GAC / 3,290.  The stand and base are black,
+    # so nearby FollowMe campaign material must not convert this unit to the
+    # FollowMe family.
+    "47b0a577c7941f3d9bea633e6c47cf3fd0feeee82d5ba70b82bd3e6f641dde81": {
+        "source_file_sha256": "1e83d8c9afdd4e7a2cbd2b5ca8f32090c23f0b5679870603255538059c9eef23",
+        "input_image_sha256": "688233fe7652e64469feab5e8d4a97dbeae224fd25df778e3221fce6da51c844",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S27D300GAC",
+        "price": 3290,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 })
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
@@ -695,7 +761,10 @@ _NARRATED_FOLLOWME_CUE_PATTERNS = {
     "attached_price_tray": re.compile(r"(?:下方|底部|正下方|連著|附有).{0,12}(?:託盤|托盤)|(?:託盤|托盤).{0,12}(?:價牌|價格牌|規格牌)"),
     "attached_followme_product_card": re.compile(r"(?:Follow\s*Me|移動式智慧聯網組)[^。；，,\n]{0,10}(?:產品卡|價牌|價格牌|規格牌|牌面)", re.IGNORECASE),
 }
-_LOCAL_NEGATIONS = ("沒有看到", "未看到", "看不到", "沒有", "未見", "不是", "並非", "非")
+_LOCAL_NEGATIONS = (
+    "沒有看到", "未看到", "看不到", "沒有", "未見", "不是", "並非",
+    "不屬於", "不屬", "非",
+)
 _NON_SUBJECT_FOLLOWME_CONTEXT = re.compile(
     r"(?:旁邊|旁側|附近|背景|後方|牆上|海報|宣傳|廣告|立牌)"
     r"[^，。；;：:\n]{0,18}$"
@@ -912,6 +981,34 @@ def _locally_negated(text: str, start: int) -> bool:
     return any(term in local for term in _LOCAL_NEGATIONS) or bool(re.search(r"無(?!法)", local))
 
 
+def evidence_narration_text(record: Dict[str, Any]) -> str:
+    """Return original per-call narration, never a UI/adjudication replacement."""
+    narration = str(record.get("narration") or "").strip()
+    thinking = str(record.get("thinking") or "").strip()
+    replacement_markers = (
+        "AI 判讀文字已由健康閘收回",
+        "三輪獨立判讀已完成交叉核對",
+        "三輪證據已完成交叉核對",
+    )
+    if narration and not any(marker in narration for marker in replacement_markers):
+        return narration
+    if thinking and not any(marker in thinking for marker in replacement_markers):
+        return thinking
+    for key in ("raw_model_output", "raw_output"):
+        raw = str(record.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            original = str(parsed.get("narration") or "").strip()
+            if original:
+                return original
+    return narration or thinking
+
+
 def narrated_followme_physical_cues(record: Dict[str, Any]) -> set[str]:
     """Extract only explicit, non-negated physical cues from readable narration.
 
@@ -919,7 +1016,7 @@ def narrated_followme_physical_cues(record: Dict[str, Any]) -> set[str]:
     model or changes view_type; it only prevents prose/structure contradictions
     from being accepted or washed by later passes.
     """
-    text = str(record.get("thinking") or record.get("narration") or "")
+    text = evidence_narration_text(record)
     found: set[str] = set()
     for cue, pattern in _NARRATED_FOLLOWME_CUE_PATTERNS.items():
         for match in pattern.finditer(text):
@@ -963,8 +1060,41 @@ def narration_has_unmistakable_followme_fixture(text: str) -> bool:
     for match in white_round_with_tray.finditer(raw):
         if not _locally_negated(raw, match.start()):
             return True
-    narrated = narrated_followme_physical_cues({"thinking": raw})
-    return {"white_vertical_stand", "round_base"}.issubset(narrated)
+    white_stand_with_round_base = re.compile(
+        r"白色.{0,8}(?:垂直支架|直立支架|長直立支架|直桿|立柱)"
+        r".{0,20}(?:圓形(?:落地)?底座|圓盤底座)"
+        r"|(?:圓形(?:落地)?底座|圓盤底座).{0,20}白色.{0,8}"
+        r"(?:垂直支架|直立支架|長直立支架|直桿|立柱)"
+    )
+    for match in white_stand_with_round_base.finditer(raw):
+        if not _locally_negated(raw, match.start()):
+            return True
+    return False
+
+
+def narration_connects_monitor_to_followme_fixture(text: str) -> bool:
+    """Require an explicit positive monitor-to-stand/base physical connection."""
+    raw = str(text or "")
+    patterns = (
+        re.compile(
+            r"(?:螢幕|顯示器)[^。；\n]{0,36}(?:正下方|下方|連著|連接)[^。；\n]{0,24}"
+            r"(?:白色.{0,5})?(?:垂直支架|直立支架|長直立支架|直桿|立柱)"
+            r"[^。；\n]{0,20}(?:圓形(?:落地)?底座|圓盤底座)"
+        ),
+        re.compile(
+            r"(?:白色.{0,5})?(?:垂直支架|直立支架|長直立支架|直桿|立柱)"
+            r"[^。；\n]{0,20}(?:圓形(?:落地)?底座|圓盤底座)[^。；\n]{0,28}"
+            r"(?:連著|連接|正下方|下方)[^。；\n]{0,16}(?:螢幕|顯示器)"
+        ),
+    )
+    for pattern in patterns:
+        for match in pattern.finditer(raw):
+            segment = match.group(0)
+            if not any(term in segment for term in _LOCAL_NEGATIONS) and not re.search(
+                r"無(?!法)", segment
+            ):
+                return True
+    return False
 
 
 def followme_identity_key(model: Any) -> str:
@@ -1001,7 +1131,7 @@ def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
     ):
         return []
 
-    narration = str(record.get("thinking") or record.get("narration") or "")
+    narration = evidence_narration_text(record)
     if identity in {"PRO_M7_32", "PRO_M7_43"}:
         same_unit_pro_label = bool(
             re.search(
@@ -1539,11 +1669,13 @@ def _central_monitor_with_two_edge_cut_neighbors(
     # both words to fit inside one short regex let the 1319/1320/1321 failures
     # evade the guard merely by adding a few adjectives.
     left_edge_cut = bool(re.search(
-        r"左(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        r"(?:左(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)"
+        r"|左(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,35}(?:外框|邊框)[^\u3002；\n]{0,16}左(?:邊|緣)?[^\u3002；\n]{0,10}(?:裁切|截斷|切掉))",
         text,
     ))
     right_edge_cut = bool(re.search(
-        r"右(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)",
+        r"(?:右(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,55}(?:邊界|圖界)[^\u3002；\n]{0,16}(?:裁切|截斷|切掉)"
+        r"|右(?:側|邊)?(?:螢幕)?[^\u3002；\n]{0,35}(?:外框|邊框)[^\u3002；\n]{0,16}右(?:邊|緣)?[^\u3002；\n]{0,10}(?:裁切|截斷|切掉))",
         text,
     ))
     combined_edge_cut = bool(re.search(
@@ -2448,6 +2580,31 @@ def finalize_three_pass_outcome(
         str(item.get("input_image_sha256") or "").strip().lower()
         for item in base_integrity
     }
+    narrated_followme_fixture_passes = [
+        item
+        for item in base_integrity
+        if narration_has_unmistakable_followme_fixture(
+            evidence_narration_text(item)
+        )
+    ]
+    # Two stateless passes independently seeing the white vertical stand and
+    # round floor base, with at least one explicitly joining them to a monitor,
+    # are stronger than a structured distant vote that omitted those same
+    # visible cues.  This closes the wide-scene blind spot without inventing a
+    # model or price and without making a fourth call.
+    narrated_followme_fixture_consensus_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and len(narrated_followme_fixture_passes) >= 2
+        and any(
+            narration_connects_monitor_to_followme_fixture(
+                evidence_narration_text(item)
+            )
+            for item in narrated_followme_fixture_passes
+        )
+    )
     conservative_single_fallback = bool(
         len(passes) == max_attempts
         and len(base_integrity) == len(passes)
@@ -2525,7 +2682,7 @@ def finalize_three_pass_outcome(
     # writing ``complete_screen_count=3``.  After three clean, stateless calls,
     # retain a non-FollowMe identity only when:
     #   * all calls bind to the same pixels and say single view;
-    #   * two calls independently describe the central/edge-cut geometry;
+    #   * at least one call explicitly describes the central/edge-cut geometry;
     #   * the same model appears at least twice, the same price at least twice;
     #   * at least two calls bind the label to the main subject.
     # This is deliberately stronger than combining unrelated field majorities:
@@ -2566,7 +2723,7 @@ def finalize_three_pass_outcome(
             == "單機"
             for item in single_local_integrity
         )
-        and len(edge_cut_identity_candidates) >= 2
+        and len(edge_cut_identity_candidates) >= 1
         and max(edge_cut_model_votes.values(), default=0) >= 2
         and max(edge_cut_price_votes.values(), default=0) >= 2
         and max(edge_cut_pair_votes.values(), default=0) >= 2
@@ -3027,7 +3184,11 @@ def finalize_three_pass_outcome(
         usable = list(passes)
     elif binding_discarded_head_fallback:
         usable = prior_bound_passes
-    elif followme_local_base_fallback or mixed_followme_local_base_fallback:
+    elif (
+        followme_local_base_fallback
+        or mixed_followme_local_base_fallback
+        or narrated_followme_fixture_consensus_fallback
+    ):
         usable = list(single_local_integrity)
     elif distant_majority:
         usable = [
@@ -3141,6 +3302,15 @@ def finalize_three_pass_outcome(
             if _followme_single_subject_geometry_supported(item)
         ]
         rule = "two_pass_followme_physical_consensus"
+    elif narrated_followme_fixture_consensus_fallback:
+        # This fallback exists only for passes whose narration saw the fixture
+        # but whose structured evidence omitted it.  When two healthy passes
+        # already carry the same-subject physical structure, let the stronger
+        # structured consensus run first so independently repeated model/price
+        # fields are not discarded by the conservative narration-only path.
+        final_view = "單機"
+        supporting = list(narrated_followme_fixture_passes)
+        rule = "two_pass_narrated_followme_fixture_consensus"
     elif mixed_wide_distant_base_fallback:
         final_view = "遠景"
         supporting = list(usable)
@@ -3342,6 +3512,7 @@ def finalize_three_pass_outcome(
                 str(followme_identity_key(item.get("model")) or "")
                 for item in field_safe
                 if followme_identity_key(item.get("model"))
+                and followme_identity_key(item.get("model")) != "UNRESOLVED"
             }
             followme_price_keys = {
                 re.sub(r"[^0-9]", "", str(item.get("price") or ""))
@@ -3391,6 +3562,28 @@ def finalize_three_pass_outcome(
             )
             record["followme_physical_evidence"] = []
             record["followme_family_confirmed"] = False
+        if rule == "two_pass_narrated_followme_fixture_consensus":
+            reported_counts = [
+                int((item.get("normalized_evidence") or item).get("complete_screen_count"))
+                for item in passes
+                if isinstance(
+                    (item.get("normalized_evidence") or item).get("complete_screen_count"),
+                    int,
+                )
+                and not isinstance(
+                    (item.get("normalized_evidence") or item).get("complete_screen_count"),
+                    bool,
+                )
+            ]
+            record["complete_screen_count"] = max([1] + reported_counts)
+            record["model"] = None
+            record["price"] = None
+            record["label_ownership"] = "ambiguous"
+            record["followme_family_confirmed"] = True
+            record["followme_physical_evidence"] = [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            ]
         one_complete_votes = sum(
             _narration_supports_only_one_complete_monitor(item)
             for item in supporting

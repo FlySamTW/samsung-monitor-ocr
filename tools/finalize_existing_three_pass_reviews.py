@@ -1161,7 +1161,8 @@ def finalize_file(
         current = dict(calls[-1])
         if completed_current_adjudication:
             for field in (
-                "view_type", "model", "price", "complete_screen_count", "unique_main",
+                "view_type", "screen_status", "quality_issue", "model", "price",
+                "complete_screen_count", "unique_main",
                 "label_ownership", "followme_physical_evidence", "followme_family_confirmed",
                 "three_pass_adjudicated", "adjudication_rule", "adjudication_summary",
                 "price_status", "price_symbol", "official_price", "price_diff_percent",
@@ -1325,7 +1326,8 @@ def finalize_file(
             })
         meta = (task.setdefault("data", {}).setdefault("ocr_meta", {}))
         for field in (
-            "view_type", "model", "price", "complete_screen_count", "unique_main",
+            "view_type", "screen_status", "quality_issue", "model", "price",
+            "complete_screen_count", "unique_main",
             "label_ownership", "followme_physical_evidence", "followme_family_confirmed",
             "three_pass_adjudicated", "adjudication_rule", "adjudication_summary",
             "price_status", "price_symbol", "official_price", "price_diff_percent",

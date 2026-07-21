@@ -1152,3 +1152,12 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - fuse 只由 `clear_runtime_health_fuse_after_smoke.py` 依新 revision、7 張 bound smoke、人工核對樣本與完整 regressions 封存；receipt 為 `_ocr_audit/runtime_health_fuse_clearance/smoke_20260721_183541_314681.json`。benchmark lock 隨後解除，backend 與唯一隱藏 stream uploader 都載入 `.64`，既有瀏覽器分頁沒有重開、重載或新增。
 - 五張正式已知錯誤以原圖雜湊綁定、零新增模型呼叫更正並逐張取得 `.64` Drive receipt：`高雄大立-408=S32DG802SC／36,900`、`高雄大立-412/413=FollowMe 單機／型號未細分／無價格`、`前鎮-766=FollowMe 單機／型號未細分／無價格`、`前鎮-768=S32FM703UC／9,990`。新 Drive IDs 依序為 `1fvL-Cn0DDi5FqxGac3qs4Y2AlTBCPevY`、`1QHB1kjhU4YWebYgml-bK0lYZTkegvemT`、`1vSLkgAW4KrbUKDusNfeqwyQp6aDLYrZG`、`1t_RzxnXY_4THXLPhKsf7aqv0y79fK97F`、`1YsI6l87nMdzVrczRiT-qvZvCgzbWXdU8`。全域更正帳本目前仍有 4 筆 mapping error，故舊錯名只可等精確帳本修復後按 Drive ID 清理；不得為清舊檔放寬 gate 或延誤 OCR／新檔逐張上傳。
 - 65,336 回退是 202606 summary 被覆寫成 processed=5 的總盤錯誤；現行唯一正確上方數字是 `66,724/151,714`、`45/137`。隔離 smoke 不計正式總數，202601 二、三輪也不重複計數。18:51 既有 Dashboard 已同步顯示 `202601 1,322/1,478`、verified 1,305、review 17、failed 0、上傳 56,224／待傳 0、目前檔案 `岡山-752`，正式 OCR、LLM 自然語言、右側卡片與逐張 uploader 持續前進。
+
+## 2026-07-21 `.69`：總盤、不中斷復原與逐張上傳鐵律
+
+- 上方「初次辨識總進度」是**唯一來源照片**的去重計數，不是模型呼叫數、複核輪次或上傳數。現行 inventory 權威為 `66,724 / 151,714`、`45 / 137`；`65,336` 是未納入 202606 的歷史錯值。202601 的第二、第三輪、離線定案、更正改名與同一來源重新上傳均不得重複加總。Dashboard 必須同時保留當前資料夾／輪次進度，讓複核期間仍能看見實際前進。
+- 正式批次的首要要求是「不中斷、正確顯示、照片邊界安全」。一張取得如實終局就立刻 enqueue，stream uploader 逐張上傳；不得等待整月、整年或人工累積。任何修復、文件、Git、清理或低功耗稽核都不可停止正式 OCR、既有 Dashboard 分頁或唯一 uploader。
+- `reload_backend_at_safe_idle.ps1` 對 incomplete staging 的 interlock 是資料保護機制：helper 尚未明確釋放前，必須先恢復原正式 staging，並以 `restart=false` 保留已消耗輪次／retry state。此時 supervisor **禁止**建立新的 staging、禁止將中斷批次誤當可重開的新批次；只有原位恢復失敗且保留完整證據時才可 fail-safe。
+- uploader 升版必須相容既有 pending jobs：每一輪 claim 前先以現行 schema 遷移 pending payload，再比對 source identity、來源／發布雜湊、目標檔名與既有 Drive receipt。已存在相同 Drive ID 的冪等確認只可更新本地收據，不得產生第二個雲端物件；同一照片的更正副本仍須取得新檔精確 receipt、讀回驗證後，才可依舊 Drive ID 清理舊錯名。
+- FollowMe 的實體證據是嚴格幾何關係：必須是與同一主體相連、位於螢幕像素外的**白色**直立支架與完整圓形落地底座，或直接附著的 FollowMe 品牌。一般黑色支架、黑色圓底座、桌架、輪架或螢幕內廣告都不是 FollowMe 證據，絕不可把它們冒充為白色實體裝置。
+- `M-高雄市-楠梓區-TK3C-右昌-1148.jpg` 已以完整原圖及雜湊綁定權威定案為 `單機 / S27D300GAC / 3,290`。它的黑色一般支架／底座不得觸發 FollowMe；其 UI 敘述出現內部結構欄位時，先限縮為同一張照片的無記憶重試並清理展示文字，不能污染下一張或停止整批。此權威只適用完全相同的 source identity、來源 SHA 與 input SHA，且不得額外呼叫第 4 輪。

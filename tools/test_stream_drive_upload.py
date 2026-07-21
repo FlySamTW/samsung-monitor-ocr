@@ -215,6 +215,45 @@ class StreamDriveUploadTests(unittest.TestCase):
             archived = json.loads(archives[0].read_text(encoding="utf-8"))
             self.assertEqual(archived, original)
 
+    def test_rev68_pending_jobs_are_explicitly_compatible_with_rev69(self):
+        self.assertEqual(
+            COMPATIBLE_PENDING_REVISION_MIGRATIONS.get("20260721.68"),
+            "20260721.69",
+        )
+
+    def test_rev68_structural_adjudication_can_migrate_to_rev69(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-test-1368.jpg"
+            make_image(source)
+            output = root / "output"
+            job_path = enqueue_finalized_result(
+                verified_result(source), output_dir=output
+            )
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job["evidence_guard_revision"] = "20260721.68"
+            job["final_result"]["adjudication_rule"] = (
+                "distant_structural_veto_over_wide_geometry_single_votes"
+            )
+            job_path.write_text(
+                json.dumps(job, ensure_ascii=False), encoding="utf-8"
+            )
+            self.assertEqual(migrate_compatible_pending_jobs(output), 1)
+            migrated = json.loads(job_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["evidence_guard_revision"], "20260721.69")
+
+    def test_worker_migrates_jobs_that_arrive_after_startup(self):
+        loop = Path(__file__).with_name("stream_drive_upload.py").read_text(
+            encoding="utf-8"
+        )
+        while_index = loop.index("while True:", loop.index("def run_worker"))
+        migrate_index = loop.index(
+            "newly_migrated = migrate_compatible_pending_jobs(output_dir)",
+            while_index,
+        )
+        claim_index = loop.index("job_path = claim_next_job(output_dir)", while_index)
+        self.assertLess(migrate_index, claim_index)
+
     def test_frozen_fuse_recovery_upload_preserves_original_ocr_revision(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

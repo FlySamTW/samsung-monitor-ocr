@@ -95,6 +95,7 @@ class RecoverContainedContentFuseTests(unittest.TestCase):
                         "attempt": 2,
                         "run_id": "run-a",
                         "reasons": [
+                            "ui_narration_contains_raw_structure",
                             "distant_followme_strong_evidence_conflict",
                             "structured_narration_followme_conflict",
                         ],

@@ -328,6 +328,37 @@ class FailedFuseUploadRecoveryTests(unittest.TestCase):
             self.assertEqual(len(recoverable), 1)
             self.assertEqual(stale, [])
 
+    def test_exact_stopped_worker_allows_new_unrelated_pending_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.fixture(Path(temp))
+            fixture["status"]["stream_upload"]["pending"] = 2
+
+            def requester(_url: str, endpoint: str):
+                if endpoint == "/api/status":
+                    return fixture["status"]
+                if endpoint == "/api/success_records":
+                    return [fixture["presentation"]]
+                raise AssertionError(endpoint)
+
+            with (
+                patch(
+                    "tools.recover_failed_fuse_uploads._request_json",
+                    side_effect=requester,
+                ),
+                patch(
+                    "tools.recover_failed_fuse_uploads.psutil.pid_exists",
+                    return_value=False,
+                ),
+            ):
+                recoverable, stale = build_recovery_plan(
+                    priority_dir=fixture["priority"],
+                    output_dir=fixture["output"],
+                    backend_url="http://unit.test",
+                    expected_stopped_worker_pid=999,
+                )
+            self.assertEqual(len(recoverable), 1)
+            self.assertEqual(stale, [])
+
     def test_stopped_worker_boundary_rejects_a_different_pid(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = self.fixture(Path(temp))

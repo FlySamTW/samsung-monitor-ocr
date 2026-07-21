@@ -35,6 +35,7 @@ from tools.continue_after_period_priority import (
 from tools.photo_rename_planner import READY_STATUS, plan_single_image
 from tools.rclone_drive_upload import sha256_file
 from tools.stream_drive_upload import (
+    COMPATIBLE_PENDING_REVISION_MIGRATIONS,
     FUSE_UPLOAD_RECOVERY_SCHEMA,
     MIN_FROZEN_RECOVERY_GUARD,
     STREAM_SCHEMA,
@@ -243,7 +244,13 @@ def build_recovery_plan(
     ):
         raise RuntimeError("priority results are not fully verified")
     worker_pid = int(upload.get("worker_pid") or 0)
-    if int(upload.get("pending") or 0) != 0 or int(upload.get("working") or 0) != 0:
+    # Once the exact previously-idle worker PID is proven stopped, OCR may
+    # continue appending unrelated pending jobs.  Those immutable outbox files
+    # do not race this recovery; only a working job would.
+    if int(upload.get("working") or 0) != 0 or (
+        expected_stopped_worker_pid is None
+        and int(upload.get("pending") or 0) != 0
+    ):
         raise RuntimeError("stream uploader is not at an idle boundary")
     if expected_stopped_worker_pid is None:
         if worker_pid <= 0 or not psutil.pid_exists(worker_pid):
@@ -353,7 +360,11 @@ def build_recovery_plan(
                 and receipt.get("remote_path")
                 and normalized(str(receipt.get("original_source_path") or ""))
                 == original_source
-                and receipt.get("period") == info.get("period") == "202606"
+                and receipt.get("period") == info.get("period")
+                and re.fullmatch(r"20\d{4}", str(info.get("period") or ""))
+                and str(info.get("period") or "").startswith(
+                    str(datetime.now().year)
+                )
                 and receipt.get("source_sha256")
                 == sha256_file(original_source)
                 and published.is_file()
@@ -393,6 +404,15 @@ def build_recovery_plan(
             and job.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
         ):
             recovery_reason = "current_revision_rejected_by_older_uploader"
+        elif (
+            failure.startswith("stale or invalid stream upload job")
+            and COMPATIBLE_PENDING_REVISION_MIGRATIONS.get(
+                str(job.get("evidence_guard_revision") or "")
+            ) == EVIDENCE_GUARD_REVISION
+        ):
+            recovery_reason = (
+                "compatible_prior_revision_rejected_after_uploader_upgrade"
+            )
         if (
             job.get("schema") != STREAM_SCHEMA
             or not recovery_reason

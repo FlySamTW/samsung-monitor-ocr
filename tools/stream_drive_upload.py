@@ -58,6 +58,10 @@ COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # FollowMe finalization, so no earlier queued result may migrate to .52.
     "20260718.49": "20260718.51",
     "20260718.50": "20260718.51",
+    # .69 adds one exact source-hash visual authority and safe reload/resume
+    # interlocking.  It does not change the meaning or target name of any
+    # already-finalized .68 job, so queued .68 jobs can migrate losslessly.
+    "20260721.68": "20260721.69",
 }
 TRANSIENT_UPLOAD_ERROR_MARKERS = (
     "exact remote readback failed",
@@ -153,6 +157,7 @@ def validate_fuse_failed_upload_recovery(
     if recovery_reason not in {
         "runtime_health_fuse_cleared_after_ocr_finalization",
         "current_revision_rejected_by_older_uploader",
+        "compatible_prior_revision_rejected_after_uploader_upgrade",
     }:
         errors.append("recovery_reason")
     if recovery.get("approved_uploader_revision") != EVIDENCE_GUARD_REVISION:
@@ -177,12 +182,19 @@ def validate_fuse_failed_upload_recovery(
     if recovery_reason == "runtime_health_fuse_cleared_after_ocr_finalization":
         if not failure.startswith("runtime health fuse is active:"):
             errors.append("failure_was_not_runtime_fuse")
+    elif recovery_reason == "current_revision_rejected_by_older_uploader":
+        if not (
+            source_revision == EVIDENCE_GUARD_REVISION
+            and failure.startswith("stale or invalid stream upload job")
+        ):
+            errors.append("failure_was_not_older_uploader_revision")
     elif not (
-        recovery_reason == "current_revision_rejected_by_older_uploader"
-        and source_revision == EVIDENCE_GUARD_REVISION
+        recovery_reason == "compatible_prior_revision_rejected_after_uploader_upgrade"
+        and COMPATIBLE_PENDING_REVISION_MIGRATIONS.get(source_revision)
+        == EVIDENCE_GUARD_REVISION
         and failure.startswith("stale or invalid stream upload job")
     ):
-        errors.append("failure_was_not_older_uploader_revision")
+        errors.append("failure_was_not_compatible_prior_revision")
 
     frozen = dict(row)
     frozen.pop("fuse_failed_upload_recovery", None)
@@ -775,7 +787,11 @@ def migrate_compatible_pending_jobs(output_dir: Path) -> int:
         final_result = job.get("final_result")
         if not isinstance(final_result, dict):
             raise RuntimeError("pending upload has no final result")
-        if final_result.get("adjudication_rule") == "distant_structural_veto_over_wide_geometry_single_votes":
+        if (
+            _guard_key(old_revision) < (20260718, 48)
+            and final_result.get("adjudication_rule")
+            == "distant_structural_veto_over_wide_geometry_single_votes"
+        ):
             raise RuntimeError("new .48 adjudication cannot originate from a .47 upload job")
         recomputed = plan_single_image(
             source,
@@ -883,6 +899,19 @@ def run_worker(
             revision_migrated=migrated,
         )
         while True:
+            # The OCR backend can still be finishing the explicitly compatible
+            # prior revision while this worker has already loaded the next
+            # guard.  Migrate newly enqueued jobs before claiming each item,
+            # not only once when the worker starts.
+            newly_migrated = migrate_compatible_pending_jobs(output_dir)
+            if newly_migrated:
+                migrated += newly_migrated
+                refresh_status(
+                    output_dir,
+                    worker_state="running",
+                    worker_pid=os.getpid(),
+                    revision_migrated=migrated,
+                )
             job_path = claim_next_job(output_dir)
             if job_path is None:
                 refresh_status(output_dir, worker_state="idle", worker_pid=os.getpid())

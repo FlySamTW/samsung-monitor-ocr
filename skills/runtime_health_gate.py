@@ -34,6 +34,7 @@ _FIRST_PASS_CONTAINABLE_CONTENT_REASONS = {
     "structured_authority_material_conflict:view_type",
     "structured_narration_followme_conflict",
     "known_source_expectation_conflict",
+    "ui_narration_contains_raw_structure",
 }
 
 _RAW_FIELD_PATTERN = re.compile(
@@ -465,7 +466,9 @@ def first_pass_content_conflict_can_retry(
     the single photo. A model-authority conflict is also photo-local when the
     same pass proves an owned single-unit price but leaves the structured model
     null; FollowMe fixture evidence is one supported subset of that rule.
-    Price, prompt, UI, and binding defects still fuse.
+    Price, prompt-instruction, and binding defects still fuse. A raw field name
+    echoed only in this photo's narration is suppressed from the UI and gets a
+    bounded stateless retry instead of stopping unrelated photos.
     """
     normalized = {str(reason) for reason in reasons if str(reason)}
     current_attempt = int(attempt or 1)
@@ -477,11 +480,20 @@ def first_pass_content_conflict_can_retry(
             "structured_narration_followme_conflict",
         }
     )
+    same_photo_narration_format_conflict = bool(
+        "ui_narration_contains_raw_structure" in normalized
+        and normalized
+        <= {
+            "ui_narration_contains_raw_structure",
+            "structured_narration_followme_conflict",
+        }
+    )
     if (
         _followme_variant_authority_conflict_is_photo_local(normalized, record)
         or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
         or _known_pixel_content_conflict_is_photo_local(normalized, record)
         or same_photo_followme_scene_conflict
+        or same_photo_narration_format_conflict
     ):
         return current_attempt in {1, 2}
     if normalized == {"known_source_expectation_conflict"}:
@@ -509,11 +521,20 @@ def final_content_conflict_can_isolate(
             "structured_narration_followme_conflict",
         }
     )
+    same_photo_narration_format_conflict = bool(
+        "ui_narration_contains_raw_structure" in normalized
+        and normalized
+        <= {
+            "ui_narration_contains_raw_structure",
+            "structured_narration_followme_conflict",
+        }
+    )
     if (
         _followme_variant_authority_conflict_is_photo_local(normalized, record)
         or _owned_single_model_authority_conflict_is_photo_local(normalized, record)
         or _known_pixel_content_conflict_is_photo_local(normalized, record)
         or same_photo_followme_scene_conflict
+        or same_photo_narration_format_conflict
     ):
         return int(attempt or 1) >= 3
     if normalized == {"known_source_expectation_conflict"}:

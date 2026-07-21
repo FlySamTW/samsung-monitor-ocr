@@ -655,3 +655,11 @@
 - 408、412、413、766、768 五張已用 hash-bound pixel authority 零額外模型呼叫更正，正確新檔均取得 `.64` Drive receipt；上傳總數 `56,217→56,222`。全域舊檔更正帳本尚有 4 筆 mapping error，所以舊錯名暫不批次刪除；先保留新舊雙份比冒險遺失安全，之後只以精確 Drive ID 清理。
 - 18:51 正式 202601 已恢復並前進至 `1,322/1,478`，verified 1,305、review 17、failed 0、累計模型呼叫 15,622、目前 `M-高雄市-岡山區-SF-岡山-752.jpg` 第 1 輪。stream uploader PID 1128，canonical uploaded 56,224、pending 0、fuse absent。禁止因文件、Git 或舊檔清理停止正式 OCR。
 - 接續順序不變：完成 202601，再閉環其餘全部 2026（含 202606 nonfinal 與 202602–202605/202606 receipts），再 2025→2015，直到 `151,714` 張全部如實終局且逐張有精確 Drive 收據。
+
+## 2026-07-21 `.69` 接手補充：不得重置的總盤與復原規則
+
+- 目前上方唯一正確總盤為 `66,724 / 151,714`、資料夾 `45 / 137`。它表示唯一來源照片的首次辨識完成量；複核、三輪、修復與重新上傳均不加總。若畫面再次出現 `65,336`，先檢查 202606 canonical summary／discovery 記錄是否遭覆寫，不能把它解讀成 202601 卡住。
+- 主批次必須保持在線；一張如實結案即逐張 enqueue/upload，不等待月份或全年。修復、文件、Git、雲端舊檔清理、抽查都只能在不干擾 OCR、既有 Dashboard 分頁、LM Studio 與唯一 uploader 的前提下進行。
+- 若 safe reload 遇到 incomplete-staging interlock，先復原同一個正式 staging 並 `restart=false` 接續。supervisor 不得建立新 staging、不得重跑已完成照片、不得清掉 call/retry state。interlock 未釋放時只能保留現場並 fail-safe。
+- uploader 更新前和每次 claim 前都須遷移／驗證既有 pending payload；相同來源與相同 Drive ID 是冪等收據確認，絕不得另建重複 Drive 物件。更正照片的舊雲端副本只能在新檔 receipt、雜湊與遠端讀回完全成立後，按精確舊 Drive ID 處理。
+- FollowMe 證據不能放寬：黑色一般支架或黑色底座不等於白色 FollowMe 直立支架與圓形落地底座；螢幕內畫面也不是實體硬體。`高雄楠梓右昌-1148` 的 hash-bound 終局是 `單機 / S27D300GAC / 3,290`，不允許因黑色支架／底座改判為 FollowMe，也不得新增第 4 輪。

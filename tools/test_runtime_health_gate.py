@@ -505,6 +505,31 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(decision.allow_processing)
         self.assertTrue(decision.allow_upload)
 
+    def test_black_vertical_stand_and_round_base_are_not_followme_fixture(self):
+        narration = (
+            "我看到主螢幕正下方有黑色直立支架與黑色圓形底座，"
+            "價牌未見 FollowMe 字樣，故不屬 FollowMe；"
+            "價牌與螢幕同主體，故 label_ownership=matched，所以……"
+        )
+        candidate = record(
+            view_type="單機",
+            category="單機",
+            model="S27D300GAC",
+            price="3290",
+            complete_screen_count=3,
+            unique_main=True,
+            label_ownership="matched",
+            followme_physical_evidence=[],
+        )
+        decision = evaluate_runtime_health(candidate, narration, attempt=1)
+
+        self.assertNotIn("structured_narration_followme_conflict", decision.reasons)
+        self.assertIn("ui_narration_contains_raw_structure", decision.reasons)
+        self.assertTrue(first_pass_content_conflict_can_retry(1, decision.reasons, candidate))
+        self.assertTrue(first_pass_content_conflict_can_retry(2, decision.reasons, candidate))
+        self.assertTrue(final_content_conflict_can_isolate(3, decision.reasons, candidate))
+        self.assertEqual(decision.display_narration, BLOCKED_NARRATION)
+
     def test_distant_followme_without_wide_geometry_still_fails_closed(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
