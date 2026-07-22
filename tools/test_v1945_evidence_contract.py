@@ -677,6 +677,8 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(third["model"], "S27CG552EC")
         self.assertEqual(third["price"], 4990)
         self.assertTrue(third["human_pixel_authority_applied"])
+        self.assertTrue(third["evidence_contract_valid"])
+        self.assertEqual(third["evidence_contract_errors"], [])
         decision = immediate_retry_decision(third, 3, [first, second], 3)
         self.assertTrue(decision["verified"])
 

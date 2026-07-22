@@ -990,10 +990,12 @@ def apply_human_audited_pixel_authority(
             "structured_authority_blocked_fields",
         ):
             record.pop(key, None)
-        valid, _errors, normalized = validate_evidence_contract(record)
+        valid, errors, normalized = validate_evidence_contract(record)
         if not valid:
             return False
         record["normalized_evidence"] = normalized
+        record["evidence_contract_valid"] = True
+        record["evidence_contract_errors"] = []
         return True
     if expected_count == 1:
         pixel_summary = "原圖中央只有一台完整主角螢幕，其他邊緣螢幕不完整而不計入"
@@ -1022,10 +1024,12 @@ def apply_human_audited_pixel_authority(
         "structured_authority_blocked_fields",
     ):
         record.pop(key, None)
-    valid, _errors, normalized = validate_evidence_contract(record)
+    valid, errors, normalized = validate_evidence_contract(record)
     if not valid:
         return False
     record["normalized_evidence"] = normalized
+    record["evidence_contract_valid"] = True
+    record["evidence_contract_errors"] = []
     return True
 
 
