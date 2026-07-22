@@ -26,7 +26,11 @@ import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from skills.audit_fields import EVIDENCE_GUARD_REVISION, validate_evidence_contract
+from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
+    adjudication_field_invariant_reasons,
+    validate_evidence_contract,
+)
 from tools.photo_rename_planner import (
     READY_STATUS,
     copy_planned_image_idempotent,
@@ -332,6 +336,12 @@ def enqueue_finalized_result(
     contract_valid, contract_errors, normalized = validate_evidence_contract(row)
     if not contract_valid:
         raise RuntimeError("verified result failed evidence contract: " + ";".join(contract_errors))
+    invariant_reasons = adjudication_field_invariant_reasons(row)
+    if invariant_reasons:
+        raise RuntimeError(
+            "verified result failed adjudication field invariant: "
+            + ";".join(invariant_reasons)
+        )
 
     source = Path(str(row.get("original_source_path") or row.get("source_path") or "")).resolve()
     if not source.is_file():
@@ -367,6 +377,8 @@ def enqueue_finalized_result(
                 "complete_screen_count", "unique_main", "label_ownership",
                 "followme_physical_evidence", "followme_family_confirmed",
                 "three_pass_adjudicated", "adjudication_rule",
+                "adjudication_pass_summaries", "field_suppression_reasons",
+                "raw_structured_model", "raw_structured_price",
             )
         },
         "run_id": str(row.get("run_id") or ""),

@@ -1360,14 +1360,8 @@ def narration_marks_reference_only_price(structured_price, narration):
         return False
     formatted = f"{int(digits):,}" if digits.isdigit() else digits
     price_pattern = rf"(?:{re.escape(digits)}|{re.escape(formatted)})"
-    if re.search(
-        rf"(?:市價|原價|參考價).{{0,12}}{price_pattern}",
-        text,
-        re.IGNORECASE,
-    ):
-        return True
     if not re.search(
-        rf"建議售價.{{0,12}}{price_pattern}",
+        rf"(?:市價|原價|參考價|建議售價).{{0,12}}{price_pattern}",
         text,
         re.IGNORECASE,
     ):
@@ -3734,6 +3728,14 @@ def process_single_image(
             for key in ("view_type", "category", "model", "price")
             if key in data_obj
         }
+        # Preserve the request-bound structured values before any deterministic
+        # catalog, price, narration, or view post-processing. Finalization and
+        # audit code must be able to prove when a field was suppressed or
+        # changed; synthesized output may never erase this provenance.
+        raw_structured_model = explicit_structured_fields.get("model")
+        raw_structured_price = explicit_structured_fields.get("price")
+        data_obj["raw_structured_model"] = raw_structured_model
+        data_obj["raw_structured_price"] = raw_structured_price
         narration_model_fill_allowed = "model" not in explicit_structured_fields
         narration_price_fill_allowed = "price" not in explicit_structured_fields
         narration_view_fill_allowed = not ({"view_type", "category"} & set(explicit_structured_fields))
@@ -4222,6 +4224,14 @@ def process_single_image(
         structured_authority_blocked_fields = list(
             dict.fromkeys(structured_authority_blocked_fields)
         )
+        field_suppression_reasons = []
+        if raw_structured_model not in (None, "") and data_obj.get("model") != raw_structured_model:
+            field_suppression_reasons.append("raw_structured_model_suppressed_or_changed")
+        raw_price_digits = re.sub(r"[^0-9]", "", str(raw_structured_price or ""))
+        final_price_digits = re.sub(r"[^0-9]", "", str(data_obj.get("price") or ""))
+        if raw_price_digits and raw_price_digits != final_price_digits:
+            field_suppression_reasons.append("raw_structured_price_suppressed_or_changed")
+        data_obj["field_suppression_reasons"] = field_suppression_reasons
 
         # 4. Auto-Calculate Quality Issue
         p_val = data_obj.get("price")

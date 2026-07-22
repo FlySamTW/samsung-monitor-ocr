@@ -673,4 +673,11 @@
 - `.70` 只有使用 `two_wide_geometry_votes_veto_single_identity_outlier` 的終局不得直接視為相容；其他 `.70` 結果沒有走到該缺陷規則，可直接沿用以避免超過三輪或白跑。問題照片只能零模型重驗或由精確 hash-bound authority 結案；文心 645 是目前 trace 中唯一命中該規則者。
 - 人工／代理監督改為每日 09:00、21:00 各一次。每次必須報總盤、當前批次、verified/upload 增量、median/P90、平均呼叫、首輪結案率、review/failed、GPU/parallel 與至少三張原圖／敘述／結構／終局一致性；平時不輪詢、不洗版。發現系統性跑歪時仍立即照片邊界停止，不能等下個時段。
 - `.71` 已在不新增第 4 次模型呼叫下復原 `新文心-967=單機/S24F332EAC/2,590`；Drive receipt ID `1SUhHE9_b4Jexo2eqsTiyLE2kDZ44VuRg`。builder 重建結果為 2026 唯一來源 5,951、相容 verified 176、hash-bound human audited 88、待續跑 5,692、missing/conflicting/invalid 均 0。
+
+## 2026-07-22 `.72`：09:00 半日監督抓到的欄位清空缺陷
+
+- 半日唯讀抽查發現 `.71` 會把「市價與會員售價相同」誤當參考價而清空，也會在重複型號／價格對遭單輪敘述歸屬矛盾阻擋時，把空欄位冒充 verified 並上傳。runtime fuse 已在照片邊界停止後續發布。
+- `.72` 保留相同價格、禁止矛盾欄位洗空成功，並要求 builder 精確排除受影響 `.71` 終局。既有錯名 Drive receipt 只能在新正確檔名完成 exact readback 後逐筆處理，不得批次猜測刪除。
+- 全面稽核不是逐張補洞：新增跨所有 adjudication rule 的 model+price 共識不變條件、raw suppression provenance 與 uploader 第二道閘。595 項 tools 測試及完整 critical regressions 通過；正式 fuse 尚未解除，介面維持在線並誠實顯示修復中。
+- Drive 唯讀盤點：current receipt 2,894、與最新 accepted 欄位不一致 172、曾產生多檔名／多 Drive ID 的來源 681、確定由有內容退化成空欄 27（皆 202601）。現有 legacy reconciliation dry-run 仍為 897 列、893 gate blocked、4 mapping errors、`safe_to_replace=false`，沒有寫 ledger、沒有動 Drive。
 - 00:04 已由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 接回原 `20260721_233817/202601_...`，不重建 staging、不重跑既有 14 張。接回後 966 正確遠景、967 正確單機、968 正確 `FollowMe M7 32吋/12,990` 且三張皆逐張上傳；後續順序仍為完成全部 2026（含 202606），再 2025→2015。

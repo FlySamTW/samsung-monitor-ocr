@@ -20,7 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from skills.audit_fields import EVIDENCE_GUARD_REVISION, KNOWN_SOURCE_AUDIT_AUTHORITIES
+from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
+    KNOWN_SOURCE_AUDIT_AUTHORITIES,
+    adjudication_field_invariant_reasons,
+)
 
 
 FIELDS = ("source_path", "file_name", "period", "audit_folder", "reason", "source_item_id")
@@ -40,8 +44,45 @@ BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
         "20260721.69",
         "20260721.70",
         "20260721.71",
+        "20260722.72",
     }
 )
+
+
+def has_v71_verified_field_erasure(item: dict) -> bool:
+    """Identify .71 finals that erased a value still present in the bound call.
+
+    Revision .71 could clear a same-price ``市價`` observation and could also
+    publish empty identity fields after a repeated pair was blocked by a
+    narration/ownership conflict.  Such rows are not compatible evidence for
+    .72 and must be revalidated rather than silently inherited.
+    """
+    if item.get("evidence_guard_revision") != "20260721.71":
+        return False
+    parsed = item.get("parsed_output") or {}
+    if parsed.get("three_pass_adjudicated") is not True:
+        return False
+    if adjudication_field_invariant_reasons(parsed):
+        return True
+    raw_objects = item.get("raw_objects") or []
+    for raw in raw_objects:
+        try:
+            raw_item = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(raw_item, dict):
+            continue
+        raw_price = re.sub(r"[^0-9]", "", str(raw_item.get("price") or ""))
+        narration = str(raw_item.get("narration") or raw_item.get("thinking") or "")
+        if raw_price and not parsed.get("price"):
+            formatted = f"{int(raw_price):,}"
+            price_pattern = rf"(?:{re.escape(raw_price)}|{re.escape(formatted)})"
+            if re.search(rf"(?:市價|原價|參考價).{{0,12}}{price_pattern}", narration) and re.search(
+                rf"(?:會員售價|會員價|促銷價|現金價|特價|優惠價|現價|(?<!建議)售價).{{0,12}}{price_pattern}",
+                narration,
+            ):
+                return True
+    return False
 
 
 def stable_source_id(path: str | Path) -> str:
@@ -70,6 +111,8 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                         not in BACKFILL_COMPATIBLE_GUARD_REVISIONS
                         or decision.get("verified") is not True
                     ):
+                        continue
+                    if has_v71_verified_field_erasure(item):
                         continue
                     parsed = item.get("parsed_output") or {}
                     if (

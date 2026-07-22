@@ -140,6 +140,35 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual([row["file_name"] for row in rows], [source.name])
             self.assertEqual(summary["already_verified_year_sources"], 0)
 
+    def test_revision_71_verified_field_erasure_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "unsafe-71.jpg"
+            source.write_bytes(b"unsafe-71")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps({
+                    "trace_version": "v19.45",
+                    "evidence_guard_revision": "20260721.71",
+                    "source_item_id": stable_source_id(source),
+                    "guard_decision": {"verified": True},
+                    "raw_objects": [json.dumps({"model": "S27DG502EC", "price": "8990"})],
+                    "parsed_output": {
+                        "three_pass_adjudicated": True,
+                        "model": "S27DG502EC",
+                        "price": None,
+                        "adjudication_pass_summaries": [
+                            {"model": "S27DG502EC", "price": "8990", "label_ownership": "matched"},
+                            {"model": "S27DG502EC", "price": "8990", "label_ownership": "matched"},
+                        ],
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+
     def test_human_audited_source_is_excluded_only_when_pixels_match(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

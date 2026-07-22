@@ -1477,6 +1477,12 @@ class EvidenceContractTests(unittest.TestCase):
                 "同一價牌建議售價 42,900 元，下方另有促銷價 39,900 元。",
             )
         )
+        self.assertFalse(
+            batch.narration_marks_reference_only_price(
+                "8990",
+                "同一張價牌標示市價 8,990 元，會員售價也是 8,990 元。",
+            )
+        )
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         self.assertIn("若價牌只有「建議售價」一個明確商品金額", prompt)
 

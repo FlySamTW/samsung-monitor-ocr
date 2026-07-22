@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260721.71"
+EVIDENCE_GUARD_REVISION = "20260722.72"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -2527,6 +2527,48 @@ def clear_superseded_terminal_content_flags(record: Dict[str, Any]) -> None:
         record["unlisted_model_photo_consensus"] = False
 
 
+def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
+    """Reject a final that erases or changes independently repeated fields.
+
+    A three-pass adjudicator may reject a lone third-pass outlier. It may not
+    erase a model or price that appears identically in at least two structured,
+    same-subject ``matched`` pass summaries and then publish the empty or
+    changed value as verified. This invariant is independent of the selected
+    adjudication rule, so every rule crosses the same publication boundary.
+    """
+    if record.get("three_pass_adjudicated") is not True:
+        return []
+    summaries = record.get("adjudication_pass_summaries") or []
+    if not isinstance(summaries, list):
+        return ["adjudication_pass_summaries_missing"]
+    pair_votes: Counter[tuple[str, str]] = Counter()
+    for item in summaries:
+        if not isinstance(item, dict) or item.get("label_ownership") != "matched":
+            continue
+        model_key = followme_identity_key(item.get("model")) or normalize_model_token(item.get("model"))
+        price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+        if model_key and price_key:
+            pair_votes[(str(model_key), price_key)] += 1
+    repeated_pairs = {pair for pair, count in pair_votes.items() if count >= 2}
+    observed_pairs = set(pair_votes)
+    final_model = followme_identity_key(record.get("model")) or normalize_model_token(record.get("model"))
+    final_price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+    final_pair = (str(final_model or ""), final_price)
+    family_price_preserved = bool(
+        record.get("followme_family_confirmed") is True
+        and not final_model
+        and any(final_price == price for _model, price in repeated_pairs)
+    )
+    if (
+        len(observed_pairs) == 1
+        and repeated_pairs
+        and final_pair not in repeated_pairs
+        and not family_price_preserved
+    ):
+        return ["adjudication_repeated_identity_pair_erased_or_changed"]
+    return []
+
+
 def finalize_three_pass_outcome(
     record: Dict[str, Any],
     history: List[Dict[str, Any]] | None,
@@ -2635,6 +2677,8 @@ def finalize_three_pass_outcome(
         str(item.get("input_image_sha256") or "").strip().lower()
         for item in base_integrity
     }
+
+
     narrated_followme_fixture_passes = [
         item
         for item in base_integrity
@@ -2731,6 +2775,22 @@ def finalize_three_pass_outcome(
         for pair, items in non_followme_pair_groups.items()
         if len(items) >= 2
     ]
+    mixed_owned_identity_pair_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and len(winning_non_followme_pairs) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip() == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main") is True
+            and (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+            and not _label_ownership_conflicts_with_narration(
+                str(item.get("thinking") or item.get("narration") or "")
+            )
+            for item in winning_non_followme_pairs[0][1]
+        )
+    )
     # A tight three-monitor composition can still be one valid photographed
     # subject when the left and right neighbours are cut by the image edges.
     # The model sometimes contradicts that same physical description by
@@ -3266,7 +3326,7 @@ def finalize_three_pass_outcome(
         usable = list(base_integrity)
     elif edge_cut_identity_consensus_fallback:
         usable = list(single_local_integrity)
-    elif single_identity_base_fallback:
+    elif single_identity_base_fallback or mixed_owned_identity_pair_fallback:
         usable = list(single_local_integrity)
     elif single_view_base_fallback:
         usable = list(single_local_integrity)
@@ -3356,10 +3416,14 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(usable)
         rule = "two_pass_edge_cut_identity_consensus"
-    elif single_identity_base_fallback:
+    elif single_identity_base_fallback or mixed_owned_identity_pair_fallback:
         final_view = "單機"
         supporting = list(winning_non_followme_pairs[0][1])
-        rule = "two_pass_non_followme_identity_consensus"
+        rule = (
+            "two_pass_non_followme_identity_consensus"
+            if single_identity_base_fallback
+            else "two_pass_unique_owned_identity_consensus"
+        )
     elif followme_local_base_fallback or mixed_followme_local_base_fallback:
         final_view = "單機"
         supporting = [
@@ -3463,6 +3527,37 @@ def finalize_three_pass_outcome(
     else:
         return _technical_retry_outcome(outcome, "three_pass_view_majority_missing")
 
+    if final_view == "單機":
+        # Never turn a repeated structured model/price observation into a
+        # verified "no model / no price" result merely because one of those
+        # passes contradicts its own matched ownership in prose.  The
+        # contradiction is real evidence and must block publication instead
+        # of laundering the repeated identity pair into empty fields.
+        structured_pair_votes: list[tuple[str, str]] = []
+        field_safe_pair_votes: list[tuple[str, str]] = []
+        for item in supporting:
+            evidence = item.get("normalized_evidence") or item
+            model_key = followme_identity_key(item.get("model")) or normalize_model_token(item.get("model"))
+            price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+            if evidence.get("label_ownership") != "matched" or not model_key or not price_key:
+                continue
+            pair = (str(model_key), price_key)
+            structured_pair_votes.append(pair)
+            if not _label_ownership_conflicts_with_narration(
+                str(item.get("thinking") or item.get("narration") or "")
+            ):
+                field_safe_pair_votes.append(pair)
+        structured_counts = Counter(structured_pair_votes)
+        safe_counts = Counter(field_safe_pair_votes)
+        if any(
+            count >= 2 and safe_counts.get(pair, 0) < 2
+            for pair, count in structured_counts.items()
+        ):
+            return _technical_retry_outcome(
+                outcome,
+                "repeated_identity_pair_blocked_by_narration_conflict",
+            )
+
     original_record = dict(record)
     original = {
         "view_type": record.get("view_type"),
@@ -3476,6 +3571,9 @@ def finalize_three_pass_outcome(
             "view_type": item.get("view_type") or item.get("category"),
             "model": item.get("model"),
             "price": item.get("price"),
+            "raw_structured_model": item.get("raw_structured_model"),
+            "raw_structured_price": item.get("raw_structured_price"),
+            "field_suppression_reasons": list(item.get("field_suppression_reasons") or []),
             "complete_screen_count": (item.get("normalized_evidence") or item).get("complete_screen_count"),
             "unique_main": (item.get("normalized_evidence") or item).get("unique_main"),
             "label_ownership": (item.get("normalized_evidence") or item).get("label_ownership"),
@@ -3567,6 +3665,7 @@ def finalize_three_pass_outcome(
             model,
             price,
         )
+        preserved_followme_price = None
         if rule == "two_pass_followme_physical_consensus":
             # A FollowMe stand can carry several nearby variant/price cards.
             # Resolve each independently from the same field-safe passes:
@@ -3580,15 +3679,32 @@ def finalize_three_pass_outcome(
                 if followme_identity_key(item.get("model"))
                 and followme_identity_key(item.get("model")) != "UNRESOLVED"
             }
+            followme_price_candidates = [
+                item
+                for item in supporting
+                if (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+                and not _label_ownership_conflicts_with_narration(
+                    str(item.get("thinking") or item.get("narration") or "")
+                )
+                and item.get("price_conflict_detected") is not True
+            ]
             followme_price_keys = {
                 re.sub(r"[^0-9]", "", str(item.get("price") or ""))
-                for item in field_safe
+                for item in followme_price_candidates
                 if re.sub(r"[^0-9]", "", str(item.get("price") or ""))
             }
             if len(followme_model_keys) > 1:
                 model = None
             if len(followme_price_keys) > 1:
                 price = None
+            elif len(followme_price_keys) == 1:
+                candidate_price = next(iter(followme_price_keys))
+                if sum(
+                    re.sub(r"[^0-9]", "", str(item.get("price") or "")) == candidate_price
+                    for item in followme_price_candidates
+                ) >= 2:
+                    price = candidate_price
+                    preserved_followme_price = candidate_price
         # A structured ``matched`` flag is not an ownership vote when that
         # pass's own narration says the card cannot be tied to the subject.
         # Count only the same pass set that is eligible to contribute identity
@@ -3598,10 +3714,14 @@ def finalize_three_pass_outcome(
         if matched_votes < 2:
             model = None
             price = None
+        if preserved_followme_price:
+            price = preserved_followme_price
         record["model"] = model
         record["price"] = price
         record["unique_main"] = True
         record["label_ownership"] = "matched" if matched_votes >= 2 else "ambiguous"
+        if preserved_followme_price:
+            record["label_ownership"] = "matched"
         if rule == "three_pass_subthree_distant_conflict_conservative_single":
             subthree_counts = [
                 int((item.get("normalized_evidence") or item).get("complete_screen_count"))
@@ -3642,9 +3762,23 @@ def finalize_three_pass_outcome(
                 )
             ]
             record["complete_screen_count"] = max([1] + reported_counts)
+            narrated_price_votes = Counter(
+                re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+                for item in supporting
+                if (item.get("normalized_evidence") or item).get("label_ownership") == "matched"
+                and not _label_ownership_conflicts_with_narration(
+                    str(item.get("thinking") or item.get("narration") or "")
+                )
+                and item.get("price_conflict_detected") is not True
+                and re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+            )
+            narrated_price = next(
+                (value for value, votes in narrated_price_votes.items() if votes >= 2),
+                None,
+            )
             record["model"] = None
-            record["price"] = None
-            record["label_ownership"] = "ambiguous"
+            record["price"] = narrated_price
+            record["label_ownership"] = "matched" if narrated_price else "ambiguous"
             record["followme_family_confirmed"] = True
             record["followme_physical_evidence"] = [
                 {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -3721,6 +3855,11 @@ def finalize_three_pass_outcome(
         "型號或價格若沒有至少兩輪一致證據，維持無型號／無價格，不做猜測。"
     )
     record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
+    invariant_reasons = adjudication_field_invariant_reasons(record)
+    if invariant_reasons:
+        record.clear()
+        record.update(original_record)
+        return _technical_retry_outcome(outcome, invariant_reasons[0])
     final_valid, _final_errors, normalized = validate_evidence_contract(record)
     if not final_valid:
         record.clear()

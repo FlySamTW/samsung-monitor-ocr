@@ -115,6 +115,25 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_enqueue_rejects_repeated_identity_pair_erased_by_adjudication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "photo.jpg"
+            make_image(source)
+            row = verified_result(
+                source,
+                model=None,
+                price=None,
+                three_pass_adjudicated=True,
+                adjudication_pass_summaries=[
+                    {"model": "S24D362GAC", "price": "3490", "label_ownership": "matched"},
+                    {"model": "S24D362GAC", "price": "3490", "label_ownership": "matched"},
+                    {"model": "S24D362GAC", "price": "3490", "label_ownership": "matched"},
+                ],
+            )
+            with self.assertRaisesRegex(RuntimeError, "adjudication field invariant"):
+                enqueue_finalized_result(row, output_dir=root / "out")
+
     def test_network_readback_failure_is_retryable_but_gate_failure_is_not(self):
         self.assertTrue(
             is_transient_upload_failure(

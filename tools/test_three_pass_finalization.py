@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
+    adjudication_field_invariant_reasons,
     apply_human_audited_pixel_authority,
     finalize_three_pass_outcome,
     has_sufficient_followme_physical_evidence,
@@ -68,6 +69,47 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_adjudication_field_invariant_allows_price_without_model_to_finish_empty(self):
+        final = {
+            "three_pass_adjudicated": True,
+            "model": None,
+            "price": None,
+            "adjudication_pass_summaries": [
+                {"model": None, "price": "3490", "label_ownership": "matched"},
+                {"model": None, "price": "3490", "label_ownership": "matched"},
+                {"model": None, "price": "3490", "label_ownership": "matched"},
+            ],
+        }
+        self.assertEqual(adjudication_field_invariant_reasons(final), [])
+
+    def test_repeated_identity_pair_with_narration_ownership_conflict_cannot_verify_empty(self):
+        calls = [
+            make_pass(model=None, price=None, ownership="not_visible", thinking="價牌不可見"),
+            make_pass(
+                model="S27CG552EC",
+                price="4990",
+                ownership="matched",
+                thinking="價格牌無法確認屬於主角",
+            ),
+            make_pass(
+                model="S27CG552EC",
+                price="4990",
+                ownership="matched",
+                thinking="型號與現價 4,990 元屬於同一主體",
+            ),
+        ]
+
+        current = calls[-1]
+        current["ocr_attempt"] = 3
+        decision = finalize_three_pass_outcome(current, calls[:-1], unresolved())
+
+        self.assertTrue(decision["unresolved"])
+        self.assertFalse(decision["verified"])
+        self.assertEqual(
+            decision["technical_retry_reason"],
+            "repeated_identity_pair_blocked_by_narration_conflict",
+        )
+
     def test_raw_single_model_price_consensus_recovers_sole_suggested_price(self):
         from tools.finalize_existing_three_pass_reviews import (
             _raw_single_model_price_consensus,
@@ -2135,7 +2177,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         result = finalize_three_pass_outcome(current, history, unresolved())
 
         self.assertTrue(result["verified"])
-        self.assertEqual(result["adjudication_rule"], "two_pass_single_view_consensus")
+        self.assertEqual(result["adjudication_rule"], "two_pass_unique_owned_identity_consensus")
         self.assertEqual(current["view_type"], "單機")
         self.assertEqual(current["model"], "S32FM803UC")
         self.assertEqual(current["price"], "12900")
@@ -2778,18 +2820,18 @@ class ThreePassFinalizationTests(unittest.TestCase):
             make_pass(
                 model='FollowMe Pro M7 43"', price="17990", count=3,
                 physical=fixture,
-                thinking="前景一台 FollowMe，背景其他螢幕均未完整入鏡，所以……",
+                thinking="前景一台 FollowMe，機身與價牌明示 Pro M7 43 與 17,990，背景其他螢幕均未完整入鏡，所以……",
             ),
             make_pass(
                 model='FollowMe Pro M7 43"', price="17990", count=4,
                 physical=fixture,
-                thinking="前景一台 FollowMe，背景另有三台完整螢幕，所以……",
+                thinking="前景一台 FollowMe，機身與價牌明示 Pro M7 43 與 17,990，背景另有三台完整螢幕，所以……",
             ),
         ]
         current = make_pass(
             model='FollowMe Pro M7 43"', price="17990", count=2,
             physical=fixture,
-            thinking="全圖掃描確認無其他完整螢幕，所以……",
+            thinking="全圖掃描確認機身與價牌明示 Pro M7 43 與 17,990，且無其他完整螢幕，所以……",
         )
 
         result = finalize_three_pass_outcome(current, history, unresolved())

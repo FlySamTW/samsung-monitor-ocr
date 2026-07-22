@@ -1164,6 +1164,17 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `strict_multiscreen_distant_fallback` 與 `two_wide_narration_distant_fallback` 也必須至少有兩輪 `unique_main=false`。三輪都把被原圖左右邊界裁切的鄰機誤寫成完整，不得只憑錯誤 count=3 抹除唯一主角與同主體價牌。
 - 永久回歸 `文心-645`：第一輪 `單機/unique_main=true`、第二輪真寬景票、第三輪 `單機/S27CG552EC/4,990/matched`，不得使用 `two_wide_geometry_votes_veto_single_identity_outlier`。原始解析度像素權威固定為只有中央一台完整螢幕；左右鄰機碰原圖邊界不計，終局為 `單機/S27CG552EC/4,990/✓`。
 - `.70` 只有 `two_wide_geometry_votes_veto_single_identity_outlier` 終局不得直接跳過 `.71` backfill；其他 `.70` 結果未經此缺陷路徑，仍可相容沿用。問題照片只能用零模型規則重驗或精確 source item + source SHA + input SHA 視覺權威結案，不得因升版增加第 4 次模型呼叫。
+
+## 2026-07-22 `.72`：禁止把已讀到的型號／價格洗成空值後冒充成功
+
+- `市價／原價／參考價／建議售價` 不是看到關鍵字就一律丟棄。只有敘述明示該金額非目前售價，或同張價牌另有不同的促銷／會員／現金／優惠價時，才可視為參考價；「市價 8,990、會員售價也是 8,990」必須保留 8,990。
+- 若至少兩輪結構答案重複同一組型號與價格，但其中一輪敘述又否定自己的 `label_ownership=matched`，不得把型號與價格清空後標成 verified／上傳。三輪完成後仍有此矛盾，該張必須 fail-closed，保留原始三輪證據供零模型重驗或像素權威結案，不得增加第 4 次模型呼叫。
+- `.71` 已驗證結果只有在未經上述欄位清空路徑時才可相容沿用；任何三輪終局的 raw bound response 仍有 model／price、但 final parsed field 被清空者，builder 必須重新列入候選。逐張上傳 worker 不得把舊錯檔名工作直接升版。
+- 系統閘不得以「最後一輪 raw 與終局不同」直接判錯，因最後一輪可能是離群值。正式 invariant 是：至少兩輪健康、同圖綁定、`label_ownership=matched` 且同一組 model+price 一致，在沒有另一組具體 pair 衝突時，終局不得清空、改寫或改成遠景；一般非 FollowMe 以 `two_pass_unique_owned_identity_consensus` 結案。若同組 pair 的敘述又否定自己的價牌歸屬，則 fail-closed，不得把矛盾洗成空欄成功。
+- 每輪必須持久保存 `raw_structured_model`、`raw_structured_price` 與 `field_suppression_reasons`；三輪摘要、stream job 與 receipt 不得丟棄此 provenance。上傳入口再次執行 adjudication field invariant，任何終局欄位遺失不得建立工作。
+- 09:00 全面唯讀盤點顯示 `.71` 的 43 個 verified 終局中，18 個最後一輪 raw 與 final 不同；逐輪共識篩選後有 7 個高確定性欄位清空／視角否決缺陷需重驗。Drive 側 2,894 份現行 receipt 與最新 accepted 結果有 172 張欄位不一致，681 個來源曾產生不同檔名與不同 Drive ID；只可在 exact existence／trashed／size／MD5 對帳及正確 replacement receipt 完成後逐筆處理，禁止批次猜測刪除。
+- canonical stream receipt 少 4,438 份不等於 Drive 一定少 4,438 張；202602–202605 必須先以 Drive 實體清單核對，不能把缺本機 receipt 直接當缺上傳。
+- 介面連續性是永久鐵律：內容 fuse 只能在照片邊界停止錯誤 OCR／錯誤上傳，port 5002、Dashboard、LM 狀態與 uploader 狀態介面必須持續在線並明示「內容守門修復中」。修復完成後由保存斷點自動續跑，不得等使用者手按、不得關閉／重開瀏覽器、不得新增分頁。
 - `新文心-967` 在安全停止邊界已消耗第三次呼叫但尚未落盤，因此只能用兩次乾淨同圖輸出加精確 source item／原圖 SHA／input SHA 像素權威零模型復原；不得再呼叫第四次。終局固定為 `單機/S24F332EAC/2,590`，Drive 收據 ID `1SUhHE9_b4Jexo2eqsTiyLE2kDZ44VuRg` 並保留 `ocr_attempt=3`。此 consumed-cap 路徑不能泛化成跳過第三輪的捷徑。
 - 發現此類系統性定案漏洞時，持續運轉鐵律的正確動作是「在照片邊界停止 OCR、保持 Dashboard/LM Studio/uploader 在線、先修與回歸，再從保存斷點續跑」；繼續跑錯比短暫安全停下更違反專案目標。
 - `reload_backend_at_safe_idle.ps1` 對 incomplete staging 的 interlock 是資料保護機制：helper 尚未明確釋放前，必須先恢復原正式 staging，並以 `restart=false` 保留已消耗輪次／retry state。此時 supervisor **禁止**建立新的 staging、禁止將中斷批次誤當可重開的新批次；只有原位恢復失敗且保留完整證據時才可 fail-safe。
