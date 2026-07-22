@@ -67,6 +67,7 @@ def _result_rows(smoke_dir: Path) -> list[dict[str, Any]]:
             {
                 "file_name": Path(str(data.get("image") or "")).name,
                 "meta": meta,
+                "adjudication_rule": str(meta.get("adjudication_rule") or ""),
                 **fields,
             }
         )
@@ -129,11 +130,26 @@ def verify_and_clear(
         raise RuntimeError("smoke trace is incomplete")
 
     hashes: dict[str, set[str]] = defaultdict(set)
+    contained_audited_content_reasons = {
+        "structured_narration_followme_conflict",
+        "evidence_thinking_conflict",
+    }
     for item in traces:
         parsed = item.get("parsed_output") or {}
         runtime = parsed.get("runtime_health") or {}
         file_name = str(item.get("file_name") or "")
         image_hash = str(parsed.get("input_image_sha256") or "").strip().lower()
+        runtime_reasons = {
+            str(reason) for reason in runtime.get("reasons") or [] if str(reason)
+        }
+        audited_content_conflict = bool(
+            file_name == audited_file
+            and audited.get("adjudication_rule")
+            == "three_pass_human_audited_pixel_authority"
+            and runtime.get("healthy") is not True
+            and runtime_reasons
+            and runtime_reasons <= contained_audited_content_reasons
+        )
         if (
             str(item.get("evidence_guard_revision") or "") != expected_revision
             or parsed.get("request_id_verified") is not True
@@ -141,7 +157,7 @@ def verify_and_clear(
             or parsed.get("independent_pass") is not True
             or parsed.get("prior_answer_exposed") is True
             or parsed.get("prompt_contamination") is True
-            or runtime.get("healthy") is not True
+            or (runtime.get("healthy") is not True and not audited_content_conflict)
             or len(image_hash) != 64
         ):
             raise RuntimeError(f"unsafe smoke trace: {file_name} attempt {item.get('attempt')}")

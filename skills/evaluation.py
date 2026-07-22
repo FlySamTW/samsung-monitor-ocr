@@ -216,6 +216,8 @@ class Evaluator:
                         "model_validation_failed": r.get('model_validation_failed', False),
                         "rejected_model": r.get('rejected_model', ''),
                         "price_conflict_detected": r.get('price_conflict_detected', False),
+                        "adjudication_rule": r.get('adjudication_rule', ''),
+                        "three_pass_adjudicated": r.get('three_pass_adjudicated', False),
                     }
                 },
                 "annotations": [{

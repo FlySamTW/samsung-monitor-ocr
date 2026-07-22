@@ -1175,6 +1175,8 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - 09:00 全面唯讀盤點顯示 `.71` 的 43 個 verified 終局中，18 個最後一輪 raw 與 final 不同；逐輪共識篩選後有 7 個高確定性欄位清空／視角否決缺陷需重驗。Drive 側 2,894 份現行 receipt 與最新 accepted 結果有 172 張欄位不一致，681 個來源曾產生不同檔名與不同 Drive ID；只可在 exact existence／trashed／size／MD5 對帳及正確 replacement receipt 完成後逐筆處理，禁止批次猜測刪除。
 - canonical stream receipt 少 4,438 份不等於 Drive 一定少 4,438 張；202602–202605 必須先以 Drive 實體清單核對，不能把缺本機 receipt 直接當缺上傳。
 - 介面連續性是永久鐵律：內容 fuse 只能在照片邊界停止錯誤 OCR／錯誤上傳，port 5002、Dashboard、LM 狀態與 uploader 狀態介面必須持續在線並明示「內容守門修復中」。修復完成後由保存斷點自動續跑，不得等使用者手按、不得關閉／重開瀏覽器、不得新增分頁。
+- fuse clearance 的實圖可由精確 hash-bound `three_pass_human_audited_pixel_authority` 收斂單一照片內容矛盾；只有 request binding、獨立輪次、同圖 SHA、無前輪答案、無 prompt 污染全數健康，且非健康理由只限該人工權威照片的 `structured_narration_followme_conflict`／`evidence_thinking_conflict` 時才可封存。transport、binding、memory、prompt 或跨照片錯誤仍一律不得放寬。
+- durable `OCR成功.json` 的 `ocr_meta` 必須保存 `adjudication_rule` 與 `three_pass_adjudicated`；不得只在記憶體／Dashboard 顯示後遺失，否則 fuse clearance、builder 與上傳稽核無法證明終局是由哪一條規則產生。
 - `新文心-967` 在安全停止邊界已消耗第三次呼叫但尚未落盤，因此只能用兩次乾淨同圖輸出加精確 source item／原圖 SHA／input SHA 像素權威零模型復原；不得再呼叫第四次。終局固定為 `單機/S24F332EAC/2,590`，Drive 收據 ID `1SUhHE9_b4Jexo2eqsTiyLE2kDZ44VuRg` 並保留 `ocr_attempt=3`。此 consumed-cap 路徑不能泛化成跳過第三輪的捷徑。
 - 發現此類系統性定案漏洞時，持續運轉鐵律的正確動作是「在照片邊界停止 OCR、保持 Dashboard/LM Studio/uploader 在線、先修與回歸，再從保存斷點續跑」；繼續跑錯比短暫安全停下更違反專案目標。
 - `reload_backend_at_safe_idle.ps1` 對 incomplete staging 的 interlock 是資料保護機制：helper 尚未明確釋放前，必須先恢復原正式 staging，並以 `restart=false` 保留已消耗輪次／retry state。此時 supervisor **禁止**建立新的 staging、禁止將中斷批次誤當可重開的新批次；只有原位恢復失敗且保留完整證據時才可 fail-safe。
