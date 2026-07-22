@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260722.72"
+EVIDENCE_GUARD_REVISION = "20260722.73"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -31,6 +31,37 @@ MATERIAL_STRUCTURED_AUTHORITY_FIELDS = {"view_type", "model", "price"}
 # model pass must never become a healthy or verified result. Full-image hashes
 # bind staging copies and renamed files to the same audited pixels.
 KNOWN_SOURCE_AUDIT_AUTHORITIES = {
+    # 嘉義新光-199: the left 12,990/19,900 price belongs to the Harman
+    # Kardon speaker display and the FollowMe material on the right is a
+    # nearby promotion board.  The central monitor is the only complete
+    # screen, but its exact owned SKU/price cannot be transcribed safely.
+    "5adcbd07f3bacd18f673ca9f7243ba0acf03a32ebbe0c5fbaaaa7e2d3451b347": {
+        "source_file_sha256": "3880911cd0d8c55abf2de05dcd007f31315917c91f29a793a5c3966ef4771333",
+        "input_image_sha256": "3880911cd0d8c55abf2de05dcd007f31315917c91f29a793a5c3966ef4771333",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_visible",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 彰化中山-234: the only visible monitor enters from the lower-right
+    # image boundary; its right and bottom bezel/corners are outside the
+    # original frame.  It contributes zero complete monitors, so the truthful
+    # project outcome is an identity-free distant scene.  The old authority
+    # incorrectly called this a one-screen single and is superseded here.
+    "e6b85baa98ec3589edbf79f6388239f92e4fa5e3b8b91c26b482f81a21c73ce9": {
+        "source_file_sha256": "c7133b8fc8467975f6cca1c953141c67e42a797dcef19076c7a24bd2cc331341",
+        "input_image_sha256": "f8a38f32e21f0e01c3047e64f70c4b37008d382beacd3e1ecf188a0415423e8d",
+        "view_type": "遠景",
+        "complete_screen_count": 0,
+        "model": None,
+        "price": None,
+        "label_ownership": "not_applicable",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
     "8055596887f98fdb69c7beafd59ddb2128662288d3f4a27026fc6d8b7f9ac905": {
         "source_file_sha256": "116e5e5d975f61131c2799468999dd469a8d6f82e37a0be16eb29101dcae7a90",
         "input_image_sha256": "2cbd7051bd2e56cb0d4a550adbae8e8d34c471eda0430dd5dd4fbf8aa154a5b2",
@@ -969,12 +1000,22 @@ def apply_human_audited_pixel_authority(
     record["human_pixel_authority_applied"] = True
     record["human_pixel_authority_sha256"] = image_hash
     record["adjudication_rule"] = "three_pass_human_audited_pixel_authority"
+    record["three_pass_adjudicated"] = True
     record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
     expected_count = expected.get("complete_screen_count")
     if expected["view_type"] == "遠景":
+        if expected_count == 0:
+            scene_summary = (
+                "原圖邊界內沒有任何一台螢幕四邊與四角完整入鏡，"
+                "因此完整螢幕數為 0，也沒有可安全歸屬的型號與價格"
+            )
+        else:
+            scene_summary = (
+                f"賣場寬景中共有 {expected_count} 台完整螢幕，沒有唯一主角，"
+                "也沒有可歸屬於同一主體的型號與價格"
+            )
         record["thinking"] = (
-            "我看到賣場寬景中至少三台完整螢幕與多組不同價牌，沒有唯一主角，"
-            "也沒有可歸屬於同一主體的型號與價格。這張依三次獨立呼叫與"
+            f"我看到{scene_summary}。這張依三次獨立呼叫與"
             "已綁定原圖像素權威定案為遠景、無型號、無價格，所以……"
         )
         record["narration"] = record["thinking"]

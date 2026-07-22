@@ -116,8 +116,22 @@ def verify_and_clear(
     audited = next((row for row in rows if row["file_name"] == audited_file), None)
     if audited is None:
         raise RuntimeError("human-audited smoke file is absent")
-    if audited.get("view_type") != "單機" or audited.get("model") or audited.get("price"):
-        raise RuntimeError("human-audited adjacent-price case did not finish conservatively")
+    audited_rule = audited.get("adjudication_rule")
+    audited_view = audited.get("view_type")
+    if audited_rule == "three_pass_human_audited_pixel_authority":
+        audited_result_valid = (
+            audited_view in {"單機", "遠景"}
+            and not audited.get("model")
+            and not audited.get("price")
+        )
+    else:
+        audited_result_valid = (
+            audited_view == "單機"
+            and not audited.get("model")
+            and not audited.get("price")
+        )
+    if not audited_result_valid:
+        raise RuntimeError("human-audited smoke case did not finish conservatively")
 
     traces: list[dict[str, Any]] = []
     for line in trace_file.read_text(encoding="utf-8").splitlines():
@@ -131,6 +145,7 @@ def verify_and_clear(
 
     hashes: dict[str, set[str]] = defaultdict(set)
     contained_audited_content_reasons = {
+        "known_source_expectation_conflict",
         "structured_narration_followme_conflict",
         "evidence_thinking_conflict",
     }
@@ -178,7 +193,7 @@ def verify_and_clear(
         "smoke_model_calls": len(traces),
         "smoke_bad_invariants": 0,
         "audited_file": audited_file,
-        "audited_final": {"view_type": "單機", "model": None, "price": None},
+        "audited_final": {"view_type": audited_view, "model": None, "price": None},
         "evidence_guard_revision": expected_revision,
         "formal_retry_state_changed": False,
         "fourth_call_authorized": False,

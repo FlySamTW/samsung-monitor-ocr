@@ -1183,3 +1183,13 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - uploader 升版必須相容既有 pending jobs：每一輪 claim 前先以現行 schema 遷移 pending payload，再比對 source identity、來源／發布雜湊、目標檔名與既有 Drive receipt。已存在相同 Drive ID 的冪等確認只可更新本地收據，不得產生第二個雲端物件；同一照片的更正副本仍須取得新檔精確 receipt、讀回驗證後，才可依舊 Drive ID 清理舊錯名。
 - FollowMe 的實體證據是嚴格幾何關係：必須是與同一主體相連、位於螢幕像素外的**白色**直立支架與完整圓形落地底座，或直接附著的 FollowMe 品牌。一般黑色支架、黑色圓底座、桌架、輪架或螢幕內廣告都不是 FollowMe 證據，絕不可把它們冒充為白色實體裝置。
 - `M-高雄市-楠梓區-TK3C-右昌-1148.jpg` 已以完整原圖及雜湊綁定權威定案為 `單機 / S27D300GAC / 3,290`。它的黑色一般支架／底座不得觸發 FollowMe；其 UI 敘述出現內部結構欄位時，先限縮為同一張照片的無記憶重試並清理展示文字，不能污染下一張或停止整批。此權威只適用完全相同的 source identity、來源 SHA 與 input SHA，且不得額外呼叫第 4 輪。
+
+## 2026-07-23 `.73`：原圖邊界零完整螢幕、鄰商品價格與自動復跑閉環
+
+- 本節修正並取代先前把 `彰化中山-234` 寫成一般單機的結論。完整原圖中唯一可見螢幕由右下方進入畫面，右框、下框及右下角均在原圖外，故 `complete_screen_count=0`，終局固定為 `遠景／無型號／無價格`。像素權威仍須同時綁定 source item、source SHA 與實際 input SHA，且只可在三次 request-bound、無記憶、無提示污染的呼叫後離線定案，絕不允許第 4 次。
+- `嘉義新光-199` 的左側 `12,990／19,900` 屬 Harman Kardon 喇叭展示，右側 FollowMe 是附近宣傳物；中央唯一完整螢幕沒有足夠同主體 SKU／價格像素。精確權威固定為 `單機／無型號／無價格`，並永久測試模型或價格候選必須被清除。
+- backfill builder 在接受 `.64`–`.73` 相容 verified trace 前，必須再比對現行精確像素權威；若舊 verified 的 view、完整台數、model 或 price 與權威不符，該來源不得被算成 current verified。這避免舊 `.72` 的 `234=單機` 被靜默沿用。
+- fuse smoke run `20260723_000827_374213` 對 234 恰執行三輪，三輪均 request-bound、independent、同一 input SHA、無前輪答案、無 prompt 污染；終局為 pixel authority 的 `遠景/count 0/null/null`，verified 1、review 0、failed 0、第四輪 0。clearance receipt 為 `_ocr_audit/runtime_health_fuse_clearance/smoke_20260723_001314_840098.json`。
+- 內容 fuse 解除後必須由腳本自動切回正式 staging；Dashboard 不關閉、不重開分頁。此次唯一 hidden runner 自 `20260723_001355/202601_商化照片-202601_6403a632` 恢復，介面實際顯示照片與第 1→2→3 輪後連續切換下一張。
+- backend 與 stream uploader 是兩個獨立長駐程序。evidence revision 變更後，即使舊 uploader PID 尚在，也可能仍載入舊 revision 而拒絕新 pending job；監督程式必須檢查 pending 是否被 claim、stderr 是否出現 `unapproved pending upload revision`。只可隱藏重啟唯一 uploader，不得重啟 OCR、Dashboard、LM Studio 或瀏覽器。此次 uploader 更新後 pending 歸零，canonical uploaded `56,317→56,319`，最新收據為 `M-202601-台中市-北屯區-TK3C-東山-遠景-1138.jpg`。
+- 持續運轉的證明不是 `is_running=true` 一個欄位；至少要同時看到正式月份的 `processed/current_pass/current_file` 前進、`stream_file=current_file`、右側 presentation queue 累積，以及 verified 照片的 pending→receipt 閉環。總盤 `66,724/151,714` 是去重首次辨識數，複核期間可不變；月份複核與逐張上傳數必須持續變動。

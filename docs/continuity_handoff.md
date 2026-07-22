@@ -682,3 +682,13 @@
 - Drive 唯讀盤點：current receipt 2,894、與最新 accepted 欄位不一致 172、曾產生多檔名／多 Drive ID 的來源 681、確定由有內容退化成空欄 27（皆 202601）。現有 legacy reconciliation dry-run 仍為 897 列、893 gate blocked、4 mapping errors、`safe_to_replace=false`，沒有寫 ledger、沒有動 Drive。
 - 00:04 已由唯一 hidden `rerun_staged_candidates.py --resume-existing-then-continue --keep-staging` 接回原 `20260721_233817/202601_...`，不重建 staging、不重跑既有 14 張。接回後 966 正確遠景、967 正確單機、968 正確 `FollowMe M7 32吋/12,990` 且三張皆逐張上傳；後續順序仍為完成全部 2026（含 202606），再 2025→2015。
 - 2026-07-22 09:46 後 `.72` 隔離驗證證明 940、976、1528 可正確收斂；199 因第 1 次 request binding 無效且後兩輪欄位衝突，正確被阻擋、未上傳。另一次 234 驗證雖終局保守正確，但第 2 輪仍有內容矛盾，因此 clearance 嚴格檢查未放行。正式 fuse、benchmark lock 與原 `20260721_233817/202601_...` 斷點均保留，尚未冒充正式續跑；port 5002／Dashboard／LM／uploader 狀態介面保持在線且未重開瀏覽器。後續必須取得全 trace 安全的 bound smoke proof 才能解除，不得為追進度放寬 binding、memory、prompt 或跨照片守門。
+
+## 2026-07-23 00:19 `.73` 接手基準：介面、正式 OCR 與逐張上傳已恢復
+
+- `.73` 取代舊文件中的 `彰化中山-234=一般單機`：原圖右下唯一螢幕的右框、下框與右下角在原圖外，完整螢幕數為 0，正確終局是 `遠景／無型號／無價格`。舊「正確」Drive 物件 ID `17J0gZssmTMA-IRpm_laTFBQPSY2Pf61K` 現為待取代副本；必須先取得新遠景檔 exact receipt/readback，才可按 ID 精確清理，禁止先刪。
+- `嘉義新光-199` 已加入精確 hash-bound 權威：中央唯一完整螢幕，左側 Harman Kardon 價格與右側 FollowMe 宣傳不得污染主體，終局 `單機／無型號／無價格`。builder 會拒絕與現行權威不符的舊 verified trace。
+- 離線 599 項 tools 測試與完整 critical regressions 全通過。fuse-active smoke `20260723_000827_374213` 為 1 張／3 calls／1 verified／0 review／0 failed；binding、independence、same-image、memory、prompt 與 call cap 全通過。fuse 以 receipt `runtime_health_fuse_clearance/smoke_20260723_001314_840098.json` 封存，benchmark lock 已解除。
+- port 5002 已載入 `.73`，既有 Dashboard 分頁未重開。唯一 hidden runner 為 `rerun_staged_candidates.py`，正式 staging `20260723_001355/202601_商化照片-202601_6403a632`；00:19 已從 `中清-1530` 連續前進到 `東山-1140`，processed 6、verified 5、review 1、failed 0，介面照片、stream file、輪次與結果卡同步。
+- 第一張 `中清-1530` 三輪均 request-bound、無記憶／prompt 污染，但皆有 `structured_authority_material_conflict:model`，所以 photo-local 技術終局、未上傳；它不阻塞後續，也不得呼叫第 4 次，後續只能零模型重驗或精確像素權威處理。
+- 舊 stream uploader 雖有 PID，實際仍載入 `.72`，因此對第一個 `.73` pending job 報 `unapproved pending upload revision` 後退出。已只把 uploader 隱藏換版，不動 OCR／Dashboard／LM／瀏覽器；新 worker parent/child `27248→3440` 上線後 pending 歸零，canonical uploaded `56,317→56,319`，最新逐張收據 `東山-1138`。未來升版後必須驗證 receipt 前進，不能只看 PID。
+- 接續工作不變：腳本持續完成全部 2026（含 nonfinal、正確新檔與精確 Drive receipt），再依 2025→2015 處理至全案 `151,714`；人工／代理維持每日 09:00、21:00 唯讀內容監督，除系統性跑歪外不干擾 runner。

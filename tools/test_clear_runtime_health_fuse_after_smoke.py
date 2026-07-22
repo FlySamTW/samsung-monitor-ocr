@@ -77,7 +77,7 @@ class RuntimeFuseSmokeClearanceTests(unittest.TestCase):
                     "adjudication_rule": "three_pass_human_audited_pixel_authority",
                 }},
                 "annotations": [{"result": [
-                    {"from_name": "category", "value": {"choices": ["單機"]}},
+                    {"from_name": "category", "value": {"choices": ["遠景"]}},
                     {"from_name": "model", "value": {"text": ["null"]}},
                     {"from_name": "price", "value": {"text": ["null"]}},
                 ]}],
@@ -94,7 +94,10 @@ class RuntimeFuseSmokeClearanceTests(unittest.TestCase):
                         "prompt_contamination": False, "input_image_sha256": "b" * 64,
                         "runtime_health": {
                             "healthy": attempt != 2,
-                            "reasons": [] if attempt != 2 else ["structured_narration_followme_conflict"],
+                            "reasons": [] if attempt != 2 else [
+                                "known_source_expectation_conflict",
+                                "structured_narration_followme_conflict",
+                            ],
                         },
                     },
                 })
@@ -110,6 +113,7 @@ class RuntimeFuseSmokeClearanceTests(unittest.TestCase):
                 apply=False,
             )
             self.assertEqual(report["status"], "would_clear")
+            self.assertEqual(report["audited_final"]["view_type"], "遠景")
 
 
 if __name__ == "__main__":

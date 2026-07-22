@@ -73,6 +73,8 @@ class EvidenceContractTests(unittest.TestCase):
     TAINAN_438_SHA = "67e134c5a48752627a8445fa0933bc203a2e5c3aa2ef4f10639eeccea4de27c4"
     TAINAN_1063_SHA = "1066f8575b45442395537bc609adf39b5756c0b3326ba44b34e96fd0f2c9019c"
     TAINAN_231_SHA = "0886bdb903c560cfd548830f4b89e81c16798e6fc42334e686022a74838d888b"
+    CHIAYI_199_SHA = "3880911cd0d8c55abf2de05dcd007f31315917c91f29a793a5c3966ef4771333"
+    CHANGHUA_234_SHA = "f8a38f32e21f0e01c3047e64f70c4b37008d382beacd3e1ecf188a0415423e8d"
     SMS_348_SHA = "31a0244a9f6186e483158f5ae80cbdd7f501383ae8eb222fde3a0262a801a85c"
     SMS_356_SHA = "9eae0b812784f4f72ac57d8ac2043b28e57de3e1a0abde3fc82ffc69fabc40a9"
     LALAPORT_301_SHA = "46efc7264cfde6dd35e82caef9c2c8182613d1acd231a8ada092efd3b585dc66"
@@ -2094,6 +2096,50 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(row["followme_family_confirmed"])
         self.assertIsNone(row["model"])
         self.assertIsNone(row["price"])
+
+    def test_234_pixel_authority_counts_cropped_monitor_as_zero(self):
+        wrong = {
+            "period": "202601", "view_type": "單機", "category": "單機",
+            "model": None, "price": None, "input_image_sha256": self.CHANGHUA_234_SHA,
+            "thinking": "右下方一台螢幕完整入鏡。", "ocr_attempt": 1,
+            "request_id_verified": True, "request_binding_enforced": True,
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True, "reasons": []},
+            **evidence(1, True, "not_visible", []),
+        }
+        first, second, third = dict(wrong), dict(wrong, ocr_attempt=2), dict(wrong, ocr_attempt=3)
+        self.assertTrue(apply_human_audited_pixel_authority(third, [first, second], 3))
+        self.assertEqual(third["view_type"], "遠景")
+        self.assertEqual(third["complete_screen_count"], 0)
+        self.assertFalse(third["unique_main"])
+        self.assertIsNone(third["model"])
+        self.assertIsNone(third["price"])
+        self.assertTrue(third["three_pass_adjudicated"])
+        self.assertIn("完整螢幕數為 0", third["thinking"])
+        decision = immediate_retry_decision(third, 3, [first, second], 3)
+        decision = finalize_three_pass_outcome(third, [first, second], decision, 3)
+        self.assertTrue(decision["verified"])
+
+    def test_199_pixel_authority_clears_adjacent_price_and_model(self):
+        wrong = {
+            "period": "202601", "view_type": "單機", "category": "單機",
+            "model": "S32DM700UC", "price": "19900",
+            "input_image_sha256": self.CHIAYI_199_SHA,
+            "thinking": "鄰近展示牌寫著 19,900。", "ocr_attempt": 1,
+            "request_id_verified": True, "request_binding_enforced": True,
+            "independent_pass": True, "prior_answer_exposed": False,
+            "prompt_contamination": False, "runtime_health": {"healthy": True, "reasons": []},
+            **evidence(1, True, "matched", []),
+        }
+        first, second, third = dict(wrong), dict(wrong, ocr_attempt=2), dict(wrong, ocr_attempt=3)
+        self.assertTrue(apply_human_audited_pixel_authority(third, [first, second], 3))
+        self.assertEqual(third["view_type"], "單機")
+        self.assertEqual(third["complete_screen_count"], 1)
+        self.assertIsNone(third["model"])
+        self.assertIsNone(third["price"])
+        decision = immediate_retry_decision(third, 3, [first, second], 3)
+        decision = finalize_three_pass_outcome(third, [first, second], decision, 3)
+        self.assertTrue(decision["verified"])
 
     def test_human_audited_1467_pixels_preserve_wide_scene_followme_subject(self):
         wrong = {

@@ -45,6 +45,7 @@ BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
         "20260721.70",
         "20260721.71",
         "20260722.72",
+        "20260722.73",
     }
 )
 
@@ -85,6 +86,39 @@ def has_v71_verified_field_erasure(item: dict) -> bool:
     return False
 
 
+def verified_row_conflicts_with_known_authority(item: dict) -> bool:
+    """Reject a legacy verified row superseded by exact audited pixels."""
+    parsed = item.get("parsed_output") or {}
+    source_id = str(
+        item.get("source_item_id") or item.get("source_identity") or ""
+    ).strip()
+    expected = KNOWN_SOURCE_AUDIT_AUTHORITIES.get(source_id)
+    if expected is None:
+        image_hash = str(parsed.get("input_image_sha256") or "").strip().lower()
+        expected = next(
+            (
+                row
+                for row in KNOWN_SOURCE_AUDIT_AUTHORITIES.values()
+                if str(row.get("input_image_sha256") or "").strip().lower()
+                == image_hash
+            ),
+            None,
+        )
+    if expected is None:
+        return False
+    actual_view = str(parsed.get("view_type") or parsed.get("category") or "").strip()
+    if actual_view != str(expected.get("view_type") or "").strip():
+        return True
+    normalized = parsed.get("normalized_evidence") or parsed
+    if normalized.get("complete_screen_count") != expected.get("complete_screen_count"):
+        return True
+    if str(parsed.get("model") or "").strip() != str(expected.get("model") or "").strip():
+        return True
+    actual_price = re.sub(r"[^0-9]", "", str(parsed.get("price") or ""))
+    expected_price = re.sub(r"[^0-9]", "", str(expected.get("price") or ""))
+    return actual_price != expected_price
+
+
 def stable_source_id(path: str | Path) -> str:
     resolved = str(Path(path).resolve())
     return hashlib.sha256(resolved.casefold().encode("utf-8")).hexdigest()
@@ -113,6 +147,8 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                     ):
                         continue
                     if has_v71_verified_field_erasure(item):
+                        continue
+                    if verified_row_conflicts_with_known_authority(item):
                         continue
                     parsed = item.get("parsed_output") or {}
                     if (

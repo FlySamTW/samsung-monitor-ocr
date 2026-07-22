@@ -12,10 +12,37 @@ from tools.build_v1945_evidence_backfill import (
     load_bound_visual_authorities,
     run,
     stable_source_id,
+    verified_row_conflicts_with_known_authority,
 )
 
 
 class EvidenceBackfillBuilderTests(unittest.TestCase):
+    def test_superseded_234_verified_row_is_not_accepted_as_current(self):
+        source_id = "e6b85baa98ec3589edbf79f6388239f92e4fa5e3b8b91c26b482f81a21c73ce9"
+        image_hash = "f8a38f32e21f0e01c3047e64f70c4b37008d382beacd3e1ecf188a0415423e8d"
+        stale = {
+            "source_item_id": source_id,
+            "parsed_output": {
+                "input_image_sha256": image_hash,
+                "view_type": "單機",
+                "complete_screen_count": 1,
+                "model": None,
+                "price": None,
+            },
+        }
+        corrected = {
+            "source_item_id": source_id,
+            "parsed_output": {
+                "input_image_sha256": image_hash,
+                "view_type": "遠景",
+                "complete_screen_count": 0,
+                "model": None,
+                "price": None,
+            },
+        }
+        self.assertTrue(verified_row_conflicts_with_known_authority(stale))
+        self.assertFalse(verified_row_conflicts_with_known_authority(corrected))
+
     def make_audit(self, root: Path, sources: list[Path]) -> Path:
         audit = root / "_ocr_audit"
         folder = audit / "0001_202605_fixture"
