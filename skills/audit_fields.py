@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260722.73"
+EVIDENCE_GUARD_REVISION = "20260723.75"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -827,6 +827,22 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "model": None,
         "price": 19900,
         "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 三創店 498: the two foreground monitors are complete; every upper-row
+    # monitor crosses the original top frame and is excluded.  The center card
+    # lists several Odyssey/Smart Monitor products, so it cannot own one exact
+    # SKU or price.  This is therefore an identity-free two-screen single, not
+    # a three-screen distant view and not a proved FollowMe fixture.
+    "eb006e7deed5ab9c812dcd10fe27a3a746de2b180342cde9c9ad67170afc3a6c": {
+        "source_file_sha256": "6fa00d35277388fd7b2e9edeb76de2426ecfeddd0b609661be84ce8d97f2e06e",
+        "input_image_sha256": "c2ef77ece2852e06eeb7ba8533dd6a8cc8a435936f928482007ace3c8764c5cd",
+        "view_type": "單機",
+        "complete_screen_count": 2,
+        "model": None,
+        "price": None,
+        "label_ownership": "ambiguous",
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },

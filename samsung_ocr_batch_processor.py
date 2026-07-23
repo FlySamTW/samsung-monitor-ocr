@@ -208,10 +208,20 @@ def _compact_status_presentation(raw):
 def _presentation_payload(orchestrator):
     """Return a small immutable live window; full per-photo history stays on the history API."""
     global _presentation_events
-    if not getattr(orchestrator, "is_running", False):
-        _presentation_events = []
-        return []
     live = list(getattr(orchestrator, "display_queue", []) or [])
+    # A content fuse may pause OCR at a photo boundary, but the boss-facing
+    # monitor must not blank itself.  Preserve the last coherent photo/LLM/card
+    # window while stopped and replace it only when a new live queue exists.
+    if not live:
+        _presentation_events = [
+            event
+            for event in _presentation_events
+            if os.path.isfile(str(event.get("source_path") or ""))
+        ][-200:]
+        return [
+            _compact_status_presentation(event)
+            for event in _presentation_events[-STATUS_PRESENTATION_WINDOW:]
+        ]
     current_events = []
     seen = set()
     for index, raw in enumerate(live):

@@ -204,6 +204,31 @@ class PresentationHistoryTests(unittest.TestCase):
         finally:
             backend._presentation_events = previous_events
 
+    def test_idle_fuse_preserves_existing_last_presentation(self):
+        class IdleOrchestrator:
+            is_running = False
+            display_queue = []
+            recent_results = []
+
+        previous_events = backend._presentation_events
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                source = Path(temp_dir) / "still-present.jpg"
+                source.write_bytes(b"image")
+                backend._presentation_events = [{
+                    "presentation_id": "p-fuse",
+                    "presentation_sequence": 900,
+                    "file_name": source.name,
+                    "source_path": str(source),
+                    "narration": "保留最後一張照片的判讀內容",
+                    "result": {"view_type": "單機", "model": "M7"},
+                }]
+                items = backend._presentation_payload(IdleOrchestrator())
+                self.assertEqual([item["presentation_id"] for item in items], ["p-fuse"])
+                self.assertEqual(items[0]["narration"], "保留最後一張照片的判讀內容")
+        finally:
+            backend._presentation_events = previous_events
+
     def test_idle_status_keeps_durable_presentation_sequence(self):
         class IdleOrchestrator:
             is_running = False

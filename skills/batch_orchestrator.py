@@ -6,7 +6,7 @@ import logging
 import hashlib
 import gzip
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread, Event, RLock, current_thread
 from typing import List, Optional, Callable
@@ -43,6 +43,16 @@ from skills.runtime_health_gate import (
 )
 
 log = logging.getLogger("rich")
+
+
+# An invalid request-id echo is never usable evidence, but two isolated model
+# transcription slips hours apart are not proof of cross-request crosstalk.
+# Escalate to the durable batch-wide fuse only when three distinct photos hit an
+# explicit mismatch inside this short rolling window.  Every invalid call still
+# consumes one of the absolute three call slots and remains excluded from
+# adjudication/upload.
+REQUEST_BINDING_SYSTEMIC_WINDOW_SECONDS = 10 * 60
+REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES = 3
 
 
 def _select_durable_or_memory_record(
@@ -239,6 +249,7 @@ class BatchOrchestrator:
         self.auto_attempts = {}
         self.auto_result_history = {}
         self.runtime_health_incident_sources = {}
+        self.request_binding_incident_events = []
         self.source_metadata_map = {}
         
         # [v16.12] Force Rerun Queue
@@ -435,6 +446,7 @@ class BatchOrchestrator:
             "auto_attempts": self.auto_attempts,
             "auto_result_history": self.auto_result_history,
             "runtime_health_incident_sources": self.runtime_health_incident_sources,
+            "request_binding_incident_events": self.request_binding_incident_events,
             "updated_at": datetime.now().isoformat(),
         }
         temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -474,6 +486,18 @@ class BatchOrchestrator:
                 for reason, sources in (payload.get("runtime_health_incident_sources") or {}).items()
                 if isinstance(sources, list)
             }
+            self.request_binding_incident_events = [
+                {
+                    "reason": str(item.get("reason") or ""),
+                    "source_id": str(item.get("source_id") or ""),
+                    "seen_at": str(item.get("seen_at") or ""),
+                }
+                for item in (payload.get("request_binding_incident_events") or [])
+                if isinstance(item, dict)
+                and str(item.get("reason") or "") == "request_id_mismatch"
+                and str(item.get("source_id") or "")
+                and str(item.get("seen_at") or "")
+            ][-REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES * 4 :]
             if self.priority_queue or self.retry_queue:
                 self.log_system(
                     f"♻️ 已恢復未完成複核佇列：人工 {len(self.priority_queue)}、自動 {len(self.retry_queue)}"
@@ -508,15 +532,16 @@ class BatchOrchestrator:
         return False
 
     def _request_binding_incident_repeated_across_sources(self, reasons, result) -> bool:
-        """Contain incomplete echoes; fuse only recurring explicit mismatches.
+        """Contain sparse bad echoes; fuse only a short systemic mismatch burst.
 
         Every unbound response is unusable evidence and still consumes one of
         the absolute three model-call slots.  Missing/unverified echoes commonly
         accompany a truncated or repetitive model response; they remain local
         to that photo even if another photo later has the same transport
-        failure.  Only an explicit non-empty request-ID mismatch recurring on a
-        different source proves cross-request crosstalk and retains the durable
-        global fuse.
+        failure.  An explicit non-empty mismatch is batch-wide only after three
+        distinct photos hit it inside a ten-minute rolling window.  This keeps
+        a rare model transcription slip photo-local without ever accepting its
+        unbound payload as evidence.
         """
         source_id = str(
             result.get("file_name")
@@ -527,15 +552,48 @@ class BatchOrchestrator:
         ).strip()
         if not source_id:
             return True
-        repeated_mismatch = False
-        for reason in sorted({str(item) for item in reasons if str(item)}):
+        now = datetime.now().astimezone()
+        cutoff = now - timedelta(seconds=REQUEST_BINDING_SYSTEMIC_WINDOW_SECONDS)
+        recent_events = []
+        for item in list(getattr(self, "request_binding_incident_events", []) or []):
+            try:
+                seen_at = datetime.fromisoformat(str(item.get("seen_at") or ""))
+                if seen_at.tzinfo is None:
+                    seen_at = seen_at.astimezone()
+            except (TypeError, ValueError):
+                continue
+            if seen_at >= cutoff:
+                recent_events.append(dict(item))
+        current_reasons = sorted({str(item) for item in reasons if str(item)})
+        for reason in current_reasons:
             prior = set(self.runtime_health_incident_sources.get(reason, []))
-            if reason == "request_id_mismatch" and prior and source_id not in prior:
-                repeated_mismatch = True
             prior.add(source_id)
             self.runtime_health_incident_sources[reason] = sorted(prior)
+            if reason == "request_id_mismatch" and not any(
+                item.get("reason") == reason and item.get("source_id") == source_id
+                for item in recent_events
+            ):
+                recent_events.append(
+                    {
+                        "reason": reason,
+                        "source_id": source_id,
+                        "seen_at": now.isoformat(),
+                    }
+                )
+        self.request_binding_incident_events = recent_events[
+            -REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES * 4 :
+        ]
         self._persist_retry_state()
-        return repeated_mismatch
+        distinct_mismatch_sources = {
+            str(item.get("source_id") or "")
+            for item in self.request_binding_incident_events
+            if item.get("reason") == "request_id_mismatch"
+        }
+        return (
+            "request_id_mismatch" in current_reasons
+            and len(distinct_mismatch_sources)
+            >= REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES
+        )
 
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:
@@ -1488,6 +1546,7 @@ class BatchOrchestrator:
                     self.auto_attempts = {}
                     self.auto_result_history = {}
                     self.runtime_health_incident_sources = {}
+                    self.request_binding_incident_events = []
                     self.session_processed = set()
                     self.current_run_id = ""
                 self.image_dir = target_dir
@@ -1513,6 +1572,7 @@ class BatchOrchestrator:
                 self.auto_attempts = {}
                 self.auto_result_history = {}
                 self.runtime_health_incident_sources = {}
+                self.request_binding_incident_events = []
                 try:
                     self._retry_state_path().unlink(missing_ok=True)
                 except OSError as exc:

@@ -67,6 +67,7 @@ def assert_batch_directory_isolation(tmp_root: Path) -> None:
 def assert_request_binding_fault_scope() -> None:
     orchestrator = BatchOrchestrator.__new__(BatchOrchestrator)
     orchestrator.runtime_health_incident_sources = {}
+    orchestrator.request_binding_incident_events = []
     orchestrator._persist_retry_state = lambda: None
 
     reasons = ["request_id_mismatch"]
@@ -78,6 +79,9 @@ def assert_request_binding_fault_scope() -> None:
     ) is False
     assert orchestrator._request_binding_incident_repeated_across_sources(
         reasons, {"file_name": "second.jpg"}
+    ) is False
+    assert orchestrator._request_binding_incident_repeated_across_sources(
+        reasons, {"file_name": "third.jpg"}
     ) is True
 
     for reason in ("request_id_missing", "request_binding_unverified"):

@@ -1,10 +1,12 @@
-"""Resume one photo-local incomplete request echo without resetting its call count.
+"""Resume one photo-local request-binding fault without resetting its call count.
 
 This recovery is deliberately narrower than a normal fuse clearance. It accepts
-only a first- or second-call missing/unverified request echo, preserves the
-already consumed call count, places the same photo back at the front of the
-durable retry queue, archives the fuse, and records an auditable receipt.
-Explicit request-ID mismatches and third-call failures are never accepted.
+only a first- or second-call missing/unverified request echo, or one explicit
+mismatch from the legacy staging-wide fuse policy when fewer than three source
+photos were recorded. It preserves the already consumed call count, places the
+same photo back at the front of the durable retry queue, archives the fuse, and
+records an auditable receipt. The invalid response is never accepted as
+evidence; third-call failures are never accepted.
 """
 
 from __future__ import annotations
@@ -22,7 +24,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-ALLOWED_REASONS = {"request_id_missing", "request_binding_unverified"}
+ALLOWED_REASONS = {
+    "request_id_missing",
+    "request_binding_unverified",
+    "request_id_mismatch",
+}
 RECOVERY_RULE = "photo_local_unbound_call_preserve_attempt_and_retry"
 
 
@@ -71,8 +77,6 @@ def recover(
         raise RuntimeError("runtime fuse is not active")
     if not reasons or not reasons <= ALLOWED_REASONS:
         raise RuntimeError(f"unsupported fuse reasons: {sorted(reasons)}")
-    if "request_id_mismatch" in reasons:
-        raise RuntimeError("explicit request-ID mismatch cannot use local recovery")
     if attempt not in (1, 2) or not file_name:
         raise RuntimeError("local recovery requires one named photo stopped on call 1 or 2")
 
@@ -104,6 +108,24 @@ def recover(
         ):
             raise RuntimeError("earlier persisted history is not healthy and request-bound")
 
+    if "request_id_mismatch" in reasons:
+        expected = str(snapshot.get("request_binding_expected") or "").strip().lower()
+        actual = str(snapshot.get("request_binding_actual") or "").strip().lower()
+        if (
+            not re.fullmatch(r"[0-9a-f]{16,64}", expected)
+            or not re.fullmatch(r"[0-9a-f]{16,64}", actual)
+            or expected == actual
+        ):
+            raise RuntimeError("explicit mismatch has no trustworthy expected/actual proof")
+        mismatch_sources = list(
+            (retry_state.get("runtime_health_incident_sources") or {}).get(
+                "request_id_mismatch"
+            )
+            or []
+        )
+        if file_name not in mismatch_sources or len(set(mismatch_sources)) >= 3:
+            raise RuntimeError("explicit mismatch is not proven sparse under the new policy")
+
     source_map = _read_json(source_map_file)
     source_info = (source_map.get("items") or {}).get(file_name) or {}
     source_item_id = str(source_info.get("source_item_id") or "")
@@ -112,6 +134,14 @@ def recover(
         raise RuntimeError("source map has no stable source_item_id")
     if not original_source.is_file() or not (staging_dir / file_name).is_file():
         raise RuntimeError("source or staged photo is missing")
+    if "request_id_mismatch" in reasons and not re.fullmatch(
+        r"[0-9a-f]{64}",
+        str(snapshot.get("input_image_sha256") or "").strip().lower(),
+    ):
+        # The hash is over the exact prepared model-input composite, not the
+        # original JPEG bytes, so equality with the staged file is neither
+        # expected nor a valid recovery condition.
+        raise RuntimeError("explicit mismatch snapshot has no model-input hash")
 
     report = {
         "status": "would_recover" if not apply else "recovered",
@@ -121,6 +151,7 @@ def recover(
         "remaining_calls": 3 - attempt,
         "fourth_call_allowed": False,
         "recovery_rule": RECOVERY_RULE,
+        "discarded_request_binding_fault": sorted(reasons),
     }
     if not apply:
         return report

@@ -60,7 +60,7 @@ _PRICE_SPEC_PATTERN = re.compile(
     r"(?:HZ|MS|CM|MM|INCH|吋|月付|月租|分期|頻率|尺寸)", re.IGNORECASE
 )
 _INSTRUCTION_ECHO_PATTERN = re.compile(
-    r"(?:送出前(?:最後)?檢查|必須(?:填|加入|逐項寫入)|禁止(?:輸出|說它)|"
+    r"(?:送出前(?:最後)?檢查|必須(?:填入|加入|逐項寫入)|禁止(?:輸出|說它)|"
     r"不得(?:敘述|抄寫)|線索時禁止|followme_physical_evidence\s*不得|"
     r"(?:最終|重新)?(?:校正|修正|更正)(?:後|結果|為|：|:))",
     re.IGNORECASE,

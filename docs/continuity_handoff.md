@@ -692,3 +692,21 @@
 - 第一張 `中清-1530` 三輪均 request-bound、無記憶／prompt 污染，但皆有 `structured_authority_material_conflict:model`，所以 photo-local 技術終局、未上傳；它不阻塞後續，也不得呼叫第 4 次，後續只能零模型重驗或精確像素權威處理。
 - 舊 stream uploader 雖有 PID，實際仍載入 `.72`，因此對第一個 `.73` pending job 報 `unapproved pending upload revision` 後退出。已只把 uploader 隱藏換版，不動 OCR／Dashboard／LM／瀏覽器；新 worker parent/child `27248→3440` 上線後 pending 歸零，canonical uploaded `56,317→56,319`，最新逐張收據 `東山-1138`。未來升版後必須驗證 receipt 前進，不能只看 PID。
 - 接續工作不變：腳本持續完成全部 2026（含 nonfinal、正確新檔與精確 Drive receipt），再依 2025→2015 處理至全案 `151,714`；人工／代理維持每日 09:00、21:00 唯讀內容監督，除系統性跑歪外不干擾 runner。
+
+## 2026-07-23 `.74` live recovery handoff
+
+- Root cause of the 02:40 stop was a false batch-wide `request_id_mismatch` fuse: only two distinct photos had mismatches, separated by about two hours and about 240 processed photos. The old staging-lifetime accumulator treated the second sparse incident as systemic.
+- `.74` keeps every invalid binding response excluded and counted against the three-call cap, but trips the global binding fuse only for three distinct mismatched photos inside ten minutes. Sparse faults remain same-photo retries. UI presentation history no longer blanks merely because OCR is temporarily stopped.
+- Full critical regressions passed. The legacy fuse for `M-台北市-中正區-SF-台北-577.jpg` was archived with its attempt count preserved; the invalid payload was discarded. Port 5002 was safely reloaded in the existing browser context to revision `.74`, the same staging checkpoint resumed, and the current-revision stream uploader was relaunched hidden.
+- Live proof immediately after recovery: `242/1209 -> 243 -> 248` and continued; latest result moved `576 -> 577 -> 582`; uploader moved the new `.74` queue through exact receipts with one transient pending item while the next photo was still processing. No browser tab/window was opened or restarted. The existing Chrome inventory still contained exactly one `Samsung OCR Dashboard` tab at the same fingerprint URL; a fresh DOM capture timed out, so do not claim a post-repair screenshot until a later non-disruptive visual check succeeds.
+- Three original-image checks passed: 581 `S27CG552EC/4990`, 582 `S27FG532EC/4990`, 583 `S32DG802SC/29900`. Early `.74` high-risk slice: 20 finalized, 50 calls, median 12.82 s, P90 16.25 s, 2.50 calls/photo, 15% first-pass, max call 3, no accepted unverified request IDs.
+- Project completion remains: every supported 2015-2026 source photo gets a truthful view/model/price-or-null result, deterministic filename, and exact year-folder Drive receipt. Finish 2026 correction/upload closure first, then continue 2025 down to 2015. Based on observed end-to-end throughput rather than call latency, current conservative full completion target is 2026-08-28 to 2026-09-01, conditional on uninterrupted service; remeasure after historical batches begin.
+
+## 2026-07-23 `.75` live handoff
+
+- Production is revision `20260723.75`, port 5002, original staging `20260723_001355\202601_商化照片-202601_6403a632`; it resumed from the saved boundary and advanced `268→273/1,209`, verified `251→256`, review 17, failed 0, fuse absent, pending/working `0/0`.
+- Root cause fixed: old instruction-echo detection treated natural `必須填 null` as copied prompt text. Never broaden it back to `必須填`.
+- `三創店-498` was finalized with zero extra inference as `單機/count 2/model null/price null`; its exact Drive receipt is `_drive_upload_stream/receipts/eb006e7d...fc3a6c.json`, Drive ID `1MUsxbIb7x6NheREtoQX-pLN-SrcatwEj`, confirmed 2026-07-23 09:04:41.
+- The hidden `.75` uploader proved pending-to-receipt closure. The old `.74` uploader was stopped before the new job became claimable, preventing incompatible-revision rejection. Backend and uploader process trees are unique.
+- Existing Chrome inventory previously proved exactly one Dashboard tab at `http://127.0.0.1:5002/?ui=31584c2c96ae7330`; no tab/window was opened, closed, reloaded or replaced. A later lightweight DOM claim timed out, so this handoff has current API/process/regression proof but no new visual screenshot; do not claim otherwise.
+- Honest completion window is 2026-08-28 through 2026-09-01 at 2,350–2,500 verified-and-uploaded photos/day. The former August 10 estimate is withdrawn. Finish 2026 first, then continue 2025 down to 2015 automatically.

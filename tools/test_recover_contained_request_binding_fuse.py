@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,8 @@ class ContainedRequestBindingRecoveryTests(unittest.TestCase):
         staging = root / "staging"
         staging.mkdir()
         file_name = "photo.jpg"
-        (staging / file_name).write_bytes(b"staged")
+        staged_bytes = b"staged"
+        (staging / file_name).write_bytes(staged_bytes)
         source = root / "source.jpg"
         source.write_bytes(b"source")
         source_id = "a" * 64
@@ -41,6 +43,9 @@ class ContainedRequestBindingRecoveryTests(unittest.TestCase):
                 "priority_queue": [],
                 "auto_attempts": {file_name: 1},
                 "auto_result_history": {},
+                "runtime_health_incident_sources": {
+                    reason: [file_name],
+                },
             },
         )
         fuse = root / "audit" / "runtime_health_fuse.json"
@@ -54,6 +59,9 @@ class ContainedRequestBindingRecoveryTests(unittest.TestCase):
                 "record_snapshot": {
                     "prior_answer_exposed": False,
                     "prompt_contamination": False,
+                    "request_binding_expected": "a" * 32,
+                    "request_binding_actual": "b" * 32,
+                    "input_image_sha256": hashlib.sha256(staged_bytes).hexdigest(),
                 },
             },
         )
@@ -75,12 +83,37 @@ class ContainedRequestBindingRecoveryTests(unittest.TestCase):
             self.assertTrue(Path(report["receipt"]).is_file())
             self.assertTrue(Path(report["fuse_history"]).is_file())
 
-    def test_explicit_mismatch_is_refused(self):
+    def test_legacy_sparse_explicit_mismatch_is_requeued_but_never_accepted(self):
         with tempfile.TemporaryDirectory() as temp:
-            staging, fuse, _ = self._fixture(
+            staging, fuse, file_name = self._fixture(
                 Path(temp), reason="request_id_mismatch"
             )
-            with self.assertRaisesRegex(RuntimeError, "unsupported fuse reasons"):
+            report = recover(staging_dir=staging, fuse_file=fuse, apply=True)
+            state = json.loads(
+                (staging / ".ocr_retry_queue.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["auto_attempts"][file_name], 1)
+            self.assertEqual(state["auto_result_history"], {})
+            self.assertEqual(state["retry_queue"], [file_name])
+            self.assertEqual(
+                report["discarded_request_binding_fault"], ["request_id_mismatch"]
+            )
+            self.assertFalse(fuse.exists())
+
+    def test_three_source_explicit_mismatch_remains_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            staging, fuse, file_name = self._fixture(
+                Path(temp), reason="request_id_mismatch"
+            )
+            state_path = staging / ".ocr_retry_queue.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["runtime_health_incident_sources"]["request_id_mismatch"] = [
+                file_name,
+                "second.jpg",
+                "third.jpg",
+            ]
+            _write(state_path, state)
+            with self.assertRaisesRegex(RuntimeError, "not proven sparse"):
                 recover(staging_dir=staging, fuse_file=fuse, apply=True)
             self.assertTrue(fuse.exists())
 

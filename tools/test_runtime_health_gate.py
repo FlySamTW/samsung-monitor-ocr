@@ -342,6 +342,15 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertNotIn("ui_narration_instruction_echo", decision.reasons)
         self.assertTrue(decision.allow_processing)
 
+    def test_natural_null_conclusion_is_not_prompt_instruction_echo(self):
+        narration = (
+            "我看到價牌文字無法可靠讀取，型號與價格因缺乏可讀標籤，"
+            "必須填 null，所以這張維持無型號與無價格。"
+        )
+        decision = evaluate_runtime_health(record(), narration)
+        self.assertNotIn("ui_narration_instruction_echo", decision.reasons)
+        self.assertTrue(decision.allow_processing)
+
     def test_public_fuse_never_exposes_raw_model_output(self):
         public = public_runtime_health_fuse({
             "active": True,
@@ -722,11 +731,12 @@ class RuntimeHealthGateTests(unittest.TestCase):
             ["source-a", "source-b"],
         )
 
-    def test_incomplete_request_echo_is_local_but_explicit_mismatch_recurs_globally(self):
+    def test_sparse_request_echo_faults_stay_local_but_short_burst_fuses(self):
         from skills.batch_orchestrator import BatchOrchestrator
 
         orchestrator = object.__new__(BatchOrchestrator)
         orchestrator.runtime_health_incident_sources = {}
+        orchestrator.request_binding_incident_events = []
         orchestrator._persist_retry_state = lambda: None
 
         for reason in ("request_id_missing", "request_binding_unverified"):
@@ -746,9 +756,35 @@ class RuntimeHealthGateTests(unittest.TestCase):
                 ["request_id_mismatch"], {"file_name": "first.jpg"}
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             orchestrator._request_binding_incident_repeated_across_sources(
                 ["request_id_mismatch"], {"file_name": "second.jpg"}
+            )
+        )
+        self.assertTrue(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["request_id_mismatch"], {"file_name": "third.jpg"}
+            )
+        )
+
+    def test_old_request_mismatch_does_not_poison_current_window(self):
+        from skills.batch_orchestrator import BatchOrchestrator
+
+        orchestrator = object.__new__(BatchOrchestrator)
+        orchestrator.runtime_health_incident_sources = {
+            "request_id_mismatch": ["old-source.jpg"]
+        }
+        orchestrator.request_binding_incident_events = [
+            {
+                "reason": "request_id_mismatch",
+                "source_id": "old-source.jpg",
+                "seen_at": "2020-01-01T00:00:00+00:00",
+            }
+        ]
+        orchestrator._persist_retry_state = lambda: None
+        self.assertFalse(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["request_id_mismatch"], {"file_name": "current.jpg"}
             )
         )
 

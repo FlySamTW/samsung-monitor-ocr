@@ -46,6 +46,8 @@ BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
         "20260721.71",
         "20260722.72",
         "20260722.73",
+        "20260723.74",
+        "20260723.75",
     }
 )
 
