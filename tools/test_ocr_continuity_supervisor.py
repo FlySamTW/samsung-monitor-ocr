@@ -32,8 +32,9 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertIn('$runnerMode = "--execute"', self.source)
         self.assertIn('$runnerMode = "--resume-existing-then-continue"', self.source)
         self.assertIn("[System.StringComparison]::OrdinalIgnoreCase", self.source)
-        self.assertIn("$runnerMode,", self.source)
-        self.assertNotIn('"--execute","--resume-existing-then-continue"', self.source)
+        self.assertIn('$runnerModeArgs = @("--execute")', self.source)
+        self.assertIn('$runnerModeArgs += "--resume-existing-then-continue"', self.source)
+        self.assertIn(") + $runnerModeArgs + @(", self.source)
 
     def test_hidden_launches_use_named_nonempty_arguments(self):
         self.assertIn("[string[]]$ProcessArgs", self.source)

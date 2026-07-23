@@ -776,3 +776,32 @@
   2026 source，不重複增加初辨數。2026 current-rule candidates 歸零後，
   continuity supervisor 必須自動接續 2025→2015。人工／代理監督維持
   09:00、21:00 低功耗抽查，重點是內容有無跑歪，不是代替腳本逐張做。
+
+## 2026-07-23 21:14 `.76` 202601 最後一張收尾與 supervisor 修復
+
+- 21:01 唯讀監督發現正式批次卡在 `202601 1208/1209` 超過兩小時；
+  backend、Dashboard API、LM Studio、唯一 uploader 與 runtime fuse
+  狀態皆正常，但 OCR 沒有前進。
+- 第一個系統根因是 continuity supervisor 啟動
+  `rerun_staged_candidates.py --resume-existing-then-continue` 時漏傳必要
+  `--execute`，因此每五分鐘只產生 argparse error。第二個根因是
+  start API 非同步，接續器在 accepted 與 running 可見之間過早 attach。
+  supervisor 現已固定傳入 `--execute`，接續器亦會等待 running 或完成
+  狀態可觀察；41 項針對性測試及完整 critical regressions 退出碼 0。
+- 修正接續後，最後一張 `M-新竹市-北　區-TK3C-新竹-1086.jpg` 暴露
+  另一個既有程序邊界：call counter 已為 3，但只有 attempts 1、2 兩份
+  current-revision 輸出，故 backend 正確拒絕第 4 次，月份仍差一張。
+- 原圖、source map、trace 與 retry state 交叉核對：source item
+  `e7ac4dbf...09e3e`，source/input SHA 均為 `9ba8d851...40cb`；兩份輸出
+  都是 request-bound、independent、無前輪答案／prompt 污染，且一致為
+  `單機 / count 1 / model null / price 3690`。完整原圖只可讀到
+  `Odyssey G6 QLED 1000R` 家族描述，不能安全猜完整 SKU。
+- 已新增精確三重雜湊權威及窄 containment 回歸，使用
+  `recover_consumed_cap_missing_result.py` 零模型收尾。結果先排入逐張
+  上傳，再寫 terminal task；`model_calls_consumed=3`、
+  `fourth_call_made=false`。202601 已到 `1209/1209`，最新上傳檔為
+  `M-202601-新竹市-北_區-TK3C-新竹-單機-型號未辨識-＄3690-1086.jpg`，
+  pending/working 回到 `0/0`。
+- 下一步由既有 hidden continuity daemon 自動完成 active group receipt
+  並接續其餘 2026 候選，再 2025→2015；不得人工重建 staging、重置
+  attempts、重啟瀏覽器或停在 2026 宣告全案完成。

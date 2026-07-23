@@ -941,6 +941,38 @@ def _status_work_dir(status: dict[str, object]) -> Path:
     return Path(str(value)).resolve()
 
 
+def wait_for_resume_start(
+    backend_url: str,
+    *,
+    timeout_seconds: float = 30.0,
+    poll_seconds: float = 0.25,
+) -> dict[str, object]:
+    """Wait until an accepted async start is observable or already complete.
+
+    ``/api/start_batch`` returns before the worker thread necessarily publishes
+    ``is_running=true``.  Treating that brief gap as an idle incomplete batch
+    makes the continuity runner exit and retry forever.
+    """
+    deadline = time.monotonic() + max(1.0, timeout_seconds)
+    last: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        last = json_request(backend_url, "/api/status", timeout=30)
+        stats = dict(last.get("stats") or {})
+        processed = int(stats.get("processed") or 0)
+        total = int(stats.get("total") or 0)
+        if bool(last.get("is_running") or stats.get("is_running")):
+            return last
+        if total > 0 and processed == total:
+            return last
+        time.sleep(max(0.01, poll_seconds))
+    stats = dict(last.get("stats") or {})
+    raise RuntimeError(
+        "resume refused: accepted start never became observable "
+        f"processed={int(stats.get('processed') or 0)} "
+        f"total={int(stats.get('total') or 0)}"
+    )
+
+
 def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tuple[str, str, str], list[dict[str, object]]]) -> dict[str, object]:
     """Finalize one already-running/already-finished staging group.
 
@@ -1081,6 +1113,7 @@ def resume_existing_then_continue(
         )
         if str(response.get("status") or "") != "started":
             raise RuntimeError(f"resume refused: active incomplete staging did not start: {response}")
+        wait_for_resume_start(args.backend_url)
         print(f"[resume] continued incomplete active group {current_dir} {processed}/{total}", flush=True)
     original_keep_staging = bool(args.keep_staging)
     # Keep the active staging directory until the dashboard is moved back to

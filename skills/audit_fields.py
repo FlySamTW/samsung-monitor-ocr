@@ -846,6 +846,21 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 新竹 1086: one complete curved Samsung monitor with a normal black
+    # desktop stand.  The aligned card clearly shows 3,690.  "Odyssey G6 QLED
+    # 1000R" is a readable product-family description, not a safely legible
+    # exact Samsung SKU, so the terminal model remains conservatively empty.
+    "e7ac4dbf9ee078eb8272a3f626d0ca26e1cf3458a93290894cc67da6e1009e3e": {
+        "source_file_sha256": "9ba8d8514913c6f9286a58e2206974323460b0b99c18c857653cdb28f89140cb",
+        "input_image_sha256": "9ba8d8514913c6f9286a58e2206974323460b0b99c18c857653cdb28f89140cb",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": None,
+        "price": 3690,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
 })
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item

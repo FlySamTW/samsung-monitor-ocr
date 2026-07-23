@@ -43,6 +43,42 @@ class ConsumedCapMissingResultRecoveryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _classify_bound_calls([unrelated_failure, clean], image_hash)
 
+    def test_empty_model_authority_can_contain_matching_material_conflict(self):
+        image_hash = "c" * 64
+        base = {
+            "input_image_sha256": image_hash,
+            "request_id_verified": True,
+            "request_binding_enforced": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "model": None,
+        }
+        clean = {**base, "runtime_health": {"healthy": True, "reasons": []}}
+        contained = {
+            **base,
+            "runtime_health": {
+                "healthy": False,
+                "reasons": ["structured_authority_material_conflict:model"],
+            },
+        }
+        authority = {
+            "authority": "human_audited_pixel_authority",
+            "model": None,
+        }
+        self.assertEqual(
+            _classify_bound_calls([contained, clean], image_hash, authority),
+            (1, 1),
+        )
+        with self.assertRaises(RuntimeError):
+            _classify_bound_calls([contained, clean], image_hash)
+        with self.assertRaises(RuntimeError):
+            _classify_bound_calls(
+                [contained, clean],
+                image_hash,
+                {**authority, "model": "S27DG602SC"},
+            )
+
     def test_two_clean_outputs_and_consumed_cap_finalize_without_call_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

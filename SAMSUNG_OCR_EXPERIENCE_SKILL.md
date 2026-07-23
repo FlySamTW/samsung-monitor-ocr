@@ -495,6 +495,15 @@ The contract version and guard implementation identity are separate authorities.
 
 The runtime health fuse is durable, not an in-memory stop flag. A trip atomically writes `_ocr_audit/runtime_health_fuse.json`. The batch start API, continuity supervisor, upload watchdog, manifest gate, shared upload proof builder, and uploader all fail closed while that marker exists. A genuine systemic incident is cleared only after the cause is fixed and the critical regressions plus a bounded live proof pass. A narrowly proven photo-local attempt-1/2 binding fault may be archived by the deterministic recovery tool only when its invalid payload is discarded, the consumed call count is preserved, the same source is requeued, and the rolling-window systemic threshold is not met.
 
+Continuity launches are executable work, not dry-run discovery. The supervisor
+must pass `--execute` whenever it invokes `rerun_staged_candidates.py`, including
+with `--resume-existing-then-continue`, and must wait through the asynchronous
+accepted-to-running API gap before attaching. If a photo has consumed all three
+calls but only two outputs survived a process boundary, never issue call four:
+only an exact source-item/source-SHA/input-SHA pixel authority plus at least one
+clean bound output may close it through the deterministic consumed-cap recovery,
+which enqueues before committing the terminal result.
+
 While the fuse remains active, `/api/start_batch` has exactly one constrained diagnostic exception: an explicit `runtime_health_trial=true` request whose folder is under `_ocr_staging`, contains `runtime_health_smoke` in its relative path, contains 1-15 images, has no success/failure session JSON, and is protected by `model_benchmark.lock`. This exception cannot resume production or open upload. A new incident archives the previous fuse before atomically refreshing the active marker. After the bounded smoke passes and its trace/UI evidence is audited, archive and manually remove the active fuse before normal continuation.
 
 Monitoring means progress plus content quality plus presentation health plus upload isolation. A counter that advances while answers are contaminated is a failure, not progress. The recurring monitor must audit all four dimensions and must not blindly resume a genuine runtime-health incident. Once a deterministic repair has archived a narrowly proven local fault and regressions pass, the continuity controller must resume the saved checkpoint automatically; no manual button, browser reload, new tab, or Dashboard outage is allowed.

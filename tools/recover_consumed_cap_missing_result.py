@@ -78,27 +78,45 @@ def _clean_bound_call(row: dict[str, Any], image_hash: str) -> bool:
     )
 
 
-def _contained_bound_call(row: dict[str, Any], image_hash: str) -> bool:
+def _contained_bound_call(
+    row: dict[str, Any],
+    image_hash: str,
+    authority: dict[str, Any] | None = None,
+) -> bool:
     runtime = row.get("runtime_health") or {}
     reasons = {
         str(reason).strip()
         for reason in (runtime.get("reasons") or [])
         if str(reason).strip()
     }
+    authority_allows_conservative_empty_model = bool(
+        reasons == {"structured_authority_material_conflict:model"}
+        and isinstance(authority, dict)
+        and authority.get("authority") == "human_audited_pixel_authority"
+        and authority.get("model") is None
+        and row.get("model") in (None, "")
+    )
     return bool(
         _base_bound_call(row, image_hash)
         and isinstance(runtime, dict)
         and runtime.get("healthy") is False
         and reasons
-        and reasons <= ALLOWED_CONTAINED_RUNTIME_REASONS
+        and (
+            reasons <= ALLOWED_CONTAINED_RUNTIME_REASONS
+            or authority_allows_conservative_empty_model
+        )
     )
 
 
 def _classify_bound_calls(
-    rows: list[dict[str, Any]], image_hash: str
+    rows: list[dict[str, Any]],
+    image_hash: str,
+    authority: dict[str, Any] | None = None,
 ) -> tuple[int, int]:
     clean_count = sum(_clean_bound_call(row, image_hash) for row in rows)
-    contained_count = sum(_contained_bound_call(row, image_hash) for row in rows)
+    contained_count = sum(
+        _contained_bound_call(row, image_hash, authority) for row in rows
+    )
     if clean_count + contained_count != len(rows):
         raise RuntimeError(
             "outputs include contamination, identity failure, or an unapproved runtime failure"
@@ -278,7 +296,7 @@ def recover(
     if len(durable_history) != 2:
         raise RuntimeError("retry state does not contain exactly two bound outputs")
     durable_clean_count, durable_contained_count = _classify_bound_calls(
-        [dict(item) for item in durable_history], image_hash
+        [dict(item) for item in durable_history], image_hash, authority
     )
 
     calls = _load_trace_calls(
@@ -286,7 +304,9 @@ def recover(
         source_item_id=source_item_id,
         file_name=file_name,
     )
-    trace_clean_count, trace_contained_count = _classify_bound_calls(calls, image_hash)
+    trace_clean_count, trace_contained_count = _classify_bound_calls(
+        calls, image_hash, authority
+    )
     if (trace_clean_count, trace_contained_count) != (
         durable_clean_count,
         durable_contained_count,

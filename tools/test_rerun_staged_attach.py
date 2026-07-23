@@ -164,8 +164,13 @@ class AttachExistingTests(unittest.TestCase):
                 "stats": {"processed": 829, "total": 1504},
             }
             started = {"status": "started"}
+            running = {
+                "is_running": True,
+                "current_relative_dir": str(current),
+                "stats": {"processed": 829, "total": 1504},
+            }
             active_summary = {"staging_dir": str(current), "period": "202601"}
-            with patch.object(mod, "json_request", side_effect=[status, started]) as request, \
+            with patch.object(mod, "json_request", side_effect=[status, started, running]) as request, \
                  patch.object(mod, "attach_existing_group", return_value=active_summary) as attach, \
                  patch.object(mod, "write_dict_csv"):
                 summaries = mod.resume_existing_then_continue(args, groups, "stamp")
@@ -173,7 +178,17 @@ class AttachExistingTests(unittest.TestCase):
             self.assertEqual(request.call_args_list[1].args[1], "/api/start_batch")
             self.assertEqual(request.call_args_list[1].args[2]["dir"], str(current.resolve()))
             self.assertTrue(request.call_args_list[1].args[2]["confirmed"])
+            self.assertEqual(request.call_args_list[2].args[1], "/api/status")
             attach.assert_called_once()
+
+    def test_resume_start_wait_tolerates_async_idle_gap(self):
+        idle = {"is_running": False, "stats": {"processed": 2, "total": 3}}
+        running = {"is_running": True, "stats": {"processed": 2, "total": 3}}
+        with patch.object(mod, "json_request", side_effect=[idle, running]) as request, \
+             patch.object(mod.time, "sleep"):
+            result = mod.wait_for_resume_start("http://mock", timeout_seconds=2)
+        self.assertIs(result, running)
+        self.assertEqual(request.call_count, 2)
 
     def test_attach_polls_and_never_starts_or_switches(self):
         with tempfile.TemporaryDirectory() as tmp:

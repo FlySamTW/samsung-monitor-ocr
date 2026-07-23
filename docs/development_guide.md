@@ -1246,3 +1246,27 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   2026 accuracy backfill 不得重複加總。腳本先關閉 2026 正確性與逐張
   Drive receipt，之後 continuity supervisor 自動接續 2025→2015，
   初次辨識總進度才會繼續增加；不得用重複計數假裝進度。
+
+## 2026-07-23 `.76` continuity supervisor 與 consumed-cap 收尾規則
+
+- supervisor 接續正式 staging 時，`rerun_staged_candidates.py` 一律要有
+  明確 `--execute`；若使用 `--resume-existing-then-continue`，兩者必須
+  同時傳入。不得讓 argparse 每五分鐘立即退出、卻把「已重新啟動」寫入
+  監督日誌。
+- `/api/start_batch` 是非同步接受。接續器收到 accepted 後，要等待
+  `is_running=true` 或 `processed=total` 變成可觀察狀態，才可 attach；
+  不得在 accepted 與工作執行緒真正開始之間的短暫 idle gap 誤判失敗。
+- 若同一張已消耗三次呼叫、durable retry state 只保存兩份同圖輸出，
+  backend 必須拒絕第 4 次。只有精確命中
+  `source_item_id + source_file_sha256 + input_image_sha256` 的人工像素權威，
+  且至少一份乾淨、至多一份可證明為同圖非污染 containment，才可用
+  `recover_consumed_cap_missing_result.py` 零模型收尾。
+- `structured_authority_material_conflict:model` 只在精確像素權威本身也
+  要求 `model=null`、該輪結構 model 亦為 null 時，才可視為保守空型號的
+  單張 containment；不得用此例外接受具體型號衝突、binding／memory／
+  prompt／transport 錯誤或其他照片。
+- 新竹 1086 的原圖只安全支持 `單機 / count=1 / model=null / price=3690`：
+  `Odyssey G6 QLED 1000R` 是可讀產品家族描述，不是可安全抄錄的完整
+  Samsung SKU。它以既有三次額度零模型結案、先 enqueue 後寫 terminal
+  result，沒有第 4 次；202601 因而從 `1208/1209` 正確收尾為
+  `1209/1209`，逐張 Drive receipt 已完成。

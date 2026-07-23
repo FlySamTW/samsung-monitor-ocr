@@ -281,6 +281,7 @@ function Start-EvidenceBackfillIfNeeded {
     $live = Get-BackendStatus
     $liveImageDir = if ($live) { [string]$live.image_dir } else { "" }
     $runnerMode = "--execute"
+    $runnerModeArgs = @("--execute")
     if (
         $liveImageDir -and
         [System.IO.Path]::GetFullPath($liveImageDir).StartsWith(
@@ -289,19 +290,23 @@ function Start-EvidenceBackfillIfNeeded {
         )
     ) {
         $runnerMode = "--resume-existing-then-continue"
+        $runnerModeArgs += "--resume-existing-then-continue"
     }
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    Start-Hidden -File $python -ProcessArgs @(
+    $runnerArgs = @(
         $stagedScript,
         "--source-root",$SourceRoot,
         "--output-dir",$OutputDir,
         "--backend-url",$BackendUrl,
         "--input-csv",$candidate,
         "--output-csv",$result,
-        "--run-summary-csv",$summaryCsv,
-        $runnerMode,
+        "--run-summary-csv",$summaryCsv
+    ) + $runnerModeArgs + @(
         "--poll-seconds","10","--timeout-minutes","10080"
-    ) -OutFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
+    )
+    Start-Hidden -File $python -ProcessArgs $runnerArgs `
+        -OutFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") `
+        -ErrFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
     Log-Event "evidence_backfill_restarted" @{remaining=[int]$proof.candidate_rows;sources=[int]$proof.unique_year_sources;runner_mode=$runnerMode;live_image_dir=$liveImageDir}
     return $true
 }
