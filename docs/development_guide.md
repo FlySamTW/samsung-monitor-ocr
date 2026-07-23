@@ -1270,3 +1270,15 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   Samsung SKU。它以既有三次額度零模型結案、先 enqueue 後寫 terminal
   result，沒有第 4 次；202601 因而從 `1208/1209` 正確收尾為
   `1209/1209`，逐張 Drive receipt 已完成。
+- 三次呼叫上限的 identity 必須跨 staging／run 維持，不能只存在於單一
+  `.ocr_retry_queue.json`。current-revision task 已有 `ocr_attempt=3` 且
+  `auto_review_required=true` 時，builder 不得把同一 source 複製到新
+  staging 再呼叫三次；必須先走保存 trace 的 deterministic finalizer，
+  能安全清空欄位就如實結案，仍缺證據才留在 durable repair queue。
+- 2026-07-23 21:23 的 63 張高風險候選重啟後，前 9 張已有 3 張再次走到
+  三輪 review（中清 1530、東山 1140、新東海 958），證明現行 builder
+  尚未執行上述跨 staging 上限。已於照片邊界建立
+  `systemic_cross_staging_three_call_terminal_review_loop` fuse 與 pipeline
+  pause；port 5002、Dashboard、LM Studio、uploader 狀態介面保持在線。
+  在跨 staging source-level cap 與 deterministic closure 回歸完成前，
+  不得解除 fuse 讓這 63 張循環重跑。

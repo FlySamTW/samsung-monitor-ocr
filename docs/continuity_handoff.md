@@ -805,3 +805,23 @@
 - 下一步由既有 hidden continuity daemon 自動完成 active group receipt
   並接續其餘 2026 候選，再 2025→2015；不得人工重建 staging、重置
   attempts、重啟瀏覽器或停在 2026 宣告全案完成。
+
+### 21:30 新發現：跨 staging 三次上限尚未閉環（正式 fail-safe）
+
+- supervisor 已依新參數正確建立下一個 63 張高風險 staging，並從
+  `0→9/63`；逐張上傳 `56,551→56,554`，證明一般接續與 uploader 本身
+  已恢復。
+- 但前 9 張中有 3 張在第 3 輪後仍為 `auto_review_required=true`：
+  `中清-1530`、`東山-1140`、`新東海-958`。這些是前一 staging 已有終局
+  缺口的 source；builder 把它們複製到新 staging 後，per-staging attempt
+  counter 從 0 重算，會形成跨 staging 的額外模型呼叫與無限候選循環。
+- 這違反「每個 source 最多三次、三輪後如實結案」；已在照片邊界呼叫
+  `/api/stop`，寫入 durable pipeline pause 及 runtime fuse：
+  `systemic_cross_staging_three_call_terminal_review_loop`。停止後
+  backend/Dashboard port 5002、LM Studio 1234、唯一 uploader 均在線，
+  pending/working `0/0`，既有 Chrome Dashboard 分頁未關閉、未重開。
+- 後續修復不得只解除 fuse 或再跑 63 張。builder 必須讀 source-level
+  current-revision terminal history；已用滿三次的 source 只能使用保存
+  trace 做 deterministic zero-model closure／精確像素權威，不能因建立
+  新 staging 再取得三次。修正與完整 critical regressions 通過後，才可
+  從 `9/63` 同一 checkpoint 自動接續。
