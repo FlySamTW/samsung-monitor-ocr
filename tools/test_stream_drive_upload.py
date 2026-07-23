@@ -115,6 +115,18 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_enqueue_rejects_terminal_quality_issue_contradiction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "photo.jpg"
+            make_image(source)
+            row = verified_result(
+                source,
+                quality_issue="不合格-沒有規格和價格牌",
+            )
+            with self.assertRaisesRegex(RuntimeError, "adjudication field invariant"):
+                enqueue_finalized_result(row, output_dir=root / "out")
+
     def test_enqueue_rejects_repeated_identity_pair_erased_by_adjudication(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

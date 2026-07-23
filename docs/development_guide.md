@@ -1211,3 +1211,38 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
 - `tools/recover_false_instruction_echo_fuse.py` 只接受唯一 fuse 理由 `ui_narration_instruction_echo`、attempt 3、兩份 durable 先前證據、可解析的第三輪 request ID、三輪同圖且無前輪答案／prompt 污染、修正版 detector 已排除 echo、來源位元組與像素權威精確一致。它先 enqueue、再寫結果、封存 fuse 並清理該張 retry state；任何證明缺失均拒絕，且不允許第 4 輪。
 - 本事故 recovery/runtime 47 項測試全通過，完整 `tools/run_critical_regressions.py` 退出碼 0。正式後端以同一 port 5002、同一 staging、原 checkpoint 載入 `.75`；未重啟 LM Studio／Chrome、未新增分頁。202601 已從 `268→273/1,209`，498 的 Drive receipt ID `1MUsxbIb7x6NheREtoQX-pLN-SrcatwEj`、size `833,687`、MD5 `81abbae20cdbf54ac3ee33e5b55276ba`，pending 回到 0。
 - 先前 `2026-08-10` 是只按單次模型 latency 推算的錯誤日期，正式撤回。以剩餘約 84,990 張首次辨識及 2026 閉環項目、已觀察端到端 `2,350–2,500 verified+uploaded/日` 計，保守全案完工窗為 `2026-08-28～2026-09-01`；前提是 24 小時不中斷並自動銜接 2026→2025→…→2015。每個 12 小時窗都要用實績重新預測，不得因舊日期掩蓋停機。
+
+## 2026-07-23 15:45：terminal cross-field invariant（尚待程式落實）
+
+- `quality_issue` 是終局結構欄位，不是可以保留的舊輪次備註。若 final model 非空，終局不得仍宣稱「沒有規格／沒有型號」；若 final price 非空，終局不得仍宣稱「沒有價格牌」。adjudication 補回 model／price 時，必須同步重算 `quality_issue`，並原子更新 trace terminal view、durable `OCR成功.json`、presentation event、stream job 與 upload gate。
+- `verified=true` 前新增跨欄位一致性 invariant；stream uploader 在 enqueue／claim 時再做第二道相同檢查。任何矛盾都不得以 verified、已完成或健康狀態發布。若 target name 已正確但 metadata／presentation 錯誤，只做零模型 durable normalization，不重複上傳；若 target name 也錯，必須取得正確新 receipt 與遠端讀回後，才可按精確舊 Drive ID 清理。
+- 15:44 重掃 current-revision `.75` formal trace 已知至少三筆：`新光A13-303=S32DG702EC/14,900` 仍寫沒有價格牌、`木新-1508=S34D300GAC/2,990` 仍寫沒有規格牌、`新店中正-1511=C34G55TWWC/9,900` 仍寫沒有規格牌。`.75` runtime fuse 沒有攔截，故此問題仍是未完成工作；先全面掃 current-revision terminal rows，不能只補三個案例。
+- 修復必須先有永久回歸：補欄後 stale `quality_issue` 會 fail closed；正確 null 欄位仍可保留對應缺欄品質原因；一般黑屏／畫質異常等與 model/price 無關的品質原因不得被誤刪；同一來源 target name 未改時不得產生第二個 Drive 物件。
+- 若 live 掃描證明矛盾仍持續，內容處理只可在照片邊界 fail-safe，Dashboard/backend/LM/uploader 狀態介面保持在線。修復與完整 critical regressions 通過後，從原 staging/checkpoint 自動續跑，不得重開瀏覽器、建立新 staging、重置 attempt 或增加第 4 次模型呼叫。
+
+## 2026-07-23 `.76` 終局欄位一致性與不中斷續跑
+
+- `.75` 的問題已在 `.76` 程式化修正：三輪定案可能已恢復正確的
+  `model`／`price`，但殘留當輪的「沒有規格牌／沒有價格牌」。這是
+  deterministic 終局同步缺陷，不得因此增加第 4 次模型呼叫。
+- 三輪定案及像素權威結案後，依最終 `view_type/model/price` 重算缺欄
+  `quality_issue`；其他品質問題（例如模糊）保留。所有終局（包含非
+  三輪）在 verified 前執行 cross-field invariant：有型號卻寫缺規格、
+  有價格卻寫缺價格，一律 fail closed。
+- stream uploader 在 enqueue 及相鄰 revision migration 時執行第二道
+  相同 invariant。evidence backfill 也不能只因 revision 相容就沿用舊
+  verified；每筆相容舊列仍須通過現行欄位一致性。
+- 正式換版於照片邊界執行：202601 在 `948/1,209` 停止，舊 uploader
+  pending/working 歸零後隱藏熱換 uploader，再以
+  `reload_backend_at_safe_idle.ps1 -AllowIncompleteStoppedBatch` 換 port
+  5002 backend。沿用 staging
+  `20260723_001355\202601_商化照片-202601_6403a632` 並自動續跑；LM
+  Studio、現有 Chrome Dashboard 分頁均未重啟、未新增。
+- 上線證據：revision `20260723.76` 已從 `948` 前進至至少
+  `955/1,209`；canonical upload `56,507→56,508`，pending/working 回到
+  `0/0`；新 revision 前 20 筆 trace 的 cross-field contradiction 為
+  0。針對性測試 133/133 及完整 critical regressions 均通過。
+- `66,724/151,714` 是 authoritative source inventory 的初次處理計數；
+  2026 accuracy backfill 不得重複加總。腳本先關閉 2026 正確性與逐張
+  Drive receipt，之後 continuity supervisor 自動接續 2025→2015，
+  初次辨識總進度才會繼續增加；不得用重複計數假裝進度。

@@ -48,6 +48,7 @@ BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
         "20260722.73",
         "20260723.74",
         "20260723.75",
+        "20260723.76",
     }
 )
 
@@ -153,6 +154,12 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                     if verified_row_conflicts_with_known_authority(item):
                         continue
                     parsed = item.get("parsed_output") or {}
+                    if adjudication_field_invariant_reasons(parsed):
+                        # Compatibility is revision-level only.  Every inherited
+                        # terminal row must still satisfy the current cross-field
+                        # contract, otherwise stale metadata can be counted as a
+                        # verified result after an adjudication rule changes.
+                        continue
                     if (
                         item.get("evidence_guard_revision") == "20260721.70"
                         and parsed.get("adjudication_rule")

@@ -16,6 +16,8 @@ from skills.audit_fields import (
     finalize_three_pass_outcome,
     has_sufficient_followme_physical_evidence,
     immediate_retry_decision,
+    normalize_terminal_quality_issue,
+    terminal_cross_field_invariant_reasons,
     validate_evidence_contract,
 )
 
@@ -69,6 +71,44 @@ def unresolved():
 
 
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_terminal_quality_issue_tracks_adjudicated_model_and_price(self):
+        row = {
+            "view_type": "單機",
+            "model": "S32DG702EC",
+            "price": "14900",
+            "quality_issue": "不合格-沒有價格牌",
+        }
+        self.assertEqual(normalize_terminal_quality_issue(row), "")
+        self.assertEqual(row["quality_issue"], "")
+        self.assertEqual(terminal_cross_field_invariant_reasons(row), [])
+
+    def test_terminal_cross_field_invariant_rejects_stale_missing_text(self):
+        row = {
+            "view_type": "單機",
+            "model": "S34D300GAC",
+            "price": "2990",
+            "quality_issue": "不合格-沒有規格和價格牌",
+        }
+        self.assertEqual(
+            terminal_cross_field_invariant_reasons(row),
+            [
+                "terminal_model_present_but_quality_says_missing",
+                "terminal_price_present_but_quality_says_missing",
+            ],
+        )
+
+    def test_terminal_quality_issue_preserves_unrelated_blur(self):
+        row = {
+            "view_type": "單機",
+            "model": "S32DG702EC",
+            "price": "14900",
+            "quality_issue": "不合格-照不清楚",
+        }
+        self.assertEqual(
+            normalize_terminal_quality_issue(row),
+            "不合格-照不清楚",
+        )
+
     def test_adjudication_field_invariant_allows_price_without_model_to_finish_empty(self):
         final = {
             "three_pass_adjudicated": True,

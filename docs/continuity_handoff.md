@@ -710,3 +710,69 @@
 - The hidden `.75` uploader proved pending-to-receipt closure. The old `.74` uploader was stopped before the new job became claimable, preventing incompatible-revision rejection. Backend and uploader process trees are unique.
 - Existing Chrome inventory previously proved exactly one Dashboard tab at `http://127.0.0.1:5002/?ui=31584c2c96ae7330`; no tab/window was opened, closed, reloaded or replaced. A later lightweight DOM claim timed out, so this handoff has current API/process/regression proof but no new visual screenshot; do not claim otherwise.
 - Honest completion window is 2026-08-28 through 2026-09-01 at 2,350–2,500 verified-and-uploaded photos/day. The former August 10 estimate is withdrawn. Finish 2026 first, then continue 2025 down to 2015 automatically.
+
+## 2026-07-23 15:45 接手快照與尚未克服問題（仍為 `.75`）
+
+### 接手時的實際執行狀態
+
+- 本節是 15:45 的唯讀快照，不取代即時 `/api/status`。接手者必須先重新讀取狀態，不能把下列檔名、PID 或計數當成永遠不變的常數。
+- port 5002 backend、LM Studio port 1234、逐張上傳 worker 均在線；快照 PID 分別為 backend `3144`、LM Studio `2132`、uploader `3836`。正式模型是 `qwen/qwen3-vl-8b`，loaded context `32768`、production parallel `1`。15:45 恰在兩次推論間的瞬時 GPU 樣本為 `0%`、`12,646/16,303 MB`；不能用單一 GPU 樣本判定卡住，應以 processed/current file/receipt 是否前進判斷。
+- 正式 revision 是 `20260723.75`，staging 仍為 `D:\00_商化\00_已OCR照片\_ocr_staging\20260723_001355\202601_商化照片-202601_6403a632`。202601 複核為 `888/1,209`，verified `850`、review `38`、failed `0`；目前照片 `M-新北市-永和區-TK3C-民權-1505.jpg` 第 3 輪，最新完成 `民權-1504.jpg`。文件整理期間 processed 仍持續前進，沒有為寫文件停機。
+- 全案 canonical 總盤為 `66,724/151,714`（`43.98%`）、資料夾 `45/137`、尚未首次辨識 `84,990`。此數字是唯一來源照片的首次辨識總盤；2026 複核、修復或重新上傳不會重複增加。
+- canonical uploaded 為 `56,506`，pending/working `0/0`；最近逐張收據為 `民權-1504 = 單機 / S24F332EAC / 2,590`。目前照片與 `stream_file` 相同，presentation queue 累積 12 張卡片。這只證明 API 資料面同步；本次遵守規則未操作瀏覽器，也沒有新的 DOM／畫面截圖，不得擴大宣稱已做新一輪目視驗證。
+- 15:44 往前 12 小時正式 staging 實績：finalized `644`、verified `623`、review `21`、新增 exact upload receipts `624`；每次推論 median `14.64 s`、P90 `18.52 s`、平均 `2.47 calls/photo`、首輪結案 `130/644 = 20.19%`、最大 attempt `3`。
+- 09:38 最近三張原圖抽查：`新光A13-301`、`302` 的實體型號牌／價牌均支持 `S40FG752EC / 29,900`；`新光A13-303` 的下方實體價牌支持 `S32DG702EC / 14,900`。三張的 view/model/price 與終局檔名相符。這是本輪最後一次完整像素抽查時間，不得冒充為 15:45 新目視結果。
+
+### 尚未克服：終局欄位已補回，但 `quality_issue` 仍保留舊缺欄敘述
+
+- 半日監督發現現行 `.75` 仍可把 model／price 正確補回並標成 verified，卻沒有同步清除舊的 `quality_issue=不合格-沒有規格／價格牌`。這不是模型記憶污染，也沒有超過三輪；根因範圍目前指向 adjudication/finalization 後缺少跨欄位一致性 invariant。
+- 15:44 重掃整個 current-revision `.75` formal trace，至少有三筆 verified terminal trace 命中此矛盾：
+  - `M-台北市-信義區-集雅社-新光A13-303.jpg`：final `S32DG702EC / 14,900`，但 `quality_issue=不合格-沒有價格牌`。
+  - `M-台北市-文山區-TK3C-木新-1508.jpg`：final `S34D300GAC / 2,990`，但 `quality_issue=不合格-沒有規格牌`。
+  - `M-新北市-新店區-TK3C-新店中正-1511.jpg`：final `C34G55TWWC / 9,900`，但 `quality_issue=不合格-沒有規格牌`。
+- `新光A13-303` 已上傳的 target name 是正確的 `...單機-S32DG702EC-↓＄14900-303.jpg`，Drive ID `1K38dMaxrzRD8Sykk6ekPjQZ5bje9piyH`；因此目前證據證明至少存在「trace／Dashboard 品質欄錯、檔名仍正確」的情況。其餘受影響照片仍須逐筆核對 durable task、presentation、upload job 與 receipt，不能先假設都只影響畫面。
+- 監督時 `runtime_health_fuse=false`，表示現有守門沒有攔截上述 terminal cross-field contradiction。這是**尚未修復**的守門缺口；不得把本節寫成健康通過，也不得因檔名恰好正確就忽略。
+- 本次工作是唯讀監督與文件移交，沒有停止／重啟程序。接手者若確認矛盾仍持續，必須在照片邊界 fail-safe：只暫停錯誤 OCR／發布，port 5002、Dashboard、LM Studio 與 uploader 狀態介面保持在線，修復後從同一 saved checkpoint 自動續跑；不得關閉或新增瀏覽器分頁，不得清空 retry/call state。
+
+### 下一位 AI 的優先接手順序
+
+1. 先讀 `docs/development_guide.md`、本文件、`SAMSUNG_OCR_EXPERIENCE_SKILL.md` 與 `docs/ai_handoff_runbook.md`；再唯讀核對 port 5002、1234、唯一 uploader、正式 staging、runtime fuse、目前照片與 pending→receipt。不要先重啟。
+2. 以目前 trace 重新掃描所有 current-revision verified terminal rows，找出：
+   - final model 非空但 `quality_issue` 仍宣稱沒有規格／型號；
+   - final price 非空但 `quality_issue` 仍宣稱沒有價格牌；
+   - durable task、presentation、stream job、receipt 彼此不一致。
+   已知三筆只是下限，不能只修三張。
+3. 先加入永久回歸，再修 adjudication/finalization 與 uploader second gate：terminal 欄位一致性必須在 `verified=true` 與 enqueue 前成立。不得改 prompt 來掩蓋 deterministic 終局同步缺陷。
+4. 既有受影響照片優先用保存的乾淨 trace 做零模型重驗／正規化，不增加第 4 次呼叫。若正確 target name 未改，只更新 durable metadata 與 presentation，不建立重複 Drive 物件；只有 target name 確實改變時才走新 receipt、遠端讀回、再按精確舊 Drive ID 清理。
+5. 跑窄測試與完整 `tools/run_critical_regressions.py`。只有 source binding、same-image SHA、independence、memory/prompt、call cap、terminal cross-field invariant 與 upload gate 全部通過，才可封存 fuse／解除安全停止。
+6. 從同一 staging/checkpoint 自動續跑：先完成全部 2026 的正確終局與逐張收據，再依 `2025→2024→…→2015`，直到 `151,714` 張全部有如實結果與 exact year-folder Drive receipt。不得停在 2026，也不得等待整月才上傳。
+
+### 接手時禁止事項
+
+- 不得把 `success` 當成正確完成；必須看 structured view/model/price、`quality_issue`、guard、durable result 與 receipt 一致。
+- 不得新增第 4 輪、餵入上一輪答案、清空 consumed attempts、重建 staging 或重跑已完成照片。
+- 不得因修文件、Git、抽查或舊檔清理中斷正式介面；內容 fail-safe 也只能在照片邊界，且介面必須持續顯示真實修復狀態。
+- 不得用缺本機 receipt 推論 Drive 一定缺檔，也不得批次猜測刪除雲端物件。
+- 不得宣稱看過現行瀏覽器畫面，除非接手者真的在既有分頁完成非干擾式目視核對。
+
+## 2026-07-23 16:30 `.76` production handoff
+
+- Production backend 與唯一 hidden stream uploader 已載入
+  `evidence_guard_revision=20260723.76`。port 5002、LM Studio 與現有
+  Chrome Dashboard 分頁均未重啟或替換。
+- 原 202601 staging
+  `20260723_001355\202601_商化照片-202601_6403a632` 保持不變。照片
+  948 邊界換版後自動從同一 checkpoint 續跑；live 至少已達
+  `955/1,209`、verified 916、review 39、failed 0。
+- 逐張上傳正常：canonical uploaded `56,507→56,508`，新 worker 隨後
+  回到 pending/working `0/0`。
+- `.76` 修正 `.75` 終局已有 model/price 卻殘留缺欄 `quality_issue`
+  的矛盾。finalization deterministic 正規化缺欄文字；terminal
+  invariant 與 uploader 各自拒絕任何殘留矛盾；相容舊 verified 也必須
+  通過現行 invariant 才能被 backfill builder 略過。
+- 驗證：133 項針對性測試、完整 critical regressions 均通過；live
+  `.76` 前 20 筆 trace 掃描為 0 cross-field conflicts。
+- canonical overall 仍如實為 `66,724/151,714`，因目前是在複核同一批
+  2026 source，不重複增加初辨數。2026 current-rule candidates 歸零後，
+  continuity supervisor 必須自動接續 2025→2015。人工／代理監督維持
+  09:00、21:00 低功耗抽查，重點是內容有無跑歪，不是代替腳本逐張做。

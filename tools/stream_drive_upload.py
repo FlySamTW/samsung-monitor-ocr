@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     adjudication_field_invariant_reasons,
+    normalize_terminal_quality_issue,
     validate_evidence_contract,
 )
 from tools.photo_rename_planner import (
@@ -69,6 +70,9 @@ COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # .70 adds three source-hash-bound pixel authorities for already-consumed
     # three-call recoveries; unrelated finalized .69 jobs are unchanged.
     "20260721.69": "20260721.70",
+    # .76 only synchronizes terminal quality_issue with already-finalized
+    # model/price fields. It does not change the deterministic target name.
+    "20260723.75": "20260723.76",
 }
 TRANSIENT_UPLOAD_ERROR_MARKERS = (
     "exact remote readback failed",
@@ -802,6 +806,14 @@ def migrate_compatible_pending_jobs(output_dir: Path) -> int:
         final_result = job.get("final_result")
         if not isinstance(final_result, dict):
             raise RuntimeError("pending upload has no final result")
+        final_result = dict(final_result)
+        normalize_terminal_quality_issue(final_result)
+        invariant_reasons = adjudication_field_invariant_reasons(final_result)
+        if invariant_reasons:
+            raise RuntimeError(
+                "pending upload failed terminal field invariant: "
+                + ";".join(invariant_reasons)
+            )
         if (
             _guard_key(old_revision) < (20260718, 48)
             and final_result.get("adjudication_rule")
@@ -828,6 +840,7 @@ def migrate_compatible_pending_jobs(output_dir: Path) -> int:
         archived = dirs["revision_migrations"] / f"{source_item_id}.{old_revision}.{stamp}.json"
         _atomic_json(archived, job)
         upgraded = dict(job)
+        upgraded["final_result"] = final_result
         upgraded["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
         upgraded["revision_migration"] = {
             "from": old_revision,

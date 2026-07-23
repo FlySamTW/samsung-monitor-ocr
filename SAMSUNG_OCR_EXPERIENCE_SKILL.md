@@ -680,3 +680,19 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - Permanent regression source `三創店-498` is `單機`, two complete foreground monitors, model null, price null, ambiguous ownership. Upper monitors cross the original top edge; the multi-product center card cannot own one SKU/price. Bind this only by source item, original SHA and model-input SHA, never by filename.
 - Required validation after touching this boundary: the narrow recovery test, runtime-health tests, and `tools/run_critical_regressions.py`. Live acceptance additionally requires current-revision port 5002 progress and exact pending-to-Drive-receipt closure while the existing Dashboard tab remains untouched.
 - The responsible forecast uses rolling verified-plus-uploaded throughput. As of this repair the conservative full-project window is 2026-08-28 through 2026-09-01 at 2,350–2,500/day; the old August 10 latency-only date is invalid. Reforecast after any 12-hour outage or when historical one-pass throughput is measured.
+
+## Revision `.76` terminal cross-field consistency contract (2026-07-23)
+
+- Adjudication may restore a correct terminal model or price only if the
+  missing-field `quality_issue` is recomputed in the same finalization step.
+  A model plus “missing specification”, or a price plus “missing price”, is a
+  terminal contradiction and must fail closed before `verified=true`.
+- Normalize only missing-model/missing-price wording. Preserve independent
+  issues such as blur or screen quality. A distant result truthfully keeps
+  model/price null without being marked as a failed single-product extraction.
+- Enforce the same invariant again in the stream uploader and when migrating
+  an explicitly compatible pending job. Compatible historical verified rows
+  must also pass the current invariant before a backfill builder skips them.
+- This is zero-model deterministic repair. Never spend a fourth call, reset
+  attempts, rebuild staging, duplicate a Drive object, or inflate the canonical
+  unique-source total to make review activity look like first-pass progress.

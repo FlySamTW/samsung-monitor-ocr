@@ -10,6 +10,7 @@ from tools.build_v1945_evidence_backfill import (
     BACKFILL_COMPATIBLE_GUARD_REVISIONS,
     build_candidates,
     load_bound_visual_authorities,
+    load_verified_source_ids,
     run,
     stable_source_id,
     verified_row_conflicts_with_known_authority,
@@ -195,6 +196,35 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             rows, summary = build_candidates(audit, "2026", {})
             self.assertEqual([row["file_name"] for row in rows], [source.name])
             self.assertEqual(summary["already_verified_year_sources"], 0)
+
+    def test_compatible_verified_cross_field_contradiction_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "stale-quality.jpg"
+            source.write_bytes(b"stale-quality")
+            audit = root / "audit"
+            audit.mkdir()
+            trace = audit / "v1945_evidence_trace.jsonl"
+            trace.write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260723.75",
+                        "source_item_id": stable_source_id(source),
+                        "guard_decision": {"verified": True},
+                        "parsed_output": {
+                            "view_type": "單機",
+                            "model": "S32DG702EC",
+                            "price": "14900",
+                            "quality_issue": "不合格-沒有價格牌",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertNotIn(stable_source_id(source), load_verified_source_ids(audit))
 
     def test_human_audited_source_is_excluded_only_when_pixels_match(self):
         with tempfile.TemporaryDirectory() as tmp:

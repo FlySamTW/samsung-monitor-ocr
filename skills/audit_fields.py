@@ -16,7 +16,7 @@ EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260723.75"
+EVIDENCE_GUARD_REVISION = "20260723.76"
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -2588,6 +2588,60 @@ def clear_superseded_terminal_content_flags(record: Dict[str, Any]) -> None:
         record["unlisted_model_photo_consensus"] = False
 
 
+def normalize_terminal_quality_issue(record: Dict[str, Any]) -> str:
+    """Synchronize pass-local missing-field text with the terminal fields.
+
+    Adjudication can legitimately replace the current pass's model/price with
+    a two-pass consensus.  A missing-spec/price flag from the superseded pass
+    must therefore be recomputed before trace, presentation, and upload.
+    Unrelated image-quality findings such as blur remain untouched.
+    """
+    issue = str(record.get("quality_issue") or "").strip()
+    missing_related = (
+        "沒有規格" in issue
+        or "沒有型號" in issue
+        or "沒有價格牌" in issue
+    )
+    if not missing_related:
+        return issue
+
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    if view == "遠景":
+        issue = ""
+    elif view == "單機":
+        has_model = bool(normalize_model_token(record.get("model")))
+        has_price = bool(re.sub(r"[^0-9]", "", str(record.get("price") or "")))
+        if has_model and has_price:
+            issue = ""
+        elif has_model:
+            issue = "不合格-沒有價格牌"
+        elif has_price:
+            issue = "不合格-沒有規格牌"
+        else:
+            issue = "不合格-沒有規格和價格牌"
+    record["quality_issue"] = issue
+    return issue
+
+
+def terminal_cross_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
+    """Return contradictions between terminal identity fields and quality text."""
+    issue = str(record.get("quality_issue") or "").strip()
+    reasons: List[str] = []
+    if normalize_model_token(record.get("model")) and (
+        "沒有規格" in issue or "沒有型號" in issue
+    ):
+        reasons.append("terminal_model_present_but_quality_says_missing")
+    if (
+        re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+        and (
+            "沒有價格牌" in issue
+            or "沒有規格和價格牌" in issue
+        )
+    ):
+        reasons.append("terminal_price_present_but_quality_says_missing")
+    return reasons
+
+
 def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
     """Reject a final that erases or changes independently repeated fields.
 
@@ -2597,11 +2651,12 @@ def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
     changed value as verified. This invariant is independent of the selected
     adjudication rule, so every rule crosses the same publication boundary.
     """
+    reasons = terminal_cross_field_invariant_reasons(record)
     if record.get("three_pass_adjudicated") is not True:
-        return []
+        return reasons
     summaries = record.get("adjudication_pass_summaries") or []
     if not isinstance(summaries, list):
-        return ["adjudication_pass_summaries_missing"]
+        return [*reasons, "adjudication_pass_summaries_missing"]
     pair_votes: Counter[tuple[str, str]] = Counter()
     for item in summaries:
         if not isinstance(item, dict) or item.get("label_ownership") != "matched":
@@ -2626,8 +2681,8 @@ def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
         and final_pair not in repeated_pairs
         and not family_price_preserved
     ):
-        return ["adjudication_repeated_identity_pair_erased_or_changed"]
-    return []
+        reasons.append("adjudication_repeated_identity_pair_erased_or_changed")
+    return reasons
 
 
 def finalize_three_pass_outcome(
@@ -2679,6 +2734,7 @@ def finalize_three_pass_outcome(
             )
         )
         if authority_passes_are_bound:
+            normalize_terminal_quality_issue(record)
             final_narration = _three_pass_final_narration(record)
             record["thinking"] = final_narration
             record["narration"] = final_narration
@@ -3880,8 +3936,10 @@ def finalize_three_pass_outcome(
         )
         result_text = f"單機，{model_text}，{price or '無價格'}"
 
-    # Only identity/price values from the field-safe pass set survive. Remove
+    # Only identity/price values from the field-safe pass set survive. Recompute
+    # pass-local missing-field text before trace/presentation/upload, then remove
     # blockers that belonged to the superseded pass candidate before enqueue.
+    normalize_terminal_quality_issue(record)
     clear_superseded_terminal_content_flags(record)
 
     record["three_pass_adjudicated"] = True
