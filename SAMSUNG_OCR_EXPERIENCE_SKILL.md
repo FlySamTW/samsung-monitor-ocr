@@ -733,7 +733,10 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
   confirmation, a missing field, distant/FollowMe evidence, ambiguous
   ownership, or a material cross-pass conflict. If stateless pass two resolves
   the trigger, close immediately. Pass three exists only for a conflict that
-  remains after pass two; it is never a fixed ritual.
+  remains after pass two; it is never a fixed ritual. The sole content-audit
+  exception is the user-mandated three independent checks for a 2026 distant
+  scene or a wide scene that may hide a physical FollowMe. Never apply that
+  exception to an ordinary single-unit photo.
 - Several visible cards do not by themselves make ownership ambiguous. If the
   narration explicitly aligns one card to the main monitor and explicitly
   assigns the remaining cards to neighbours, neighbour-card wording must not
