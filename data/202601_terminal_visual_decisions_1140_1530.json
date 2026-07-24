@@ -1,0 +1,30 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "decisions": [
+    {
+      "file_name": "M-台中市-北屯區-TK3C-東山-1140.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S24F332EAC",
+      "price": 2390,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false,
+      "visual_basis": "Only the central monitor has all four bezel sides and corners inside the original frame. The left and right monitors cross the original image borders. The physical card aligned below the central monitor reads S24F332EAC and 2,390."
+    },
+    {
+      "file_name": "M-台中市-北屯區-TK3C-中清-1530.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": null,
+      "price": 4990,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "wide_scene_followme_present": false,
+      "visual_basis": "Only the central monitor is fully inside the original frame; both neighbouring monitors are cut by the image edges. The aligned physical card clearly shows 4,990, while the full model text is not reliable enough to publish."
+    }
+  ]
+}

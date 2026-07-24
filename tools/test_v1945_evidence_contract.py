@@ -1028,6 +1028,60 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["verified"])
         self.assertFalse(decision["retry"])
 
+    def test_one_aligned_card_and_neighbour_cards_close_on_matching_second_pass(self):
+        first = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27CG552EC",
+            "price": "5790",
+            "price_status": "high",
+            "thinking": (
+                "中央價牌與主角螢幕對齊，清楚標示 S27CG552 與 5,790 元；"
+                "其他兩張價牌屬於鄰機。"
+            ),
+            "model_prefix_completed": True,
+            "model_prefix_completion_from": "S27CG552",
+            "independent_pass": True,
+            "request_id_verified": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        second = {
+            **first,
+            "thinking": (
+                "螢幕下方有三張實體價牌，其中一張與螢幕對齊，寫著"
+                "「27吋 SAMSUNG S27CG552」與價格 5,790 元，"
+                "其他兩張價牌則屬於旁邊螢幕。這不是 FollowMe，"
+                "也無法確認型號與價格是否屬於同一主角商品，所以……"
+            ),
+        }
+        decision = immediate_retry_decision(second, 2, [first], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertNotIn("標籤歸屬與敘述衝突", decision["reasons"])
+
+    def test_unaligned_card_still_conflicts_with_matched_structure(self):
+        row = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27CG552EC",
+            "price": "5790",
+            "thinking": "螢幕下方有價牌，但無法確認該價牌是否與主角螢幕空間對齊。",
+            "independent_pass": True,
+            "request_id_verified": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True},
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertIn("標籤歸屬與敘述衝突", decision["reasons"])
+
     def test_unlisted_model_candidate_requires_same_photo_label_evidence(self):
         narration = (
             "中間主角螢幕正下方有實體價牌，清楚標示型號 S24D300GAC，"

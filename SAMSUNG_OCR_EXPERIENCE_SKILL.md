@@ -4,6 +4,16 @@ description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 
 # SAMSUNG_OCR_EXPERIENCE (Project Bible)
 
+## Highest iron rule: correctness belongs to the local program
+
+- Permanent priority is **photo correctness > OpenAI/Codex token savings > elapsed time**.
+- Correctness must be enforced by stable local code, evidence contracts, at most three stateless LM Studio calls, deterministic terminal invariants, per-photo upload receipts, and permanent regression tests. Codex/OpenAI must not become a per-photo OCR worker, a daily rule editor, or a required human-in-the-loop component of the production pipeline.
+- Formal batch OCR runs only through the local LM Studio model and local scripts. Codex fixes systemic root causes, validates regressions, reads compact local summaries at 09:00 and 21:00, and intervenes only when the local monitor emits an anomaly.
+- Repeated detection of the same error class proves a program defect. Stop only at the affected photo boundary, repair the shared cause, add a reproducing test, and auto-resume the saved checkpoint. Never keep rerunning, patch only the current photo, clear the warning, or wait for the next Codex monitor.
+- Healthy monitoring must stay local and compact. Do not send full status payloads, model logs, images, or the whole history to Codex on every cycle. Token savings may never weaken the accuracy gates.
+- `samsung_ocr_prompt.txt` is a proven Qwen 2.5 baseline created through repeated real-photo iteration. A move to Qwen 3 VL 8B or any other LLM must prove that the new model preserves this prompt's meaning on a fixed, versioned regression corpus covering view, complete-screen count, FollowMe, model, price, label ownership, terminal naming, and upload. Do not deploy the new model before non-regression is demonstrated.
+- Never broadly rewrite, shorten, or replace the formal prompt merely to accommodate a new model. If accuracy falls, recover the last proven high-accuracy prompt from Git first, then make the smallest context/output compatibility change with recorded diffs, corpus results, and an immediate rollback commit.
+
 ## Revision `.36` 型號身分規則（2026-07-18）
 
 - `skills/model_catalog_rules.py` 是一般型號正規化、六款 FollowMe 名稱與面板對照的唯一共用權威；不得在各工具另寫一份價格或尺寸推導表。
@@ -712,3 +722,30 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
 - This is zero-model deterministic repair. Never spend a fourth call, reset
   attempts, rebuild staging, duplicate a Drive object, or inflate the canonical
   unique-source total to make review activity look like first-pass progress.
+
+## Selective escalation and no-ritual-third-pass contract (2026-07-24)
+
+- Accuracy-first does not mean three calls for every photo. A clean ordinary
+  non-FollowMe single with a valid evidence contract, unique main subject,
+  `matched` card ownership, directly supported model and price, and no
+  narration/binding/field conflict closes and uploads after pass one.
+- Escalate only the risky field: short-SKU completion, 2026 price-role
+  confirmation, a missing field, distant/FollowMe evidence, ambiguous
+  ownership, or a material cross-pass conflict. If stateless pass two resolves
+  the trigger, close immediately. Pass three exists only for a conflict that
+  remains after pass two; it is never a fixed ritual.
+- Several visible cards do not by themselves make ownership ambiguous. If the
+  narration explicitly aligns one card to the main monitor and explicitly
+  assigns the remaining cards to neighbours, neighbour-card wording must not
+  contradict `label_ownership=matched`. Continue to fail closed when the main
+  card itself is described as unaligned or unowned.
+- Permanent regression `M-台南市-新營區-SF-新營-732.jpg`: pass one legitimately
+  escalates because `S27CG552` is uniquely completed to `S27CG552EC` and the
+  photographed `5,790` requires price-role confirmation. An identical,
+  request-bound pass two must close the photo. The legacy three-call row was
+  deterministically finalized and uploaded as
+  `單機 / S27CG552EC / 5,790` with zero additional model calls.
+- Measure first-, second-, and third-pass rates on an unbiased full-month mix.
+  A selected high-risk tail is not a throughput baseline. An elevated third
+  pass rate in an ordinary mixed batch is a systemic trigger-regression signal,
+  not a reason to accept two-to-three-times slower OCR.

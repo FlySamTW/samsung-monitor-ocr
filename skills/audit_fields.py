@@ -1678,6 +1678,52 @@ def _narration_declares_distant(text: str) -> bool:
 
 def _label_ownership_conflicts_with_narration(text: str) -> bool:
     normalized = str(text or "")
+    # A shelf photo can legitimately contain several cards: one explicitly
+    # aligned with the main monitor and the others explicitly assigned to
+    # neighbouring monitors.  Do not treat the mere mention of those
+    # neighbouring cards as a contradiction to ``label_ownership=matched``.
+    #
+    # Real 新營-732 wording first identified the aligned card and separated
+    # the other two as neighbour cards, then ended with a generic,
+    # self-contradictory "無法確認" sentence.  Two independent structured
+    # passes nevertheless agreed on the same owned model/price.  The old broad
+    # regex saw "其他兩張價牌屬於旁邊" and forced an unnecessary third call.
+    explicit_main_card = bool(
+        re.search(
+            r"(?:其中|中央|正下方).{0,28}"
+            r"(?:與(?:主角)?螢幕(?:的)?(?:空間)?對齊|屬於(?:這台|主角)?螢幕|屬於主角)",
+            normalized,
+        )
+        or re.search(
+            r"(?:中央|正下方)(?:的)?(?:實體)?(?:價牌|價格牌|規格牌).{0,36}"
+            r"(?:屬於(?:這台|主角)?螢幕|屬於主角|與(?:主角)?螢幕(?:的)?(?:空間)?對齊)",
+            normalized,
+        )
+    )
+    explicit_neighbour_cards = bool(
+        re.search(
+            r"(?:其他|其餘|另外).{0,12}(?:張)?(?:實體)?(?:價牌|價格牌|規格牌)"
+            r".{0,18}(?:屬於|對應).{0,10}(?:旁邊|鄰近|鄰機|其他)(?:商品|螢幕|顯示器|機台)?",
+            normalized,
+        )
+    )
+    explicit_main_card_retracted = bool(
+        re.search(
+            r"(?:其中一張|中央(?:的)?(?:實體)?(?:價牌|價格牌|規格牌)|"
+            r"正下方(?:的)?(?:實體)?(?:價牌|價格牌|規格牌)|該(?:價牌|價格牌|規格牌))"
+            r".{0,36}(?:無法|不能|不可).{0,16}(?:確認|判定|歸屬|對齊)",
+            normalized,
+        )
+        or re.search(
+            r"(?:無法|不能|不可).{0,16}(?:確認|判定).{0,28}"
+            r"(?:其中一張|中央(?:的)?(?:價牌|價格牌|規格牌)|"
+            r"正下方(?:的)?(?:價牌|價格牌|規格牌)|該(?:價牌|價格牌|規格牌))",
+            normalized,
+        )
+    )
+    if explicit_main_card and explicit_neighbour_cards and not explicit_main_card_retracted:
+        return False
+
     conflict_patterns = (
         r"(?:規格牌|價格牌|標籤).{0,16}(?:屬於|對應)(?:旁邊|鄰近|另一台|其他)(?:商品|螢幕|顯示器|機台)?",
         r"(?:規格牌|價格牌|標籤).{0,16}(?:不能|無法|不可).{0,6}歸屬",
@@ -2349,10 +2395,10 @@ def _adjudication_pass_has_base_integrity(
             or (
                 allow_local_followme_conflict
                 and runtime_reasons
-                and runtime_reasons
-                <= {
+                and runtime_reasons <= {
                     "distant_followme_strong_evidence_conflict",
                     "structured_narration_followme_conflict",
+                    "structured_authority_material_conflict:model",
                 }
             )
         )
@@ -2734,8 +2780,18 @@ def finalize_three_pass_outcome(
     # corrected third-pass record back into an unresolved backlog item.
     if record.get("human_pixel_authority_applied") is True:
         authority_hash = str(record.get("human_pixel_authority_sha256") or "").strip().lower()
+        authority_attempts = {
+            int(item.get("ocr_attempt") or 0) for item in passes
+        }
         authority_passes_are_bound = bool(
-            len(passes) == max_attempts
+            (
+                len(passes) == max_attempts
+                or (
+                    len(passes) == 2
+                    and int(record.get("ocr_attempt") or 0) == max_attempts
+                    and authority_attempts == {1, 3}
+                )
+            )
             and authority_hash
             and all(
                 str(item.get("input_image_sha256") or "").strip().lower() == authority_hash
@@ -2768,7 +2824,7 @@ def finalize_three_pass_outcome(
                     or "three_pass_human_audited_pixel_authority"
                 ),
                 "adjudication_summary": (
-                    "三輪獨立判讀已完成；依人工核對且以完整影像雜湊綁定的像素事實定案，"
+                    "模型呼叫額度已到第三輪；依人工核對且以完整影像雜湊綁定的像素事實定案，"
                     "沒有增加第 4 次模型呼叫。"
                 ),
                 "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
@@ -3031,6 +3087,36 @@ def finalize_three_pass_outcome(
             )
             for item in single_local_integrity
         ) < 2
+    )
+    # Three independently bound calls that all agree on an ordinary single
+    # subject with only one or two complete monitors have already established
+    # the business view, even when model/price narration conflicts made those
+    # identity fields unusable.  Content uncertainty is not a technical
+    # failure: finish truthfully as a single unit and clear unsupported
+    # identity fields.  Requiring every call to stay below three complete
+    # monitors keeps genuine wide display walls out of this fallback.
+    subthree_single_content_closure_fallback = bool(
+        len(passes) == max_attempts
+        and len(base_integrity) == len(passes)
+        and "" not in base_hashes
+        and len(base_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip()
+            == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main")
+            is True
+            and (item.get("normalized_evidence") or item).get(
+                "complete_screen_count"
+            )
+            in {1, 2}
+            for item in base_integrity
+        )
+        and not any(
+            has_sufficient_followme_physical_evidence(
+                item.get("normalized_evidence") or item
+            )
+            for item in base_integrity
+        )
     )
     followme_local_base_fallback = bool(
         len(passes) == max_attempts
@@ -3462,6 +3548,8 @@ def finalize_three_pass_outcome(
         usable = list(single_local_integrity)
     elif single_view_base_fallback:
         usable = list(single_local_integrity)
+    elif subthree_single_content_closure_fallback:
+        usable = list(base_integrity)
     elif mixed_wide_distant_base_fallback:
         usable = list(base_integrity)
     elif wide_scene_structural_base_fallback:
@@ -3605,6 +3693,10 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(usable)
         rule = "three_pass_single_subject_consensus"
+    elif subthree_single_content_closure_fallback:
+        final_view = "單機"
+        supporting = list(usable)
+        rule = "three_pass_subthree_single_content_closure"
     elif len(followme) >= 2 and any(
         _followme_single_subject_geometry_supported(item) for item in followme
     ):
@@ -3864,6 +3956,28 @@ def finalize_three_pass_outcome(
             ]
             record["complete_screen_count"] = min(subthree_counts) if subthree_counts else 1
             record["followme_physical_evidence"] = []
+        if rule == "three_pass_subthree_single_content_closure":
+            subthree_counts = [
+                int(
+                    (item.get("normalized_evidence") or item).get(
+                        "complete_screen_count"
+                    )
+                )
+                for item in supporting
+                if (item.get("normalized_evidence") or item).get(
+                    "complete_screen_count"
+                )
+                in {1, 2}
+            ]
+            record["complete_screen_count"] = min(subthree_counts) if subthree_counts else 1
+            # This rule exists precisely because identity/price evidence was
+            # contradictory.  Never preserve a majority assembled from
+            # ambiguous neighbouring cards.
+            record["model"] = None
+            record["price"] = None
+            record["label_ownership"] = "ambiguous"
+            record["followme_physical_evidence"] = []
+            record["followme_family_confirmed"] = False
         if rule == "two_pass_edge_cut_frame_consensus":
             record["complete_screen_count"] = 1
             record["followme_physical_evidence"] = []
