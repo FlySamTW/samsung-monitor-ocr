@@ -1320,3 +1320,64 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   「升第二輪率」、「升第三輪率」及平均模型呼叫數；若一般混合批次的
   第三輪率異常升高，先查觸發器系統性過寬，不得以增加硬體或放任慢速
   掩蓋。
+
+## 2026-07-24 RequestID 尾碼假污染與原位續跑
+
+- 第二、第三輪 prompt 末尾會再次列出同一個全新 128-bit RequestID，格式為
+  `本次只輸出一個 JSON 物件；其中 request_id 必須逐字等於以下本次識別碼：<32hex>`。
+  這是當輪 transport binding，不是上一輪答案。`review_prior_value_present`
+  檢查在比對前一輪型號／價格前，必須先移除這段完整固定格式；隨機十六進位
+  尾碼偶然包含前一輪四位價格，不得誤判為跨輪記憶污染。
+- 永久事故 `M-台中市-大甲區-TK3C-大甲-1521.jpg`：第一輪為
+  `單機 / S24F332EAC / 2,590`；第二輪尚未送入 LM 時，新 RequestID
+  恰含 `2590`，舊檢查器誤觸 durable fuse。這不是模型看過上一輪答案，
+  也不是第二輪內容錯誤。
+- 預推論誤熔斷只能由 `tools/recover_review_metadata_false_fuse.py`
+  原位恢復。工具只接受 attempt 2 或 3、已有 durable history 與 trace
+  恰好為先前已完成輪次、相同 source item／run／full-image SHA、所有先前
+  輪次皆 request-bound、stateless、無 prior-answer exposure／prompt
+  contamination，並只把 attempt counter 回退一格。不得清除證據、重建
+  staging、重跑已完成輪次或允許第 4 次呼叫。
+- 1521 恢復後真正執行第二輪，兩輪均得到
+  `單機 / S24F332EAC / 2,590` 且健康，第二輪即結案。正式 202602
+  checkpoint 由 `82/1,598` 持續前進；port 5002、既有 Dashboard、
+  LM Studio 與逐張 uploader 均未重啟或另開分頁。
+- 必測回歸：RequestID 中文尾碼含前輪價格仍健康、attempt-2 預推論回退
+  保留第一輪證據、attempt-3 預推論回退保留前兩輪證據，以及完整
+  `tools/run_critical_regressions.py`。修復後必須用兩次即時狀態讀取證明
+  `current_file`／period processed 真正前進且 runtime fuse、pipeline
+  pause 皆不存在，不能只看 Dashboard 的單一截圖。
+
+## 2026-07-24 可預知熔斷自復原與主管可見結論
+
+- `ocr_continuity_supervisor.ps1` 遇到唯一理由
+  `review_prior_value_present`、attempt 2/3、尚未送入 LM、沒有 raw output
+  的精確舊式假熔斷時，先以現行 sanitizer 自測固定 RequestID 尾碼，再以
+  `recover_review_metadata_false_fuse.py` dry-run 與 apply 雙重驗證。
+  驗證通過才原位回退未發生的那一次 attempt、封存 fuse 並沿用同 staging
+  checkpoint；同一 source/run 最多自復原一次，第二次必須 fail closed，
+  防止真正提示污染形成無限自清迴圈。
+- supervisor 的 runtime source mtime 清冊必須包含
+  `skills/runtime_health_gate.py` 與 `skills/batch_orchestrator.py`。
+  否則守門已修正但 backend 未換版，會讓同一可預知事故重複發生。
+- Dashboard／port 5002 是永久在線介面。真正系統風險可在照片邊界暫停
+  OCR 與該張上傳，但頁面、狀態 API、LM 與 uploader 狀態仍須可見；
+  可安全證明的舊式 metadata 假熔斷由程式自復原，不等待定時 AI 或使用者
+  手按。
+- 舊 `AGENTS.md` 與輸出契約曾強制模型以「所以……」結尾，後端又會把
+  該字串移到最後，正是主管畫面看似賣關子的根因。新永久契約為：
+  `我看到本輪結論：遠景/單機，型號/無型號，價格/無價格。`
+  第一個完整句先報結論，後面才寫照片可見依據，最後以完整句號結束；
+  禁止省略號、裸 JSON 或把結論留到最後。
+- 舊模型若仍回傳「所以……」，`build_final_display_thinking()` 只移除
+  懸空標記、保留原始可見依據，並以同輪結構欄產生主管可見的結論首句。
+  原始 raw response 仍留在 evidence trace，不能用顯示整理洗掉衝突。
+- 2026-07-24 正式換版只在照片邊界短暫停止 OCR 寫入，既有 Chrome 分頁
+  未重開／未重整；以 `AllowIncompleteStoppedBatch` 從同一 202602 staging
+  自動續跑。即時驗收由 `168/1,598` 前進，runtime fuse 與 pipeline pause
+  均不存在；新卡片已實際顯示結論優先文字。
+- 換版前殘留的唯一技術失敗 `大甲-1519`（舊程式缺少
+  `EVIDENCE_GUARD_REVISION` 名稱）不得永久留在 failed。現行程式原位優先
+  重跑後，三輪一致定案為遠景、無型號、無價格，`failed` 由 1 歸零，
+  並取得逐張上傳檔名 `M-202602-台中市-大甲區-TK3C-大甲-遠景-1519.jpg`；
+  正式複核同時前進至至少 `187/1,598`。

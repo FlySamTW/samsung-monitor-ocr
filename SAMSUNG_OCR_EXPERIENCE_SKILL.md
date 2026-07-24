@@ -752,3 +752,55 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
   A selected high-risk tail is not a throughput baseline. An elevated third
   pass rate in an ordinary mixed batch is a systemic trigger-regression signal,
   not a reason to accept two-to-three-times slower OCR.
+
+## Request-binding-tail false-fuse contract (2026-07-24)
+
+- The repeated final Chinese `request_id` binding line and its fresh 32-hex
+  token are transport metadata. Strip that exact fixed-format tail before
+  scanning a blind-review prompt for a prior model or price. A random token
+  containing the same four digits as a prior price is not memory exposure.
+- Recover a pre-inference `review_prior_value_present` fuse only with
+  `tools/recover_review_metadata_false_fuse.py`. Attempt 2 must have exactly
+  call 1 in durable trace/history; attempt 3 must have exactly calls 1 and 2.
+  Every completed call must bind the same source item, run and full-image SHA
+  and be stateless, request-bound and contamination-free.
+- Roll the persisted counter back by exactly one because the blocked call never
+  reached the model. Preserve every completed call and all evidence. Never
+  reset staging, replay a completed call, clear evidence, or permit call 4.
+- Permanent live regression `M-台中市-大甲區-TK3C-大甲-1521.jpg`: the fresh
+  pass-2 RequestID happened to contain `2590`. After deterministic recovery,
+  the real second call independently agreed on
+  `單機 / S24F332EAC / 2,590` and the photo closed at pass 2.
+- Acceptance requires the two narrow recovery tests, runtime-health tests,
+  complete critical regressions, and two live status samples proving period
+  progress while port 5002 and the existing Dashboard remain online and the
+  runtime fuse and pipeline pause remain absent.
+
+## Predictable-fuse self-recovery and conclusion-first UI (2026-07-24)
+
+- A supervisor may auto-recover only the exact pre-inference
+  `review_prior_value_present` metadata shape: one reason, attempt 2/3, null
+  model/price, no raw model output, complete prior bound trace/history, and a
+  current sanitizer probe that proves the fixed Chinese RequestID tail is
+  ignored. Dry-run before apply and archive a durable receipt.
+- The same source/run may use this recovery once. A repeated trip is systemic
+  or unknown and remains fail-closed. Never create a loop that deletes fuses,
+  resets attempts, replays completed calls, or waits for a periodic cloud agent
+  to repair a known deterministic transport collision.
+- Runtime reload discovery must watch the health gate and batch orchestrator,
+  not only the main processor. Keep port 5002, the existing Dashboard tab, LM
+  status and uploader status visible while OCR is safely held at a photo
+  boundary; resume the exact checkpoint automatically after repair.
+- Operator narration is conclusion-first. Begin with
+  `我看到本輪結論：遠景/單機，型號/無型號，價格/無價格。`, then give
+  current-image evidence and end with a full stop. Never use `所以……`,
+  ellipses, suspense phrasing, bare JSON, or a conclusion deferred to the end.
+- Legacy narration is retained in immutable evidence, but its dangling marker
+  is removed from the visible form and the same-pass structured conclusion is
+  prepended. This display normalization must never erase a real
+  narration/structure conflict from runtime-health evaluation.
+- A technical failed row left by old code is unfinished work, not a permanent
+  business outcome. After the root cause and regressions are proven, requeue
+  that exact source inside the same formal batch, keep the three-call cap, and
+  require a terminal result plus exact stream-upload receipt before failed can
+  return to zero.

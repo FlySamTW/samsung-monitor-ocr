@@ -1046,8 +1046,9 @@ def apply_human_audited_pixel_authority(
                 "也沒有可歸屬於同一主體的型號與價格"
             )
         record["thinking"] = (
-            f"我看到{scene_summary}。這張依三次獨立呼叫與"
-            "已綁定原圖像素權威定案為遠景、無型號、無價格，所以……"
+            "我看到本輪結論：遠景，無型號，無價格。"
+            f"判讀依據：{scene_summary}；這張已依三次獨立呼叫與"
+            "綁定原圖像素權威完成定案。"
         )
         record["narration"] = record["thinking"]
         # The audited pixels are the final authority after exactly three
@@ -1086,8 +1087,11 @@ def apply_human_audited_pixel_authority(
     else:
         identity_summary = "畫面沒有足夠可歸屬同一主角的型號或價格證據，兩欄都如實留空"
     record["thinking"] = (
-        f"我看到{pixel_summary}；{identity_summary}。"
-        "這張依三次獨立呼叫與已綁定原圖像素權威定案為單機，所以……"
+        f"我看到本輪結論：單機，"
+        f"{expected_model or '無型號'}，"
+        f"{f'{expected_price:,}元' if expected_price else '無價格'}。"
+        f"判讀依據：{pixel_summary}；{identity_summary}；"
+        "這張已依三次獨立呼叫與綁定原圖像素權威完成定案。"
     )
     record["narration"] = record["thinking"]
     for key in (
@@ -2607,9 +2611,10 @@ def _three_pass_final_narration(record: Dict[str, Any]) -> str:
             else ""
         )
         return (
-            f"我看到三輪獨立判讀已完成交叉核對，畫面屬於{count_text}的整體陳列，"
+            "我看到本輪結論：遠景，無型號，無價格。"
+            f"判讀依據：三輪獨立判讀已完成交叉核對，畫面屬於{count_text}的整體陳列，"
             f"沒有足以唯一歸屬同一主角的型號與價格{followme_text}，"
-            "因此定案為遠景、無型號、無價格。所以……"
+            "已完成遠景定案。"
         )
 
     if count == 1:
@@ -2626,8 +2631,10 @@ def _three_pass_final_narration(record: Dict[str, Any]) -> str:
     else:
         family_text = "沒有足夠的 FollowMe 同主體實體結構證據"
     return (
-        f"我看到三輪獨立判讀已完成交叉核對，{count_text}；{model_text}，{price_text}；"
-        f"{family_text}，因此定案為單機。所以……"
+        f"我看到本輪結論：單機，{model or '無型號'}，"
+        f"{f'{int(price):,}元' if price else '無價格'}。"
+        f"判讀依據：三輪獨立判讀已完成交叉核對，{count_text}；"
+        f"{model_text}，{price_text}；{family_text}，已完成單機定案。"
     )
 
 

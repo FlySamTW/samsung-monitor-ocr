@@ -113,10 +113,9 @@ def main() -> None:
         {"view_type": "單機", "model": "S24F332EAC", "price": "2390"},
         "我看到中央一台完整螢幕，所以……這不是 FollowMe，是一般單機。",
     )
-    assert normalized_self_talk.startswith("我看到")
-    assert normalized_self_talk.endswith("所以……")
+    assert normalized_self_talk.startswith("我看到本輪結論：單機，S24F332EAC，2,390元。")
     assert "這不是 FollowMe，是一般單機" in normalized_self_talk
-    assert normalized_self_talk.count("所以……") == 1
+    assert "所以……" not in normalized_self_talk
 
     assert not ocr.has_explicit_distant_layout_evidence(
         "這是 3C 賣場，有展示區與多台螢幕，但中間一台是主角。"

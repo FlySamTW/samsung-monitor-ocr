@@ -1,11 +1,11 @@
 """Clear a pre-inference review-metadata false fuse without losing a model call.
 
-This recovery is deliberately narrow.  It applies only when attempt three was
-blocked before inference because a prior numeric value appeared solely in
-transport metadata (source filename, RequestID or bbox coordinates).  Two
-healthy, stateless, request-bound calls must already exist for the same source,
-run and full-image hash.  The persisted attempt counter is rolled back from
-three to two so the fixed runtime can make the real third and final call.
+This recovery is deliberately narrow.  It applies only when attempt two or
+three was blocked before inference because a prior numeric value appeared
+solely in transport metadata (source filename, RequestID or bbox coordinates).
+Every earlier call must be healthy, stateless and request-bound for the same
+source, run and full-image hash.  The persisted attempt counter is rolled back
+by exactly one so the fixed runtime can make the call that never happened.
 """
 
 from __future__ import annotations
@@ -22,10 +22,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
+from skills.runtime_health_gate import review_prompt_leak_reasons
 
 
 RECOVERY_SCHEMA = "samsung-ocr-review-metadata-fuse-recovery/v1"
-RECOVERY_RULE = "rollback_pre_inference_metadata_false_positive_to_call_two"
+RECOVERY_RULE = "rollback_pre_inference_metadata_false_positive_one_slot"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -87,7 +88,7 @@ def recover(
         fuse.get("schema") != "samsung-ocr-runtime-health-fuse/v1"
         or fuse.get("active") is not True
         or fuse.get("reasons") != ["review_prior_value_present"]
-        or int(fuse.get("attempt") or 0) != 3
+        or int(fuse.get("attempt") or 0) not in {2, 3}
         or not file_name
         or not run_id
         or snapshot.get("view_type") != "失敗"
@@ -97,16 +98,45 @@ def recover(
     ):
         raise RuntimeError("fuse is not the exact pre-inference metadata false-positive shape")
 
+    # Refuse recovery unless the currently installed guard demonstrably ignores
+    # the fixed-format transport binding that caused the known false fuse.
+    # This prevents a supervisor from clearing the marker while old code is
+    # still loaded or before the root cause has actually been fixed.
+    sanitizer_probe = review_prompt_leak_reasons(
+        2,
+        [{
+            "role": "user",
+            "content": (
+                "這是全新照片，只根據當前影像獨立判讀。\n"
+                "本次只輸出一個 JSON 物件；其中 request_id 必須逐字等於"
+                "以下本次識別碼：aabb2590ccddeeff0011223344556677"
+            ),
+        }],
+        injected_prior_results=[],
+        prior_results_for_leak_check=[{"model": "S24F332EAC", "price": "2590"}],
+    )
+    if sanitizer_probe:
+        raise RuntimeError("current runtime guard has not fixed the transport-binding collision")
+
+    blocked_attempt = int(fuse.get("attempt") or 0)
+    completed_attempts = list(range(1, blocked_attempt))
     retry_state = _read_json(retry_file)
     attempts = retry_state.get("auto_attempts") or {}
     histories = retry_state.get("auto_result_history") or {}
     history = histories.get(file_name) or []
-    if int(attempts.get(file_name) or 0) != 3 or len(history) != 2:
-        raise RuntimeError("persisted attempt/history state is not exactly 3 with two calls")
+    if (
+        int(attempts.get(file_name) or 0) != blocked_attempt
+        or len(history) != len(completed_attempts)
+    ):
+        raise RuntimeError(
+            "persisted attempt/history state does not match the pre-inference block"
+        )
 
     calls = _trace_calls(trace_path, file_name=file_name, run_id=run_id)
-    if [int(item.get("ocr_attempt") or 0) for item in calls] != [1, 2]:
-        raise RuntimeError("evidence trace must contain exactly bound calls one and two")
+    if [int(item.get("ocr_attempt") or 0) for item in calls] != completed_attempts:
+        raise RuntimeError(
+            "evidence trace must contain exactly the calls completed before the block"
+        )
     source_ids = {str(item.get("source_item_id") or "") for item in calls}
     image_hashes = {
         str(item.get("input_image_sha256") or "").strip().lower() for item in calls
@@ -131,6 +161,18 @@ def recover(
 
     source_item_id = next(iter(source_ids))
     image_hash = next(iter(image_hashes))
+    clearance_dir = fuse_file.parent / "runtime_health_fuse_clearance"
+    for prior_receipt in clearance_dir.glob("review_metadata_*.json"):
+        try:
+            prior = _read_json(prior_receipt)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            prior.get("source_file") == file_name
+            and prior.get("run_id") == run_id
+            and prior.get("recovery") == RECOVERY_RULE
+        ):
+            raise RuntimeError("this source/run already used the one-time metadata recovery")
     report = {
         "schema": RECOVERY_SCHEMA,
         "status": "would_recover" if not apply else "recovered",
@@ -139,16 +181,16 @@ def recover(
         "source_item_id": source_item_id,
         "run_id": run_id,
         "input_image_sha256": image_hash,
-        "trace_attempts": [1, 2],
-        "persisted_attempt_before": 3,
-        "persisted_attempt_after": 2,
+        "trace_attempts": completed_attempts,
+        "persisted_attempt_before": blocked_attempt,
+        "persisted_attempt_after": blocked_attempt - 1,
         "fourth_call_allowed": False,
         "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
     }
     if not apply:
         return report
 
-    attempts[file_name] = 2
+    attempts[file_name] = blocked_attempt - 1
     retry_state["auto_attempts"] = attempts
     retry_state["updated_at"] = datetime.now().isoformat(timespec="seconds")
     _atomic_json(retry_file, retry_state)
@@ -156,11 +198,7 @@ def recover(
     cleared_at = datetime.now().isoformat(timespec="seconds")
     audit_dir = fuse_file.parent
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    receipt_path = (
-        audit_dir
-        / "runtime_health_fuse_clearance"
-        / f"review_metadata_{stamp}_{source_item_id[:12]}.json"
-    )
+    receipt_path = clearance_dir / f"review_metadata_{stamp}_{source_item_id[:12]}.json"
     receipt = {**report, "cleared_at": cleared_at}
     _atomic_json(receipt_path, receipt)
     archived = (

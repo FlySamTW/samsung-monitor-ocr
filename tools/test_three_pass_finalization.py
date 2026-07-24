@@ -2084,8 +2084,8 @@ class ThreePassFinalizationTests(unittest.TestCase):
                 self.assertEqual(passes[-1]["followme_physical_evidence"], [])
                 self.assertIn(expected_model, passes[-1]["thinking"])
                 self.assertNotIn("健康閘收回", passes[-1]["thinking"])
-                self.assertTrue(passes[-1]["thinking"].startswith("我看到"))
-                self.assertTrue(passes[-1]["thinking"].endswith("所以……"))
+                self.assertTrue(passes[-1]["thinking"].startswith("我看到本輪結論："))
+                self.assertNotIn("所以……", passes[-1]["thinking"])
 
     def test_audited_wide_scene_followme_pixels_override_false_distant_calls(self):
         for image_hash in (
@@ -2301,8 +2301,8 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertIsNone(current["model"])
         self.assertEqual(current["price"], "3300")
         self.assertTrue(current["adjudication_narration_synthesized"])
-        self.assertTrue(current["thinking"].startswith("我看到"))
-        self.assertTrue(current["thinking"].endswith("所以……"))
+        self.assertTrue(current["thinking"].startswith("我看到本輪結論：單機"))
+        self.assertNotIn("所以……", current["thinking"])
         self.assertIn("維持無型號", current["thinking"])
         self.assertIn("3,300元", current["thinking"])
         self.assertNotIn("健康閘收回", current["thinking"])
@@ -2959,8 +2959,8 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(
             current["adjudication_original_current"]["thinking"], original_thinking
         )
-        self.assertTrue(current["thinking"].startswith("我看到"))
-        self.assertTrue(current["thinking"].endswith("所以……"))
+        self.assertTrue(current["thinking"].startswith("我看到本輪結論："))
+        self.assertNotIn("所以……", current["thinking"])
         self.assertIn("系統", "系統" + current["adjudication_summary"])
         self.assertIn("遠景", current["adjudication_summary"])
 
@@ -2993,7 +2993,8 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(current["complete_screen_count"], 1)
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
-        self.assertTrue(current["thinking"].endswith("所以……"))
+        self.assertTrue(current["thinking"].startswith("我看到本輪結論：單機"))
+        self.assertNotIn("所以……", current["thinking"])
 
     def test_identity_free_terminal_result_clears_superseded_upload_blockers(self):
         history = [

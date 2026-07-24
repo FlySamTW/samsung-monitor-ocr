@@ -348,7 +348,8 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(current["followme_family_confirmed"])
         self.assertEqual(current["quality_issue"], "不合格-沒有規格和價格牌")
         self.assertNotIn("None", current["thinking"])
-        self.assertTrue(current["thinking"].endswith("所以……"))
+        self.assertTrue(current["thinking"].startswith("我看到本輪結論：單機"))
+        self.assertNotIn("所以……", current["thinking"])
 
     def test_non_followme_pixel_authority_clears_false_fixture_family(self):
         def authority_pass(attempt):
@@ -1698,7 +1699,8 @@ class EvidenceContractTests(unittest.TestCase):
         full, _ = batch.build_runtime_system_prompt(prompt, "\\nDYNAMIC_REFERENCE")
         self.assertTrue(full.endswith(batch.V1945_OUTPUT_CONTRACT))
         self.assertIn("narration", batch.V1945_OUTPUT_CONTRACT)
-        self.assertIn("Traditional Chinese first-person observation", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("beginning with 我看到本輪結論：", batch.V1945_OUTPUT_CONTRACT)
+        self.assertIn("Never use 所以…… or ellipses", batch.V1945_OUTPUT_CONTRACT)
         self.assertLessEqual(len(full), batch.RUNTIME_SYSTEM_PROMPT_MAX_CHARS)
 
     def test_runtime_prompt_has_no_copyable_followme_price_or_panel_examples(self):
@@ -2015,8 +2017,8 @@ class EvidenceContractTests(unittest.TestCase):
         result = {"view_type": "單機", "model": 'FollowMe Pro M7 43"', "price": "17990"}
         displayed = batch.build_final_display_thinking(result, original)
         self.assertIn("前景 FollowMe 實體，但最後卻說是遠景", displayed)
-        self.assertTrue(displayed.startswith("我看到"))
-        self.assertTrue(displayed.endswith("所以……"))
+        self.assertTrue(displayed.startswith('我看到本輪結論：單機，FollowMe Pro M7 43"，17,990元。'))
+        self.assertNotIn("所以……", displayed)
         self.assertNotIn("最終校正", displayed)
         source = Path(batch.__file__).read_text(encoding="utf-8")
         self.assertIn("先掃描全張原圖，逐區搜尋實體 FollowMe，再計算所有完整螢幕", source)

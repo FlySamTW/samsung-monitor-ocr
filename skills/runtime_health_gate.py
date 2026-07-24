@@ -293,6 +293,18 @@ def review_prompt_leak_reasons(
         "",
         prior_value_scan,
     )
+    # The same fresh per-call RequestID is repeated as the final Chinese
+    # binding instruction so the VLM copies it reliably.  It is transport
+    # metadata too.  A random token can naturally contain four digits equal
+    # to a prior price (大甲-1521: 2590), which previously stopped pass two
+    # before inference even though no prior answer entered the prompt.
+    prior_value_scan = re.sub(
+        r"本次只輸出一個\s*JSON\s*物件；其中\s*request_id\s*必須逐字等於"
+        r"以下本次識別碼：[0-9a-f]{32}",
+        "",
+        prior_value_scan,
+        flags=re.IGNORECASE,
+    )
     prior_value_scan = re.sub(
         r"(?i)\bbbox\s*=\s*[\[(][^\])\r\n]*[\])]",
         "",

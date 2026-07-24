@@ -11,6 +11,7 @@ from skills.runtime_health_gate import (
     first_pass_content_conflict_can_retry,
     public_runtime_health_fuse,
     read_runtime_health_fuse,
+    review_prompt_leak_reasons,
     trip_runtime_health_fuse,
 )
 from tools.build_upload_gate_proof import build_proof
@@ -468,6 +469,50 @@ class RuntimeHealthGateTests(unittest.TestCase):
             }],
         )
         self.assertTrue(decision.healthy)
+
+    def test_final_request_binding_tail_cannot_mimic_a_prior_price(self):
+        decision = evaluate_runtime_health(
+            record(),
+            "獨立判讀完成。",
+            attempt=2,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "這是全新照片，請只根據當前影像獨立判讀。\n"
+                    "本次只輸出一個 JSON 物件；其中 request_id 必須逐字等於"
+                    "以下本次識別碼：aabb2590ccddeeff0011223344556677"
+                ),
+            }],
+            prior_results_for_leak_check=[{
+                "view_type": "單機",
+                "model": "S24F332EAC",
+                "price": "2590",
+            }],
+        )
+        self.assertTrue(decision.healthy)
+
+    def test_all_fixed_transport_fields_are_excluded_from_prior_value_scan(self):
+        for price in ("2590", "4990", "17990"):
+            request_id = (price + ("a" * 32))[:32]
+            reasons = review_prompt_leak_reasons(
+                2,
+                [{
+                    "role": "user",
+                    "content": (
+                        f"圖片: M-測試門市-{price}.jpg\n"
+                        f"RequestID: {request_id}\n"
+                        f"補充圖：central，bbox=[0,100,{price},900]。\n"
+                        "本次只輸出一個 JSON 物件；其中 request_id 必須逐字等於"
+                        f"以下本次識別碼：{request_id}"
+                    ),
+                }],
+                injected_prior_results=[],
+                prior_results_for_leak_check=[{
+                    "model": "S24F332EAC",
+                    "price": price,
+                }],
+            )
+            self.assertEqual(reasons, [], price)
 
     def test_generic_prior_class_word_does_not_make_neutral_prompt_contaminated(self):
         decision = evaluate_runtime_health(

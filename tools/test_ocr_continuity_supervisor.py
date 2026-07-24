@@ -102,6 +102,18 @@ class ContinuitySupervisorTests(unittest.TestCase):
         self.assertLess(running_noop, reload_start)
         self.assertNotIn("Stop-Process", self.source)
 
+    def test_known_pre_inference_metadata_false_fuse_recovers_once(self):
+        self.assertIn("Try-AutoRecoverKnownReviewMetadataFuse", self.source)
+        self.assertIn("recover_review_metadata_false_fuse.py", self.source)
+        self.assertIn("known_metadata_fuse_auto_recovered", self.source)
+        self.assertIn("known_metadata_fuse_recovery_refused", self.source)
+        self.assertIn("known_metadata_fuse_recovery_failed", self.source)
+        self.assertIn("--fuse-file $RuntimeHealthFusePath --apply", self.source)
+        self.assertIn('"skills\\runtime_health_gate.py"', self.source)
+        recovery = self.source.index("Try-AutoRecoverKnownReviewMetadataFuse")
+        fail_closed = self.source.index('Alert "runtime_health_fuse_active"', recovery)
+        self.assertLess(recovery, fail_closed)
+
     def test_current_year_and_upload_gates(self):
         self.assertIn('"-CurrentYearOnly"', self.source)
         self.assertIn("drive_upload_ready_pending.csv", self.source)

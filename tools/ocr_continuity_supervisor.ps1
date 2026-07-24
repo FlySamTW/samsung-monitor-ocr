@@ -35,6 +35,8 @@ $stagedScript = Join-Path $RepoRoot "tools\rerun_staged_candidates.py"
 $watcherScript = Join-Path $RepoRoot "tools\auto_rerun_questionable_after_recursive.ps1"
 $bulkUploaderScript = Join-Path $RepoRoot "tools\rclone_drive_upload.py"
 $safeIdleReloadScript = Join-Path $RepoRoot "tools\reload_backend_at_safe_idle.ps1"
+$recoverReviewMetadataScript = Join-Path $RepoRoot "tools\recover_review_metadata_false_fuse.py"
+$evidenceTracePath = Join-Path $audit "v1945_evidence_trace.jsonl"
 $streamPendingDir = Join-Path $OutputDir "_drive_upload_stream\pending"
 try { $backendPort = ([uri]$BackendUrl).Port } catch { throw "invalid BackendUrl: $BackendUrl" }
 if ($backendPort -le 0) { throw "BackendUrl must include a valid port: $BackendUrl" }
@@ -133,13 +135,58 @@ function Get-LatestBackendRuntimeWrite {
         $backendScript,
         (Join-Path $RepoRoot "samsung_ocr_prompt.txt"),
         (Join-Path $RepoRoot "skills\audit_fields.py"),
-        (Join-Path $RepoRoot "skills\model_validation.py")
+        (Join-Path $RepoRoot "skills\model_validation.py"),
+        (Join-Path $RepoRoot "skills\runtime_health_gate.py"),
+        (Join-Path $RepoRoot "skills\batch_orchestrator.py")
     )
     $items = @($runtimePaths | ForEach-Object {
         if (Test-Path -LiteralPath $_ -PathType Leaf) { Get-Item -LiteralPath $_ }
     })
     if ($items.Count -ne $runtimePaths.Count) { return $null }
     return ($items | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+}
+function Try-AutoRecoverKnownReviewMetadataFuse {
+    $fuse = Read-JsonFile $RuntimeHealthFusePath
+    if (
+        -not $fuse -or
+        $fuse.schema -ne "samsung-ocr-runtime-health-fuse/v1" -or
+        $fuse.active -ne $true -or
+        @($fuse.reasons).Count -ne 1 -or
+        [string]$fuse.reasons[0] -ne "review_prior_value_present" -or
+        [int]$fuse.attempt -notin @(2,3) -or
+        [string]$fuse.record_snapshot.view_type -ne "失敗" -or
+        $null -ne $fuse.record_snapshot.model -or
+        $null -ne $fuse.record_snapshot.price -or
+        -not [string]::IsNullOrEmpty([string]$fuse.record_snapshot.raw_model_output)
+    ) { return $false }
+    $live = Get-BackendStatus
+    $stagingDir = if ($live) { [string]$live.image_dir } else { "" }
+    if (
+        -not $stagingDir -or
+        -not (Test-Path -LiteralPath $stagingDir -PathType Container) -or
+        -not (Test-Path -LiteralPath $evidenceTracePath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $recoverReviewMetadataScript -PathType Leaf)
+    ) { return $false }
+    $dryOutput = @(& $python $recoverReviewMetadataScript `
+        --staging-dir $stagingDir --trace $evidenceTracePath `
+        --fuse-file $RuntimeHealthFusePath 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Log-Event "known_metadata_fuse_recovery_refused" @{detail=($dryOutput -join "`n")}
+        return $false
+    }
+    $applyOutput = @(& $python $recoverReviewMetadataScript `
+        --staging-dir $stagingDir --trace $evidenceTracePath `
+        --fuse-file $RuntimeHealthFusePath --apply 2>&1)
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $RuntimeHealthFusePath)) {
+        Log-Event "known_metadata_fuse_recovery_failed" @{detail=($applyOutput -join "`n")}
+        return $false
+    }
+    Log-Event "known_metadata_fuse_auto_recovered" @{
+        source=[string]$fuse.source_file
+        attempt=[int]$fuse.attempt
+        staging=$stagingDir
+    }
+    return $true
 }
 function Get-CsvRowCount([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
@@ -319,8 +366,12 @@ try {
 
     $status = Get-BackendStatus
     if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
-        Alert "runtime_health_fuse_active" @{fuse=$RuntimeHealthFusePath}
-        exit 9
+        if (Try-AutoRecoverKnownReviewMetadataFuse) {
+            $status = Get-BackendStatus
+        } else {
+            Alert "runtime_health_fuse_active" @{fuse=$RuntimeHealthFusePath}
+            exit 9
+        }
     }
     if (Test-Path -LiteralPath $PipelinePausePath) {
         Log-Event "pipeline_pause_noop" @{pause=$PipelinePausePath}

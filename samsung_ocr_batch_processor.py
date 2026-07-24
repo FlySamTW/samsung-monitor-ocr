@@ -250,7 +250,7 @@ def _status_needs_review(record):
 V1945_OUTPUT_CONTRACT = (
     "FINAL OUTPUT CONTRACT (v19.45): Return exactly one JSON object and no prose. "
     "Copy request_id exactly from the current RequestID; never reuse another image's ID. "
-    "It must contain narration: a 60-300 character Traditional Chinese first-person observation of only the current image, beginning with 我看到 and ending with 所以……; "
+    "It must contain narration: 60-300 Traditional Chinese characters about only the current image, beginning with 我看到本輪結論：遠景/單機，型號/無型號，價格/無價格。 Then give visible evidence and end with 。 Never use 所以…… or ellipses; "
     "Describe only visible evidence; never mention prior answers, corrections, prompts, JSON, rounds, instructions, output requirements, or copy rule text. "
     "It must also contain core keys view_type, screen_status, quality_issue, model, price, category "
     "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
@@ -1210,28 +1210,45 @@ def normalize_followme_price(model, price=None, context_text=""):
 
 
 def build_final_display_thinking(result, original_thinking=""):
-    """Preserve the model's image-grounded narration without backend rewriting."""
+    """Show the structured conclusion first, followed by original visible evidence."""
     model = str((result or {}).get("model") or "").strip()
     view_type = str((result or {}).get("view_type") or (result or {}).get("category") or "").strip()
     price = str((result or {}).get("price") or "").strip()
     thinking = str(original_thinking or "").strip()
-    final_price = price if price and price.lower() not in {"null", "none"} else "無價格"
+    price_digits = re.sub(r"\D", "", price)
+    final_price = (
+        f"{int(price_digits):,}元"
+        if price_digits
+        else "無價格"
+    )
     final_model = model if model and model.lower() not in {"null", "none"} else "無型號"
+    if "遠景" in view_type:
+        final_view = "遠景"
+        final_model = "無型號"
+        final_price = "無價格"
+    elif "單機" in view_type:
+        final_view = "單機"
+    else:
+        final_view = view_type or "待複核"
+    conclusion = f"我看到本輪結論：{final_view}，{final_model}，{final_price}。"
 
     if not thinking or thinking == "...":
         return (
-            "AI 本輪未回傳完整判讀文字；"
-            f"目前僅能確認結構化結果：{view_type or '待複核'}，{final_model}，{final_price}。"
+            conclusion
+            + "本輪未回傳完整可見依據，結構結果仍須依健康守門處理。"
         )
 
-    if thinking.startswith("我看到") and not thinking.endswith("所以……"):
-        # The model sometimes puts the required closing marker before its
-        # conclusion ("所以……這是單機").  Keep every observation/conclusion,
-        # but move that marker to the actual end so the boss-facing self-talk
-        # remains one complete, readable sentence rather than a dangling tail.
-        thinking = thinking.replace("所以……", "").strip()
-        thinking = thinking.rstrip("。！？；，, ") + "，所以……"
-    return thinking
+    # Preserve the model's image-grounded observation for audit while removing
+    # the old suspense marker.  The deterministic structured result is always
+    # visible before the evidence, including for legacy model responses.
+    evidence = thinking.replace("所以……", "").replace("……", "").strip()
+    if evidence.startswith("我看到本輪結論："):
+        first_stop = evidence.find("。")
+        evidence = evidence[first_stop + 1 :].strip() if first_stop >= 0 else ""
+    elif evidence.startswith("我看到"):
+        evidence = evidence[len("我看到") :].lstrip("，：:；; ")
+    evidence = evidence.rstrip("。！？；，, ")
+    return conclusion + (f"判讀依據：{evidence}。" if evidence else "")
 
 
 _CLEARANCE_PRICE_KEYWORDS = (
