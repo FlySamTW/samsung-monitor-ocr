@@ -825,3 +825,26 @@
   trace 做 deterministic zero-model closure／精確像素權威，不能因建立
   新 staging 再取得三次。修正與完整 critical regressions 通過後，才可
   從 `9/63` 同一 checkpoint 自動接續。
+
+## 2026-07-24 19:34 202602 規則回音復原與不中斷分流
+
+- 正式 202602 在 `278/1,598`、`采河-本店-1348.jpg` attempt 1 因
+  `ui_narration_instruction_echo` 停止。這次是模型真的抄入當輪 prompt
+  suffix，不是 detector 假陽性，也不是前輪記憶污染；該 call 未進正式
+  結果或上傳，1347 是停止前最後一張。
+- `skills/runtime_health_gate.py` 新增綁定完整的 response-side narration
+  failure 窄 predicate；`skills/batch_orchestrator.py` 將其送入既有 technical
+  retry 分支，消耗呼叫額度但不建立 business pass／presentation／upload。
+  `samsung_ocr_batch_processor.py` 同時避免 raw 規則在健康判定前閃入 LLM
+  顯示區。真正 prompt construction、request/image binding 或混合內容故障
+  仍 durable fail-closed。
+- 新工具 `tools/recover_legacy_instruction_echo_fuse.py` dry-run 與 apply
+  均通過；receipt 為
+  `_ocr_audit/runtime_health_fuse_clearance/legacy_echo_20260724_193413_080572_06a343f07e2a.json`，
+  archived fuse 為相同 stem 的 `runtime_health_fuse_history` 檔。attempt 1
+  被保留、沒有回退或第 4 輪，1348 從 call 2 原位續跑。
+- 53 項針對性測試與完整 critical regressions 退出碼 0。安全換版使用同一
+  staging `20260724_120028/202602_商化照片-202602_929e7c93`，既有瀏覽器
+  分頁未重開。兩次 live 取樣為 `280→283/1,598`，verified `265→268`、
+  failed 0、fuse/pause 皆空；逐張上傳 `56,793→56,794`，最新已跨到
+  `新光三越南西-517`，OCR、Dashboard、uploader 與 hidden daemon 均在線。

@@ -227,6 +227,38 @@ def narration_contains_instruction_echo(value: Any) -> bool:
     return bool(text and _INSTRUCTION_ECHO_PATTERN.search(text))
 
 
+def photo_local_narration_failure_can_contain(
+    reasons: Iterable[Any],
+    record: Mapping[str, Any] | None,
+) -> bool:
+    """Contain a bound response-side narration failure to one photo."""
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    value = dict(record or {})
+    allowed = {
+        "ui_narration_instruction_echo",
+        "structured_narration_followme_conflict",
+    }
+    image_hash = str(value.get("input_image_sha256") or "").strip().lower()
+    return bool(
+        "ui_narration_instruction_echo" in normalized
+        and normalized <= allowed
+        and value.get("request_binding_enforced") is True
+        and value.get("request_id_verified") is True
+        and re.fullmatch(r"[0-9a-f]{64}", image_hash)
+        and value.get("independent_pass") is True
+        and value.get("prior_answer_exposed") is not True
+        and value.get("prompt_contamination") is not True
+    )
+
+
+def response_narration_format_failure_is_photo_local(
+    reasons: Iterable[Any],
+) -> bool:
+    """Return true only for the isolated response-side instruction echo."""
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    return normalized == {"ui_narration_instruction_echo"}
+
+
 def _flatten_content(value: Any) -> str:
     if value is None:
         return ""
@@ -583,7 +615,10 @@ def evaluate_runtime_health(
         reasons.append("ui_narration_missing")
     elif narration_contains_raw_structure(narration_text):
         reasons.append("ui_narration_contains_raw_structure")
-    elif narration_contains_instruction_echo(narration_text):
+    elif (
+        record.get("narration_instruction_echo_detected") is True
+        or narration_contains_instruction_echo(narration_text)
+    ):
         reasons.append("ui_narration_instruction_echo")
 
     reasons.extend(

@@ -9,6 +9,7 @@ from skills.runtime_health_gate import (
     evaluate_runtime_health,
     final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
+    photo_local_narration_failure_can_contain,
     public_runtime_health_fuse,
     read_runtime_health_fuse,
     review_prompt_leak_reasons,
@@ -331,6 +332,44 @@ class RuntimeHealthGateTests(unittest.TestCase):
                 self.assertFalse(decision.allow_processing)
                 self.assertEqual(decision.display_narration, BLOCKED_NARRATION)
         self.assertNotIn("view_type", decision.display_narration)
+
+    def test_bound_instruction_echo_is_photo_local_technical_failure(self):
+        candidate = record(
+            request_binding_enforced=True,
+            request_id_verified=True,
+            input_image_sha256="a" * 64,
+            independent_pass=True,
+            prior_answer_exposed=False,
+            prompt_contamination=False,
+        )
+        narration = (
+            "我看到本輪結論：遠景，無型號，無價格。判讀依據："
+            "全圖掃描發現無任何實體 FollowMe 商業主角，完整螢幕共六台。"
+            "完整台數只能看第一張全尺寸照片並只計一次：外框四邊四角全部"
+            "在照片內纔算完整；自然敘述與結構欄必須逐項一致，且自然敘述"
+            "不得抄寫這些規則。"
+        )
+        decision = evaluate_runtime_health(candidate, narration)
+        self.assertFalse(decision.allow_processing)
+        self.assertEqual(decision.display_narration, BLOCKED_NARRATION)
+        self.assertIn("ui_narration_instruction_echo", decision.reasons)
+        self.assertTrue(
+            photo_local_narration_failure_can_contain(
+                decision.reasons, candidate
+            )
+        )
+        self.assertFalse(
+            photo_local_narration_failure_can_contain(
+                decision.reasons,
+                {**candidate, "request_id_verified": False},
+            )
+        )
+        self.assertFalse(
+            photo_local_narration_failure_can_contain(
+                list(decision.reasons) + ["review_prior_value_present"],
+                candidate,
+            )
+        )
 
     def test_long_natural_narration_does_not_trip_instruction_echo(self):
         narration = (

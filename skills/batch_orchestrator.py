@@ -39,6 +39,7 @@ from skills.runtime_health_gate import (
     evaluate_runtime_health,
     final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
+    photo_local_narration_failure_can_contain,
     trip_runtime_health_fuse,
 )
 
@@ -2163,18 +2164,42 @@ class BatchOrchestrator:
                 runtime_health_force_unresolved = False
                 can_retry_conflict = False
                 can_isolate_conflict = False
-                if contained_request_binding_failure:
+                contained_narration_failure = bool(
+                    not contained_request_binding_failure
+                    and not runtime_health.allow_processing
+                    and photo_local_narration_failure_can_contain(
+                        runtime_health.reasons, norm_result
+                    )
+                )
+                if contained_request_binding_failure or contained_narration_failure:
+                    contained_reasons = list(
+                        raw_result.get("runtime_health_reasons")
+                        or runtime_health.reasons
+                        or ["request_id_mismatch"]
+                    )
                     norm_result["runtime_health_contained_reasons"] = list(
-                        raw_result.get("runtime_health_reasons") or ["request_id_mismatch"]
+                        contained_reasons
+                    )
+                    safe_display = (
+                        "本輪判讀文字包含規則回音，已隔離且不會參與定案。"
+                        if contained_narration_failure
+                        else "本輪回覆識別碼無效，已隔離且不會參與定案。"
                     )
                     norm_result["runtime_health"] = {
                         "healthy": False,
                         "allow_processing": True,
                         "allow_upload": False,
                         "reasons": list(norm_result["runtime_health_contained_reasons"]),
-                        "display_narration": "本輪回覆識別碼無效，已隔離且不會參與定案。",
-                        "contained_request_binding_failure": True,
+                        "display_narration": safe_display,
+                        "contained_request_binding_failure": bool(
+                            contained_request_binding_failure
+                        ),
+                        "contained_narration_failure": bool(
+                            contained_narration_failure
+                        ),
                     }
+                    norm_result["thinking"] = safe_display
+                    norm_result["narration"] = safe_display
                 elif not runtime_health.allow_processing:
                     norm_result["auto_review_required"] = True
                     can_retry_conflict = first_pass_content_conflict_can_retry(
@@ -2221,10 +2246,14 @@ class BatchOrchestrator:
                         break
 
                 review_decision = {"retry": False, "reasons": [], "unresolved": False}
-                if contained_request_binding_failure:
+                if contained_request_binding_failure or contained_narration_failure:
                     binding_reasons = list(
                         norm_result.get("runtime_health_contained_reasons")
-                        or ["request_id_mismatch"]
+                        or (
+                            ["ui_narration_instruction_echo"]
+                            if contained_narration_failure
+                            else ["request_id_mismatch"]
+                        )
                     )
                     review_decision = {
                         "attempt": attempt_number,

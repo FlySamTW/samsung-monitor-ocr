@@ -1381,3 +1381,37 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   重跑後，三輪一致定案為遠景、無型號、無價格，`failed` 由 1 歸零，
   並取得逐張上傳檔名 `M-202602-台中市-大甲區-TK3C-大甲-遠景-1519.jpg`；
   正式複核同時前進至至少 `187/1,598`。
+
+## 2026-07-24 當輪規則回音改為照片內技術隔離
+
+- 正式事故 `M-台北市-中山區-采河-本店-1348.jpg` 第一次呼叫不是
+  detector 誤報：Request ID、full-image SHA 與 source item 均綁定，
+  且無前輪答案／prompt contamination，但模型在自然判讀後逐字抄入
+  「完整台數只能看第一張全尺寸照片」等當輪規則。該輸出同時把碰到
+  原圖邊界的面板計入六台，故不得靠刪除尾句後冒充健康證據。
+- 這類「回覆端 narration 規則回音」與「送入模型前 prompt 已污染」
+  必須分流。只有唯一 presentation reason 為
+  `ui_narration_instruction_echo`（可伴隨同一 narration 的 FollowMe
+  一致性理由）、且 request/image 綁定、independent pass、無 prior
+  exposure／prompt contamination 時，才是 photo-local technical
+  failure；prompt construction、binding、價格、實質內容或混合理由仍
+  維持 durable fail-closed。
+- 照片內技術隔離仍消耗該 source 的一次模型額度；第 1／2 次立即把同張
+  放回 retry queue，但不進 presentation、business history、success 或
+  upload。原始輸出只留在 audit raw evidence，主管 LLM 區只顯示安全隔離
+  文字。第 3 次仍回音時該張標為 technical exhausted，主批次繼續，絕不
+  產生第 4 次，也不因一張可恢復格式故障停止整個 Dashboard／月份。
+- `process_single_image()` 在健康閘完成前先記錄
+  `narration_instruction_echo_detected`，並禁止 raw prompt 規則短暫閃入
+  `stream_buffer`；健康閘仍依此旗標判定該 call 無效，顯示清理不得洗白
+  原始事故。
+- 舊式 attempt 1/2 fuse 只能由
+  `tools/recover_legacy_instruction_echo_fuse.py` 復原。工具要求唯一理由、
+  可解析 32-hex Request ID、兩個 64-hex 身分／影像雜湊、完全綁定且
+  stateless 的 snapshot、retry counter/history 與 source map 精確一致；
+  它保留已消耗 attempt、只將同張插回 queue，先原子寫 receipt/history
+  才刪 active fuse，不呼叫模型、不寫結果、不排上傳。
+- 本事故復原後 1348 只使用剩餘 call 2/3，兩輪均健康、request-bound，
+  定案遠景／無型號／無價格並逐張上傳；完整 critical regressions 及新增
+  recovery tests 全通過。換版沿用同一 202602 staging 與既有瀏覽器分頁，
+  即時進度由 `278/1,598` 前進到至少 `283/1,598`，fuse/pause 均為空。

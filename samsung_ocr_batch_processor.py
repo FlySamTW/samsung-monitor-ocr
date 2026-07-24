@@ -88,6 +88,7 @@ from skills.runtime_health_gate import (
     read_runtime_health_fuse,
     public_runtime_health_fuse,
     BLOCKED_NARRATION,
+    narration_contains_instruction_echo,
 )
 from tools.stream_drive_upload import enqueue_finalized_result, read_stream_status
 
@@ -4608,7 +4609,15 @@ def process_single_image(
     result_json = finalize_evidence_contract(result_json, locals().get("full_response_text", ""))
     result_json = attach_spatial_evidence_trace(result_json, scene_tiles, ocr_attempt)
     final_think = thinking_text if 'thinking_text' in locals() else ""
-    result_json['thinking'] = build_final_display_thinking(result_json, final_think)
+    narration_instruction_echo_detected = narration_contains_instruction_echo(final_think)
+    result_json["narration_instruction_echo_detected"] = bool(
+        narration_instruction_echo_detected
+    )
+    # Preserve the raw response for audit, but do not let copied prompt rules
+    # flash in the supervisor-facing live panel before the runtime health gate
+    # classifies this call as a local technical failure.
+    safe_final_think = "" if narration_instruction_echo_detected else final_think
+    result_json['thinking'] = build_final_display_thinking(result_json, safe_final_think)
     result_json["independent_pass"] = True
     result_json["prior_answer_exposed"] = False
     result_json["prompt_contamination"] = False
