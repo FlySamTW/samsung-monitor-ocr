@@ -32,6 +32,14 @@ class AutoRerunContinuityTests(unittest.TestCase):
         self.assertIn("SkipRecursiveResume", SCRIPT)
         self.assertIn("planned backend upgrade/backfill owns the next boundary", SCRIPT)
 
+    def test_current_year_finalizer_never_reenters_current_year_recursive_scan(self):
+        self.assertIn(
+            "current-year finalizer completed; Supervisor owns historical continuation gate and recursive launch",
+            SCRIPT,
+        )
+        self.assertIn('if ($CurrentYearOnly)', SCRIPT)
+        self.assertIn('"--historical-continuation-receipt", $HistoricalContinuationReceiptPath', SCRIPT)
+
     def test_full_project_mode_skips_current_year_and_writes_completion_marker(self):
         self.assertIn("SkipCurrentYearPhases", SCRIPT)
         self.assertIn("$CurrentYearFirst -and -not $SkipCurrentYearPhases", SCRIPT)
@@ -51,14 +59,17 @@ class AutoRerunContinuityTests(unittest.TestCase):
         main_tail = SCRIPT.rsplit("Refresh-UploadAndReviewSplit", 1)[1]
         self.assertLess(main_tail.index("Rebuild-DriveCorrectionLedgerIfSafe"), main_tail.index("Start-Uploader-IfNeeded"))
 
-    def test_current_year_marker_requires_verified_new_and_disposed_old_drive_objects(self):
+    def test_current_year_marker_repairs_safe_rows_without_blocking_on_legacy_deferred_rows(self):
         self.assertIn("function Complete-DriveCorrectionReconciliation", SCRIPT)
         self.assertIn("--execute --phase discover-old", SCRIPT)
         self.assertIn("--execute --phase upload-new", SCRIPT)
         self.assertIn("--execute --phase trash-old", SCRIPT)
         self.assertIn('@("old_trashed_verified","unchanged_remote_verified")', SCRIPT)
+        self.assertIn('Where-Object { [string]$_.status -ne "detected" }', SCRIPT)
+        self.assertIn("Drive correction backlog deferred without blocking OCR", SCRIPT)
+        self.assertIn("verified current upload completion is not blocked", SCRIPT)
         uploader = SCRIPT.rindex("Start-Uploader-IfNeeded -WaitForCompletion")
-        reconciliation = SCRIPT.index("Complete-DriveCorrectionReconciliation", uploader)
+        reconciliation = SCRIPT.index("if ($script:DriveCorrectionReady)", uploader)
         marker = SCRIPT.index(
             r'$markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"',
             reconciliation,

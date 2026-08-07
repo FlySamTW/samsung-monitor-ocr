@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     adjudication_field_invariant_reasons,
+    generic_smart_monitor_without_direct_followme_identity,
     normalize_terminal_quality_issue,
     validate_evidence_contract,
 )
@@ -73,6 +74,30 @@ COMPATIBLE_PENDING_REVISION_MIGRATIONS = {
     # .76 only synchronizes terminal quality_issue with already-finalized
     # model/price fields. It does not change the deterministic target name.
     "20260723.75": "20260723.76",
+    # .79/.80 repair only pre-inference leak detection and photo-local retry
+    # containment. They do not change any already-finalized result, source
+    # identity, deterministic target name, or upload contract.
+    "20260724.78": "20260724.80",
+    "20260724.79": "20260724.80",
+    # .87/.88 change only a narrow FollowMe identity signature. .89 reconciles
+    # a complete, same-pass ordinary SKU/price result when its prose explicitly
+    # says one complete monitor but the JSON count/fixture fields contradict it.
+    # .90 adds provider-side output shape enforcement and a narrower first-pass
+    # unlisted-SKU fast path. .91 accepts a fully bound historical same-card
+    # SKU/price on pass one and prioritizes physical-label clauses over an
+    # opening narration typo; neither change invalidates prior safe records.
+    # Safe older jobs can migrate after full byte/name revalidation below; the
+    # affected Smart Monitor-only signature is explicitly rejected.
+    "20260730.86": "20260807.96",
+    "20260731.87": "20260807.96",
+    "20260731.88": "20260807.96",
+    "20260731.89": "20260807.96",
+    "20260731.90": "20260807.96",
+    "20260803.91": "20260807.96",
+    "20260803.92": "20260807.96",
+    "20260805.93": "20260807.96",
+    "20260806.94": "20260807.96",
+    "20260807.95": "20260807.96",
 }
 TRANSIENT_UPLOAD_ERROR_MARKERS = (
     "exact remote readback failed",
@@ -82,6 +107,7 @@ TRANSIENT_UPLOAD_ERROR_MARKERS = (
     "single-photo upload timed out",
     "remote upload was not uniquely confirmed",
     "runtime health fuse is active",
+    "pipeline pause is active",
     "temporarily unavailable",
     "connection reset",
     "connection aborted",
@@ -301,6 +327,36 @@ def read_stream_status(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Any]:
         return refresh_status(output_dir)
 
 
+def clear_stale_pause_status(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Any]:
+    """Clear an obsolete repair badge after the pause file has disappeared."""
+    current = read_stream_status(output_dir)
+    if (
+        current.get("mutation_blocked") is True
+        or str(current.get("repair_reason") or "")
+        or current.get("pipeline_pause") is not None
+    ):
+        return refresh_status(
+            output_dir,
+            mutation_blocked=False,
+            repair_reason="",
+            pipeline_pause=None,
+        )
+    return current
+
+
+def read_pipeline_pause(output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, Any] | None:
+    pause_path = Path(output_dir).resolve() / "_ocr_audit" / "pipeline_pause.json"
+    if not pause_path.exists():
+        return None
+    try:
+        payload = _read_json(pause_path)
+    except (OSError, UnicodeError, ValueError, TypeError, RuntimeError):
+        return {"schema": "invalid", "reason": "pipeline_pause_unreadable"}
+    if payload.get("schema") != "samsung-ocr-pipeline-pause/v1":
+        return {"schema": "invalid", "reason": "pipeline_pause_schema_invalid"}
+    return payload
+
+
 def _job_key(result: Mapping[str, Any]) -> str:
     source_item_id = str(result.get("source_item_id") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", source_item_id):
@@ -310,7 +366,7 @@ def _job_key(result: Mapping[str, Any]) -> str:
 
 def _equivalent_upload_job(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     """Compare durable upload intent while ignoring audit-only enqueue metadata."""
-    volatile = {"queued_at", "superseded_receipt"}
+    volatile = {"queued_at", "superseded_receipt", "superseded_pending_job"}
     left_stable = {key: value for key, value in dict(left).items() if key not in volatile}
     right_stable = {key: value for key, value in dict(right).items() if key not in volatile}
     return left_stable == right_stable
@@ -391,12 +447,45 @@ def enqueue_finalized_result(
         "normalized_evidence": normalized,
         "queued_at": datetime.now().isoformat(timespec="seconds"),
     }
-    for existing_path in (pending, working):
-        if existing_path.exists():
-            existing = _read_json(existing_path)
-            if _equivalent_upload_job(existing, job):
-                return existing_path
+    if pending.exists():
+        existing = _read_json(pending)
+        if _equivalent_upload_job(existing, job):
+            return pending
+        old_revision = str(existing.get("evidence_guard_revision") or "")
+        same_bound_source = bool(
+            existing.get("schema") == STREAM_SCHEMA
+            and existing.get("source_item_id") == key
+            and existing.get("source_sha256") == job["source_sha256"]
+            and existing.get("input_image_sha256") == job["input_image_sha256"]
+            and existing.get("period") == job["period"]
+            and existing.get("year") == job["year"]
+            and old_revision
+            and old_revision != EVIDENCE_GUARD_REVISION
+        )
+        if not same_bound_source:
             raise RuntimeError(f"same source_item_id already has a different upload job: {key}")
+        # The old job has not reached Drive, so a current-revision,
+        # source-bound correction may replace it.  Preserve the exact old
+        # intent first; the final atomic write below is the only mutation of
+        # the durable pending slot.
+        safe_revision = re.sub(r"[^0-9A-Za-z._-]", "_", old_revision)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archived = (
+            dirs["revision_migrations"]
+            / f"{key}.{safe_revision}.{stamp}.superseded_pending.json"
+        )
+        _atomic_json(archived, existing)
+        job["superseded_pending_job"] = {
+            "archived_path": str(archived),
+            "evidence_guard_revision": old_revision,
+            "target_name": existing.get("target_name"),
+            "source_sha256": existing.get("source_sha256"),
+        }
+    if working.exists():
+        existing = _read_json(working)
+        if _equivalent_upload_job(existing, job):
+            return working
+        raise RuntimeError(f"same source_item_id already has a different upload job: {key}")
     if receipt.exists():
         previous_receipt = _read_json(receipt)
         receipt_is_current = bool(
@@ -433,6 +522,12 @@ def _runtime_fuse_clear(output_dir: Path) -> None:
     fuse = Path(output_dir).resolve() / "_ocr_audit" / "runtime_health_fuse.json"
     if fuse.exists():
         raise RuntimeError(f"runtime health fuse is active: {fuse}")
+
+
+def _pipeline_pause_clear(output_dir: Path) -> None:
+    pause = Path(output_dir).resolve() / "_ocr_audit" / "pipeline_pause.json"
+    if pause.exists():
+        raise RuntimeError(f"pipeline pause is active: {pause}")
 
 
 def remote_stat_exact(
@@ -635,17 +730,22 @@ def process_one_job(
         raise RuntimeError("source bytes changed after OCR finalization")
     if remote != DEFAULT_REMOTE:
         raise RuntimeError("unapproved Drive remote")
+    # Both guards must run before publishing the renamed local copy as well as
+    # before any remote Drive call.  During repair the worker remains alive for
+    # Dashboard/status heartbeats, but performs no upload-side mutation.
+    _runtime_fuse_clear(output_dir)
+    _pipeline_pause_clear(output_dir)
     published_row = copy_planned_image_idempotent(job["plan"], output_dir)
     published = Path(published_row["target_path"])
     year = str(job["year"])
     file_name = str(job["target_name"])
     rclone_path = Path(rclone) if rclone else resolve_rclone("")
-    _runtime_fuse_clear(output_dir)
 
     lock_path = output_dir / "_drive_upload" / "rclone_drive_upload.lock"
     uploaded_log = output_dir / "_drive_upload" / "drive_upload_uploaded.csv"
     with single_instance_lock(lock_path):
         _runtime_fuse_clear(output_dir)
+        _pipeline_pause_clear(output_dir)
         entries = remote_stat_exact(
             rclone_path, remote, year, file_name,
             timeout_seconds=timeout_seconds, runner=runner,
@@ -807,6 +907,14 @@ def migrate_compatible_pending_jobs(output_dir: Path) -> int:
         if not isinstance(final_result, dict):
             raise RuntimeError("pending upload has no final result")
         final_result = dict(final_result)
+        if (
+            old_revision in {"20260730.86", "20260731.87"}
+            and final_result.get("ordered_followme_early_exit") is True
+            and generic_smart_monitor_without_direct_followme_identity(final_result)
+        ):
+            raise RuntimeError(
+                "unsafe legacy generic Smart Monitor FollowMe result requires revalidation"
+            )
         normalize_terminal_quality_issue(final_result)
         invariant_reasons = adjudication_field_invariant_reasons(final_result)
         if invariant_reasons:
@@ -918,8 +1026,8 @@ def run_worker(
     output_dir = Path(output_dir).resolve()
     completed = 0
     with worker_lock(output_dir):
-        recover_working_jobs(output_dir)
-        migrated = migrate_compatible_pending_jobs(output_dir)
+        migrated = 0
+        transport_initialized = False
         refresh_status(
             output_dir,
             worker_state="running",
@@ -927,6 +1035,42 @@ def run_worker(
             revision_migrated=migrated,
         )
         while True:
+            pause = read_pipeline_pause(output_dir)
+            if pause is not None:
+                # A pause can arrive after transport initialization.  Force a
+                # fresh recovery pass after it clears so the durable status
+                # also leaves repair mode instead of continuing uploads while
+                # still displaying a stale mutation_blocked=true state.
+                transport_initialized = False
+                refresh_status(
+                    output_dir,
+                    worker_state="repair",
+                    worker_pid=os.getpid(),
+                    mutation_blocked=True,
+                    repair_reason="pipeline_pause",
+                    pipeline_pause=pause,
+                )
+                if once:
+                    break
+                time.sleep(max(0.5, poll_seconds))
+                continue
+            # A pause can be created and removed while the worker is inside a
+            # long Drive request.  In that race it never observes the file,
+            # so clear any stale Dashboard repair badge on every normal loop.
+            clear_stale_pause_status(output_dir)
+            if not transport_initialized:
+                recover_working_jobs(output_dir)
+                migrated = migrate_compatible_pending_jobs(output_dir)
+                transport_initialized = True
+                refresh_status(
+                    output_dir,
+                    worker_state="running",
+                    worker_pid=os.getpid(),
+                    mutation_blocked=False,
+                    repair_reason="",
+                    pipeline_pause=None,
+                    revision_migrated=migrated,
+                )
             # The OCR backend can still be finishing the explicitly compatible
             # prior revision while this worker has already loaded the next
             # guard.  Migrate newly enqueued jobs before claiming each item,
@@ -940,6 +1084,11 @@ def run_worker(
                     worker_pid=os.getpid(),
                     revision_migrated=migrated,
                 )
+            # Close the small migration-to-claim window.  If a pause lands
+            # after claim, process_one_job raises a transient hold and the job
+            # is returned to pending without publishing or contacting Drive.
+            if read_pipeline_pause(output_dir) is not None:
+                continue
             job_path = claim_next_job(output_dir)
             if job_path is None:
                 refresh_status(output_dir, worker_state="idle", worker_pid=os.getpid())

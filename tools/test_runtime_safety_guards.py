@@ -211,7 +211,8 @@ def main() -> None:
         "thinking": "整排展示牆有三台以上螢幕全部完整入鏡，沒有唯一主角，無法讀取唯一主角自己的規格與價格。",
     }
     first = immediate_retry_decision(distant_record, 1, [], 3)
-    assert first["retry"] is True
+    assert first["retry"] is False
+    assert first["verified"] is True
     history = [dict(distant_record), dict(distant_record)]
     third = immediate_retry_decision(distant_record, 3, history, 3)
     assert third["unresolved"] is False

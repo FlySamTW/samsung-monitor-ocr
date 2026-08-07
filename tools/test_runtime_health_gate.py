@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from skills.runtime_health_gate import (
     BLOCKED_NARRATION,
+    empty_unbound_response_can_contain,
     evaluate_runtime_health,
     final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
@@ -197,6 +198,35 @@ class RuntimeHealthGateTests(unittest.TestCase):
             "我看到一台主角螢幕，所以……",
         )
         self.assertTrue(valid.allow_processing)
+
+    def test_exact_empty_model_response_is_photo_local_but_partial_payload_is_not(self):
+        empty = {
+            "request_binding_enforced": True,
+            "request_id_verified": False,
+            "input_image_sha256": "",
+            "thinking": "",
+            "raw_model_output": "",
+            "model": None,
+            "price": None,
+        }
+        reasons = {
+            "request_binding_unverified",
+            "input_image_fingerprint_missing",
+            "ui_narration_missing",
+        }
+        self.assertTrue(empty_unbound_response_can_contain(reasons, empty))
+        self.assertFalse(
+            empty_unbound_response_can_contain(
+                reasons,
+                {**empty, "raw_model_output": "{\"model\":\"S27D300GAC\"}"},
+            )
+        )
+        self.assertFalse(
+            empty_unbound_response_can_contain(
+                reasons | {"review_prior_fields_present"},
+                empty,
+            )
+        )
 
     def test_health_gate_is_wired_into_prompt_and_batch_loop(self):
         root = Path(__file__).resolve().parents[1]
@@ -509,6 +539,21 @@ class RuntimeHealthGateTests(unittest.TestCase):
         )
         self.assertTrue(decision.healthy)
 
+    def test_original_image_and_original_price_role_words_are_not_prior_answer_leaks(self):
+        reasons = review_prompt_leak_reasons(
+            2,
+            [{
+                "role": "user",
+                "content": (
+                    "請只看本張原圖；先列同一價牌上的市價、原價與現售價格，"
+                    "再將可讀 model 與 price 寫入固定欄位。"
+                ),
+            }],
+            injected_prior_results=[],
+            prior_results_for_leak_check=[],
+        )
+        self.assertEqual(reasons, [])
+
     def test_final_request_binding_tail_cannot_mimic_a_prior_price(self):
         decision = evaluate_runtime_health(
             record(),
@@ -562,6 +607,44 @@ class RuntimeHealthGateTests(unittest.TestCase):
             prior_results_for_leak_check=[{"view_type": "遠景", "category": "遠景"}],
         )
         self.assertTrue(decision.healthy)
+
+    def test_generic_followme_unresolved_model_in_neutral_prompt_is_not_prior_leak(self):
+        decision = evaluate_runtime_health(
+            record(),
+            "M-台南市-北區-Q哥-台南文賢-177.jpg",
+            attempt=2,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "本輪只看目前照片。若已確認 FollowMe 但尺寸與系列不足，"
+                    "輸出 FollowMe 型號未細分。"
+                ),
+            }],
+            prior_results_for_leak_check=[{
+                "view_type": "單機",
+                "model": "FollowMe 型號未細分",
+                "price": None,
+            }],
+        )
+        self.assertTrue(decision.healthy)
+
+    def test_specific_prior_model_in_neutral_prompt_still_trips_prior_leak(self):
+        decision = evaluate_runtime_health(
+            record(),
+            "M-test.jpg",
+            attempt=2,
+            messages=[{
+                "role": "user",
+                "content": "本輪只看目前照片，但文字中錯誤出現 S32DM703UC。",
+            }],
+            prior_results_for_leak_check=[{
+                "view_type": "單機",
+                "model": "S32DM703UC",
+                "price": None,
+            }],
+        )
+        self.assertFalse(decision.healthy)
+        self.assertIn("review_prior_value_present", decision.reasons)
 
     def test_missing_review_prompt_fails_closed(self):
         decision = evaluate_runtime_health(record(), "獨立判讀完成。", attempt=2, messages=[])
@@ -719,6 +802,21 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertFalse(final_content_conflict_can_isolate(2, reasons, candidate))
         self.assertTrue(final_content_conflict_can_isolate(3, reasons, candidate))
 
+        direct_branding_without_separate_label = dict(candidate)
+        direct_branding_without_separate_label["label_ownership"] = "not_applicable"
+        direct_branding_without_separate_label["followme_physical_evidence"] = physical + [
+            {
+                "cue": "direct_followme_branding_on_unit",
+                "same_subject": True,
+                "strength": "strong",
+            }
+        ]
+        self.assertTrue(
+            final_content_conflict_can_isolate(
+                3, reasons, direct_branding_without_separate_label
+            )
+        )
+
     def test_owned_single_model_omission_is_bounded_to_one_photo(self):
         reasons = ["structured_authority_material_conflict:model"]
         owned_single = record(
@@ -756,6 +854,22 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(
             final_content_conflict_can_isolate(
                 3, combined_content_reasons, wide_store_owned_single
+            )
+        )
+        raw_narration_model_conflict = reasons + ["ui_narration_contains_raw_structure"]
+        self.assertTrue(
+            first_pass_content_conflict_can_retry(
+                1, raw_narration_model_conflict, owned_single
+            )
+        )
+        self.assertTrue(
+            first_pass_content_conflict_can_retry(
+                2, raw_narration_model_conflict, owned_single
+            )
+        )
+        self.assertTrue(
+            final_content_conflict_can_isolate(
+                3, raw_narration_model_conflict, owned_single
             )
         )
         self.assertFalse(
@@ -815,7 +929,7 @@ class RuntimeHealthGateTests(unittest.TestCase):
             ["source-a", "source-b"],
         )
 
-    def test_sparse_request_echo_faults_stay_local_but_short_burst_fuses(self):
+    def test_sparse_request_echo_faults_stay_local_and_only_id_mismatch_burst_fuses(self):
         from skills.batch_orchestrator import BatchOrchestrator
 
         orchestrator = object.__new__(BatchOrchestrator)
@@ -848,6 +962,21 @@ class RuntimeHealthGateTests(unittest.TestCase):
         self.assertTrue(
             orchestrator._request_binding_incident_repeated_across_sources(
                 ["request_id_mismatch"], {"file_name": "third.jpg"}
+            )
+        )
+        self.assertFalse(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["empty_model_response"], {"file_name": "empty-first.jpg"}
+            )
+        )
+        self.assertFalse(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["empty_model_response"], {"file_name": "empty-second.jpg"}
+            )
+        )
+        self.assertFalse(
+            orchestrator._request_binding_incident_repeated_across_sources(
+                ["empty_model_response"], {"file_name": "empty-third.jpg"}
             )
         )
 

@@ -6,17 +6,26 @@ from typing import Any, Dict, List, Tuple
 
 from skills.model_catalog_rules import (
     FOLLOWME_UNRESOLVED,
+    extract_samsung_models,
     normalize_confirmed_followme_model,
     normalize_followme_family,
 )
 from skills.model_validation import is_placeholder_model, normalize_model_token
+from skills.review_pass_contract import (
+    apply_trusted_source_view_lock,
+    trusted_source_view_hint,
+)
 
 
 EVIDENCE_CONTRACT_VERSION = "v19.45"
 # Immutable identity for the complete three-layer guard implementation.
 # The contract version describes the evidence schema; this revision proves
 # which guard logic actually evaluated that evidence.
-EVIDENCE_GUARD_REVISION = "20260723.76"
+EVIDENCE_GUARD_REVISION = "20260807.96"
+# Smart Monitor M5/M7 existed earlier, but the Taiwan-market FollowMe
+# mobile-stand bundle first enters this project's evidence timeline in 2024.
+# Unknown years remain conservative.
+FOLLOWME_TW_EARLIEST_YEAR = 2024
 LABEL_OWNERSHIP_VALUES = {"matched", "mismatched", "ambiguous", "not_visible", "not_applicable"}
 FOLLOWME_CUE_CODES = {
     "direct_followme_branding_on_unit", "white_vertical_stand", "round_base",
@@ -861,6 +870,40 @@ KNOWN_SOURCE_AUDIT_AUTHORITIES.update({
         "followme_physical_expected": False,
         "authority": "human_audited_pixel_authority",
     },
+    # 大里 194 is an ordinary tabletop Smart Monitor M7.  The full original
+    # frame shows a short monitor stand and a continuous retail shelf rail,
+    # not a FollowMe floor pole, complete round floor base, or attached tray.
+    "f0567ac66f4c37dba4365f4750727dc11d3c6f27f9a5565af9831f00b42bfe8d": {
+        "source_file_sha256": "528cce9e62251b5b5925f3fdc8a87a7c507d783754d092c4610d6fc73a6785f1",
+        "input_image_sha256": "398069cd41a89c520a170f81e03d7035d187d1474ae0f7fe687584017075a608",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S32FM703UC",
+        "price": 9990,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "authority": "human_audited_pixel_authority",
+    },
+    # 台中烏日 1501: one complete central Samsung monitor; the monitor at the
+    # left crosses the original frame and is excluded.  The aligned physical
+    # card visibly reads S24C32EAC / 2,590.  Two clean, stateless, request-bound
+    # local-model outputs independently read the same card before the third
+    # call was consumed without a durable trace, so this hash-bound authority
+    # closes the photo without a fourth model request.
+    "136d48f4008fed25840ff15afa874663ec1e8897244ee28df1d520c39b797fbd": {
+        "source_file_sha256": "e6b146a414da5244b078ec4e5cb08d2f5a10e1a6248539d867c8c06e595fbfd3",
+        "input_image_sha256": "e6b146a414da5244b078ec4e5cb08d2f5a10e1a6248539d867c8c06e595fbfd3",
+        "view_type": "單機",
+        "complete_screen_count": 1,
+        "model": "S24C32EAC",
+        "price": 2590,
+        "label_ownership": "matched",
+        "followme_physical_expected": False,
+        "unlisted_model_candidate": True,
+        "official_model_unverified": True,
+        "unlisted_model_photo_consensus": True,
+        "authority": "human_audited_pixel_authority",
+    },
 })
 KNOWN_SOURCE_EXPECTATIONS = {
     item["input_image_sha256"]: item
@@ -1180,6 +1223,142 @@ def narration_has_positive_followme_identity(text: str) -> bool:
     return False
 
 
+def narration_has_followme_subject_counterevidence(text: str) -> bool:
+    """Detect explicit main-subject/global evidence against FollowMe.
+
+    A negative statement about another/background monitor is not evidence
+    against the photographed main unit. A global/main-unit denial, or an
+    ordinary black stand paired with an explicit absence of a same-unit
+    FollowMe label, is material counterevidence and must veto the ordered
+    family fast path.
+    """
+    raw = str(text or "")
+    negative_patterns = (
+        re.compile(
+            r"(?:沒有|未見|未看到|看不到|無)(?:任何|明確|可見|實體|正面|機身|直屬|同主體|同一台)?"
+            r"\s*(?:SAMSUNG\s*)?FOLLOW\s*ME"
+            r"(?:\s*(?:字樣|標牌|標籤|線索|實體|候選|產品|證據))?",
+            re.IGNORECASE,
+        ),
+        re.compile(r"(?:不是|並非|非)\s*(?:SAMSUNG\s*)?FOLLOW\s*ME", re.IGNORECASE),
+    )
+
+    main_markers = re.compile(r"(?:主角|主體|本機|本台|這台|該台|中央|同一(?:台|實機|主體))")
+    non_subject_markers = re.compile(
+        r"(?:其他|背景|旁邊|旁側|附近|後方|牆上|海報|宣傳|廣告|立牌)"
+    )
+    for pattern in negative_patterns:
+        for match in pattern.finditer(raw):
+            sentence_start = max(
+                (raw.rfind(mark, 0, match.start()) for mark in "。；;\n"),
+                default=-1,
+            )
+            prefix = raw[sentence_start + 1 : match.start()]
+            last_main = max(
+                (item.start() for item in main_markers.finditer(prefix)),
+                default=-1,
+            )
+            last_non_subject = max(
+                (item.start() for item in non_subject_markers.finditer(prefix)),
+                default=-1,
+            )
+            if last_non_subject > last_main:
+                continue
+            return True
+
+    ordinary_black_stand = bool(
+        re.search(
+            r"(?:黑色|普通|一般|桌上型|桌面型)[^。；\n]{0,12}"
+            r"(?:直立)?(?:支架|腳架|底座)",
+            raw,
+        )
+    )
+    same_unit_label_absent = bool(
+        re.search(
+            r"(?:沒有|未見|未看到|看不到|無)[^。；\n]{0,18}"
+            r"(?:正面|機身|直屬|同主體|同一台)?[^。；\n]{0,8}"
+            r"(?:FOLLOW\s*ME)[^。；\n]{0,8}(?:標牌|標籤|字樣|線索)",
+            raw,
+            re.IGNORECASE,
+        )
+    )
+    return ordinary_black_stand and same_unit_label_absent
+
+
+def narration_structured_followme_counterevidence_reasons(
+    record: Dict[str, Any],
+) -> List[str]:
+    """Return material contradictions between structured fixture cues and prose."""
+    narration = evidence_narration_text(record)
+    evidence = record.get("normalized_evidence") or record
+    physical = evidence.get("followme_physical_evidence") or []
+    structured = {
+        str(item.get("cue") or "").strip()
+        for item in physical
+        if isinstance(item, dict)
+        and item.get("same_subject") is True
+        and str(item.get("strength") or "") in {"strong", "direct"}
+    }
+    denied_fixture_patterns = {
+        "white_vertical_stand": re.compile(
+            r"(?:沒有|未見|未看到|看不到|無)[^。；\n]{0,14}"
+            r"(?:白色)?(?:垂直支架|直立支架|長直立支架|直桿|立柱)"
+        ),
+        "round_base": re.compile(
+            r"(?:沒有|未見|未看到|看不到|無)[^。；\n]{0,14}"
+            r"(?:白色)?(?:圓形(?:落地)?底座|圓盤底座)"
+        ),
+        "attached_price_tray": re.compile(
+            r"(?:沒有|未見|未看到|看不到|無)[^。；\n]{0,14}"
+            r"(?:附著|連接|同主體)?(?:託盤|托盤)"
+        ),
+    }
+    denied_fixtures: set[str] = set()
+    main_markers = re.compile(r"(?:主角|主體|本機|本台|這台|該台|中央|同一(?:台|實機|主體))")
+    non_subject_markers = re.compile(
+        r"(?:其他|背景|旁邊|旁側|附近|後方|牆上|海報|宣傳|廣告|立牌)"
+    )
+    for cue, pattern in denied_fixture_patterns.items():
+        for match in pattern.finditer(narration):
+            sentence_start = max(
+                (narration.rfind(mark, 0, match.start()) for mark in "。；;\n"),
+                default=-1,
+            )
+            prefix = narration[sentence_start + 1 : match.start()]
+            last_main = max(
+                (item.start() for item in main_markers.finditer(prefix)),
+                default=-1,
+            )
+            last_non_subject = max(
+                (item.start() for item in non_subject_markers.finditer(prefix)),
+                default=-1,
+            )
+            if last_non_subject <= last_main:
+                denied_fixtures.add(cue)
+                break
+    family_candidate = bool(
+        "direct_followme_branding_on_unit" in structured
+        or "attached_followme_product_card" in structured
+        or len(
+            structured
+            & {"white_vertical_stand", "round_base", "attached_price_tray"}
+        )
+        >= 2
+    )
+    reasons: List[str] = []
+    if family_candidate and narration_has_followme_subject_counterevidence(narration):
+        reasons.append("narration_denies_structured_followme_subject")
+    ordinary_stand_conflict = bool(
+        "white_vertical_stand" in structured
+        and re.search(
+            r"(?:黑色|普通|一般|桌上型|桌面型)[^。；\n]{0,12}"
+            r"(?:直立)?(?:支架|腳架|底座)",
+            narration,
+        )
+    )
+    if ordinary_stand_conflict or structured.intersection(denied_fixtures):
+        reasons.append("narration_denies_structured_followme_fixture")
+    return reasons
 def narration_has_unmistakable_followme_fixture(text: str) -> bool:
     """Recognize only fixture combinations specific enough to trip the fuse.
 
@@ -1251,6 +1430,31 @@ def followme_models_equivalent(first: Any, second: Any) -> bool:
     return bool(first_key and first_key == followme_identity_key(second))
 
 
+def _narration_has_direct_followme_variant_evidence(
+    narration: str, identity: str
+) -> bool:
+    """Require the exact variant to be read from a physical same-unit label."""
+    for clause in re.split(r"[。；;\n]+", str(narration or "")):
+        if not re.search(
+            r"(?:同一(?:台|實機|主體)|自己的|附著|機身|規格牌|產品卡|商品卡|"
+            r"價格牌|價牌|標籤|側標|牌面)",
+            clause,
+        ):
+            continue
+        if not re.search(r"(?:寫(?:著|明)?|印(?:著|有)?|標示|標有|讀到|可讀|清楚)", clause):
+            continue
+        if followme_identity_key(clause) == identity:
+            return True
+        if identity.startswith("PRO_"):
+            size = "43" if identity.endswith("_43") else "32"
+            if (
+                re.search(r"(?<![A-Z])PRO(?![A-Z])", clause, re.IGNORECASE)
+                and size in clause
+            ):
+                return True
+    return False
+
+
 def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
     """Require same-pass physical text support for every specific bundle.
 
@@ -1268,6 +1472,20 @@ def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
 
     narration = evidence_narration_text(record)
     if identity in {"PRO_M7_32", "PRO_M7_43"}:
+        normalized = record.get("normalized_evidence") or record
+        structured_same_unit_card = any(
+            isinstance(item, dict)
+            and str(item.get("cue") or "") == "attached_followme_product_card"
+            and item.get("same_subject") is True
+            and str(item.get("strength") or "") in {"strong", "direct"}
+            for item in normalized.get("followme_physical_evidence") or []
+        )
+        if (
+            followme_identity_key(narration) == identity
+            and normalized.get("label_ownership") == "matched"
+            and structured_same_unit_card
+        ):
+            return []
         same_unit_pro_label = bool(
             re.search(
                 r"(?:同一台|同一實機|同一主體|自己的|附著|機身|標籤|側標|規格牌|牌面|寫著)"
@@ -1282,10 +1500,9 @@ def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
             return []
         return ["followme_pro_identity_evidence_missing"]
 
-    # Machine-readable fixture evidence remains authoritative for ordinary
-    # FollowMe rows.  The narrow unsafe case is a pass that explicitly reads
-    # only the generic product-card text "Follow Me 4K" but nevertheless
-    # returns a particular M5/M7/size.  That exact wording proves family only.
+    # Outside the ordered one-pass fast path, preserve the established
+    # multi-pass behavior.  The narrow unsafe case is a pass that explicitly
+    # reads only generic "FollowMe 4K" text but still invents M5/M7/size.
     if not re.search(r"FOLLOW\s*ME\s*4K", narration, re.IGNORECASE):
         return []
 
@@ -1312,6 +1529,7 @@ def followme_variant_evidence_reasons(record: Dict[str, Any]) -> List[str]:
 def narration_evidence_consistency_reasons(record: Dict[str, Any]) -> List[str]:
     """Reject material prose/structure gaps without stalling on minor cue omission."""
     reasons = followme_variant_evidence_reasons(record)
+    reasons.extend(narration_structured_followme_counterevidence_reasons(record))
     narrated = narrated_followme_physical_cues(record)
     # One isolated shape word can be incidental. Two independent same-clause
     # fixture cues are the existing strong-evidence threshold and are material.
@@ -1433,14 +1651,21 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
     }
     view_type = str(record.get("view_type") or "").strip()
     category_view = _category_view(record.get("category"))
+    source_hint = trusted_source_view_hint(record)
     if view_type in {"單機", "遠景", "失敗"} and category_view and category_view != view_type:
         errors.append("view_category_conflict")
     if view_type == "遠景":
-        if count is None or unique is None:
+        if source_hint == "遠景":
+            if unique is not False:
+                errors.append("source_distant_unique_main_conflict")
+        elif count is None or unique is None:
             errors.append("distant_evidence_missing")
         # A store/environment photo with no complete monitor is still a
         # truthful no-model/no-price scene result.  Counts 1-2 remain unsafe
         # as distant because they may contain a partially missed main unit.
+        # The future capture workflow can explicitly lock the view at source.
+        # For that trusted contract the model is not asked to reclassify the
+        # photo; no visual screen count is required.
         elif (count != 0 and count < 3) or unique:
             errors.append("distant_evidence_inconsistent")
         if ownership == "matched":
@@ -1450,7 +1675,7 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
         # photographed unit has direct branding or two independent strong
         # hardware cues, it is the business subject and cannot be discarded as
         # a distant wall merely because other screens are also complete.
-        if has_sufficient_followme_physical_evidence(normalized):
+        if source_hint != "遠景" and has_sufficient_followme_physical_evidence(normalized):
             errors.append("distant_followme_physical_conflict")
     if view_type == "單機" and unique is not True:
         errors.append("single_unique_main_required")
@@ -1463,8 +1688,17 @@ def validate_evidence_contract(record: Dict[str, Any]) -> Tuple[bool, List[str],
     if is_followme_model(model) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence({"followme_physical_evidence": normalized_physical}):
             errors.append("followme_physical_evidence_insufficient")
-    if record.get("model") or record.get("price"):
-        if ownership != "matched":
+    if record.get("price") and ownership != "matched":
+        errors.append("label_ownership_required_for_fields")
+    if record.get("model") and ownership != "matched":
+        unresolved_followme_family = bool(
+            followme_identity_key(record.get("model")) == "UNRESOLVED"
+            and record.get("followme_family_confirmed") is True
+            and has_sufficient_followme_physical_evidence(
+                {"followme_physical_evidence": normalized_physical}
+            )
+        )
+        if not unresolved_followme_family:
             errors.append("label_ownership_required_for_fields")
     return not errors, list(dict.fromkeys(errors)), normalized
 
@@ -1663,10 +1897,15 @@ def _no_unique_main_evidence(text: str) -> bool:
     return any(
         clue in normalized
         for clue in (
-            "沒有唯一主角", "沒有單一主角", "無法指定唯一主角", "無法鎖定唯一主角",
+            "沒有唯一主角", "沒有單一主角", "無唯一主角", "無明確唯一主角",
+            "無法指定唯一主角", "無法鎖定唯一主角",
             "無法指定主角", "沒有明確主角", "無法對應主角自己的規格", "無法對應主角自己的價格",
             "無法讀取唯一主角", "沒有可歸屬的規格", "沒有可歸屬的價格",
         )
+    ) or bool(
+        _explicit_three_complete(normalized)
+        and re.search(r"(?:判為|判斷為|屬於|應為)遠景", normalized)
+        and re.search(r"(?:整體陳列|整排展示|均屬展示|皆屬展示)", normalized)
     )
 
 
@@ -1739,10 +1978,331 @@ def _label_ownership_conflicts_with_narration(text: str) -> bool:
         # Treat these equivalent uncertainty phrases as an explicit ownership
         # conflict; a two-out-of-three vote must never launder a neighbour's
         # price into the final monitor filename.
-        r"(?:規格牌|價格牌|價牌|標籤).{0,28}(?:無法|不能|不可).{0,12}(?:確認|判定).{0,20}(?:屬於|對應|歸屬|空間對齊)",
-        r"(?:無法|不能|不可).{0,12}(?:確認|判定).{0,24}(?:規格牌|價格牌|價牌|標籤).{0,20}(?:屬於|對應|歸屬|空間對齊)",
+        # Ownership uncertainty must be in the same sentence/clause as the
+        # card.  Do not join "無法確認 FollowMe。" to the next sentence's
+        # positively aligned price card (the real 軍校DC-281 failure).
+        r"(?:規格牌|價格牌|價牌|標籤)[^。；;\n]{0,28}(?:無法|不能|不可)[^。；;\n]{0,12}(?:確認|判定)[^。；;\n]{0,20}(?:屬於|對應|歸屬|空間對齊)",
+        r"(?:無法|不能|不可)[^。；;\n]{0,12}(?:確認|判定)[^。；;\n]{0,24}(?:規格牌|價格牌|價牌|標籤)[^。；;\n]{0,20}(?:屬於|對應|歸屬|空間對齊)",
     )
     return any(re.search(pattern, normalized) for pattern in conflict_patterns)
+
+
+def _multiple_price_card_scene(record: Dict[str, Any]) -> bool:
+    narration = evidence_narration_text(record)
+    return bool(
+        re.search(
+            r"(?:多張|數張|多個|數個|好幾張|其他(?:幾)?張|其餘(?:幾)?張)"
+            r"[^。；;\n]{0,12}(?:規格牌|價格牌|價牌|商品卡)",
+            narration,
+        )
+    )
+
+
+def _same_card_exact_model_price_evidence(record: Dict[str, Any]) -> bool:
+    """Require one narrated physical card to carry the exact SKU and price."""
+    model_key = normalize_model_token(record.get("model"))
+    price_key = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+    if not model_key or not price_key:
+        return False
+    for clause in re.split(r"[。；;\n]+", evidence_narration_text(record)):
+        if not re.search(r"(?:規格牌|價格牌|價牌|商品卡|實體標籤)", clause):
+            continue
+        clause_alnum = re.sub(r"[^A-Z0-9]", "", clause.upper())
+        clause_digits = re.sub(r"[^0-9]", "", clause)
+        if model_key in clause_alnum and price_key in clause_digits:
+            return True
+    return False
+
+
+def _select_narrated_current_store_price(
+    text: str,
+    observed_prices: List[str],
+) -> str | None:
+    """Choose one explicitly labelled current/promotion amount on one card.
+
+    A store card may print both a reference ``市價`` and a current
+    ``會員特價``.  Rejecting both loses visible evidence, while choosing an
+    unlabelled amount is unsafe.  Therefore a role-labelled current amount may
+    win only when it is unique; otherwise the old single-amount rule applies.
+    """
+    current_matches = re.findall(
+        r"(?:會員(?:特價|售價|價)|限時特價|促銷價|門市專案價|門市價|"
+        r"現金價|優惠價|現售價|現價|特價|(?<!建議)售價)"
+        r"\s*(?:為|[:：])?\s*(?:NT\$?|\$)?\s*"
+        r"([1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{3,5})(?!\d)",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    current_prices = list(
+        dict.fromkeys(
+            re.sub(r"[^0-9]", "", value)
+            for value in current_matches
+            if re.sub(r"[^0-9]", "", value)
+        )
+    )
+    if len(current_prices) == 1:
+        return current_prices[0]
+    if current_prices:
+        return None
+    unique_observed = list(dict.fromkeys(value for value in observed_prices if value))
+    return unique_observed[0] if len(unique_observed) == 1 else None
+
+
+def _narrated_physical_card_model_price_pair(
+    record: Dict[str, Any],
+) -> tuple[str, str] | None:
+    """Read one exact SKU/price pair from one positively bound card clause.
+
+    This is deliberately narrower than general narration recovery.  It exists
+    for the observed Qwen contract failure where JSON returns ``null`` while
+    the same request's narration transcribes a clearly aligned physical card.
+    Multiple cards, multiple SKUs/amounts, ownership uncertainty, distant
+    scenes, or a non-unique subject remain ineligible.
+    """
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    evidence = record.get("normalized_evidence") or record
+    if (
+        view == "遠景"
+        or evidence.get("unique_main") is not True
+        or _multiple_price_card_scene(record)
+    ):
+        return None
+    narration = evidence_narration_text(record)
+    if not narration or _label_ownership_conflicts_with_narration(narration):
+        return None
+    pairs: list[tuple[str, str]] = []
+    clauses = [item.strip() for item in re.split(r"[。；;\n]+", narration) if item.strip()]
+    for index, clause in enumerate(clauses):
+        if not re.search(r"(?:實體)?(?:規格牌|價格牌|價牌|商品卡|產品卡|側標)", clause):
+            continue
+        # Qwen sometimes places the conclusion (SKU/price) in the immediately
+        # preceding sentence and describes the physical card in the next one.
+        # Inspect that tightly bounded two-sentence window, never the whole
+        # narration, so another product/card cannot be borrowed.
+        windows = [clause]
+        if index > 0:
+            windows.append(f"{clauses[index - 1]}。{clause}")
+        for window in windows:
+            if not re.search(
+            r"(?:主角|中央|中間|螢幕(?:本身)?(?:正)?下方|同一台|自己的|"
+            r"與螢幕.{0,12}(?:對齊|相連)|價牌上|牌上)",
+                window,
+            ):
+                continue
+            models = list(
+                dict.fromkeys(
+                    normalize_model_token(value)
+                    for value in extract_samsung_models(window)
+                    if normalize_model_token(value)
+                )
+            )
+            # A single physical card often prints a short display-line SKU
+            # and the full SKU elsewhere on the same card (for example
+            # ``C24F390F`` and ``C24F390FHE``).  They are not two products.
+            # Collapse only strict prefix variants from this tightly bounded
+            # same-card window; unrelated model strings remain ambiguous.
+            if len(models) > 1:
+                longest = max(models, key=len)
+                if all(
+                    longest.startswith(candidate)
+                    and len(longest) - len(candidate) <= 3
+                    for candidate in models
+                ):
+                    models = [longest]
+            # The catalogue layer may uniquely complete a photographed short
+            # code by one or two trailing characters.  Preserve that unique
+            # completion as the observation; do not treat the short narration
+            # and its deterministic completion as different products.
+            if len(models) == 1 and record.get("model_prefix_completed") is True:
+                completed = normalize_model_token(record.get("model"))
+                completion_from = normalize_model_token(
+                    record.get("model_prefix_completion_from")
+                )
+                if (
+                    completed
+                    and completion_from == models[0]
+                    and completed.startswith(completion_from)
+                    and 0 < len(completed) - len(completion_from) <= 2
+                ):
+                    models = [completed]
+            # Currency suffixes are strongest, but many real store cards print
+            # a comma-formatted amount without 「元」.  Such an amount is safe
+            # only inside this one physical-card window; unformatted digits
+            # still require an explicit price keyword to exclude SKU/item/spec
+            # numbers.
+            price_tokens: list[str] = []
+            price_tokens.extend(
+                re.findall(
+                    r"(?<![A-Z0-9])(?:NT\$?|\$)?\s*"
+                    r"([1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{3,5})\s*元",
+                    window,
+                    flags=re.IGNORECASE,
+                )
+            )
+            price_tokens.extend(
+                re.findall(r"(?<!\d)([1-9]\d{0,2}(?:,\d{3})+)(?!\d)", window)
+            )
+            price_tokens.extend(
+                re.findall(
+                    r"(?:價格|售價|特價|促銷價|會員(?:特價|售價)|市價|標價)"
+                    r"\s*(?:為|[:：])?\s*(?:NT\$?|\$)?\s*([1-9]\d{3,5})(?!\d)",
+                    window,
+                    flags=re.IGNORECASE,
+                )
+            )
+            prices = list(
+                dict.fromkeys(
+                    re.sub(r"[^0-9]", "", match)
+                    for match in price_tokens
+                    if re.sub(r"[^0-9]", "", match)
+                )
+            )
+            selected_price = _select_narrated_current_store_price(window, prices)
+            if len(models) == 1 and selected_price:
+                pairs.append((normalize_model_token(models[0]), selected_price))
+    unique_pairs = list(dict.fromkeys(pairs))
+    return unique_pairs[0] if len(unique_pairs) == 1 else None
+
+
+def _same_card_pass_has_base_integrity(item: Dict[str, Any]) -> bool:
+    """Allow only photo-local formatting/content conflicts for card fields."""
+    if _adjudication_pass_has_base_integrity(
+        item, allow_local_followme_conflict=True
+    ):
+        return True
+    # ``ui_narration_contains_raw_structure`` is a presentation-format issue
+    # caused by phrases such as ``label_ownership=matched`` in the narration.
+    # It is not an image/request/memory failure and therefore may participate
+    # only in literal same-card field recovery.
+    runtime = item.get("runtime_health") or {}
+    reasons = {
+        str(reason)
+        for reason in (runtime.get("reasons") or [])
+        if str(reason)
+    } if isinstance(runtime, dict) else set()
+    allowed_local = {
+        "ui_narration_contains_raw_structure",
+        "structured_narration_followme_conflict",
+        "distant_followme_strong_evidence_conflict",
+        "structured_authority_material_conflict:model",
+    }
+    if not reasons or not reasons <= allowed_local:
+        return False
+    probe = dict(item)
+    probe["runtime_health"] = {"healthy": True, "reasons": []}
+    return _adjudication_pass_has_base_integrity(
+        probe, allow_local_followme_conflict=True
+    )
+
+
+def _historical_same_card_raw_recovery(
+    passes: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """Resolve repeated historical same-card evidence without another call.
+
+    Exact pairs need two independent narration votes.  A first-letter OCR
+    disagreement (S/C/F/P) needs all three calls, one common price, one common
+    suffix, and exactly one pass whose structured model survived catalog
+    validation.  The helper never operates on 2026 price-comparison photos.
+    """
+    years = [_record_year(item) for item in passes]
+    if len(passes) not in {2, 3} or any(year == 0 or year >= 2026 for year in years):
+        return None
+    hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in passes
+    }
+    if "" in hashes or len(hashes) != 1:
+        return None
+    if any(
+        not _same_card_pass_has_base_integrity(item)
+        or item.get("brand_evidence_conflict") is True
+        or item.get("price_conflict_detected") is True
+        for item in passes
+    ):
+        return None
+    observations = [
+        _narrated_physical_card_model_price_pair(item) for item in passes
+    ]
+    observed = [item for item in observations if item]
+    pair_counts = Counter(observed)
+    repeated = [pair for pair, votes in pair_counts.items() if votes >= 2]
+    if len(repeated) == 1:
+        model, price = repeated[0]
+        return {
+            "model": model,
+            "price": price,
+            "mode": "two_pass_exact_same_card_pair",
+            "observations": observed,
+        }
+    if len(passes) != 3 or len(observed) != 3:
+        return None
+    models = [model for model, _price in observed]
+    prices = [price for _model, price in observed]
+    if len(set(prices)) != 1 or not models[0]:
+        return None
+    validated_candidates = {
+        normalize_model_token(item.get("model"))
+        for item, (narrated_model, _price) in zip(passes, observed)
+        if normalize_model_token(item.get("model"))
+        and (
+            normalize_model_token(item.get("model")) == narrated_model
+            or (
+                item.get("model_prefix_completed") is True
+                and normalize_model_token(
+                    item.get("model_prefix_completion_from")
+                ) == narrated_model
+            )
+        )
+        and item.get("model_validation_failed") is not True
+        and item.get("official_model_unverified") is not True
+        and item.get("catalog_confusable_first_letter_candidate") is not True
+    }
+    if len(validated_candidates) != 1:
+        return None
+    model = next(iter(validated_candidates))
+    # Qwen's remaining disagreement on clear historical cards is commonly one
+    # confusable first character (S/C/F/P), sometimes plus one omitted trailing
+    # character.  Select the one already-validated catalogue candidate only
+    # when every same-card observation has the same price and a compatible
+    # suffix.  This never invents a model from format alone.
+    if any(
+        len(candidate) < 8
+        or candidate[0] not in {"S", "C", "F", "P"}
+        or model[0] not in {"S", "C", "F", "P"}
+        or abs(len(candidate[1:]) - len(model[1:])) > 1
+        or not (
+            candidate[1:].startswith(model[1:])
+            or model[1:].startswith(candidate[1:])
+        )
+        for candidate in models
+    ):
+        return None
+    return {
+        "model": model,
+        "price": prices[0],
+        "mode": "three_pass_first_letter_tail_with_one_validated_model",
+        "observations": observed,
+    }
+
+
+def _attached_exact_model_evidence(record: Dict[str, Any], model: Any) -> bool:
+    """Require the exact SKU in a clause describing a physical attached label.
+
+    Model identity is independent from price identity.  A readable side label
+    or attached product card may lock the SKU even when the price is printed in
+    a different clause or must remain unresolved.
+    """
+    model_key = normalize_model_token(model)
+    if not model_key or record.get("label_ownership") != "matched":
+        return False
+    for clause in re.split(r"[。；;\n]+", evidence_narration_text(record)):
+        if not re.search(r"(?:側標|標籤|貼紙|商品卡|價牌|卡片|托盤|託盤)", clause):
+            continue
+        clause_alnum = re.sub(r"[^A-Z0-9]", "", clause.upper())
+        if model_key in clause_alnum:
+            return True
+    return False
 
 
 def _same_model_price_confirmed(record: Dict[str, Any], history: List[Dict[str, Any]]) -> bool:
@@ -1892,7 +2452,8 @@ def _narration_supports_only_one_complete_monitor(record: Dict[str, Any]) -> boo
     incomplete_neighbour = bool(
         re.search(
             r"(?:另一台|鄰機|左側|右側|左右(?:兩)?側|背景).{0,30}"
-            r"(?:部分(?:可見|露出)|局部露出|未見完整外框|外框.{0,10}(?:裁切|截斷|穿出)|不完整)",
+            r"(?:部分(?:可見|露出)|局部(?:可見|露出)|未見完整外框|"
+            r"外框.{0,10}(?:未完整入鏡|裁切|截斷|穿出)|不完整)",
             text,
         )
         or re.search(
@@ -2026,6 +2587,10 @@ def _followme_single_subject_geometry_not_contradicted(record: Dict[str, Any]) -
     normalized = record.get("normalized_evidence") or record
     return bool(
         has_sufficient_followme_physical_evidence(normalized)
+        and not narration_structured_followme_counterevidence_reasons(record)
+        and not narration_has_followme_subject_counterevidence(
+            evidence_narration_text(record)
+        )
     )
 
 
@@ -2067,12 +2632,356 @@ def _raw_structured_samsung_models(record: Dict[str, Any]) -> List[str]:
                 parsed = None
         if not isinstance(parsed, dict):
             continue
-        payload = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+        if isinstance(parsed.get("value"), dict):
+            payload = parsed["value"]
+        elif isinstance(parsed.get("data"), dict):
+            payload = parsed["data"]
+        else:
+            payload = parsed
         candidate = str(payload.get("model") or "").strip()
         if candidate and _is_samsung_sku_like(candidate):
             found.append(candidate)
     return list(dict.fromkeys(found))
 
+
+def generic_smart_monitor_without_direct_followme_identity(
+    record: Dict[str, Any],
+) -> bool:
+    """Detect an ordinary M5/M7/M8 card that cannot prove FollowMe by itself."""
+    evidence = record.get("normalized_evidence") or record
+    physical = evidence.get("followme_physical_evidence") or []
+    if not isinstance(physical, list):
+        physical = []
+    direct_identity = any(
+        isinstance(item, dict)
+        and item.get("same_subject") is True
+        and str(item.get("cue") or "").strip()
+        in {"direct_followme_branding_on_unit", "attached_followme_product_card"}
+        and str(item.get("strength") or "").strip() in {"strong", "direct"}
+        for item in physical
+    )
+    if direct_identity:
+        return False
+    text_parts = [evidence_narration_text(record)]
+    raw_model_output = record.get("raw_model_output")
+    if isinstance(raw_model_output, str):
+        text_parts.append(raw_model_output)
+    for raw in record.get("raw_objects") or []:
+        if isinstance(raw, str):
+            text_parts.append(raw)
+        elif isinstance(raw, dict):
+            text_parts.append(json.dumps(raw, ensure_ascii=False))
+    narration = "\n".join(part for part in text_parts if part)
+    return bool(
+        re.search(
+            r"(?:SMART\s*MONITOR|智慧聯網螢幕)\s*M[578]\b",
+            narration,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _normalize_narrated_owned_card_single_pass(record: Dict[str, Any]) -> bool:
+    """Reconcile machine fields with one explicit same-pass physical card.
+
+    Qwen sometimes transcribes the correct SKU and store price from the unique
+    main monitor's card, but emits ``label_ownership=not_applicable`` or counts
+    cropped neighbours as complete.  Those machine fields must not erase the
+    same request's literal card evidence.  This repair is intentionally narrow:
+    one historical single subject, one card pair, no ownership/brand/price
+    conflict, a catalogue-valid ordinary SKU, and explicit one-complete-frame
+    prose when the structured count is not already one.
+    """
+    if _record_year(record) >= 2026:
+        return False
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    evidence = dict(record.get("normalized_evidence") or record)
+    if view != "單機" or evidence.get("unique_main") is not True:
+        return False
+    pair = _narrated_physical_card_model_price_pair(record)
+    if not pair:
+        return False
+    narrated_model, narrated_price = pair
+    model = normalize_model_token(record.get("model"))
+    if (
+        not model
+        or is_followme_model(model)
+        or is_placeholder_model(model)
+        or record.get("model_validation_failed") is True
+        or record.get("official_model_unverified") is True
+        or record.get("catalog_confusable_first_letter_candidate") is True
+        or record.get("price_conflict_detected") is True
+        or record.get("brand_evidence_conflict") is True
+    ):
+        return False
+    model_matches = model == narrated_model
+    if not model_matches and record.get("model_prefix_completed") is True:
+        completion_from = normalize_model_token(
+            record.get("model_prefix_completion_from")
+        )
+        model_matches = bool(
+            completion_from == narrated_model
+            and model.startswith(completion_from)
+            and 0 < len(model) - len(completion_from) <= 2
+        )
+    if not model_matches:
+        return False
+    existing_price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+    if existing_price and existing_price != narrated_price:
+        return False
+    narration = evidence_narration_text(record)
+    if _label_ownership_conflicts_with_narration(narration):
+        return False
+    if (
+        narration_has_positive_followme_identity(narration)
+        or narration_has_unmistakable_followme_fixture(narration)
+    ) and not narration_has_followme_subject_counterevidence(narration):
+        return False
+    if _narration_reports_additional_complete_monitors(record):
+        return False
+    original_count = evidence.get("complete_screen_count")
+    if original_count != 1 and not _narration_supports_only_one_complete_monitor(record):
+        return False
+
+    record["model"] = model
+    record["price"] = narrated_price
+    record["label_ownership"] = "matched"
+    record["unique_main"] = True
+    evidence["label_ownership"] = "matched"
+    evidence["unique_main"] = True
+    if original_count != 1:
+        record["complete_screen_count"] = 1
+        evidence["complete_screen_count"] = 1
+        record["reconciled_complete_screen_count_from"] = original_count
+    record["normalized_evidence"] = evidence
+    record["same_pass_narrated_owned_card_reconciled"] = True
+    return True
+
+
+def _normalize_self_consistent_owned_single_pass(record: Dict[str, Any]) -> bool:
+    """Repair one-pass JSON fields that contradict the same pass's prose.
+
+    Qwen can correctly read one owned SKU/price card and explicitly describe
+    cropped neighbouring monitors, yet still copy ``complete_screen_count=3``
+    or generic FollowMe fixture cues into the JSON fields.  Repeating the same
+    image cannot add evidence in that situation.  When the *same pass* has a
+    complete ordinary Samsung identity, matched ownership, explicit one-frame
+    prose, and no positive FollowMe evidence, make the structured fields agree
+    immediately.  Raw model output remains untouched in the evidence trace.
+
+    This deliberately does not rescue missing/ambiguous identity, a FollowMe
+    model, conflicting label ownership, a broad scene with other complete
+    monitors, or any positive/direct FollowMe narration.
+    """
+
+    view = str(record.get("view_type") or record.get("category") or "").strip()
+    evidence = dict(record.get("normalized_evidence") or record)
+    narration = evidence_narration_text(record)
+    model = str(record.get("model") or "").strip()
+    price_digits = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
+
+    if view != "單機":
+        return False
+    if evidence.get("unique_main") is not True:
+        return False
+    if evidence.get("label_ownership") != "matched":
+        return False
+    if not model or is_followme_model(model) or is_placeholder_model(model):
+        return False
+    if not price_digits:
+        return False
+    if (
+        record.get("model_validation_failed") is True
+        or record.get("price_conflict_detected") is True
+        or record.get("brand_evidence_conflict") is True
+        or _label_ownership_conflicts_with_narration(narration)
+        or _narration_model_family_conflicts(record)
+    ):
+        return False
+    if not _narration_supports_only_one_complete_monitor(record):
+        return False
+    if _narration_reports_additional_complete_monitors(record):
+        return False
+    if (
+        narration_has_positive_followme_identity(narration)
+        or narration_has_unmistakable_followme_fixture(narration)
+    ):
+        return False
+
+    structured_followme = has_sufficient_followme_physical_evidence(evidence)
+    counterevidence = narration_structured_followme_counterevidence_reasons(record)
+    if structured_followme and not counterevidence:
+        return False
+
+    original_count = evidence.get("complete_screen_count")
+    original_physical = list(evidence.get("followme_physical_evidence") or [])
+    if original_count == 1 and not original_physical:
+        return False
+
+    evidence["complete_screen_count"] = 1
+    evidence["unique_main"] = True
+    evidence["label_ownership"] = "matched"
+    evidence["followme_physical_evidence"] = []
+    record["normalized_evidence"] = evidence
+    record["complete_screen_count"] = 1
+    record["unique_main"] = True
+    record["label_ownership"] = "matched"
+    record["followme_physical_evidence"] = []
+    record["followme_family_confirmed"] = False
+    record["same_pass_owned_single_reconciled"] = True
+    record["reconciled_complete_screen_count_from"] = original_count
+    if original_physical:
+        record["rejected_structured_followme_physical_evidence"] = original_physical
+    return True
+
+
+def _apply_ordered_followme_family_lock(
+    record: Dict[str, Any],
+    *,
+    strict_first_pass_variant: bool = True,
+) -> bool:
+    """Lock an unmistakable FollowMe subject before lower decision branches.
+
+    This is deliberately stricter than the ordinary two-cue family rule: a
+    one-pass terminal lock needs same-subject direct branding/product-card plus
+    two fixture cues, or all three stand/base/tray cues. Exact variant and price
+    remain independent and may be conservatively cleared without revoking the
+    family.
+    """
+    evidence = record.get("normalized_evidence") or record
+    if evidence.get("unique_main") is not True:
+        return False
+    physical = evidence.get("followme_physical_evidence") or []
+    if not isinstance(physical, list):
+        return False
+    direct_identity = False
+    fixture_codes: set[str] = set()
+    for item in physical:
+        if not isinstance(item, dict) or item.get("same_subject") is not True:
+            continue
+        cue = str(item.get("cue") or "").strip()
+        strength = str(item.get("strength") or "").strip()
+        if cue in {"direct_followme_branding_on_unit", "attached_followme_product_card"} and strength in {"strong", "direct"}:
+            direct_identity = True
+        if cue in {"white_vertical_stand", "round_base", "attached_price_tray"} and strength == "strong":
+            fixture_codes.add(cue)
+    if not ((direct_identity and len(fixture_codes) >= 2) or len(fixture_codes) == 3):
+        return False
+    narration = evidence_narration_text(record)
+    generic_smart_monitor_only = bool(
+        generic_smart_monitor_without_direct_followme_identity(record)
+    )
+    if generic_smart_monitor_only:
+        # M7/M5/M8 product cards also appear on ordinary tabletop monitors.
+        # When the first pass claims stand/base/tray geometry but does not see
+        # direct same-unit FollowMe identity, require one independent pass
+        # instead of turning that potentially hallucinated geometry into a
+        # terminal family lock.
+        record["generic_smart_monitor_requires_independent_followme_confirmation"] = True
+        return False
+    narration_positive = bool(
+        narration_has_positive_followme_identity(narration)
+        or narration_has_unmistakable_followme_fixture(narration)
+    )
+    if (
+        not narration_positive
+        or narration_has_followme_subject_counterevidence(narration)
+        or narration_structured_followme_counterevidence_reasons(record)
+    ):
+        return False
+
+    record["view_type"] = "單機"
+    record["category"] = "單機"
+    record["unique_main"] = True
+    record["followme_family_confirmed"] = True
+    record["ordered_followme_family_lock"] = True
+
+    original_model = str(record.get("model") or "").strip()
+    # Frozen results from an older guard can already contain the generic
+    # FollowMe family value even though the bound raw model object preserved
+    # an exact Samsung SKU.  Recover that SKU only when there is exactly one
+    # strong raw candidate and the same-card narration still binds the model
+    # and price to the selected subject.  This is evidence replay, not a new
+    # inference or a narration-only identity rescue.
+    raw_owned_skus = [
+        candidate
+        for candidate in _raw_structured_samsung_models(record)
+        if (
+            not is_followme_model(candidate)
+            and re.fullmatch(
+                r"(?:L[SCUFH]|[SCU])\d[A-Z0-9]{5,}",
+                normalize_model_token(candidate),
+            )
+        )
+    ]
+    raw_owned_skus = list(dict.fromkeys(raw_owned_skus))
+    if (
+        len(raw_owned_skus) == 1
+        and (
+            not original_model
+            or original_model == FOLLOWME_UNRESOLVED
+            or is_followme_model(original_model)
+        )
+        and evidence.get("label_ownership") == "matched"
+        and (
+            _attached_exact_model_evidence(record, raw_owned_skus[0])
+            or _same_card_exact_model_price_evidence(
+                {**record, "model": raw_owned_skus[0]}
+            )
+        )
+    ):
+        original_model = raw_owned_skus[0]
+        record["model"] = original_model
+        record["ordered_followme_raw_sku_recovered"] = True
+    original_model_token = normalize_model_token(original_model)
+    normalized_family = normalize_followme_family(original_model) if original_model else None
+    owned_ordinary_sku = bool(
+        original_model
+        and not is_followme_model(original_model)
+        and _is_samsung_sku_like(original_model)
+        and re.fullmatch(
+            r"(?:L[SCUFH]|[SCU])\d[A-Z0-9]{5,}",
+            original_model_token,
+        )
+        and evidence.get("label_ownership") == "matched"
+        and (
+            _attached_exact_model_evidence(record, original_model)
+            or _same_card_exact_model_price_evidence(record)
+        )
+    )
+    if normalized_family:
+        record["model"] = normalized_family
+    elif is_followme_model(original_model) and not followme_identity_key(original_model):
+        # Generic printed family wording such as "Samsung Follow Me 4K"
+        # establishes the family but is not an exact M5/M7/Pro variant.
+        record["model"] = FOLLOWME_UNRESOLVED
+    elif not is_followme_model(original_model) and not owned_ordinary_sku:
+        if original_model:
+            record["rejected_non_followme_model_after_family_lock"] = original_model
+        record["model"] = FOLLOWME_UNRESOLVED
+    # The ordered first-pass early exit is intentionally stricter than later
+    # bounded consensus.  Generic fixture geometry proves only the family; an
+    # exact M5/M7/Pro variant survives this fast path only when the evidence
+    # clause says that a physical same-unit card/label printed it.
+    locked_identity = followme_identity_key(record.get("model"))
+    if (
+        strict_first_pass_variant
+        and locked_identity
+        and locked_identity != "UNRESOLVED"
+        and is_followme_model(record.get("model"))
+        and not _narration_has_direct_followme_variant_evidence(
+            narration, locked_identity
+        )
+    ):
+        record["rejected_unsupported_followme_variant"] = record.get("model")
+        record["model"] = FOLLOWME_UNRESOLVED
+        record["model_validation_failed"] = False
+
+    if record.get("price_conflict_detected"):
+        if record.get("price") not in (None, ""):
+            record["rejected_conflicting_price_after_family_lock"] = record.get("price")
+        record["price"] = None
+    return True
 
 def immediate_retry_decision(
     record: Dict[str, Any],
@@ -2084,8 +2993,41 @@ def immediate_retry_decision(
     history = list(history or [])
     attempt = max(1, int(attempt or 1))
     max_attempts = max(attempt, int(max_attempts or 3))
+    _normalize_narrated_owned_card_single_pass(record)
+    _normalize_self_consistent_owned_single_pass(record)
+    ordered_followme_lock = _apply_ordered_followme_family_lock(
+        record,
+        strict_first_pass_variant=(attempt == 1),
+    )
+    apply_trusted_source_view_lock(record)
     year = _record_year(record)
     current_year = year >= 2026
+    historical_same_card_recovery = _historical_same_card_raw_recovery(
+        (history + [record])[-3:]
+    )
+    if historical_same_card_recovery:
+        # Two healthy, stateless, image-bound calls that both transcribe the
+        # same exact SKU/price from one owned physical card are sufficient.
+        # Do not spend a ritual third model call merely because JSON nulls or
+        # catalogue post-processing erased what both narrations read.
+        record["model"] = historical_same_card_recovery["model"]
+        record["price"] = historical_same_card_recovery["price"]
+        record["label_ownership"] = "matched"
+        record["unique_main"] = True
+        record["historical_same_card_raw_recovery"] = True
+        record["historical_same_card_raw_recovery_mode"] = (
+            historical_same_card_recovery["mode"]
+        )
+        record["historical_same_card_raw_observations"] = list(
+            historical_same_card_recovery["observations"]
+        )
+        clear_superseded_terminal_content_flags(record)
+        record["unlisted_model_candidate"] = False
+        record["official_model_unverified"] = False
+        record["unlisted_model_photo_consensus"] = True
+        record["catalog_confusable_first_letter_candidate"] = False
+        record["structured_identity_conflict"] = False
+        normalize_terminal_quality_issue(record)
     view_type = str(record.get("view_type") or record.get("category") or "")
     model = str(record.get("model") or "").strip()
     price = record.get("price")
@@ -2093,6 +3035,105 @@ def immediate_retry_decision(
     quality = str(record.get("quality_issue") or "").strip()
     thinking = str(record.get("thinking") or record.get("raw_response") or "")
     reasons: list[str] = []
+    source_hint = trusted_source_view_hint(record)
+    record["source_view_hint_applied"] = bool(source_hint)
+    if source_hint:
+        expected_view = "遠景" if source_hint == "遠景" else "單機"
+        record["source_view_hint_conflict"] = bool(
+            record.get("source_view_hint_conflict")
+        )
+        if source_hint == "遠景":
+            ordered_followme_lock = False
+
+    def wide_non_followme_single(item: Dict[str, Any]) -> bool:
+        item_view = str(item.get("view_type") or item.get("category") or "")
+        item_evidence = item.get("normalized_evidence") or item
+        item_count = item_evidence.get("complete_screen_count")
+        return bool(
+            "單機" in item_view
+            and isinstance(item_count, int)
+            and not isinstance(item_count, bool)
+            and item_count >= 3
+            and not has_sufficient_followme_physical_evidence(item_evidence)
+            # The wide-scene repair is only for identity-free classifications.
+            # A directly attached side label can establish one owned business
+            # subject even when several complete display units are visible.
+            # Never erase that observed SKU/price merely to satisfy a screen
+            # count heuristic (the real TK3C-楠梓-1585 failure).
+            and not item.get("model")
+            and not item.get("price")
+            and item_evidence.get("label_ownership") != "matched"
+        )
+
+    def strong_owned_single_identity(item: Dict[str, Any]) -> bool:
+        item_view = str(item.get("view_type") or item.get("category") or "")
+        item_evidence = item.get("normalized_evidence") or item
+        return bool(
+            "單機" in item_view
+            and trusted_source_view_hint(item) != "近景"
+            and item_evidence.get("unique_main") is True
+            and item_evidence.get("label_ownership") == "matched"
+            and normalize_model_token(item.get("model"))
+            and not is_followme_model(item.get("model"))
+            and item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+            and not _label_ownership_conflicts_with_narration(
+                str(item.get("thinking") or item.get("narration") or "")
+            )
+        )
+
+    def narration_blocks_wide_resolution(item: Dict[str, Any]) -> bool:
+        return bool(
+            _narration_supports_only_one_complete_monitor(item)
+            or _central_monitor_with_two_edge_cut_neighbors(item)
+        )
+
+    if (
+        _multiple_price_card_scene(record)
+        and model
+        and price not in (None, "")
+        and normalize_model_token(model)
+    ):
+        if not _same_card_exact_model_price_evidence(record):
+            record["rejected_price_without_exact_model_card"] = price
+            record["price"] = None
+            refresh_authoritative_price_comparison(record, model, None)
+            price = None
+
+    followme_market_possible = year == 0 or year >= FOLLOWME_TW_EARLIEST_YEAR
+    # FollowMe risk is a selective second-pass check, not a ritual third pass
+    # for every wide photo. Before 2024, a 3+-screen/no-FollowMe scene closes
+    # as distant immediately. From 2024 onward, two blind negative passes close
+    # it; only a real remaining conflict may consume the third and final call.
+    deterministic_wide_scene_resolution = bool(
+        wide_non_followme_single(record)
+        and not narration_blocks_wide_resolution(record)
+        and (
+            not followme_market_possible
+            or (
+                attempt >= 2
+                and history
+                and wide_non_followme_single(history[-1])
+                and not narration_blocks_wide_resolution(history[-1])
+            )
+        )
+    )
+    if deterministic_wide_scene_resolution:
+        record["view_type"] = "遠景"
+        record["category"] = "遠景"
+        record["model"] = None
+        record["price"] = None
+        record["unique_main"] = False
+        if record.get("label_ownership") == "matched":
+            record["label_ownership"] = "ambiguous"
+        record["followme_physical_evidence"] = []
+        record["followme_family_confirmed"] = False
+        record["wide_scene_resolved_without_ritual_third_pass"] = True
+        record["followme_market_possible_for_period"] = followme_market_possible
+        view_type = "遠景"
+        model = ""
+        price = None
 
     def unlisted_photo_consensus() -> bool:
         if not record.get("unlisted_model_candidate"):
@@ -2119,12 +3160,84 @@ def immediate_retry_decision(
         )
         return strong_passes >= 2
 
-    contract = evidence_contract_decision(record, history)
+    def unlisted_first_pass_evidence_lock() -> bool:
+        """Close a fully bound same-card SKU/price read in any source year.
+
+        A discontinued historical SKU disappearing from the current catalogue
+        is not, by itself, a reason to spend two more model calls.  The same
+        strict image/request/ownership/conflict checks still apply.
+        """
+        input_hash = str(record.get("input_image_sha256") or "").strip().lower()
+        blocked_fields = {
+            str(value or "").strip().lower()
+            for value in record.get("structured_authority_blocked_fields") or []
+        }
+        suppressed = [
+            str(value or "").strip().lower()
+            for value in record.get("field_suppression_reasons") or []
+        ]
+        material_suppression = bool(
+            {"model", "price"} & blocked_fields
+            or any(
+                reason in {"model", "price"}
+                or reason.startswith(
+                    (
+                        "model:",
+                        "model_",
+                        "model-",
+                        "model.",
+                        "price:",
+                        "price_",
+                        "price-",
+                        "price.",
+                    )
+                )
+                for reason in suppressed
+            )
+        )
+        return bool(
+            attempt == 1
+            and record.get("unlisted_model_candidate") is True
+            and "單機" in view_type
+            and record.get("unique_main") is True
+            and record.get("label_ownership") == "matched"
+            and model
+            and not is_followme_model(model)
+            and not is_placeholder_model(model)
+            and _is_samsung_sku_like(model)
+            and re.fullmatch(r"[0-9a-f]{64}", input_hash)
+            and re.sub(r"[^0-9]", "", str(price or ""))
+            and _same_card_exact_model_price_evidence(record)
+            and record.get("independent_pass") is True
+            and record.get("request_binding_enforced") is True
+            and record.get("request_id_verified") is True
+            and record.get("prior_answer_exposed") is not True
+            and record.get("prompt_contamination") is not True
+            and (record.get("runtime_health") or {}).get("healthy") is True
+            and record.get("model_validation_failed") is not True
+            and record.get("catalog_confusable_first_letter_candidate") is not True
+            and record.get("price_conflict_detected") is not True
+            and record.get("brand_evidence_conflict") is not True
+            and record.get("structured_identity_conflict") is not True
+            and not material_suppression
+        )
+
+    contract = evidence_contract_decision(
+        record,
+        [] if deterministic_wide_scene_resolution else history,
+    )
     record["evidence_contract_version"] = EVIDENCE_CONTRACT_VERSION
     record["normalized_evidence"] = contract["normalized_evidence"]
+    ordered_followme_family_terminal = bool(ordered_followme_lock and contract["valid"])
+    record["ordered_followme_early_exit"] = ordered_followme_family_terminal
     if not contract["valid"]:
         reasons.extend(contract["reasons"])
-    if "遠景" in view_type and contract["valid"]:
+    if (
+        "遠景" in view_type
+        and contract["valid"]
+        and not deterministic_wide_scene_resolution
+        and source_hint != "遠景"
+    ):
         zero_screen_scene = contract["normalized_evidence"].get("complete_screen_count") == 0
         if (not zero_screen_scene and not _distant_count_supported_by_narration(
             thinking,
@@ -2135,7 +3248,11 @@ def immediate_retry_decision(
     if view_type == "失敗" or str(record.get("category") or "") == "失敗":
         reasons.append("處理失敗")
     if record.get("unlisted_model_candidate"):
-        consensus = unlisted_photo_consensus()
+        first_pass_lock = bool(
+            contract["valid"] and unlisted_first_pass_evidence_lock()
+        )
+        record["unlisted_model_first_pass_evidence_lock"] = first_pass_lock
+        consensus = first_pass_lock or unlisted_photo_consensus()
         record["unlisted_model_photo_consensus"] = consensus
         if not consensus:
             reasons.append("官網未收錄型號需三輪獨立照片證據一致")
@@ -2146,7 +3263,10 @@ def immediate_retry_decision(
     if record.get("model_catalog_unavailable"):
         reasons.append("型號表未載入，屬系統設定錯誤")
     if record.get("price_conflict_detected"):
-        reasons.append("價格欄位互相衝突")
+        if ordered_followme_family_terminal and record.get("price") in (None, ""):
+            record["ordered_followme_price_withdrawn"] = True
+        else:
+            reasons.append("價格欄位互相衝突")
     if record.get("brand_evidence_conflict"):
         reasons.append("品牌敘述與正式型號衝突")
     if re.fullmatch(r"它牌[（(][^）)]+[）)]", model, re.IGNORECASE) and _raw_structured_samsung_models(record):
@@ -2187,7 +3307,10 @@ def immediate_retry_decision(
 
     if view_type == "單機" and _narration_declares_distant(thinking):
         reasons.append("結構為單機但敘述明確判為遠景")
-    if _weak_single_claim_in_wide_multiscreen_scene(record):
+    if (
+        source_hint != "近景"
+        and _weak_single_claim_in_wide_multiscreen_scene(record)
+    ):
         reasons.append("寬廣多螢幕陳列缺少可歸屬的單機身分證據")
     if record.get("label_ownership") == "matched" and _label_ownership_conflicts_with_narration(thinking):
         reasons.append("標籤歸屬與敘述衝突")
@@ -2200,19 +3323,33 @@ def immediate_retry_decision(
     # model/price ownership conflict or an unreadable label).  A legitimate
     # store promotion can differ substantially from today's reference price.
     #
-    # One independently read pass is nevertheless insufficient when a 2026
-    # store price differs from the deterministic official reference.  The real
-    # 永康大灣-1415 failure read the small 市價 as the current amount and
-    # still formed a perfectly valid JSON object.  Require one stateless price-
-    # role confirmation for high/low rows.  Matching repeat evidence may close
-    # on pass two; a cross-pass price disagreement consumes the third and is
-    # settled by the existing bounded pair consensus.  Normal ✓ rows keep the
-    # one-pass fast path.
+    # A visible store price may legitimately differ from today's deterministic
+    # official reference.  When the unique subject, model, price and matched
+    # physical label are complete, ↑/↓ is an annotation rather than a retry
+    # trigger.  Real label-role ambiguity, missing fields, or a later
+    # independently observed contradiction still escalates through the
+    # ordinary bounded evidence rules.
     price_digits = re.sub(r"[^0-9]", "", str(price or ""))
     model_key = normalize_model_token(model)
+    if (
+        isinstance(
+            contract["normalized_evidence"].get("complete_screen_count"), int
+        )
+        and not isinstance(
+            contract["normalized_evidence"].get("complete_screen_count"), bool
+        )
+        and contract["normalized_evidence"].get("complete_screen_count") >= 3
+        and strong_owned_single_identity(record)
+    ):
+        prior_owned_models = {
+            normalize_model_token(item.get("model"))
+            for item in history
+            if strong_owned_single_identity(item)
+            and normalize_model_token(item.get("model"))
+        }
+        if prior_owned_models and model_key not in prior_owned_models:
+            reasons.append("寬景唯一主角型號跨輪不一致，需完成有界複核")
     if current_year and view_type == "單機" and model_key and price_digits:
-        if price_status in {"high", "low"} and attempt == 1:
-            reasons.append("2026 價差照片需第二輪無記憶核對價牌角色")
         prior_bound_prices = {
             (
                 normalize_model_token(item.get("model")),
@@ -2256,8 +3393,6 @@ def immediate_retry_decision(
         reasons.append("敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上")
 
     if "遠景" in view_type:
-        if current_year and attempt < max_attempts:
-            reasons.append("2026 遠景必須完成三輪獨立複核")
         if model or price:
             reasons.append("遠景不應帶型號或價格")
         if attempt >= max_attempts and not contract["valid"] and not _explicit_three_complete(thinking):
@@ -2267,11 +3402,16 @@ def immediate_retry_decision(
         if quality and quality not in {"無", "正常", "None", "null"}:
             reasons.append(f"遠景與畫質標記需再確認:{quality}")
     elif "單機" in view_type or is_followme_model(model):
-        if current_year and not model:
+        if current_year and not model and not ordered_followme_family_terminal:
             reasons.append("2026 單機缺型號")
-        if current_year and not price:
+        if current_year and not price and not ordered_followme_family_terminal:
             reasons.append("2026 單機缺價格")
-        if quality and quality not in {"無", "正常", "None", "null"}:
+        expected_missing_quality = any(
+            token in quality for token in ("沒有規格牌", "沒有價格牌", "沒有規格和價格牌")
+        )
+        if quality and quality not in {"無", "正常", "None", "null"} and not (
+            ordered_followme_family_terminal and expected_missing_quality
+        ):
             reasons.append(f"單機仍有品質疑慮:{quality}")
         strong_followme_subject = has_sufficient_followme_physical_evidence(
             contract["normalized_evidence"]
@@ -2282,14 +3422,23 @@ def immediate_retry_decision(
             and not strong_followme_subject
         ):
             reasons.append("單機結果與三台以上完整陳列衝突")
-        if isinstance(multiscreen_count, int) and not isinstance(multiscreen_count, bool) and multiscreen_count >= 3:
+        if (
+            source_hint != "近景"
+            and isinstance(multiscreen_count, int)
+            and not isinstance(multiscreen_count, bool)
+            and multiscreen_count >= 3
+        ):
             if strong_followme_subject:
-                if attempt < max_attempts:
-                    reasons.append("寬景中的 FollowMe 實體必須完成三輪獨立複核")
-            elif attempt < max_attempts:
-                reasons.append("三台以上入鏡的單機候選必須完成三輪獨立複核")
-            else:
-                reasons.append("沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景")
+                if attempt == 1 and not ordered_followme_family_terminal:
+                    reasons.append("寬景中的 FollowMe 實體需第二輪獨立確認")
+            elif (
+                not deterministic_wide_scene_resolution
+                and not strong_owned_single_identity(record)
+            ):
+                if attempt == 1 and followme_market_possible:
+                    reasons.append("寬景單機候選需第二輪確認是否為 FollowMe")
+                else:
+                    reasons.append("沒有 FollowMe 實體證據的三台以上完整螢幕應定案遠景")
 
     non_followme_pixel_authority = bool(
         known_expectation
@@ -2301,14 +3450,11 @@ def immediate_retry_decision(
     ) and not non_followme_pixel_authority:
         if not has_sufficient_followme_physical_evidence(contract["normalized_evidence"]):
             reasons.append("FollowMe 缺少同一實機的物理支架證據")
-        # FollowMe family names and common prices are especially prone to
-        # prompt/prior-knowledge hallucination.  One self-consistent pass is
-        # therefore insufficient even when all fields are populated.  Require
-        # one stateless independent confirmation; ordinary non-FollowMe singles
-        # may still finish on pass 1.  Once escalated, every observed FollowMe
-        # pass must agree and a later majority may never wash out a conflict.
-        if current_year and attempt < 2:
-            reasons.append("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認")
+        # A complete current-year FollowMe single may also use the one-pass
+        # fast path when the model/price belong to the unique main unit and
+        # strong same-subject physical evidence is present.  Missing or
+        # contradictory evidence still escalates; a later majority may never
+        # wash out an actual observed conflict.
         if (
             current_year
             and history
@@ -2320,9 +3466,14 @@ def immediate_retry_decision(
     reasons = list(dict.fromkeys(reasons))
     retry = bool(reasons) and attempt < max_attempts
     unresolved = bool(reasons) and attempt >= max_attempts
-    verified = bool(contract["valid"] and not reasons and "遠景" not in view_type)
+    verified = bool(contract["valid"] and not reasons)
 
-    if "遠景" in view_type and attempt >= max_attempts and not reasons:
+    if (
+        "遠景" in view_type
+        and attempt >= max_attempts
+        and not reasons
+        and not deterministic_wide_scene_resolution
+    ):
         views = [str(item.get("view_type") or item.get("category") or "") for item in history] + [view_type]
         verified = len(views) >= max_attempts and all("遠景" in value for value in views[-max_attempts:])
         if not verified:
@@ -2726,21 +3877,40 @@ def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
     if not isinstance(summaries, list):
         return [*reasons, "adjudication_pass_summaries_missing"]
     pair_votes: Counter[tuple[str, str]] = Counter()
+    followme_pair_votes: Counter[tuple[str, str]] = Counter()
     for item in summaries:
         if not isinstance(item, dict) or item.get("label_ownership") != "matched":
             continue
-        model_key = followme_identity_key(item.get("model")) or normalize_model_token(item.get("model"))
+        followme_key = followme_identity_key(item.get("model"))
+        model_key = followme_key or normalize_model_token(item.get("model"))
         price_key = re.sub(r"[^0-9]", "", str(item.get("price") or ""))
         if model_key and price_key:
             pair_votes[(str(model_key), price_key)] += 1
+            if followme_key:
+                followme_pair_votes[(str(model_key), price_key)] += 1
     repeated_pairs = {pair for pair, count in pair_votes.items() if count >= 2}
+    repeated_followme_pairs = {
+        pair for pair, count in followme_pair_votes.items() if count >= 2
+    }
     observed_pairs = set(pair_votes)
     final_model = followme_identity_key(record.get("model")) or normalize_model_token(record.get("model"))
     final_price = re.sub(r"[^0-9]", "", str(record.get("price") or ""))
     final_pair = (str(final_model or ""), final_price)
     family_price_preserved = bool(
         record.get("followme_family_confirmed") is True
+        and final_model in {None, "", "UNRESOLVED"}
+        and any(final_price == price for _model, price in repeated_pairs)
+    )
+    unsupported_followme_identity_discarded = bool(
+        record.get("adjudication_rule")
+        == "three_call_exhausted_conservative_terminal"
+        and record.get("adjudication_discarded_unsupported_followme_identity")
+        is True
         and not final_model
+        and record.get("followme_family_confirmed") is not True
+        and not (record.get("followme_physical_evidence") or [])
+        and repeated_pairs
+        and repeated_pairs.issubset(repeated_followme_pairs)
         and any(final_price == price for _model, price in repeated_pairs)
     )
     if (
@@ -2748,6 +3918,7 @@ def adjudication_field_invariant_reasons(record: Dict[str, Any]) -> List[str]:
         and repeated_pairs
         and final_pair not in repeated_pairs
         and not family_price_preserved
+        and not unsupported_followme_identity_discarded
     ):
         reasons.append("adjudication_repeated_identity_pair_erased_or_changed")
     return reasons
@@ -2872,6 +4043,28 @@ def finalize_three_pass_outcome(
         str(item.get("input_image_sha256") or "").strip().lower()
         for item in base_integrity
     }
+    historical_same_card_recovery = _historical_same_card_raw_recovery(passes)
+    same_card_base_integrity = [
+        item for item in passes if _same_card_pass_has_base_integrity(item)
+    ]
+    same_card_hashes = {
+        str(item.get("input_image_sha256") or "").strip().lower()
+        for item in same_card_base_integrity
+    }
+    same_card_field_recovery_fallback = bool(
+        historical_same_card_recovery
+        and len(passes) == max_attempts
+        and len(same_card_base_integrity) == len(passes)
+        and "" not in same_card_hashes
+        and len(same_card_hashes) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip()
+            == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main")
+            is True
+            for item in passes
+        )
+    )
 
 
     narrated_followme_fixture_passes = [
@@ -2881,24 +4074,10 @@ def finalize_three_pass_outcome(
             evidence_narration_text(item)
         )
     ]
-    # Two stateless passes independently seeing the white vertical stand and
-    # round floor base, with at least one explicitly joining them to a monitor,
-    # are stronger than a structured distant vote that omitted those same
-    # visible cues.  This closes the wide-scene blind spot without inventing a
-    # model or price and without making a fourth call.
-    narrated_followme_fixture_consensus_fallback = bool(
-        len(passes) == max_attempts
-        and len(base_integrity) == len(passes)
-        and "" not in base_hashes
-        and len(base_hashes) == 1
-        and len(narrated_followme_fixture_passes) >= 2
-        and any(
-            narration_connects_monitor_to_followme_fixture(
-                evidence_narration_text(item)
-            )
-            for item in narrated_followme_fixture_passes
-        )
-    )
+    # Narration may request another independent look, but it is never physical
+    # evidence and may not synthesize a terminal FollowMe identity.  Only the
+    # structured same-subject evidence branches below can settle that family.
+    narrated_followme_fixture_consensus_fallback = False
     conservative_single_fallback = bool(
         len(passes) == max_attempts
         and len(base_integrity) == len(passes)
@@ -2942,6 +4121,13 @@ def finalize_three_pass_outcome(
         str(item.get("input_image_sha256") or "").strip().lower()
         for item in single_local_integrity
     }
+    followme_counterevidence_present = any(
+        narration_structured_followme_counterevidence_reasons(item)
+        or narration_has_followme_subject_counterevidence(
+            evidence_narration_text(item)
+        )
+        for item in single_local_integrity
+    )
     non_followme_pair_groups: dict[tuple[str, str], list[Dict[str, Any]]] = {}
     for item in single_local_integrity:
         normalized = item.get("normalized_evidence") or item
@@ -2963,6 +4149,10 @@ def finalize_three_pass_outcome(
             and item.get("model_validation_failed") is not True
             and item.get("price_conflict_detected") is not True
             and item.get("brand_evidence_conflict") is not True
+            and (
+                not _multiple_price_card_scene(item)
+                or _same_card_exact_model_price_evidence(item)
+            )
         ):
             non_followme_pair_groups.setdefault((model_key, price_key), []).append(item)
     winning_non_followme_pairs = [
@@ -2970,6 +4160,61 @@ def finalize_three_pass_outcome(
         for pair, items in non_followme_pair_groups.items()
         if len(items) >= 2
     ]
+    # A resumed run can legitimately reach the lifetime third-call cap while
+    # its in-memory history contains only the current run's attempts 2 and 3.
+    # Two healthy, request-bound calls may close here only when they are exactly
+    # that tail, bind to the same source pixels, and repeat one fully owned
+    # ordinary SKU/price pair.  This is evidence consensus, not a ritual demand
+    # for a third preserved list entry (the real eLife-軍校DC-281 failure).
+    current_tail_attempts = {
+        int(item.get("ocr_attempt") or 0)
+        for item in passes
+    }
+    current_tail_source_ids = {
+        str(item.get("source_item_id") or "").strip()
+        for item in passes
+    }
+    two_current_bound_owned_identity_tail_fallback = bool(
+        attempt == max_attempts
+        and len(passes) == 2
+        and current_tail_attempts == {max_attempts - 1, max_attempts}
+        and len(single_local_integrity) == len(passes)
+        and all(_adjudication_pass_is_usable(item) for item in passes)
+        and "" not in single_local_hashes
+        and len(single_local_hashes) == 1
+        and "" not in current_tail_source_ids
+        and len(current_tail_source_ids) == 1
+        and len(winning_non_followme_pairs) == 1
+        and all(
+            str(item.get("view_type") or item.get("category") or "").strip()
+            == "單機"
+            and (item.get("normalized_evidence") or item).get("unique_main")
+            is True
+            and (item.get("normalized_evidence") or item).get(
+                "complete_screen_count"
+            )
+            in {1, 2}
+            and (item.get("normalized_evidence") or item).get(
+                "label_ownership"
+            )
+            == "matched"
+            and not _label_ownership_conflicts_with_narration(
+                str(item.get("thinking") or item.get("narration") or "")
+            )
+            and item.get("model_validation_failed") is not True
+            and item.get("price_conflict_detected") is not True
+            and item.get("brand_evidence_conflict") is not True
+            for item in passes
+        )
+        and any(
+            (item.get("normalized_evidence") or item).get(
+                "complete_screen_count"
+            )
+            == 1
+            or _narration_supports_only_one_complete_monitor(item)
+            for item in passes
+        )
+    )
     mixed_owned_identity_pair_fallback = bool(
         len(passes) == max_attempts
         and len(base_integrity) == len(passes)
@@ -3130,6 +4375,7 @@ def finalize_three_pass_outcome(
         and len(single_local_integrity) == len(passes)
         and "" not in single_local_hashes
         and len(single_local_hashes) == 1
+        and not followme_counterevidence_present
         and sum(
             _followme_single_subject_geometry_not_contradicted(item)
             for item in single_local_integrity
@@ -3150,6 +4396,7 @@ def finalize_three_pass_outcome(
         and len(single_local_integrity) == len(passes)
         and "" not in single_local_hashes
         and len(single_local_hashes) == 1
+        and not followme_counterevidence_present
         and sum(
             _followme_single_subject_geometry_not_contradicted(item)
             for item in single_local_integrity
@@ -3535,6 +4782,15 @@ def finalize_three_pass_outcome(
         usable = list(passes)
     elif binding_discarded_head_fallback:
         usable = prior_bound_passes
+    elif two_current_bound_owned_identity_tail_fallback:
+        usable = list(passes)
+    elif same_card_field_recovery_fallback:
+        # A request-bound, same-image card transcription is field evidence.
+        # It must reach adjudication before the generic current-pass health
+        # check below, otherwise an unrelated photo-local stand/FollowMe prose
+        # conflict can erase two exact SKU/price observations as a technical
+        # error (the real 桃園中平-1242 failure).
+        usable = list(base_integrity)
     elif (
         followme_local_base_fallback
         or mixed_followme_local_base_fallback
@@ -3639,6 +4895,14 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(prior_bound_passes)
         rule = "two_bound_pass_consensus_discarded_unbound_third"
+    elif two_current_bound_owned_identity_tail_fallback:
+        final_view = "單機"
+        supporting = list(winning_non_followme_pairs[0][1])
+        rule = "two_current_bound_owned_identity_tail_after_consumed_cap"
+    elif same_card_field_recovery_fallback:
+        final_view = "單機"
+        supporting = list(usable)
+        rule = "three_pass_same_card_raw_field_consensus"
     elif edge_cut_identity_consensus_fallback:
         final_view = "單機"
         supporting = list(usable)
@@ -3704,7 +4968,7 @@ def finalize_three_pass_outcome(
         final_view = "單機"
         supporting = list(usable)
         rule = "three_pass_subthree_single_content_closure"
-    elif len(followme) >= 2 and any(
+    elif len(followme) >= 2 and not followme_counterevidence_present and any(
         _followme_single_subject_geometry_supported(item) for item in followme
     ):
         final_view = "單機"
@@ -3798,7 +5062,7 @@ def finalize_three_pass_outcome(
     }
     pass_summaries = [
         {
-            "attempt": index + 1,
+            "attempt": int(item.get("ocr_attempt") or index + 1),
             "view_type": item.get("view_type") or item.get("category"),
             "model": item.get("model"),
             "price": item.get("price"),
@@ -3808,6 +5072,7 @@ def finalize_three_pass_outcome(
             "complete_screen_count": (item.get("normalized_evidence") or item).get("complete_screen_count"),
             "unique_main": (item.get("normalized_evidence") or item).get("unique_main"),
             "label_ownership": (item.get("normalized_evidence") or item).get("label_ownership"),
+            "narrated_same_card_pair": _narrated_physical_card_model_price_pair(item),
         }
         for index, item in enumerate(passes)
     ]
@@ -3863,6 +5128,11 @@ def finalize_three_pass_outcome(
             and item.get("model_validation_failed") is not True
             and item.get("price_conflict_detected") is not True
             and item.get("brand_evidence_conflict") is not True
+            and (
+                not _multiple_price_card_scene(item)
+                or not item.get("price")
+                or _same_card_exact_model_price_evidence(item)
+            )
             and not followme_variant_evidence_reasons(item)
         ]
         model = _consensus_value(
@@ -3990,6 +5260,7 @@ def finalize_three_pass_outcome(
             record["followme_physical_evidence"] = []
         if rule in {
             "two_pass_non_followme_identity_consensus",
+            "two_current_bound_owned_identity_tail_after_consumed_cap",
             "two_pass_edge_cut_identity_consensus",
             "three_pass_single_subject_consensus",
             "two_pass_identity_free_single_consensus",
@@ -4066,6 +5337,33 @@ def finalize_three_pass_outcome(
                 )
                 or []
             )
+        if record.get("followme_family_confirmed") is True and not record.get("model"):
+            # The family is a real terminal model value, not merely a UI note.
+            # Keeping it only in adjudication_summary made Dashboard/CSV/upload
+            # incorrectly display a confirmed FollowMe as "(無)".
+            record["model"] = FOLLOWME_UNRESOLVED
+            model = FOLLOWME_UNRESOLVED
+        if historical_same_card_recovery:
+            # This is not a prose-only guess: every observation is from the
+            # same image-bound local-model call, names one physical card, and
+            # includes both the SKU and currency amount.  It repairs the
+            # specific contract mismatch where post-processing erased fields
+            # that the stored request evidence repeatedly read correctly.
+            record["model"] = historical_same_card_recovery["model"]
+            record["price"] = historical_same_card_recovery["price"]
+            record["label_ownership"] = "matched"
+            record["unique_main"] = True
+            record["historical_same_card_raw_recovery"] = True
+            record["historical_same_card_raw_recovery_mode"] = (
+                historical_same_card_recovery["mode"]
+            )
+            record["historical_same_card_raw_observations"] = list(
+                historical_same_card_recovery["observations"]
+            )
+            record["model_validation_failed"] = False
+            record["price_conflict_detected"] = False
+            model = record["model"]
+            price = record["price"]
         model_text = (
             model
             or ("FollowMe（型號未細分）" if record.get("followme_family_confirmed") is True else "無型號")
@@ -4105,10 +5403,16 @@ def finalize_three_pass_outcome(
             "display_narration": "",
             "resolved_by_bound_consensus_after_discard": True,
         }
-    record["adjudication_summary"] = (
-        f"三輪證據已完成交叉核對，依固定實體證據規則定案為：{result_text}。"
-        "型號或價格若沒有至少兩輪一致證據，維持無型號／無價格，不做猜測。"
-    )
+    if rule == "two_current_bound_owned_identity_tail_after_consumed_cap":
+        record["adjudication_summary"] = (
+            f"模型呼叫已到第三輪上限；目前保存的第二、三輪健康綁定證據一致，"
+            f"依固定實體證據規則定案為：{result_text}。沒有增加第 4 次模型呼叫。"
+        )
+    else:
+        record["adjudication_summary"] = (
+            f"三輪證據已完成交叉核對，依固定實體證據規則定案為：{result_text}。"
+            "型號或價格若沒有至少兩輪一致證據，維持無型號／無價格，不做猜測。"
+        )
     record["evidence_guard_revision"] = EVIDENCE_GUARD_REVISION
     invariant_reasons = adjudication_field_invariant_reasons(record)
     if invariant_reasons:
@@ -4131,6 +5435,8 @@ def finalize_three_pass_outcome(
         "retry": False,
         "unresolved": False,
         "verified": True,
+        "technical_retry_required": False,
+        "technical_retry_reason": "",
         "reasons": [],
         "recommended_model": "",
         "evidence_guard_revision": EVIDENCE_GUARD_REVISION,

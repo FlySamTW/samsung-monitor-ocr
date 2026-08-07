@@ -22,8 +22,10 @@ $alertPath = Join-Path $audit "ocr_continuity_supervisor_alert.json"
 $fullProjectRequestPath = Join-Path $audit "full_project_continuation_requested.json"
 $historicalContinuationGate = Join-Path $RepoRoot "tools\historical_continuation_gate.py"
 $historicalContinuationReceipt = Join-Path $audit "historical_continuation_receipt.json"
+$pipelineStatusPath = Join-Path $RepoRoot "dashboard\dist\pipeline-status.json"
 $currentYearCompletePath = Join-Path $audit "current_year_rerun_cycle_complete.json"
 $fullProjectCompletePath = Join-Path $audit "full_project_rerun_cycle_complete.json"
+$evidenceDeferredSnapshotPath = Join-Path $audit "evidence_backfill_deferred_snapshot.json"
 $uploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
 $logPath = Join-Path $logDir ("ocr_continuity_supervisor_{0}.jsonl" -f (Get-Date -Format "yyyyMMdd"))
 $python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -36,8 +38,12 @@ $watcherScript = Join-Path $RepoRoot "tools\auto_rerun_questionable_after_recurs
 $bulkUploaderScript = Join-Path $RepoRoot "tools\rclone_drive_upload.py"
 $safeIdleReloadScript = Join-Path $RepoRoot "tools\reload_backend_at_safe_idle.ps1"
 $recoverReviewMetadataScript = Join-Path $RepoRoot "tools\recover_review_metadata_false_fuse.py"
+$recoverFirstPassPhotoLocalScript = Join-Path $RepoRoot "tools\recover_first_pass_photo_local_fuse.py"
+$recoverContainedRequestBindingScript = Join-Path $RepoRoot "tools\recover_contained_request_binding_fuse.py"
 $evidenceTracePath = Join-Path $audit "v1945_evidence_trace.jsonl"
 $streamPendingDir = Join-Path $OutputDir "_drive_upload_stream\pending"
+$streamWorkingDir = Join-Path $OutputDir "_drive_upload_stream\working"
+$script:CurrentYearEvidenceComplete = $false
 try { $backendPort = ([uri]$BackendUrl).Port } catch { throw "invalid BackendUrl: $BackendUrl" }
 if ($backendPort -le 0) { throw "BackendUrl must include a valid port: $BackendUrl" }
 New-Item -ItemType Directory -Force -Path $audit,$logDir | Out-Null
@@ -51,7 +57,11 @@ function Alert([string]$Reason, [hashtable]$Data = @{}) {
     $payload = [ordered]@{ timestamp=(Get-Date).ToString("o"); status="fail_closed"; reason=$Reason; repo_root=$RepoRoot }
     foreach ($k in $Data.Keys) { $payload[$k] = $Data[$k] }
     $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $alertPath -Encoding UTF8
+    Write-PipelineStatus -Active $false -Phase "blocked" -WorkerPid 0 -Reason $Reason
     Log-Event "alert" (@{reason=$Reason} + $Data)
+}
+function Clear-Alert {
+    Remove-Item -LiteralPath $alertPath -Force -ErrorAction SilentlyContinue
 }
 function Owned([string]$Pattern) {
     $matches = @(Get-CimInstance Win32_Process | Where-Object {
@@ -124,11 +134,218 @@ function Start-Hidden([string]$File, [string[]]$ProcessArgs, [string]$OutFile, [
 }
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    try { return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { return $null }
+    # Windows PowerShell 5.1 otherwise decodes UTF-8 without BOM through the
+    # active ANSI code page.  A Chinese staging path then becomes unreadable,
+    # falls back to SourceRoot, and creates a false checkpoint mismatch loop.
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch { return $null }
+}
+
+function Write-JsonAtomic([string]$Path, [object]$Payload) {
+    $temp = "$Path.tmp.$PID"
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 8
+        [System.IO.File]::WriteAllText($temp, $json, [System.Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temp -Destination $Path -Force
+    } finally {
+        if (Test-Path -LiteralPath $temp) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+function Write-PipelineStatus(
+    [bool]$Active,
+    [string]$Phase,
+    [int]$WorkerPid = 0,
+    [string]$Reason = ""
+) {
+    $payload = [ordered]@{
+        schema = "samsung-ocr-pipeline-status/v1"
+        updated_at = (Get-Date).ToUniversalTime().ToString("o")
+        active = $Active
+        phase = $Phase
+        worker_pid = $WorkerPid
+        reason = $Reason
+    }
+    Write-JsonAtomic -Path $pipelineStatusPath -Payload $payload
+}
+function Get-StreamPendingCount {
+    if (-not (Test-Path -LiteralPath $streamPendingDir)) { return 0 }
+    return @(Get-ChildItem -LiteralPath $streamPendingDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+}
+function Get-StreamWorkingCount {
+    if (-not (Test-Path -LiteralPath $streamWorkingDir)) { return 0 }
+    return @(Get-ChildItem -LiteralPath $streamWorkingDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+}
+function Ensure-StreamUploaderOnline {
+    $workers = @(Owned "stream_drive_upload\.py")
+    if ($workers.Count -gt 1) {
+        throw "multiple repo-owned stream upload workers exist"
+    }
+    if ($workers.Count -eq 1) { return $workers }
+    $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+    Start-Hidden -File $python -ProcessArgs @(
+        $streamUploaderScript,
+        "--output-dir",$OutputDir,
+        "--poll-seconds","5",
+        "--timeout-seconds","600"
+    ) -OutFile (Join-Path $logDir "supervisor_stream_uploader_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_stream_uploader_$stamp.err.log")
+    Start-Sleep -Seconds 1
+    $workers = @(Owned "stream_drive_upload\.py")
+    if ($workers.Count -ne 1) {
+        throw "stream uploader status worker did not become unique"
+    }
+    Log-Event "stream_uploader_started" @{
+        pending=(Get-StreamPendingCount)
+        pid=$workers[0].ProcessId
+    }
+    return $workers
+}
+function Start-BackendService([string]$ImageDir) {
+    $live = Get-BackendStatus
+    $workers = @(Owned "samsung_ocr_batch_processor\.py")
+    if ($live) {
+        if ($workers.Count -ne 1) {
+            throw "backend status API is not owned by one logical repo process"
+        }
+        return $live
+    }
+    if ($workers.Count -gt 0) {
+        throw "repo-owned backend exists but its status API is unavailable"
+    }
+    if (-not (Test-Path -LiteralPath $ImageDir -PathType Container)) {
+        throw "backend continuity directory is unavailable: $ImageDir"
+    }
+    $env:SAMSUNG_OCR_NO_BROWSER = "1"
+    $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+    Start-Hidden -File $python -ProcessArgs @(
+        $backendScript,
+        "--api_base",$ApiBase,
+        "--api_key","lm-studio",
+        "--model",$Model,
+        "--dir",$ImageDir,
+        "--port",[string]$backendPort,
+        "--no_followme_auto_update"
+    ) -OutFile (Join-Path $logDir "supervisor_backend_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_backend_$stamp.err.log")
+    for ($attempt = 0; $attempt -lt 45 -and -not $live; $attempt++) {
+        Start-Sleep -Seconds 1
+        $live = Get-BackendStatus
+    }
+    if (-not $live) {
+        throw "backend status API did not become available"
+    }
+    $workers = @(Owned "samsung_ocr_batch_processor\.py")
+    if ($workers.Count -ne 1) {
+        throw "started backend is not one logical repo process"
+    }
+    Log-Event "interface_backend_recovered" @{model=$Model;port=$backendPort;backend=@(Owned "samsung_ocr_batch_processor\.py").Count;image_dir=$ImageDir}
+    return $live
+}
+function Get-PausedContinuityDir($Pause) {
+    $fallback = [System.IO.Path]::GetFullPath($SourceRoot)
+    $candidateText = if ($Pause) { [string]$Pause.current_dir } else { "" }
+    if (-not $candidateText) { return $fallback }
+    try {
+        $candidate = [System.IO.Path]::GetFullPath($candidateText)
+        $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $OutputDir "_ocr_staging"))
+        $sourceRootPath = [System.IO.Path]::GetFullPath($SourceRoot)
+    } catch { return $fallback }
+    $insideStaging = (
+        $candidate.Equals($stagingRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith(
+            $stagingRoot.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    )
+    $insideSource = (
+        $candidate.Equals($sourceRootPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith(
+            $sourceRootPath.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    )
+    if (
+        ($insideStaging -or $insideSource) -and
+        (Test-Path -LiteralPath $candidate -PathType Container)
+    ) {
+        return $candidate
+    }
+    return $fallback
+}
+function Resume-RepairedPausedCheckpoint([string]$Checkpoint) {
+    if (-not $Checkpoint -or -not (Test-Path -LiteralPath $Checkpoint -PathType Container)) {
+        throw "saved paused checkpoint is unavailable"
+    }
+    $resumeBody = @{
+        dir=$Checkpoint
+        restart=$false
+        confirmed=$true
+        reprocess_last_n=0
+    } | ConvertTo-Json
+    $resume = Invoke-RestMethod -Uri "$BackendUrl/api/start_batch" -Method Post `
+        -ContentType "application/json; charset=utf-8" -Body $resumeBody -TimeoutSec 30
+    if ([string]$resume.status -ne "started") {
+        throw "backend did not accept the repaired checkpoint resume"
+    }
+    $resumed = $null
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        Start-Sleep -Seconds 1
+        $candidate = Get-BackendStatus
+        if (
+            $candidate -and
+            (
+                [bool]$candidate.is_running -or
+                [int]$candidate.stats.processed -eq [int]$candidate.stats.total
+            )
+        ) {
+            $resumed = $candidate
+            break
+        }
+    }
+    if (-not $resumed) {
+        throw "repaired checkpoint resume did not become observable"
+    }
+    try {
+        $liveDir = [System.IO.Path]::GetFullPath([string]$resumed.image_dir)
+    } catch { $liveDir = "" }
+    if (
+        -not $liveDir.Equals($Checkpoint, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $resumed.pipeline_pause -or
+        (Test-Path -LiteralPath $PipelinePausePath)
+    ) {
+        throw "repaired checkpoint resume verification failed"
+    }
+    Log-Event "pipeline_pause_checkpoint_auto_resumed" @{
+        checkpoint=$Checkpoint
+        processed=[int]$resumed.stats.processed
+        total=[int]$resumed.stats.total
+    }
+    return $resumed
 }
 function Get-FileSha256([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
     try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() } catch { return "" }
+}
+function Get-NormalizedSourceIdSetProof([object[]]$Ids) {
+    $normalized = @()
+    foreach ($raw in @($Ids)) {
+        $id = ([string]$raw).Trim().ToLowerInvariant()
+        if ($id -notmatch '^[0-9a-f]{64}$') { return $null }
+        $normalized += $id
+    }
+    if ($normalized.Count -le 0) { return $null }
+    $unique = @($normalized | Sort-Object -Unique)
+    if ($unique.Count -ne $normalized.Count) { return $null }
+    $joined = [string]::Join("`n", $unique)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($joined)
+        $hash = ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+    return [pscustomobject]@{ count=$unique.Count; sha256=$hash }
 }
 function Get-LatestBackendRuntimeWrite {
     $runtimePaths = @(
@@ -188,9 +405,86 @@ function Try-AutoRecoverKnownReviewMetadataFuse {
     }
     return $true
 }
+function Try-AutoRecoverFirstPassPhotoLocalFuse {
+    $fuse = Read-JsonFile $RuntimeHealthFusePath
+    if (
+        -not $fuse -or
+        $fuse.schema -ne "samsung-ocr-runtime-health-fuse/v1" -or
+        $fuse.active -ne $true -or
+        [int]$fuse.attempt -ne 1 -or
+        @($fuse.reasons).Count -ne 1 -or
+        [string]$fuse.reasons[0] -ne "structured_authority_material_conflict:model" -or
+        @($fuse.record_snapshot.structured_authority_blocked_fields).Count -ne 1 -or
+        [string]$fuse.record_snapshot.structured_authority_blocked_fields[0] -ne "model"
+    ) { return $false }
+    $live = Get-BackendStatus
+    $stagingDir = if ($live) { [string]$live.image_dir } else { "" }
+    if (
+        -not $stagingDir -or
+        -not (Test-Path -LiteralPath $stagingDir -PathType Container) -or
+        -not (Test-Path -LiteralPath $recoverFirstPassPhotoLocalScript -PathType Leaf)
+    ) { return $false }
+    $dryOutput = @(& $python $recoverFirstPassPhotoLocalScript `
+        --staging-dir $stagingDir --fuse-file $RuntimeHealthFusePath 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Log-Event "first_pass_photo_local_fuse_recovery_refused" @{detail=($dryOutput -join "`n")}
+        return $false
+    }
+    $applyOutput = @(& $python $recoverFirstPassPhotoLocalScript `
+        --staging-dir $stagingDir --fuse-file $RuntimeHealthFusePath --apply 2>&1)
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $RuntimeHealthFusePath)) {
+        Log-Event "first_pass_photo_local_fuse_recovery_failed" @{detail=($applyOutput -join "`n")}
+        return $false
+    }
+    Log-Event "first_pass_photo_local_fuse_auto_recovered" @{
+        source=[string]$fuse.source_file
+        attempt=[int]$fuse.attempt
+        staging=$stagingDir
+    }
+    return $true
+}
 function Get-CsvRowCount([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
     try { return @((Import-Csv -LiteralPath $Path)).Count } catch { return -1 }
+}
+function Try-AutoRecoverContainedRequestBindingFuse {
+    $fuse = Read-JsonFile $RuntimeHealthFusePath
+    if (
+        -not $fuse -or
+        $fuse.schema -ne "samsung-ocr-runtime-health-fuse/v1" -or
+        $fuse.active -ne $true -or
+        [int]$fuse.attempt -notin @(1,2) -or
+        -not (Test-Path -LiteralPath $recoverContainedRequestBindingScript -PathType Leaf)
+    ) { return $false }
+    $reasons = @($fuse.reasons | ForEach-Object { [string]$_ })
+    if (
+        "request_binding_unverified" -notin $reasons -and
+        "request_id_missing" -notin $reasons -and
+        "request_id_mismatch" -notin $reasons
+    ) { return $false }
+    $live = Get-BackendStatus
+    $stagingDir = if ($live) { [string]$live.image_dir } else { "" }
+    if (-not $stagingDir -or -not (Test-Path -LiteralPath $stagingDir -PathType Container)) {
+        return $false
+    }
+    $dryOutput = @(& $python $recoverContainedRequestBindingScript `
+        --staging-dir $stagingDir --fuse-file $RuntimeHealthFusePath 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Log-Event "contained_request_binding_recovery_refused" @{detail=($dryOutput -join "`n")}
+        return $false
+    }
+    $applyOutput = @(& $python $recoverContainedRequestBindingScript `
+        --staging-dir $stagingDir --fuse-file $RuntimeHealthFusePath --apply 2>&1)
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $RuntimeHealthFusePath)) {
+        Log-Event "contained_request_binding_recovery_failed" @{detail=($applyOutput -join "`n")}
+        return $false
+    }
+    Log-Event "contained_request_binding_auto_recovered" @{
+        source=[string]$fuse.source_file
+        attempt=[int]$fuse.attempt
+        staging=$stagingDir
+    }
+    return $true
 }
 function Test-UploadGateProof {
     $gate = Read-JsonFile $uploadGateProofPath
@@ -245,21 +539,18 @@ function Full-Project-ContinuationReady {
     $request = Read-JsonFile $fullProjectRequestPath
     $currentYear = Read-JsonFile $currentYearCompletePath
     if (-not $request -or -not $currentYear) { return $false }
-    if (-not (Test-UploadGateProof)) { return $false }
-    $gate = Read-JsonFile $uploadGateProofPath
-    if (-not $gate -or [int]$gate.pending_count -ne 0) { return $false }
-    if (
-        [string]$currentYear.upload_gate_schema -ne [string]$gate.schema -or
-        [string]$currentYear.audit_input_sha256 -ne [string]$gate.audit_input_sha256 -or
-        [string]$currentYear.manifest_summary_sha256 -ne [string]$gate.manifest_summary_sha256 -or
-        [string]$currentYear.pending_sha256 -ne [string]$gate.pending_sha256 -or
-        [string]$currentYear.backfill_run_id -ne [string]$gate.backfill_run_id -or
-        [int]$currentYear.pending_count -ne 0
-    ) { return $false }
-    try {
-        if (([datetime]$currentYear.completed_at) -lt ([datetime]$request.requested_at)) { return $false }
-    } catch { return $false }
     if (-not (Test-Path -LiteralPath $historicalContinuationGate)) { return $false }
+    # User intent survives evidence-revision upgrades.  Refresh only the
+    # revision field while preserving the original request time/objective;
+    # the Python gate remains the sole authority for every content binding.
+    $migrationOutput = @(& $python $historicalContinuationGate `
+        --source-root $SourceRoot --output-dir $OutputDir --backend-url $BackendUrl --migrate-existing-request 2>&1)
+    $migrationExit = $LASTEXITCODE
+    try { $migration = ($migrationOutput -join "`n") | ConvertFrom-Json } catch { return $false }
+    if ($migrationExit -ne 0 -or $migration.valid -ne $true) {
+        Log-Event "historical_continuation_request_migration_blocked" @{detail=($migrationOutput -join ";")}
+        return $false
+    }
     $validatorOutput = @(& $python $historicalContinuationGate `
         --source-root $SourceRoot --output-dir $OutputDir --backend-url $BackendUrl --write-receipt 2>&1)
     $validatorExit = $LASTEXITCODE
@@ -297,8 +588,6 @@ function Test-FullProjectCompletionMarker {
 function Start-EvidenceBackfillIfNeeded {
     $builder = Join-Path $RepoRoot "tools\build_v1945_evidence_backfill.py"
     $candidate = Join-Path $audit "v1945_evidence_backfill_2026.csv"
-    $result = Join-Path $audit "v1945_evidence_backfill_2026_results.csv"
-    $summaryCsv = Join-Path $audit "v1945_evidence_backfill_2026_run_summary.csv"
     $builderOutput = @(& $python $builder --audit-dir $audit --year "2026" --output $candidate --execute 2>&1)
     $builderExit = $LASTEXITCODE
     $builderText = $builderOutput -join "`n"
@@ -311,18 +600,223 @@ function Start-EvidenceBackfillIfNeeded {
         throw "evidence backfill builder returned unreadable output"
     }
     if ($proof.executed -ne $true) { throw "evidence backfill builder did not atomically write candidates" }
+    if (
+        ($streamPendingCount -gt 0 -or $streamWorkingCount -gt 0) -and
+        $null -eq $proof.current_upload_queue_source_ids
+    ) {
+        throw "evidence backfill builder has no durable upload-queue authority"
+    }
+    if ([int]$proof.invalid_upload_queue_jobs -gt 0) {
+        Alert "evidence_backfill_invalid_upload_queue_jobs" @{
+            invalid=[int]$proof.invalid_upload_queue_jobs
+            samples=($proof.upload_queue_error_samples -join ";")
+        }
+    }
     if ([int]$proof.candidate_rows -eq 0) {
         if (
             [int]$proof.missing_sources -ne 0 -or
             [int]$proof.conflicting_sources -ne 0 -or
             [int]$proof.invalid_rows -ne 0 -or
             [int]$proof.unique_year_sources -le 0 -or
-            [int]$proof.already_verified_year_sources -ne [int]$proof.unique_year_sources
+            $null -eq $proof.terminal_authorized_year_sources -or
+            [int]$proof.terminal_authorized_year_sources -ne [int]$proof.unique_year_sources
         ) {
             throw "evidence backfill zero-candidate proof is incomplete"
         }
-        Log-Event "evidence_backfill_complete" @{sources=[int]$proof.unique_year_sources;verified=[int]$proof.already_verified_year_sources}
+        Log-Event "evidence_backfill_complete" @{
+            sources=[int]$proof.unique_year_sources
+            verified=[int]$proof.already_verified_year_sources
+            human_audited=[int]$proof.human_audited_year_sources
+            terminal_authorized=[int]$proof.terminal_authorized_year_sources
+        }
+        $script:CurrentYearEvidenceComplete = $true
         return $false
+    }
+    $candidateHash = Get-FileSha256 $candidate
+    $resolverScript = Join-Path $RepoRoot "tools\resolve_capped_adjudication_queue.py"
+    $resolverHash = Get-FileSha256 $resolverScript
+    $traceInfo = Get-Item -LiteralPath $evidenceTracePath -ErrorAction Stop
+    if (-not $candidateHash -or -not $resolverHash) {
+        throw "evidence backfill authority hashes are unavailable"
+    }
+
+    # Never create another staging cycle after the prior cycle already inspected
+    # the same authority.  The candidate file normally shrinks after safe rows are
+    # finalized, so a whole-file hash alone is insufficient: the remaining IDs
+    # must also be compared with the exact durable capped queues from that run.
+    $snapshot = Read-JsonFile $evidenceDeferredSnapshotPath
+    $snapshotAuthorityUnchanged = (
+        $snapshot -and
+        [string]$snapshot.resolver_sha256 -eq $resolverHash -and
+        [int64]$snapshot.trace_length -eq [int64]$traceInfo.Length -and
+        [int64]$snapshot.trace_last_write_utc_ticks -eq [int64]$traceInfo.LastWriteTimeUtc.Ticks -and
+        (Test-Path -LiteralPath ([string]$snapshot.run_summary_csv))
+    )
+    if ($snapshotAuthorityUnchanged) {
+        if (
+            [string]$snapshot.residual_candidate_sha256 -eq $candidateHash -and
+            [int]$snapshot.residual_candidate_rows -eq [int]$proof.candidate_rows
+        ) {
+            Log-Event "evidence_backfill_exact_residual_deferred" @{
+                rows=[int]$proof.candidate_rows
+                sha256=$candidateHash
+                summary=[string]$snapshot.run_summary_csv
+                fast_path=$true
+            }
+            return $true
+        }
+        try {
+            $summaryRows = @(Import-Csv -LiteralPath ([string]$snapshot.run_summary_csv))
+            $queued = 0
+            $deferred = 0
+            $aborted = 0
+            foreach ($row in $summaryRows) {
+                $queued += [int]($row.queued -as [int])
+                $deferred += [int]($row.deferred_capped -as [int])
+                if ([int]($row.aborted -as [int]) -ne 0) { $aborted++ }
+            }
+            if (
+                [string]$snapshot.candidate_sha256 -eq $candidateHash -and
+                [int]$snapshot.candidate_rows -eq [int]$proof.candidate_rows -and
+                $summaryRows.Count -gt 0 -and
+                $aborted -eq 0 -and
+                $queued -eq [int]$proof.candidate_rows -and
+                $deferred -gt 0
+            ) {
+                Log-Event "evidence_backfill_unchanged_deferred" @{
+                    rows=[int]$proof.candidate_rows
+                    deferred=$deferred
+                    sha256=$candidateHash
+                    summary=[string]$snapshot.run_summary_csv
+                }
+                return $true
+            }
+
+            if ($summaryRows.Count -gt 0 -and $aborted -eq 0 -and $deferred -gt 0) {
+                $candidateRows = @(Import-Csv -LiteralPath $candidate)
+                $candidateSet = Get-NormalizedSourceIdSetProof @($candidateRows | ForEach-Object { $_.source_item_id })
+                $deferredIds = @()
+                $queueProofValid = $true
+                foreach ($row in $summaryRows) {
+                    $rowDeferred = [int]($row.deferred_capped -as [int])
+                    if ($rowDeferred -le 0) { continue }
+                    $stagingDir = [System.IO.Path]::GetFullPath([string]$row.staging_dir)
+                    $queuePath = Join-Path $stagingDir ".ocr_capped_adjudication_queue.json"
+                    $queue = Read-JsonFile $queuePath
+                    if (
+                        -not $queue -or
+                        [string]$queue.schema -ne "samsung-ocr-capped-adjudication-queue/v1" -or
+                        -not ([System.IO.Path]::GetFullPath([string]$queue.image_dir)).Equals(
+                            $stagingDir,
+                            [System.StringComparison]::OrdinalIgnoreCase
+                        ) -or
+                        @($queue.items).Count -ne $rowDeferred
+                    ) {
+                        $queueProofValid = $false
+                        break
+                    }
+                    foreach ($item in @($queue.items)) {
+                        if (
+                            [int]$item.consumed_calls -lt 3 -or
+                            [string]$item.state -ne "awaiting_zero_model_adjudication" -or
+                            $item.verified -eq $true -or
+                            $item.uploaded -eq $true
+                        ) {
+                            $queueProofValid = $false
+                            break
+                        }
+                        $deferredIds += [string]$item.source_item_id
+                    }
+                    if (-not $queueProofValid) { break }
+                }
+                $deferredSet = if ($queueProofValid) {
+                    Get-NormalizedSourceIdSetProof $deferredIds
+                } else { $null }
+                if (
+                    $candidateSet -and
+                    $deferredSet -and
+                    [int]$candidateSet.count -eq [int]$proof.candidate_rows -and
+                    [int]$deferredSet.count -eq $deferred -and
+                    [int]$candidateSet.count -eq [int]$deferredSet.count -and
+                    [string]$candidateSet.sha256 -eq [string]$deferredSet.sha256
+                ) {
+                    $snapshot | Add-Member -NotePropertyName residual_candidate_sha256 -NotePropertyValue $candidateHash -Force
+                    $snapshot | Add-Member -NotePropertyName residual_candidate_rows -NotePropertyValue ([int]$proof.candidate_rows) -Force
+                    Write-JsonAtomic $evidenceDeferredSnapshotPath $snapshot
+                    Log-Event "evidence_backfill_exact_residual_deferred" @{
+                        rows=[int]$proof.candidate_rows
+                        deferred=$deferred
+                        sha256=$candidateHash
+                        summary=[string]$snapshot.run_summary_csv
+                        fast_path=$false
+                    }
+                    return $true
+                }
+                Alert "evidence_backfill_residual_proof_failed" @{
+                    rows=[int]$proof.candidate_rows
+                    deferred=$deferred
+                    summary=[string]$snapshot.run_summary_csv
+                    dashboard_kept_online=$true
+                }
+                return $true
+            }
+        } catch {
+            Log-Event "evidence_backfill_deferred_snapshot_invalidated" @{
+                detail=$_.Exception.Message
+            }
+        }
+    }
+
+    $driveRoot = [System.IO.Path]::GetPathRoot(
+        [System.IO.Path]::GetFullPath($OutputDir)
+    )
+    $drive = [System.IO.DriveInfo]::new($driveRoot)
+    $minimumFreeBytes = [int64](16GB)
+    if ([int64]$drive.AvailableFreeSpace -lt $minimumFreeBytes) {
+        Alert "evidence_backfill_disk_guard" @{
+            available_bytes=[int64]$drive.AvailableFreeSpace
+            required_bytes=$minimumFreeBytes
+            dashboard_kept_online=$true
+        }
+        return $true
+    }
+    # The builder's canonical CSV is mutable and may change while a long runner is
+    # active.  Give every runner an immutable, hash-verified snapshot so process
+    # monitoring can never reinterpret a changed row list as a stopped batch.
+    $freezeStamp = Get-Date -Format "yyyyMMdd_HHmmss_fffffff"
+    $frozenCandidate = Join-Path $audit ("v1945_evidence_backfill_2026_frozen_{0}.csv" -f $freezeStamp)
+    $frozenTemp = "$frozenCandidate.tmp.$PID"
+    try {
+        [System.IO.File]::Copy($candidate, $frozenTemp, $false)
+        Move-Item -LiteralPath $frozenTemp -Destination $frozenCandidate -ErrorAction Stop
+        $candidateHash = Get-FileSha256 $candidate
+        $frozenHash = Get-FileSha256 $frozenCandidate
+        if (-not $candidateHash -or $candidateHash -ne $frozenHash) {
+            throw "evidence backfill frozen candidate hash mismatch"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $frozenTemp) {
+            Remove-Item -LiteralPath $frozenTemp -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $candidate = $frozenCandidate
+    $result = Join-Path $audit ("v1945_evidence_backfill_2026_frozen_{0}_results.csv" -f $freezeStamp)
+    $summaryCsv = Join-Path $audit ("v1945_evidence_backfill_2026_frozen_{0}_run_summary.csv" -f $freezeStamp)
+    Write-JsonAtomic $evidenceDeferredSnapshotPath ([ordered]@{
+        schema="samsung-ocr-evidence-backfill-cycle/v1"
+        started_at=(Get-Date).ToString("o")
+        candidate_sha256=$candidateHash
+        candidate_rows=[int]$proof.candidate_rows
+        resolver_sha256=$resolverHash
+        trace_length=[int64]$traceInfo.Length
+        trace_last_write_utc_ticks=[int64]$traceInfo.LastWriteTimeUtc.Ticks
+        frozen_candidate=$candidate
+        run_summary_csv=$summaryCsv
+    })
+    Log-Event "evidence_backfill_candidate_frozen" @{
+        rows=[int]$proof.candidate_rows
+        candidate=$candidate
+        sha256=$frozenHash
     }
     $stagingRoot = Join-Path $OutputDir "_ocr_staging"
     $live = Get-BackendStatus
@@ -331,6 +825,7 @@ function Start-EvidenceBackfillIfNeeded {
     $runnerModeArgs = @("--execute")
     if (
         $liveImageDir -and
+        (Test-Path -LiteralPath $liveImageDir -PathType Container) -and
         [System.IO.Path]::GetFullPath($liveImageDir).StartsWith(
             [System.IO.Path]::GetFullPath($stagingRoot),
             [System.StringComparison]::OrdinalIgnoreCase
@@ -354,7 +849,13 @@ function Start-EvidenceBackfillIfNeeded {
     Start-Hidden -File $python -ProcessArgs $runnerArgs `
         -OutFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.out.log") `
         -ErrFile (Join-Path $logDir "supervisor_evidence_backfill_$stamp.err.log")
-    Log-Event "evidence_backfill_restarted" @{remaining=[int]$proof.candidate_rows;sources=[int]$proof.unique_year_sources;runner_mode=$runnerMode;live_image_dir=$liveImageDir}
+    Log-Event "evidence_backfill_restarted" @{
+        remaining=[int]$proof.candidate_rows
+        sources=[int]$proof.unique_year_sources
+        upload_queue_terminal=[int]$proof.current_upload_queue_source_ids
+        runner_mode=$runnerMode
+        live_image_dir=$liveImageDir
+    }
     return $true
 }
 
@@ -365,16 +866,134 @@ try {
     } catch { Log-Event "duplicate_or_locked"; exit 0 }
 
     $status = Get-BackendStatus
+    $pipelinePaused = Test-Path -LiteralPath $PipelinePausePath
+    $pause = $null
+    $continuityDir = ""
+    if ($pipelinePaused) {
+        # pipeline_pause is a mutation interlock, not an interface shutdown.
+        # On reboot restore the idle Dashboard/API against the saved staging
+        # directory and keep the pause-aware upload status worker alive.  No
+        # runner, model call, bulk upload or checkpoint reset is started here.
+        $pause = Read-JsonFile $PipelinePausePath
+        $continuityDir = Get-PausedContinuityDir $pause
+        try {
+            $status = Start-BackendService $continuityDir
+            $streamUploader = @(Ensure-StreamUploaderOnline)
+        } catch {
+            Alert "pipeline_pause_interface_recovery_failed" @{
+                pause=$PipelinePausePath
+                detail=$_.Exception.Message
+            }
+            exit 16
+        }
+        if ([bool]$status.is_running) {
+            Alert "pipeline_pause_backend_not_idle" @{
+                pause=$PipelinePausePath
+                image_dir=[string]$status.image_dir
+            }
+            exit 17
+        }
+        if ($pause -and [string]$pause.current_dir) {
+            try {
+                $liveDir = [System.IO.Path]::GetFullPath([string]$status.image_dir)
+            } catch { $liveDir = "" }
+            if (-not $liveDir.Equals($continuityDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Alert "pipeline_pause_checkpoint_mismatch" @{
+                    pause=$PipelinePausePath
+                    saved_checkpoint=$continuityDir
+                    live_image_dir=$liveDir
+                }
+                exit 19
+            }
+        }
+        if (-not $status.pipeline_pause) {
+            Alert "pipeline_pause_not_visible_in_status" @{pause=$PipelinePausePath}
+            exit 18
+        }
+        Log-Event "pipeline_pause_interface_maintained" @{
+            pause=$PipelinePausePath
+            reason=if($pause){[string]$pause.reason}else{"unreadable"}
+            checkpoint=$continuityDir
+            backend=@(Owned "samsung_ocr_batch_processor\.py").Count
+            stream_uploader=$streamUploader.Count
+            stream_pending=(Get-StreamPendingCount)
+        }
+    }
+    $fuseRecovered = $false
     if (Test-Path -LiteralPath $RuntimeHealthFusePath) {
-        if (Try-AutoRecoverKnownReviewMetadataFuse) {
+        $fuseRecovered = Try-AutoRecoverKnownReviewMetadataFuse
+        if (-not $fuseRecovered) {
+            $fuseRecovered = Try-AutoRecoverFirstPassPhotoLocalFuse
+        }
+        if (-not $fuseRecovered) {
+            $fuseRecovered = Try-AutoRecoverContainedRequestBindingFuse
+        }
+        if ($fuseRecovered) {
             $status = Get-BackendStatus
         } else {
             Alert "runtime_health_fuse_active" @{fuse=$RuntimeHealthFusePath}
             exit 9
         }
     }
-    if (Test-Path -LiteralPath $PipelinePausePath) {
-        Log-Event "pipeline_pause_noop" @{pause=$PipelinePausePath}
+    if ($pipelinePaused) {
+        if ($fuseRecovered) {
+            if (-not $pause -or -not [string]$pause.current_dir) {
+                Alert "pipeline_pause_resume_checkpoint_missing" @{pause=$PipelinePausePath}
+                exit 20
+            }
+            try {
+                $status = Resume-RepairedPausedCheckpoint $continuityDir
+            } catch {
+                Alert "pipeline_pause_auto_resume_failed" @{
+                    pause=$PipelinePausePath
+                    checkpoint=$continuityDir
+                    detail=$_.Exception.Message
+                }
+                exit 21
+            }
+            # Resume only the exact repaired batch in this cycle.  Later
+            # supervisor passes may advance periods after its normal gates.
+            exit 0
+        }
+        if (
+            $pause -and
+            [string]$pause.reason -eq "capped_zero_model_adjudication_apply"
+        ) {
+            $activeBackfill = @(Owned "rerun_staged_candidates\.py")
+            if ($activeBackfill.Count -gt 1) {
+                Alert "capped_zero_model_resolver_not_unique" @{
+                    workers=$activeBackfill.Count
+                    checkpoint=$continuityDir
+                }
+                exit 22
+            }
+            if ($activeBackfill.Count -eq 1) {
+                Log-Event "capped_zero_model_resolver_active" @{
+                    checkpoint=$continuityDir
+                    pid=$activeBackfill[0].ProcessId
+                }
+                exit 0
+            }
+            try {
+                $started = Start-EvidenceBackfillIfNeeded
+            } catch {
+                Alert "capped_zero_model_resolver_start_failed" @{
+                    checkpoint=$continuityDir
+                    detail=$_.Exception.Message
+                }
+                exit 23
+            }
+            if (-not $started) {
+                Alert "capped_zero_model_resolver_missing_work" @{
+                    checkpoint=$continuityDir
+                }
+                exit 24
+            }
+            Log-Event "capped_zero_model_resolver_started" @{
+                checkpoint=$continuityDir
+            }
+            exit 0
+        }
         exit 0
     }
     if (Test-Path -LiteralPath $BenchmarkLockPath) {
@@ -433,29 +1052,69 @@ try {
     $recursive = @(Owned "recursive_ocr_flat_export\.py")
     $uploader = @(Owned "rclone_drive_upload\.py|rclone\.exe")
     $streamUploader = @(Owned "stream_drive_upload\.py")
-    $streamPendingCount = if (Test-Path -LiteralPath $streamPendingDir) {
-        @(Get-ChildItem -LiteralPath $streamPendingDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
-    } else { 0 }
+    $streamPendingCount = Get-StreamPendingCount
     $pipelineTransitionStarted = $false
 
-    if ($streamPendingCount -gt 0 -and $streamUploader.Count -eq 0) {
-        $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden -File $python -ProcessArgs @(
-            $streamUploaderScript,
-            "--output-dir",$OutputDir,
-            "--poll-seconds","5",
-            "--timeout-seconds","600"
-        ) -OutFile (Join-Path $logDir "supervisor_stream_uploader_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_stream_uploader_$stamp.err.log")
-        Start-Sleep -Seconds 1
-        $streamUploader = @(Owned "stream_drive_upload\.py")
-        if ($streamUploader.Count -ne 1) {
-            Alert "stream_uploader_recovery_failed" @{pending=$streamPendingCount;workers=$streamUploader.Count}
-            exit 12
+    try {
+        $streamUploader = @(Ensure-StreamUploaderOnline)
+    } catch {
+        Alert "stream_uploader_recovery_failed" @{
+            pending=$streamPendingCount
+            workers=$streamUploader.Count
+            detail=$_.Exception.Message
         }
-        Log-Event "stream_uploader_started" @{pending=$streamPendingCount;pid=$streamUploader[0].ProcessId}
+        exit 12
     }
 
     if ($status -and [bool]$status.is_running) {
+        # A backend can be resumed directly against the saved historical
+        # folder while the recursive coordinator is absent (for example after
+        # a reboot or a contained fuse repair).  Do not treat that as a healthy
+        # terminal state: attach the coordinator to the already-running exact
+        # folder so it can rebuild the canonical progress floor and continue
+        # with the next folder.  This does not restart the backend or browser.
+        $runningHistoricalFolder = (
+            -not [string]::IsNullOrWhiteSpace([string]$status.current_relative_dir) -and
+            [string]$status.current_relative_dir -notmatch '(^|\\)商化照片-2026\d{2}$'
+        )
+        if (
+            $runningHistoricalFolder -and
+            $recursive.Count -eq 0 -and
+            $staged.Count -eq 0 -and
+            (Test-Path -LiteralPath $historicalContinuationReceipt -PathType Leaf)
+        ) {
+            $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+            Start-Hidden -File $python -ProcessArgs @(
+                $recursiveScript,
+                "--source-root",$SourceRoot,
+                "--output-dir",$OutputDir,
+                "--backend-url",$BackendUrl,
+                "--api-base",$ApiBase,
+                "--api-key","lm-studio",
+                "--model",$Model,
+                "--poll-seconds","20",
+                "--timeout-minutes","10080",
+                "--historical-continuation-receipt",$historicalContinuationReceipt
+            ) -OutFile (Join-Path $logDir "supervisor_attach_recursive_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_attach_recursive_$stamp.err.log")
+            Start-Sleep -Seconds 1
+            $recursive = @(Owned "recursive_ocr_flat_export\.py")
+            if ($recursive.Count -eq 1) {
+                Log-Event "historical_coordinator_attached_to_running_backend" @{
+                    recursive_pid=[int]$recursive[0].ProcessId
+                    folder=[string]$status.current_relative_dir
+                    processed=[int]$status.stats.processed
+                    total=[int]$status.stats.total
+                    dashboard_kept_online=$true
+                }
+            } else {
+                Alert "historical_coordinator_attach_failed" @{
+                    recursive=$recursive.Count
+                    folder=[string]$status.current_relative_dir
+                    dashboard_kept_online=$true
+                }
+            }
+        }
+        Write-PipelineStatus -Active $true -Phase "photo_ocr" -WorkerPid ([int]$backend[0].ProcessId)
         Log-Event "healthy_noop" @{backend=$backend.Count;watcher=$watcher.Count;staged=$staged.Count;recursive=$recursive.Count;uploader=$uploader.Count;stream_uploader=$streamUploader.Count;stream_pending=$streamPendingCount;folder=$status.current_relative_dir;file=$status.current_file}
         exit 0
     }
@@ -493,7 +1152,7 @@ try {
                 exit 15
             }
             $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-            Start-Hidden -File "powershell.exe" -ProcessArgs @(
+            $reloadArgs = @(
                 "-NoProfile","-ExecutionPolicy","Bypass","-File",$safeIdleReloadScript,
                 "-RepoRoot",$RepoRoot,
                 "-SourceRoot",$SourceRoot,
@@ -501,11 +1160,28 @@ try {
                 "-BackendUrl",$BackendUrl,
                 "-ApiBase",$ApiBase,
                 "-Model",$Model
-            ) -OutFile (Join-Path $logDir "safe_idle_reload_$stamp.out.log") -ErrFile (Join-Path $logDir "safe_idle_reload_$stamp.err.log")
+            )
+            $incompleteStoppedBatch = (
+                $status.stats -and
+                [int]$status.stats.total -gt 0 -and
+                [int]$status.stats.processed -lt [int]$status.stats.total
+            )
+            if ($incompleteStoppedBatch) {
+                # The helper still verifies a completely idle photo boundary,
+                # exact staging ownership, one backend process and no active
+                # runner. This flag permits it to reload current code and
+                # resume that same saved checkpoint instead of failing every
+                # supervisor cycle merely because the batch is incomplete.
+                $reloadArgs += "-AllowIncompleteStoppedBatch"
+            }
+            Start-Hidden -File "powershell.exe" -ProcessArgs $reloadArgs -OutFile (Join-Path $logDir "safe_idle_reload_$stamp.out.log") -ErrFile (Join-Path $logDir "safe_idle_reload_$stamp.err.log")
             Log-Event "safe_idle_reload_started" @{
                 backend_created=$backendCreated.ToString("o")
                 latest_runtime_write=$latestRuntimeWrite.ToString("o")
                 helper=$safeIdleReloadScript
+                incomplete_stopped_batch=$incompleteStoppedBatch
+                processed=[int]$status.stats.processed
+                total=[int]$status.stats.total
             }
             exit 0
         }
@@ -591,17 +1267,74 @@ try {
         Log-Event "backend_started" @{model=$Model;port=$backendPort;backend=$backend.Count}
     }
 
+    if ($recursive.Count -eq 1 -and $staged.Count -eq 0) {
+        $recursiveCommand = [string]$recursive[0].CommandLine
+        if (
+            -not (Test-Path -LiteralPath $historicalContinuationReceipt -PathType Leaf) -or
+            $recursiveCommand -notmatch [regex]::Escape("--historical-continuation-receipt") -or
+            $recursiveCommand -notmatch [regex]::Escape($historicalContinuationReceipt)
+        ) {
+            Alert "historical_pipeline_authority_missing" @{
+                recursive_pid=[int]$recursive[0].ProcessId
+                receipt=$historicalContinuationReceipt
+            }
+            exit 8
+        }
+        Clear-Alert
+        Write-PipelineStatus -Active $true -Phase "historical_continuation" -WorkerPid ([int]$recursive[0].ProcessId)
+        Log-Event "historical_pipeline_active" @{
+            recursive_pid=[int]$recursive[0].ProcessId
+            watcher=$watcher.Count
+            folder=$status.current_relative_dir
+            processed=$status.overall_progress.processed_images
+            total=$status.overall_progress.total_images
+            dashboard_kept_online=$true
+        }
+        exit 0
+    }
     if ($staged.Count -gt 0 -or $recursive.Count -gt 0) {
         Alert "staged_or_recursive_state_ambiguous" @{staged=$staged.Count;recursive=$recursive.Count}
         exit 8
     }
     $fullProjectDone = Test-FullProjectCompletionMarker
-    if (-not $fullProjectDone -and (Start-EvidenceBackfillIfNeeded)) {
+    # A marker/gate-bound handoff is stronger than mutable recursive folder
+    # summaries. Check it before rebuilding current-year evidence so a later
+    # interrupted historical runner can never send 2026 back through OCR.
+    $fullProjectReady = if ($fullProjectDone) { $false } else { Full-Project-ContinuationReady }
+    $streamPendingCount = Get-StreamPendingCount
+    $streamWorkingCount = Get-StreamWorkingCount
+    if ($streamPendingCount -gt 0 -or $streamWorkingCount -gt 0) {
+        # Current-revision pending/working jobs are now source/hash/result-bound
+        # terminal authorities consumed by the builder.  OCR may therefore
+        # continue while the slower network queue drains without re-staging the
+        # same photos.  A failed job leaves these directories and becomes
+        # eligible again unless a confirmed receipt exists.
+        Log-Event "evidence_backfill_concurrent_with_stream_upload" @{
+            pending=$streamPendingCount
+            working=$streamWorkingCount
+        }
+    }
+    if (-not $fullProjectDone -and -not $fullProjectReady -and (Start-EvidenceBackfillIfNeeded)) {
         $pipelineTransitionStarted = $true
         exit 0
     }
-    $fullProjectReady = Full-Project-ContinuationReady
+    if (
+        $script:CurrentYearEvidenceComplete -and
+        ($streamPendingCount -gt 0 -or $streamWorkingCount -gt 0)
+    ) {
+        # Per-photo streaming is already the authoritative transport. Do not
+        # start the legacy finalizer/bulk uploader against the same jobs.
+        Log-Event "current_year_finalization_waiting_for_stream_upload" @{
+            pending=$streamPendingCount
+            working=$streamWorkingCount
+        }
+        exit 0
+    }
+    if (-not $fullProjectDone -and -not $fullProjectReady) {
+        $fullProjectReady = Full-Project-ContinuationReady
+    }
     if ($fullProjectDone) {
+        Write-PipelineStatus -Active $false -Phase "completed" -WorkerPid 0
         Log-Event "full_project_complete_noop" @{marker=$fullProjectCompletePath}
     } elseif ($fullProjectReady -and $watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
@@ -628,9 +1361,15 @@ try {
         Log-Event "full_project_pipeline_started" @{request=$fullProjectRequestPath;current_year_marker=$currentYearCompletePath}
     } elseif ($watcher.Count -eq 0) {
         $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
-        Start-Hidden -File "powershell.exe" -ProcessArgs @("-NoProfile","-ExecutionPolicy","Bypass","-File",$watcherScript,"-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly") -OutFile (Join-Path $logDir "supervisor_watcher_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
+        $watcherArgs = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$watcherScript,"-RepoRoot",$RepoRoot,"-SourceRoot",$SourceRoot,"-OutputDir",$OutputDir,"-BackendUrl",$BackendUrl,"-PollSeconds","300","-PrimaryPasses","2","-CurrentYearOnly")
+        if ($script:CurrentYearEvidenceComplete) {
+            $watcherArgs += "-FinalizeCurrentYearOnly"
+        }
+        Start-Hidden -File "powershell.exe" -ProcessArgs $watcherArgs -OutFile (Join-Path $logDir "supervisor_watcher_$stamp.out.log") -ErrFile (Join-Path $logDir "supervisor_watcher_$stamp.err.log")
         $pipelineTransitionStarted = $true
-        Log-Event "current_year_watcher_started"
+        Log-Event "current_year_watcher_started" @{
+            finalize_only=[bool]$script:CurrentYearEvidenceComplete
+        }
     }
     $pending = Join-Path $OutputDir "_drive_upload\drive_upload_ready_pending.csv"
     $pendingCount = Get-CsvRowCount $pending

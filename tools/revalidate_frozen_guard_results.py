@@ -25,9 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import samsung_ocr_batch_processor as backend
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
+    _narration_reports_additional_complete_monitors,
+    _narration_supports_only_one_complete_monitor,
     enrich_result_for_review,
     finalize_three_pass_outcome,
     immediate_retry_decision,
+    normalize_model_token,
     refresh_authoritative_price_comparison,
     validate_evidence_contract,
 )
@@ -39,6 +42,7 @@ from skills.model_validation import (
     recover_pipeline_unlisted_model_candidate,
     resolve_photo_label_model_candidate,
     strict_known_model,
+    unique_known_first_letter_alternative,
     unique_embedded_known_model,
 )
 from skills.runtime_health_gate import (
@@ -78,6 +82,8 @@ META_FIELDS = (
     "auto_retry_reasons",
     "technical_retry_required",
     "technical_retry_exhausted",
+    "lifetime_model_call_count",
+    "call_budget_overrun_detected",
 )
 
 
@@ -94,6 +100,112 @@ def _atomic_json(path: Path, payload: Any) -> None:
     )
     os.replace(temp, path)
 
+
+def _load_retry_state_for_revalidation(
+    staging_dir: Path,
+) -> tuple[Path, dict[str, Any]]:
+    path = staging_dir / ".ocr_retry_queue.json"
+    if path.is_file():
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            raise RuntimeError("retry state is not an object")
+    else:
+        payload = {
+            "image_dir": str(staging_dir),
+            "priority_queue": [],
+            "retry_queue": [],
+            "auto_attempts": {},
+            "auto_result_history": {},
+            "runtime_health_incident_sources": {},
+            "request_binding_incident_events": [],
+        }
+    if _resolved(payload.get("image_dir")) != staging_dir:
+        raise RuntimeError("retry state belongs to another staging directory")
+    expected_types = {
+        "priority_queue": list,
+        "retry_queue": list,
+        "auto_attempts": dict,
+        "auto_result_history": dict,
+    }
+    for field, expected_type in expected_types.items():
+        value = payload.get(field, expected_type())
+        if not isinstance(value, expected_type):
+            raise RuntimeError(f"retry state field has invalid type: {field}")
+        payload[field] = value
+    return path, payload
+
+
+def _build_rejected_retry_state(
+    staging_dir: Path,
+    candidates: list[dict[str, Any]],
+) -> tuple[Path, dict[str, Any], list[dict[str, Any]], dict[str, str]]:
+    path, state = _load_retry_state_for_revalidation(staging_dir)
+    attempts = dict(state.get("auto_attempts") or {})
+    histories = dict(state.get("auto_result_history") or {})
+    scheduled: list[dict[str, Any]] = []
+    blocked: dict[str, str] = {}
+
+    for candidate in candidates:
+        name = str(candidate.get("file_name") or "")
+        calls = int(candidate.get("calls") or 0)
+        history = candidate.get("retry_history")
+        reason = ""
+        if not name or calls not in (1, 2):
+            reason = "rerun_requires_one_or_two_consumed_calls"
+        elif (
+            not isinstance(history, list)
+            or len(history) > calls
+            or not all(isinstance(item, dict) for item in history)
+        ):
+            reason = "replayable_history_exceeds_consumed_calls"
+        else:
+            try:
+                existing_attempt = int(attempts.get(name) or 0)
+            except (TypeError, ValueError):
+                reason = "existing_retry_attempt_count_is_invalid"
+            else:
+                existing_history = histories.get(name)
+                if existing_attempt not in (0, calls):
+                    reason = "existing_retry_attempt_count_conflicts_with_trace"
+                elif existing_history not in (None, [], history):
+                    reason = "existing_retry_history_conflicts_with_trace"
+        if reason:
+            blocked[name] = reason
+            continue
+
+        attempts[name] = calls
+        histories[name] = list(history)
+        scheduled.append(
+            {
+                "file_name": name,
+                "consumed_calls": calls,
+                "remaining_calls": 3 - calls,
+                "replayable_history_calls": len(history),
+                "stateless_prompt": True,
+            }
+        )
+
+    scheduled_names = [row["file_name"] for row in scheduled]
+    if scheduled_names:
+        scheduled_set = set(scheduled_names)
+        state["image_dir"] = str(staging_dir)
+        state["priority_queue"] = [
+            item
+            for item in state.get("priority_queue") or []
+            if str(item) not in scheduled_set
+        ]
+        state["retry_queue"] = [
+            *scheduled_names,
+            *[
+                item
+                for item in state.get("retry_queue") or []
+                if str(item) not in scheduled_set
+            ],
+        ]
+        state["auto_attempts"] = attempts
+        state["auto_result_history"] = histories
+        state["updated_at"] = datetime.now().isoformat()
+    return path, state, scheduled, blocked
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -119,16 +231,49 @@ def _status(url: str) -> dict[str, Any]:
     return payload
 
 
-def _prove_inactive_staging(staging_dir: Path, status: dict[str, Any]) -> None:
+def _prove_inactive_staging(
+    staging_dir: Path,
+    status: dict[str, Any],
+    *,
+    allow_paused_current_staging: bool = False,
+) -> None:
+    if status.get("runtime_health_fuse"):
+        raise RuntimeError("runtime health fuse is active")
     current = _resolved(
         status.get("current_relative_dir")
         or status.get("image_dir")
         or status.get("current_dir")
     )
-    if current == staging_dir:
+    if current != staging_dir:
+        return
+    if not allow_paused_current_staging:
         raise RuntimeError("refusing to rewrite the backend's active staging directory")
-    if status.get("runtime_health_fuse"):
-        raise RuntimeError("runtime health fuse is active")
+    current_file = status.get("current_file")
+    current_file_empty = current_file is None or str(current_file).strip().lower() in {
+        "",
+        "none",
+    }
+    pause = status.get("pipeline_pause")
+    exact_pause = (
+        status.get("is_running") is False
+        and current_file_empty
+        and isinstance(pause, dict)
+        and pause.get("schema") == "samsung-ocr-pipeline-pause/v1"
+        and _resolved(pause.get("current_dir")) == staging_dir
+        and str(pause.get("reason") or "").startswith(
+            (
+                "fail_safe_ordered_followme_",
+                "fail_safe_deterministic_wide_scene_overrode_partial_neighbor_narration_",
+                "fail_safe_attached_side_label_terminal_",
+                "fail_safe_followme_family_lock_",
+            )
+        )
+    )
+    if not exact_pause:
+        raise RuntimeError(
+            "refusing to rewrite current staging without an exact paused "
+            "approved photo-boundary fail-safe proof"
+        )
 
 
 def _load_tasks(staging_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
@@ -149,25 +294,35 @@ def _load_tasks(staging_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[str,
     return by_name, files
 
 
-def _load_trace_groups(
+def _load_trace_inventory(
     trace_path: Path,
     *,
     old_revision: str,
     names: set[str],
-) -> dict[str, list[dict[str, Any]]]:
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    inventory: list[dict[str, Any]] = []
     with trace_path.open("r", encoding="utf-8-sig") as handle:
-        for line in handle:
+        for line_number, line in enumerate(handle, start=1):
             try:
                 row = json.loads(line)
             except (TypeError, ValueError):
                 continue
+            if not isinstance(row, dict):
+                continue
+            row = dict(row)
+            row["_ledger_line_number"] = line_number
+            inventory.append(row)
             name = str(row.get("file_name") or "")
-            if name in names and str(row.get("evidence_guard_revision") or "") == old_revision:
+            if (
+                name in names
+                and str(row.get("evidence_guard_revision") or "")
+                == old_revision
+            ):
                 grouped[name].append(row)
     for rows in grouped.values():
         rows.sort(key=lambda item: int(item.get("attempt") or 0))
-    return grouped
+    return grouped, inventory
 
 
 def _raw_call(
@@ -208,6 +363,10 @@ def _raw_call(
     # SKU.
     record["raw_objects"] = raw_objects
     record.pop("request_id", None)
+    record["file_name"] = str(trace.get("file_name") or "")
+    record["source_path"] = str(trace.get("source_path") or "")
+    record["period"] = str(trace.get("period") or "")
+    record["ocr_attempt"] = int(trace.get("attempt") or attempt)
     record["request_id_verified"] = True
     record["request_binding_enforced"] = True
     record["input_image_sha256"] = str(
@@ -240,6 +399,15 @@ def _raw_call(
                 record["model"] = photo_label_candidate
                 record["unlisted_model_candidate"] = True
                 record["official_model_unverified"] = True
+                first_letter_alternative = unique_known_first_letter_alternative(
+                    photo_label_candidate,
+                    matcher.valid_models,
+                )
+                if first_letter_alternative:
+                    record["catalog_confusable_first_letter_candidate"] = True
+                    record["catalog_confusable_first_letter_alternative"] = (
+                        first_letter_alternative
+                    )
                 raw_model = photo_label_candidate
             matched = (
                 strict_known_model(raw_model, matcher.valid_models)
@@ -247,6 +415,13 @@ def _raw_call(
             )
             if matched:
                 record["model"] = matched
+                # The pre-contract photo-label extractor intentionally runs
+                # before the catalog matcher.  Once the exact token is proven
+                # catalog-listed, it is no longer an unverified candidate.
+                record.pop("unlisted_model_candidate", None)
+                record.pop("official_model_unverified", None)
+                record.pop("catalog_confusable_first_letter_candidate", None)
+                record.pop("catalog_confusable_first_letter_alternative", None)
             elif (
                 record.get("unlisted_model_candidate")
                 and has_photo_label_model_evidence(
@@ -285,13 +460,295 @@ def _raw_call(
     return record
 
 
+def _trace_call_identity(trace: dict[str, Any]) -> str:
+    trace_id = str(trace.get("trace_id") or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", trace_id):
+        return f"trace:{trace_id}"
+    raw_output = str(trace.get("raw_output") or "")
+    request_id = ""
+    try:
+        parsed, _objects, _mode, _rejected = backend._merge_v1945_json_objects(
+            raw_output
+        )
+        if isinstance(parsed, dict):
+            request_id = str(parsed.get("request_id") or "").strip().lower()
+    except Exception:
+        request_id = ""
+    if not re.fullmatch(r"[0-9a-f]{32}", request_id):
+        match = re.search(
+            r'"request_id"\s*:\s*"([0-9a-f]{32})"',
+            raw_output,
+            flags=re.IGNORECASE,
+        )
+        request_id = match.group(1).lower() if match else ""
+    if request_id:
+        return f"request:{request_id}"
+    fallback = "|".join(
+        (
+            str(trace.get("run_id") or ""),
+            str(trace.get("attempt") or ""),
+            str((trace.get("parsed_output") or {}).get("input_image_sha256") or ""),
+            raw_output,
+        )
+    )
+    return "fallback:" + hashlib.sha256(fallback.encode("utf-8")).hexdigest()
+
+
+_INTERNAL_RETRY_COUNT_FIELDS = (
+    "transport_retry_count",
+    "parser_retry_count",
+    "internal_retry_count",
+    "lm_studio_retry_count",
+    "request_retry_count",
+)
+_INTERNAL_CALL_COUNT_FIELDS = (
+    "transport_call_count",
+    "model_call_count",
+    "lm_studio_call_count",
+    "physical_model_call_count",
+    "request_attempt_count",
+)
+_INTERNAL_RETRY_FLAG_FIELDS = (
+    "transport_retry_occurred",
+    "parser_retry_occurred",
+    "internal_retry_occurred",
+    "lm_studio_retry_occurred",
+)
+_INTERNAL_RETRY_REASON_FIELDS = (
+    "transport_retry_reason",
+    "parser_retry_reason",
+    "internal_retry_reason",
+    "merge_rejected_reason",
+)
+
+
+def _trace_internal_retry_evidence(
+    trace: dict[str, Any],
+) -> tuple[int, list[str]]:
+    """Return the minimum physical calls and explicit hidden-retry evidence.
+
+    Legacy evidence traces normally store only the final response for one
+    business pass.  When a trace explicitly says transport/parser retrying
+    occurred, one trace row can no longer be treated as one LM Studio call.
+    The exact historical count may be unknowable, so any such evidence blocks
+    rerun scheduling; the returned floor remains a conservative audit lower
+    bound.
+    """
+
+    containers: list[tuple[str, dict[str, Any]]] = [("trace", trace)]
+    parsed = trace.get("parsed_output")
+    if isinstance(parsed, dict):
+        containers.append(("parsed_output", parsed))
+    for parent_name, parent in list(containers):
+        for nested_name in (
+            "transport_meta",
+            "parser_meta",
+            "model_call_meta",
+            "runtime_retry",
+        ):
+            nested = parent.get(nested_name)
+            if isinstance(nested, dict):
+                containers.append((f"{parent_name}.{nested_name}", nested))
+
+    physical_call_floor = 1
+    evidence: list[str] = []
+    for scope, value in containers:
+        for field in _INTERNAL_RETRY_COUNT_FIELDS:
+            raw = value.get(field)
+            if isinstance(raw, bool):
+                continue
+            try:
+                count = int(raw or 0)
+            except (TypeError, ValueError):
+                if raw not in (None, ""):
+                    evidence.append(f"{scope}.{field}:invalid")
+                continue
+            if count > 0:
+                evidence.append(f"{scope}.{field}:{count}")
+                physical_call_floor = max(physical_call_floor, 1 + count)
+        for field in _INTERNAL_CALL_COUNT_FIELDS:
+            raw = value.get(field)
+            if isinstance(raw, bool):
+                continue
+            try:
+                count = int(raw or 0)
+            except (TypeError, ValueError):
+                if raw not in (None, ""):
+                    evidence.append(f"{scope}.{field}:invalid")
+                continue
+            if count > 1:
+                evidence.append(f"{scope}.{field}:{count}")
+                physical_call_floor = max(physical_call_floor, count)
+        for field in _INTERNAL_RETRY_FLAG_FIELDS:
+            if value.get(field) is True:
+                evidence.append(f"{scope}.{field}:true")
+                physical_call_floor = max(physical_call_floor, 2)
+        for field in _INTERNAL_RETRY_REASON_FIELDS:
+            reason = str(value.get(field) or "").strip()
+            if reason:
+                evidence.append(f"{scope}.{field}:{reason[:120]}")
+                physical_call_floor = max(physical_call_floor, 2)
+    return physical_call_floor, list(dict.fromkeys(evidence))
+
+def _global_source_call_ledger(
+    inventory: list[dict[str, Any]],
+    *,
+    binding: dict[str, Any],
+    task_attempt: int,
+    checkpoint_attempt: int,
+    normalizer: FieldNormalizer,
+    matcher: ModelMatcher,
+) -> dict[str, Any]:
+    source_item_id = str(binding.get("source_item_id") or "").strip().lower()
+    original = _resolved(binding.get("original_source_path"))
+    source_sha256 = str(binding.get("source_sha256") or "").strip().lower()
+    input_sha256 = str(binding.get("prepared_input_sha256") or "").strip().lower()
+    calls: list[dict[str, Any]] = []
+    seen_calls: set[str] = set()
+    identity_conflicts: list[str] = []
+    internal_retry_evidence: list[str] = []
+    trace_physical_call_floor = 0
+
+    for row in inventory:
+        if str(row.get("source_item_id") or "").strip().lower() != source_item_id:
+            continue
+        call_identity = _trace_call_identity(row)
+        if call_identity in seen_calls:
+            continue
+        seen_calls.add(call_identity)
+        calls.append(row)
+        physical_floor, retry_evidence = _trace_internal_retry_evidence(row)
+        trace_physical_call_floor += physical_floor
+        internal_retry_evidence.extend(
+            f"line {row.get('_ledger_line_number')}: {item}"
+            for item in retry_evidence
+        )
+        parsed = row.get("parsed_output") or {}
+        row_source_sha = str(
+            row.get("source_sha256") or parsed.get("source_sha256") or ""
+        ).strip().lower()
+        if _resolved(row.get("original_source_path")) != original:
+            identity_conflicts.append("original_source_path_mismatch")
+        if row_source_sha and row_source_sha != source_sha256:
+            identity_conflicts.append("source_sha256_mismatch")
+
+    run_attempts: dict[str, list[int]] = defaultdict(list)
+    attempt_sequence_conflicts: list[str] = []
+    for row in calls:
+        run_id = str(row.get("run_id") or "").strip()
+        try:
+            attempt = int(row.get("attempt") or 0)
+        except (TypeError, ValueError):
+            attempt = 0
+        if not run_id or attempt < 1:
+            attempt_sequence_conflicts.append("missing_run_or_attempt")
+            continue
+        run_attempts[run_id].append(attempt)
+    trace_consumed_floor = max(len(calls), trace_physical_call_floor)
+    for run_id, attempts_in_run in run_attempts.items():
+        highest = max(attempts_in_run)
+        trace_consumed_floor = max(trace_consumed_floor, highest)
+        if (
+            sorted(set(attempts_in_run)) != list(range(1, highest + 1))
+            or len(attempts_in_run) != len(set(attempts_in_run))
+        ):
+            attempt_sequence_conflicts.append(
+                f"non_contiguous_or_duplicate_attempts:{run_id}"
+            )
+    effective_calls = max(
+        len(calls),
+        trace_consumed_floor,
+        max(0, int(task_attempt or 0)),
+        max(0, int(checkpoint_attempt or 0)),
+    )
+    retry_history: list[dict[str, Any]] = []
+    replayable_records: list[dict[str, Any]] = []
+    replayed_call_ids: list[str] = []
+    for global_attempt, row in enumerate(calls, start=1):
+        parsed = row.get("parsed_output") or {}
+        row_source_sha = str(
+            row.get("source_sha256") or parsed.get("source_sha256") or ""
+        ).strip().lower()
+        if (
+            _resolved(row.get("original_source_path")) != original
+            or (row_source_sha and row_source_sha != source_sha256)
+            or str(parsed.get("input_image_sha256") or "").strip().lower()
+            != input_sha256
+            or parsed.get("request_id_verified") is not True
+            or parsed.get("independent_pass") is not True
+            or parsed.get("prior_answer_exposed") is True
+            or parsed.get("prompt_contamination") is True
+        ):
+            continue
+        try:
+            record = _raw_call(
+                row,
+                attempt=global_attempt,
+                normalizer=normalizer,
+                matcher=matcher,
+            )
+        except RuntimeError:
+            continue
+        narration = str(record.get("thinking") or record.get("narration") or "")
+        record["runtime_health"] = evaluate_runtime_health(
+            record,
+            narration,
+            attempt=1,
+            upstream_upload_authorized=False,
+        ).to_dict()
+        replayable_records.append(record)
+        retry_history.append(
+            BatchOrchestrator._history_snapshot(
+                record,
+                [str(reason) for reason in row.get("retry_reason") or [] if str(reason)],
+            )
+        )
+        replayed_call_ids.append(_trace_call_identity(row))
+
+    return {
+        "source_item_id": source_item_id,
+        "source_sha256": source_sha256,
+        "global_calls": effective_calls,
+        "distinct_trace_calls": len(calls),
+        "trace_consumed_floor": trace_consumed_floor,
+        "trace_physical_call_floor": trace_physical_call_floor,
+        "task_attempt": max(0, int(task_attempt or 0)),
+        "checkpoint_attempt": max(0, int(checkpoint_attempt or 0)),
+        "remaining_calls": max(0, 3 - effective_calls),
+        "retry_history": retry_history,
+        "replayable_records": replayable_records,
+        "replayable_calls": len(retry_history),
+        "unreplayable_calls": len(calls) - len(retry_history),
+        "call_ids": [_trace_call_identity(row) for row in calls],
+        "replayed_call_ids": replayed_call_ids,
+        "revisions": sorted(
+            {
+                str(row.get("evidence_guard_revision") or "")
+                for row in calls
+                if str(row.get("evidence_guard_revision") or "")
+            }
+        ),
+        "runs": sorted(
+            {
+                str(row.get("run_id") or "")
+                for row in calls
+                if str(row.get("run_id") or "")
+            }
+        ),
+        "identity_conflicts": sorted(set(identity_conflicts)),
+        "attempt_sequence_conflicts": sorted(set(attempt_sequence_conflicts)),
+        "internal_retry_evidence": list(dict.fromkeys(internal_retry_evidence)),
+    }
+
+
 def _revalidate_calls(
     traces: list[dict[str, Any]],
     *,
     normalizer: FieldNormalizer,
     matcher: ModelMatcher,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     history: list[dict[str, Any]] = []
+    retry_history: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     decision: dict[str, Any] = {}
 
@@ -338,6 +795,17 @@ def _revalidate_calls(
                 technical_retry_required=False,
             )
         decision = finalize_three_pass_outcome(current, history, decision, 3)
+        current["category"] = current.get("view_type")
+        retry_history.append(
+            BatchOrchestrator._history_snapshot(
+                current,
+                [
+                    str(reason)
+                    for reason in decision.get("reasons") or []
+                    if str(reason)
+                ],
+            )
+        )
 
         if attempt < len(traces):
             history.append(current)
@@ -362,7 +830,7 @@ def _revalidate_calls(
     # may change view_type after parsing; keep the alias synchronized before
     # validating the final contract.
     current["category"] = current.get("view_type")
-    return current, decision
+    return current, decision, retry_history
 
 
 def _validate_binding(
@@ -474,6 +942,7 @@ def revalidate(
     old_revision: str,
     apply: bool,
     backend_status: dict[str, Any],
+    allow_paused_current_staging: bool = False,
     allow_partial: bool = False,
     drop_rejected_for_rerun: bool = False,
     enqueue: Callable[..., Path | None] = enqueue_finalized_result,
@@ -481,7 +950,15 @@ def revalidate(
     staging_dir = staging_dir.resolve()
     trace_path = trace_path.resolve()
     output_dir = output_dir.resolve()
-    _prove_inactive_staging(staging_dir, backend_status)
+    if drop_rejected_for_rerun and not (apply and allow_partial):
+        raise RuntimeError(
+            "drop_rejected_for_rerun requires apply and allow_partial"
+        )
+    _prove_inactive_staging(
+        staging_dir,
+        backend_status,
+        allow_paused_current_staging=allow_paused_current_staging,
+    )
     if (output_dir / "_ocr_audit" / "runtime_health_fuse.json").exists():
         raise RuntimeError("runtime health fuse is active")
 
@@ -500,15 +977,21 @@ def revalidate(
     }
     if not names:
         raise RuntimeError("no frozen tasks match the requested old revision")
-    groups = _load_trace_groups(
+    groups, trace_inventory = _load_trace_inventory(
         trace_path,
         old_revision=old_revision,
         names=names,
     )
+    retry_checkpoint_state: dict[str, Any] = {}
+    if drop_rejected_for_rerun:
+        _checkpoint_path, retry_checkpoint_state = (
+            _load_retry_state_for_revalidation(staging_dir)
+        )
     normalizer = FieldNormalizer()
     matcher = ModelMatcher(str(backend.MODEL_LIST_PATH))
     results: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    retry_candidates: list[dict[str, Any]] = []
 
     for name in sorted(names):
         task = tasks[name]
@@ -534,25 +1017,102 @@ def revalidate(
                     "reason": "binding_preflight_rejected",
                     "calls": len(traces),
                     "reasons": [str(exc)],
+                    "rerun_disposition": "not_queued",
+                    "rerun_blocked_reason": "binding_preflight_rejected",
                 }
             )
             continue
-        result, decision = _revalidate_calls(
+        result, decision, _old_revision_retry_history = _revalidate_calls(
             traces,
             normalizer=normalizer,
             matcher=matcher,
         )
         if decision.get("verified") is not True:
-            rejected.append(
-                {
-                    "file_name": name,
-                    "reason": "current_rules_do_not_verify",
-                    "calls": len(traces),
-                    "reasons": [
-                        str(item) for item in decision.get("reasons") or []
-                    ],
-                }
+            checkpoint_error = ""
+            checkpoint_raw = (
+                (retry_checkpoint_state.get("auto_attempts") or {}).get(name)
+                if retry_checkpoint_state
+                else 0
             )
+            try:
+                checkpoint_attempt = int(checkpoint_raw or 0)
+                if checkpoint_attempt < 0:
+                    raise ValueError("negative checkpoint")
+            except (TypeError, ValueError):
+                checkpoint_attempt = 0
+                checkpoint_error = "invalid_retry_checkpoint_attempt"
+            task_attempt = int(
+                (((task.get("data") or {}).get("ocr_meta") or {}).get(
+                    "ocr_attempt"
+                ))
+                or 0
+            )
+            ledger = _global_source_call_ledger(
+                trace_inventory,
+                binding=binding,
+                task_attempt=task_attempt,
+                checkpoint_attempt=checkpoint_attempt,
+                normalizer=normalizer,
+                matcher=matcher,
+            )
+            if checkpoint_error:
+                ledger["attempt_sequence_conflicts"] = sorted(
+                    set(ledger["attempt_sequence_conflicts"] + [checkpoint_error])
+                )
+            global_calls = int(ledger["global_calls"])
+            rejected_row = {
+                "file_name": name,
+                "reason": "current_rules_do_not_verify",
+                "calls": len(traces),
+                "global_calls": global_calls,
+                "distinct_trace_calls": int(ledger["distinct_trace_calls"]),
+                "trace_consumed_floor": int(ledger["trace_consumed_floor"]),
+                "task_attempt": int(ledger["task_attempt"]),
+                "checkpoint_attempt": int(ledger["checkpoint_attempt"]),
+                "remaining_calls": int(ledger["remaining_calls"]),
+                "replayable_calls": int(ledger["replayable_calls"]),
+                "global_call_revisions": list(ledger["revisions"]),
+                "global_call_runs": list(ledger["runs"]),
+                "source_sha256": str(ledger["source_sha256"]),
+                "identity_conflicts": list(ledger["identity_conflicts"]),
+                "attempt_sequence_conflicts": list(
+                    ledger["attempt_sequence_conflicts"]
+                ),
+                "reasons": [
+                    str(item) for item in decision.get("reasons") or []
+                ],
+            }
+            if global_calls >= 3:
+                rejected_row["rerun_disposition"] = "not_queued"
+                rejected_row["rerun_blocked_reason"] = (
+                    "three_call_hard_limit_reached"
+                )
+                rejected_row["call_budget_overrun_detected"] = global_calls > 3
+            elif ledger["identity_conflicts"]:
+                rejected_row["rerun_disposition"] = "not_queued"
+                rejected_row["rerun_blocked_reason"] = (
+                    "global_call_identity_conflict"
+                )
+            elif ledger["attempt_sequence_conflicts"]:
+                rejected_row["rerun_disposition"] = "not_queued"
+                rejected_row["rerun_blocked_reason"] = (
+                    "global_attempt_sequence_is_not_contiguous"
+                )
+            elif global_calls in (1, 2):
+                rejected_row["rerun_disposition"] = "eligible_preserved_budget"
+                retry_candidates.append(
+                    {
+                        "file_name": name,
+                        "calls": global_calls,
+                        "retry_history": ledger["retry_history"],
+                    }
+                )
+            else:
+                rejected_row["rerun_disposition"] = "not_queued"
+                rejected_row["rerun_blocked_reason"] = (
+                    "global_call_ledger_is_empty"
+                )
+            rejected.append(rejected_row)
             continue
         result.update(
             {
@@ -620,11 +1180,34 @@ def revalidate(
                     "reason": "current_upload_plan_not_ready",
                     "calls": len(traces),
                     "reasons": [str(plan.get("reason") or "unknown")],
+                    "rerun_disposition": "not_queued",
+                    "rerun_blocked_reason": "current_upload_plan_not_ready",
                 }
             )
             continue
         results.append(result)
 
+    retry_state_path: Path | None = None
+    retry_state_payload: dict[str, Any] | None = None
+    scheduled_reruns: list[dict[str, Any]] = []
+    retry_state_blocked: dict[str, str] = {}
+    if drop_rejected_for_rerun:
+        (
+            retry_state_path,
+            retry_state_payload,
+            scheduled_reruns,
+            retry_state_blocked,
+        ) = _build_rejected_retry_state(staging_dir, retry_candidates)
+        scheduled_names = {
+            row["file_name"] for row in scheduled_reruns
+        }
+        for row in rejected:
+            name = str(row.get("file_name") or "")
+            if name in scheduled_names:
+                row["rerun_disposition"] = "queued_with_preserved_budget"
+            elif name in retry_state_blocked:
+                row["rerun_disposition"] = "not_queued"
+                row["rerun_blocked_reason"] = retry_state_blocked[name]
     report = {
         "schema": SCHEMA,
         "generated_at": datetime.now().astimezone().isoformat(),
@@ -638,6 +1221,12 @@ def revalidate(
         "result_count": len(results),
         "rejected_count": len(rejected),
         "rejected": rejected,
+        "queued_for_rerun_count": len(scheduled_reruns),
+        "queued_for_rerun": scheduled_reruns,
+        "retry_state_path": (
+            str(retry_state_path) if scheduled_reruns and retry_state_path else ""
+        ),
+        "dropped_for_rerun": len(scheduled_reruns),
         "results": [
             {
                 "file_name": row["file_name"],
@@ -665,22 +1254,23 @@ def revalidate(
             raise RuntimeError(f"current result was not queued: {row['file_name']}")
     for row in results:
         _update_task(tasks[row["file_name"]], row)
-    rejected_names = {
-        str(row.get("file_name") or "")
-        for row in rejected
-        if str(row.get("file_name") or "")
-    }
+
+    # Queue and consumed-call history must reach disk before the old finalized
+    # task is removed.  A crash between these writes can leave a duplicate old
+    # row, but can never reset the model-call budget or lose the rerun.
+    if scheduled_reruns:
+        if retry_state_path is None or retry_state_payload is None:
+            raise RuntimeError("retry-state plan is missing for scheduled reruns")
+        _atomic_json(retry_state_path, retry_state_payload)
+    rerun_names = {row["file_name"] for row in scheduled_reruns}
     for path_text, payload in task_files.items():
-        if drop_rejected_for_rerun:
+        if rerun_names:
             payload[:] = [
                 task
                 for task in payload
-                if _task_file_name(task) not in rejected_names
+                if _task_file_name(task) not in rerun_names
             ]
         _atomic_json(Path(path_text), payload)
-    report["dropped_for_rerun"] = (
-        len(rejected_names) if drop_rejected_for_rerun else 0
-    )
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     manifest = (
         output_dir
@@ -701,6 +1291,14 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--old-revision", required=True)
     parser.add_argument("--backend-url", default="http://127.0.0.1:5002")
+    parser.add_argument(
+        "--allow-paused-current-staging",
+        action="store_true",
+        help=(
+            "Allow the backend's current staging only when it is stopped at "
+            "the exact ordered-FollowMe fail-safe photo boundary."
+        ),
+    )
     parser.add_argument(
         "--allow-partial",
         action="store_true",
@@ -728,6 +1326,7 @@ def main() -> int:
         old_revision=args.old_revision,
         apply=args.apply,
         backend_status=_status(args.backend_url),
+        allow_paused_current_staging=args.allow_paused_current_staging,
         allow_partial=args.allow_partial,
         drop_rejected_for_rerun=args.drop_rejected_for_rerun,
     )

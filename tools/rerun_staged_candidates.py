@@ -60,6 +60,13 @@ from rerun_questionable_records import (  # noqa: E402
     wait_for_folder_done,
     write_dict_csv,
 )
+from recover_preinference_system_errors import (  # noqa: E402
+    apply_plan as apply_preinference_system_error_recovery,
+    build_plan as build_preinference_system_error_recovery,
+)
+from resolve_capped_adjudication_queue import (  # noqa: E402
+    resolve_queue as resolve_capped_queue,
+)
 
 SINGLE_VIEW_TEXT = "\u55ae\u6a5f"
 NO_MODEL_TEXT = "\u7121\u578b\u865f"
@@ -633,6 +640,19 @@ def stage_images(rows: list[dict[str, object]], staging_dir: Path) -> int:
             "original_source_path": original,
             "period": str(row.get("period") or infer_period_from_text(original)),
             "audit_folder": str(row.get("audit_folder") or ""),
+            # Future capture systems may explicitly lock the photo as distant
+            # or close-up.  Preserve only explicit metadata; never infer this
+            # contract from a legacy filename.
+            "source_view_hint": str(row.get("source_view_hint") or ""),
+            "source_view_hint_locked": str(
+                row.get("source_view_hint_locked") or ""
+            ).strip().casefold() in {"1", "true", "yes"},
+            "source_view_hint_source": str(
+                row.get("source_view_hint_source") or ""
+            ),
+            "source_view_hint_version": str(
+                row.get("source_view_hint_version") or ""
+            ),
         }
         count += 1
     if source_map:
@@ -837,6 +857,9 @@ def rebuild_outputs(
     }
 
 
+STAGING_FREE_RESERVE_BYTES = 16 * 1024 * 1024 * 1024
+
+
 def run_group(args, source_folder_text: str, audit_folder_text: str, period: str, rows: list[dict[str, object]], index: int, total: int, stamp: str) -> dict[str, object]:
     source_folder = Path(source_folder_text)
     audit_folder = Path(audit_folder_text)
@@ -849,6 +872,29 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
         "staging_dir": str(staging_dir),
         "queued": len(rows),
     }
+    unique_sources: dict[str, Path] = {}
+    for row in rows:
+        source = Path(str(row.get("source_path") or ""))
+        if source.is_file():
+            unique_sources[str(source.resolve()).casefold()] = source
+    source_bytes = sum(source.stat().st_size for source in unique_sources.values())
+    disk_probe = staging_root if staging_root.exists() else staging_root.parent
+    free_before = shutil.disk_usage(disk_probe).free
+    summary["staging_source_bytes"] = source_bytes
+    summary["staging_free_before"] = free_before
+    if free_before < STAGING_FREE_RESERVE_BYTES + source_bytes:
+        summary["staged"] = ""
+        summary["aborted"] = 1
+        summary["abort_reason"] = (
+            "staging_disk_guard: "
+            f"free={free_before} source_bytes={source_bytes} "
+            f"reserve={STAGING_FREE_RESERVE_BYTES}"
+        )
+        print(
+            f"[abort] {source_folder.name} reason={summary['abort_reason']}",
+            flush=True,
+        )
+        return summary
     try:
         staged_count = stage_images(rows, staging_dir)
     except OSError as exc:
@@ -877,11 +923,14 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
     )
     print(f"[start] {staging_dir.name} response={response.get('status')}", flush=True)
     status = wait_for_folder_done(args.backend_url, staging_dir, args.timeout_minutes, args.poll_seconds)
-    rerun_records = json_request(args.backend_url, "/api/success_records", timeout=120)
-    if not isinstance(rerun_records, list):
-        raise RuntimeError("/api/success_records did not return a list")
+    finalized = finalize_capped_group(args, staging_dir, status)
+    rerun_records = list(finalized["records"])
 
-    candidate_names = {Path(str(row.get("source_path") or "")).name for row in rows}
+    candidate_names = set(finalized["record_names"])
+    capped_names = set(finalized["capped_names"])
+    summary["deferred_capped"] = len(capped_names)
+    resolver_report = dict(finalized["resolver_report"])
+    summary["zero_model_resolved"] = int(resolver_report.get("safe_count") or 0)
     logs = get_logs_since(args.backend_url, log_start)
     rescued_followme = rescue_followme_distant_records(rerun_records, candidate_names)
     if rescued_followme:
@@ -929,7 +978,7 @@ def run_group(args, source_folder_text: str, audit_folder_text: str, period: str
         flush=True,
     )
     restore_backend_work_dir(args.backend_url, source_folder)
-    if not args.keep_staging:
+    if not args.keep_staging and not capped_names:
         shutil.rmtree(staging_dir, ignore_errors=True)
     return summary
 
@@ -939,6 +988,799 @@ def _status_work_dir(status: dict[str, object]) -> Path:
     if not value:
         raise RuntimeError("attach refused: API did not report current work directory")
     return Path(str(value)).resolve()
+
+
+def _capped_adjudication_names(status: dict[str, object]) -> set[str]:
+    capped = status.get("capped_adjudication") or {}
+    if not isinstance(capped, dict):
+        return set()
+    items = capped.get("items") or []
+    if not isinstance(items, list):
+        return set()
+    return {
+        Path(str(item.get("file_name") or "")).name
+        for item in items
+        if isinstance(item, dict) and str(item.get("file_name") or "").strip()
+    }
+
+
+def _durable_capped_adjudication_names(
+    current_dir: Path,
+    status: dict[str, object],
+) -> set[str]:
+    """Read the complete capped set from its source-bound durable queue."""
+
+    _processed, expected_count, _total = _completed_or_deferred_count(status)
+    if expected_count == 0:
+        return set()
+    queue_path = current_dir / ".ocr_capped_adjudication_queue.json"
+    try:
+        payload = json.loads(queue_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"attach refused: capped queue is unavailable: {queue_path}: {exc}"
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or Path(str(payload.get("image_dir") or "")).resolve() != current_dir
+        or not isinstance(payload.get("items"), list)
+    ):
+        raise RuntimeError("attach refused: capped queue binding is invalid")
+    names = {
+        Path(str(item.get("file_name") or "")).name
+        for item in payload["items"]
+        if isinstance(item, dict) and str(item.get("file_name") or "").strip()
+    }
+    if len(names) != expected_count:
+        raise RuntimeError(
+            "attach refused: capped queue count does not match backend status"
+        )
+    return names
+
+
+def _durable_staged_source_names(
+    current_dir: Path,
+    status: dict[str, object],
+) -> set[str]:
+    """Read the immutable filename inventory written when the group was staged.
+
+    The evidence candidate CSV is rebuilt while a long-running group is active.
+    Rows that have already become terminal can therefore disappear from that
+    CSV even though they remain part of the original staged group.  Finalizing
+    against the refreshed CSV would reject a healthy exact partition forever.
+    The source map is the content-bound inventory for this staging directory.
+    """
+
+    source_map_path = current_dir / ".ocr_source_map.json"
+    try:
+        payload = json.loads(source_map_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"attach refused: staged source map is unavailable: {source_map_path}: {exc}"
+        ) from exc
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, dict) or not items:
+        raise RuntimeError("attach refused: staged source map binding is invalid")
+    names = {
+        Path(str(name)).name
+        for name, binding in items.items()
+        if str(name).strip() and isinstance(binding, dict)
+    }
+    _processed, _deferred, expected_total = _completed_or_deferred_count(status)
+    if not names or len(names) != len(items) or len(names) != expected_total:
+        raise RuntimeError(
+            "attach refused: staged source map count does not match backend status"
+        )
+    return names
+
+
+def _completed_or_deferred_count(status: dict[str, object]) -> tuple[int, int, int]:
+    stats = dict(status.get("stats") or {})
+    processed = int(stats.get("processed") or 0)
+    total = int(stats.get("total") or 0)
+    capped = status.get("capped_adjudication") or {}
+    deferred = int(capped.get("count") or 0) if isinstance(capped, dict) else 0
+    return processed, deferred, total
+
+
+def _task_record(task: dict[str, object]) -> dict[str, object] | None:
+    """Convert one durable Label Studio task to the runner's flat record."""
+
+    data = task.get("data") or {}
+    if not isinstance(data, dict):
+        return None
+    file_name = Path(str(data.get("image") or "")).name
+    if not file_name:
+        return None
+    meta = data.get("ocr_meta") or {}
+    record: dict[str, object] = dict(meta) if isinstance(meta, dict) else {}
+    record["file_name"] = file_name
+    annotations = task.get("annotations") or []
+    if isinstance(annotations, list) and annotations:
+        annotation = annotations[0] if isinstance(annotations[0], dict) else {}
+        record.setdefault("timestamp", annotation.get("created_at") or "")
+        for field in annotation.get("result") or []:
+            if not isinstance(field, dict):
+                continue
+            name = str(field.get("from_name") or "")
+            value = field.get("value") or {}
+            if not isinstance(value, dict):
+                continue
+            if name == "category":
+                choices = value.get("choices") or []
+                if isinstance(choices, list) and choices:
+                    record["view_type"] = choices[0]
+                    record["category"] = choices[0]
+            elif name in {"model", "price"}:
+                values = value.get("text") or []
+                if isinstance(values, list) and values:
+                    text = str(values[0] or "")
+                    record[name] = None if text.lower() == "null" else text
+    record.setdefault("category", record.get("view_type") or "")
+    return record
+
+
+def load_group_records_from_disk(staging_dir: Path) -> list[dict[str, object]]:
+    """Reload the exact durable terminal set after an external resolver write."""
+
+    records: dict[str, dict[str, object]] = {}
+    result_files = sorted(
+        staging_dir.glob("*OCR成功.json"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    for path in result_files:
+        try:
+            tasks = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"disk attach refused: unreadable result file {path}: {exc}") from exc
+        if not isinstance(tasks, list):
+            raise RuntimeError(f"disk attach refused: result file is not a task list: {path}")
+        for task in tasks:
+            record = _task_record(task) if isinstance(task, dict) else None
+            if record:
+                records[str(record["file_name"])] = record
+    return list(records.values())
+
+
+def _source_names_from_disk(staging_dir: Path) -> set[str]:
+    path = staging_dir / ".ocr_source_map.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"disk attach refused: unreadable source map: {exc}") from exc
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, dict) or not items:
+        raise RuntimeError("disk attach refused: invalid source map")
+    names = {
+        Path(str(name)).name
+        for name, binding in items.items()
+        if str(name).strip() and isinstance(binding, dict)
+    }
+    if len(names) != len(items):
+        raise RuntimeError("disk attach refused: duplicate/invalid source filenames")
+    return names
+
+
+def _capped_names_from_disk(staging_dir: Path) -> set[str]:
+    path = staging_dir / ".ocr_capped_adjudication_queue.json"
+    if not path.is_file():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"disk attach refused: unreadable capped queue: {exc}") from exc
+    if (
+        not isinstance(payload, dict)
+        or Path(str(payload.get("image_dir") or "")).resolve() != staging_dir.resolve()
+        or not isinstance(payload.get("items"), list)
+    ):
+        raise RuntimeError("disk attach refused: capped queue binding is invalid")
+    return {
+        Path(str(item.get("file_name") or "")).name
+        for item in payload["items"]
+        if isinstance(item, dict) and str(item.get("file_name") or "").strip()
+    }
+
+
+def _stop_at_exact_staging_boundary(
+    args,
+    staging_dir: Path,
+    reason: str,
+) -> dict[str, object]:
+    """Establish and prove one source-bound photo-boundary pause."""
+
+    stopped = json_request(
+        args.backend_url,
+        "/api/stop",
+        {"reason": reason},
+        timeout=30,
+    )
+    if str(stopped.get("status") or "") != "stopped":
+        raise RuntimeError(f"group boundary stop was not accepted: {stopped}")
+    idle = json_request(args.backend_url, "/api/status", timeout=30)
+    idle_pause = idle.get("pipeline_pause") or {}
+    if (
+        idle.get("is_running") is not False
+        or str(idle.get("current_file") or "").strip() not in {"", "None"}
+        or _status_work_dir(idle) != staging_dir.resolve()
+        or not isinstance(idle_pause, dict)
+        or Path(str(idle_pause.get("current_dir") or "")).resolve()
+        != staging_dir.resolve()
+    ):
+        raise RuntimeError("group finalization could not prove exact idle pipeline pause")
+    return idle
+
+
+def finalize_capped_group(
+    args,
+    staging_dir: Path,
+    status: dict[str, object],
+) -> dict[str, object]:
+    """Recover exact pre-inference software faults once, then finalize.
+
+    A settled staged group must be an exact partition of terminal records,
+    durable capped rows, and (temporarily) exact eligible pre-inference
+    failures.  Only the third set may be requeued, at most once per filename
+    during this invocation.  Unknown/malformed failures fail closed while the
+    exact staging pause remains in place.
+    """
+
+    staging_dir = staging_dir.resolve()
+    recovered_names: set[str] = set()
+    recovery_manifests: list[str] = []
+    while True:
+        processed, deferred, total = _completed_or_deferred_count(status)
+        if total <= 0 or processed + deferred != total:
+            raise RuntimeError(
+                "group technical recovery refused before photo boundary "
+                f"processed={processed} deferred={deferred} total={total}"
+            )
+        if _status_work_dir(status) != staging_dir:
+            raise RuntimeError(
+                "group technical recovery refused: backend staging binding changed"
+            )
+
+        source_names = _durable_staged_source_names(staging_dir, status)
+        records = load_group_records_from_disk(staging_dir)
+        record_names = {
+            str(record.get("file_name") or record.get("filename") or "")
+            for record in records
+        }
+        capped_names = _durable_capped_adjudication_names(staging_dir, status)
+        if (
+            not record_names.issubset(source_names)
+            or not capped_names.issubset(source_names)
+            or record_names & capped_names
+        ):
+            raise RuntimeError(
+                "group technical recovery refused: terminal/capped binding is invalid"
+            )
+        missing_names = source_names - record_names - capped_names
+        if not missing_names:
+            finalized = _finalize_capped_group_after_technical_recovery(
+                args,
+                staging_dir,
+                status,
+            )
+            finalized["preinference_recovered_names"] = sorted(recovered_names)
+            finalized["preinference_recovery_manifests"] = recovery_manifests
+            return finalized
+
+        repeated = missing_names & recovered_names
+        if repeated:
+            raise RuntimeError(
+                "group technical recovery refused: eligible filename failed again "
+                f"after its one bounded recovery: {sorted(repeated)}"
+            )
+
+        _stop_at_exact_staging_boundary(
+            args,
+            staging_dir,
+            "bounded_preinference_system_error_recovery",
+        )
+        # build_plan is the authoritative allow-list and durable call-history
+        # validator.  Unknown errors, duplicate rows, contaminated evidence, or
+        # an already exhausted three-call history all raise before any write.
+        plan = build_preinference_system_error_recovery(
+            staging_dir,
+            Path(args.output_dir).resolve() / "_ocr_audit",
+            sorted(missing_names),
+        )
+        manifest = apply_preinference_system_error_recovery(plan)
+        recovered_names.update(missing_names)
+        recovery_manifests.append(str(manifest))
+
+        response = json_request(
+            args.backend_url,
+            "/api/start_batch",
+            {
+                "dir": str(staging_dir),
+                "restart": False,
+                "confirmed": True,
+                "reprocess_last_n": 0,
+            },
+            timeout=30,
+        )
+        if str(response.get("status") or "") != "started":
+            raise RuntimeError(
+                "group technical recovery was applied but same staging did not start: "
+                f"{response}"
+            )
+        wait_for_resume_start(args.backend_url)
+        status = wait_for_folder_done(
+            args.backend_url,
+            staging_dir,
+            args.timeout_minutes,
+            args.poll_seconds,
+        )
+
+
+def _ensure_all_capped_result_file(
+    staging_dir: Path,
+    status: dict[str, object],
+) -> Path:
+    """Create the empty terminal container for a legacy all-capped run.
+
+    A run normally creates ``*OCR成功.json`` after its first accepted result.
+    When every source is already at the lifetime three-call cap, there is no
+    first accepted result, but the deterministic zero-model resolver still
+    needs a source-bound terminal container. Creating it is safe only after
+    the backend is idle on the exact paused staging directory and the durable
+    capped queue is the complete source partition.
+    """
+
+    staging_dir = staging_dir.resolve()
+    success_files = sorted(
+        staging_dir.glob("*OCR成功.json"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    if success_files:
+        return success_files[-1]
+
+    processed, deferred, total = _completed_or_deferred_count(status)
+    pause = status.get("pipeline_pause") or {}
+    if (
+        total <= 0
+        or processed != 0
+        or deferred != total
+        or status.get("is_running") is not False
+        or str(status.get("current_file") or "").strip() not in {"", "None"}
+        or _status_work_dir(status) != staging_dir
+        or not isinstance(pause, dict)
+        or Path(str(pause.get("current_dir") or "")).resolve() != staging_dir
+    ):
+        raise RuntimeError(
+            "group finalization has no durable success result file and "
+            "the batch is not an exact idle all-capped partition"
+        )
+
+    source_names = _durable_staged_source_names(staging_dir, status)
+    capped_names = _durable_capped_adjudication_names(staging_dir, status)
+    if not source_names or source_names != capped_names:
+        raise RuntimeError(
+            "group finalization refused empty result creation: "
+            "capped queue does not exactly equal the staged source set"
+        )
+
+    result_file = staging_dir / "capped-zero-model-OCR成功.json"
+    temp_file = staging_dir / ".capped-zero-model-OCR成功.json.tmp"
+    temp_file.write_text("[]\n", encoding="utf-8")
+    os.replace(temp_file, result_file)
+    return result_file
+
+
+def _candidate_capped_result_file(staging_dir: Path) -> Path:
+    """Return the existing terminal file or a deterministic future container."""
+
+    success_files = sorted(
+        staging_dir.glob("*OCR成功.json"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    if success_files:
+        return success_files[-1]
+    return staging_dir / "capped-zero-model-OCR成功.json"
+
+
+ZERO_MODEL_ACTIVITY_SCHEMA = "samsung-ocr-zero-model-activity/v1"
+
+
+def _write_zero_model_activity(
+    args,
+    staging_dir: Path,
+    *,
+    active: bool,
+    phase: str,
+    progress: dict[str, object] | None = None,
+    error: str = "",
+) -> None:
+    """Atomically expose deterministic adjudication without blocking it."""
+
+    status_path = (
+        Path(args.output_dir).resolve()
+        / "_ocr_audit"
+        / "zero_model_adjudication_status.json"
+    )
+    event = dict(progress or {})
+    payload = {
+        "schema": ZERO_MODEL_ACTIVITY_SCHEMA,
+        "active": bool(active),
+        "phase": str(phase or "unknown"),
+        "updated_at": datetime.now().astimezone().isoformat(),
+        "pid": os.getpid(),
+        "staging_dir": str(staging_dir.resolve()),
+        "period": (
+            re.findall(r"20\d{4}", str(staging_dir))[-1]
+            if re.findall(r"20\d{4}", str(staging_dir))
+            else ""
+        ),
+        "processed": max(0, int(event.get("processed") or 0)),
+        "total": max(0, int(event.get("total") or 0)),
+        "safe": max(0, int(event.get("safe") or 0)),
+        "unresolved": max(0, int(event.get("unresolved") or 0)),
+        "enqueued": max(0, int(event.get("enqueued") or 0)),
+        "matched": max(0, int(event.get("matched") or 0)),
+        "unit": str(event.get("unit") or "photos"),
+        "error": str(error or ""),
+    }
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = status_path.with_name(
+        f".{status_path.name}.{os.getpid()}.tmp"
+    )
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temp_path, status_path)
+
+
+def _zero_model_progress_writer(args, staging_dir: Path, phase_prefix: str):
+    def publish(event: dict[str, object]) -> None:
+        phase = str(event.get("phase") or "working")
+        _write_zero_model_activity(
+            args,
+            staging_dir,
+            active=True,
+            phase=f"{phase_prefix}_{phase}",
+            progress=event,
+        )
+
+    return publish
+
+
+def _resume_exact_staging_after_zero_model_finalization(
+    args,
+    staging_dir: Path,
+) -> dict[str, object]:
+    """Refresh backend disk state and clear the exact source-bound pause.
+
+    ``/api/start_batch`` restores the durable terminal/capped partition from
+    disk and atomically removes ``pipeline_pause.json`` only after the same
+    staging directory has been accepted.  A group containing only completed
+    and capped rows may settle immediately; that is a valid observable resume.
+    """
+
+    response = json_request(
+        args.backend_url,
+        "/api/start_batch",
+        {
+            "dir": str(staging_dir),
+            "restart": False,
+            "confirmed": True,
+            "reprocess_last_n": 0,
+        },
+        timeout=30,
+    )
+    if str(response.get("status") or "") != "started":
+        raise RuntimeError(
+            "zero-model finalization completed but exact staging did not resume: "
+            f"{response}"
+        )
+    resumed = wait_for_resume_start(args.backend_url)
+    if resumed.get("is_running") is True:
+        resumed = wait_for_folder_done(
+            args.backend_url,
+            staging_dir,
+            float(getattr(args, "timeout_minutes", 5)),
+            float(getattr(args, "poll_seconds", 0.25)),
+        )
+    processed, deferred, total = _completed_or_deferred_count(resumed)
+    if (
+        resumed.get("is_running") is not False
+        or str(resumed.get("current_file") or "").strip() not in {"", "None"}
+        or _status_work_dir(resumed) != staging_dir.resolve()
+        or resumed.get("pipeline_pause")
+        or total <= 0
+        or processed + deferred != total
+    ):
+        raise RuntimeError(
+            "zero-model finalization resume did not return to the exact settled "
+            f"photo boundary processed={processed} deferred={deferred} total={total}"
+        )
+    return resumed
+
+
+def _finalize_capped_group_after_technical_recovery(
+    args,
+    staging_dir: Path,
+    status: dict[str, object],
+) -> dict[str, object]:
+    """Resolve a settled group's capped queue, then reattach from durable disk.
+
+    Any failure is intentionally allowed to propagate after ``/api/stop`` so
+    the source-bound pause and staging checkpoint remain intact.  No model call
+    is made by this helper.
+    """
+
+    staging_dir = staging_dir.resolve()
+    processed, deferred, total = _completed_or_deferred_count(status)
+    if total <= 0 or processed + deferred != total:
+        raise RuntimeError(
+            "group finalization refused before photo boundary "
+            f"processed={processed} deferred={deferred} total={total}"
+        )
+    if _status_work_dir(status) != staging_dir:
+        raise RuntimeError("group finalization refused: backend staging binding changed")
+
+    report: dict[str, object] = {
+        "status": "not_needed",
+        "model_calls_made": 0,
+        "fourth_call_authorized": False,
+    }
+    if deferred:
+        # First inspect the durable evidence without mutating files or creating
+        # a global pause.  Legacy rows that lack three clean request-bound
+        # traces are a valid durable review state; they must not freeze
+        # unrelated photos or later folders.
+        result_file = _candidate_capped_result_file(staging_dir)
+        _write_zero_model_activity(
+            args,
+            staging_dir,
+            active=True,
+            phase="preflight_starting",
+            progress={"processed": 0, "total": deferred, "unit": "photos"},
+        )
+        try:
+            preflight = resolve_capped_queue(
+                staging_dir=staging_dir,
+                trace_path=Path(args.output_dir).resolve()
+                / "_ocr_audit"
+                / "v1945_evidence_trace.jsonl",
+                result_file=result_file,
+                upload_output_dir=Path(args.output_dir).resolve(),
+                apply=False,
+                progress_fn=_zero_model_progress_writer(
+                    args,
+                    staging_dir,
+                    "preflight",
+                ),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            _write_zero_model_activity(
+                args,
+                staging_dir,
+                active=False,
+                phase="preflight_failed",
+                progress={"processed": 0, "total": deferred, "unit": "photos"},
+                error=str(exc),
+            )
+            pause = status.get("pipeline_pause") or {}
+            # Per-photo revalidation/enqueue failures remain in the exact
+            # capped queue and are not exposed as completed results. The
+            # successfully enqueued subset is already durable, so that
+            # isolated remainder must not freeze this or later folders.
+            if (
+                not isinstance(pause, dict)
+                or Path(str(pause.get("current_dir") or "")).resolve()
+                != staging_dir
+            ):
+                _stop_at_exact_staging_boundary(
+                    args,
+                    staging_dir,
+                    "capped_zero_model_preflight_failed",
+                )
+            raise
+        if (
+            preflight.get("status") != "dry_run"
+            or int(preflight.get("model_calls_made") or 0) != 0
+            or preflight.get("fourth_call_authorized") is not False
+        ):
+            raise RuntimeError(
+                f"group zero-model preflight did not complete safely: {preflight}"
+            )
+        safe_count = int(preflight.get("safe_count") or 0)
+        if safe_count:
+            _write_zero_model_activity(
+                args,
+                staging_dir,
+                active=True,
+                phase="waiting_for_exact_photo_boundary",
+                progress={
+                    "processed": 0,
+                    "total": safe_count,
+                    "safe": safe_count,
+                    "unresolved": int(preflight.get("unresolved_count") or 0),
+                    "unit": "photos",
+                },
+            )
+            idle_status = _stop_at_exact_staging_boundary(
+                args,
+                staging_dir,
+                "capped_zero_model_adjudication_apply",
+            )
+            success_file = _ensure_all_capped_result_file(staging_dir, idle_status)
+            try:
+                report = resolve_capped_queue(
+                    staging_dir=staging_dir,
+                    trace_path=Path(args.output_dir).resolve()
+                    / "_ocr_audit"
+                    / "v1945_evidence_trace.jsonl",
+                    result_file=success_file,
+                    upload_output_dir=Path(args.output_dir).resolve(),
+                    apply=True,
+                    progress_fn=_zero_model_progress_writer(
+                        args,
+                        staging_dir,
+                        "apply",
+                    ),
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                _write_zero_model_activity(
+                    args,
+                    staging_dir,
+                    active=False,
+                    phase="apply_failed",
+                    progress={
+                        "processed": 0,
+                        "total": safe_count,
+                        "safe": safe_count,
+                        "unit": "photos",
+                    },
+                    error=str(exc),
+                )
+                raise
+            if (
+                report.get("status") not in {"resolved", "partial_failure"}
+                or int(report.get("model_calls_made") or 0) != 0
+                or report.get("fourth_call_authorized") is not False
+            ):
+                _write_zero_model_activity(
+                    args,
+                    staging_dir,
+                    active=False,
+                    phase="apply_contract_failed",
+                    progress={
+                        "processed": int(report.get("enqueued_count") or 0),
+                        "total": safe_count,
+                        "safe": safe_count,
+                        "unresolved": int(
+                            report.get("queue_remaining_count") or 0
+                        ),
+                        "enqueued": int(report.get("enqueued_count") or 0),
+                        "unit": "photos",
+                    },
+                    error=f"unsafe resolver report: {report.get('status')}",
+                )
+                raise RuntimeError(
+                    f"group zero-model resolver did not complete safely: {report}"
+                )
+            try:
+                _resume_exact_staging_after_zero_model_finalization(
+                    args,
+                    staging_dir,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                _write_zero_model_activity(
+                    args,
+                    staging_dir,
+                    active=False,
+                    phase="checkpoint_resume_failed",
+                    progress={
+                        "processed": int(report.get("enqueued_count") or 0),
+                        "total": safe_count,
+                        "safe": safe_count,
+                        "unresolved": int(
+                            report.get("queue_remaining_count") or 0
+                        ),
+                        "enqueued": int(report.get("enqueued_count") or 0),
+                        "unit": "photos",
+                    },
+                    error=str(exc),
+                )
+                raise
+            report["backend_reload_required_before_resume"] = False
+            report["checkpoint_auto_resumed"] = True
+            _write_zero_model_activity(
+                args,
+                staging_dir,
+                active=False,
+                phase="completed",
+                progress={
+                    "processed": safe_count,
+                    "total": safe_count,
+                    "safe": safe_count,
+                    "unresolved": int(
+                        report.get("queue_remaining_count") or 0
+                    ),
+                    "enqueued": int(report.get("enqueued_count") or 0),
+                    "unit": "photos",
+                },
+            )
+        else:
+            report = {
+                **preflight,
+                "status": "deferred_unresolved",
+                "backend_reload_required_before_resume": False,
+                "checkpoint_auto_resumed": False,
+            }
+            pause = status.get("pipeline_pause") or {}
+            if (
+                isinstance(pause, dict)
+                and Path(str(pause.get("current_dir") or "")).resolve()
+                == staging_dir
+            ):
+                try:
+                    _resume_exact_staging_after_zero_model_finalization(
+                        args,
+                        staging_dir,
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    _write_zero_model_activity(
+                        args,
+                        staging_dir,
+                        active=False,
+                        phase="checkpoint_resume_failed",
+                        progress={
+                            "processed": deferred,
+                            "total": deferred,
+                            "safe": 0,
+                            "unresolved": int(
+                                preflight.get("unresolved_count") or deferred
+                            ),
+                            "unit": "photos",
+                        },
+                        error=str(exc),
+                    )
+                    raise
+                report["checkpoint_auto_resumed"] = True
+            _write_zero_model_activity(
+                args,
+                staging_dir,
+                active=False,
+                phase="completed_no_safe_candidates",
+                progress={
+                    "processed": deferred,
+                    "total": deferred,
+                    "safe": 0,
+                    "unresolved": int(
+                        preflight.get("unresolved_count") or deferred
+                    ),
+                    "unit": "photos",
+                },
+            )
+
+    records = load_group_records_from_disk(staging_dir)
+    source_names = _source_names_from_disk(staging_dir)
+    capped_names = _capped_names_from_disk(staging_dir)
+    record_names = {
+        str(record.get("file_name") or record.get("filename") or "")
+        for record in records
+    }
+    if (
+        not record_names.issubset(source_names)
+        or not capped_names.issubset(source_names)
+        or record_names & capped_names
+        or record_names | capped_names != source_names
+    ):
+        raise RuntimeError(
+            "disk attach refused: terminal and capped rows do not exactly partition source map"
+        )
+    return {
+        "records": records,
+        "record_names": record_names,
+        "source_names": source_names,
+        "capped_names": capped_names,
+        "resolver_report": report,
+    }
 
 
 def wait_for_resume_start(
@@ -958,18 +1800,16 @@ def wait_for_resume_start(
     while time.monotonic() < deadline:
         last = json_request(backend_url, "/api/status", timeout=30)
         stats = dict(last.get("stats") or {})
-        processed = int(stats.get("processed") or 0)
-        total = int(stats.get("total") or 0)
+        processed, deferred, total = _completed_or_deferred_count(last)
         if bool(last.get("is_running") or stats.get("is_running")):
             return last
-        if total > 0 and processed == total:
+        if total > 0 and processed + deferred == total:
             return last
         time.sleep(max(0.01, poll_seconds))
-    stats = dict(last.get("stats") or {})
+    processed, deferred, total = _completed_or_deferred_count(last)
     raise RuntimeError(
         "resume refused: accepted start never became observable "
-        f"processed={int(stats.get('processed') or 0)} "
-        f"total={int(stats.get('total') or 0)}"
+        f"processed={processed} deferred={deferred} total={total}"
     )
 
 
@@ -988,35 +1828,51 @@ def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tup
         current_dir.relative_to(staging_root)
     except ValueError as exc:
         raise RuntimeError(f"attach refused: current work directory is outside staging root: {current_dir}") from exc
-    expected_prefix = f"{period}_"
-    if not current_dir.name.startswith(expected_prefix):
-        raise RuntimeError(f"attach refused: current staging group does not match period {period}: {current_dir.name}")
     source_folder = Path(source_folder_text).resolve()
-    expected_digest = hashlib.sha1(str(source_folder).encode("utf-8")).hexdigest()[:8]
-    if not current_dir.name.endswith(f"_{expected_digest}"):
+    audit_folder = Path(audit_folder_text).resolve()
+    if not _staging_dir_matches_group(current_dir, period, source_folder, audit_folder):
         raise RuntimeError(f"attach refused: current staging group does not match input folder: {current_dir.name}")
 
     stats = status.get("stats") or {}
     if bool(status.get("is_running") or stats.get("is_running")):
         status = wait_for_folder_done(args.backend_url, current_dir, args.timeout_minutes, args.poll_seconds)
         stats = status.get("stats") or {}
-    processed = int(stats.get("processed") or 0)
-    total = int(stats.get("total") or 0)
-    if total <= 0 or processed != total:
-        raise RuntimeError(f"attach refused: incomplete staged work processed={processed} total={total}")
+    processed, deferred, total = _completed_or_deferred_count(status)
+    if total <= 0 or processed + deferred != total:
+        raise RuntimeError(
+            "attach refused: incomplete staged work "
+            f"processed={processed} deferred={deferred} total={total}"
+        )
 
-    rerun_records = json_request(args.backend_url, "/api/success_records", timeout=120)
-    if not isinstance(rerun_records, list):
-        raise RuntimeError("attach refused: /api/success_records did not return a list")
-    candidate_names = {Path(str(row.get("source_path") or "")).name for row in group_rows}
-    record_names = {str(record.get("file_name") or record.get("filename") or "") for record in rerun_records}
-    if not candidate_names or not record_names.issubset(candidate_names) or record_names != candidate_names:
-        raise RuntimeError("attach refused: success record filenames do not exactly match staged group")
+    finalized = finalize_capped_group(args, current_dir, status)
+    rerun_records = list(finalized["records"])
+    input_candidate_names = {
+        Path(str(row.get("source_path") or "")).name for row in group_rows
+    }
+    candidate_names = set(finalized["source_names"])
+    record_names = set(finalized["record_names"])
+    capped_names = set(finalized["capped_names"])
+    if (
+        not input_candidate_names
+        or not input_candidate_names.issubset(candidate_names)
+        or not record_names.issubset(candidate_names)
+        or not capped_names.issubset(candidate_names)
+        or record_names & capped_names
+        or record_names | capped_names != candidate_names
+    ):
+        raise RuntimeError(
+            "attach refused: filenames do not exactly match staged group; "
+            "terminal and capped rows must form one exact partition"
+        )
 
     summary: dict[str, object] = {
         "folder": str(source_folder), "period": period, "audit_folder": audit_folder_text,
         "staging_dir": str(current_dir), "queued": len(group_rows), "staged": len(candidate_names),
-        "processed": processed, "aborted": 0, "abort_reason": "",
+        "processed": len(record_names), "deferred_capped": len(capped_names),
+        "zero_model_resolved": int(
+            dict(finalized["resolver_report"]).get("safe_count") or 0
+        ),
+        "aborted": 0, "abort_reason": "",
     }
     summary_path = Path(args.run_summary_csv)
     existing = read_dict_csv(summary_path)
@@ -1025,25 +1881,34 @@ def attach_existing_group(args, rows: list[dict[str, object]], grouped: dict[tup
             return dict(row)
 
     logs: list[str] = []
-    rescued = rescue_followme_distant_records(rerun_records, candidate_names)
-    demoted = demote_single_clue_distant_records(rerun_records, candidate_names)
+    rescued = rescue_followme_distant_records(rerun_records, record_names)
+    demoted = demote_single_clue_distant_records(rerun_records, record_names)
     if rescued:
         summary["rescued_followme_distant"] = len(rescued)
     if demoted:
         summary["demoted_distant_single_clue"] = len(demoted)
-    contained_conflicts = contained_structured_narration_conflicts(rerun_records, candidate_names)
+    contained_conflicts = contained_structured_narration_conflicts(rerun_records, record_names)
     if contained_conflicts:
         summary["contained_review_conflicts"] = len(contained_conflicts)
         summary["contained_review_conflict_sample"] = ";".join(contained_conflicts[:5])
-    abort_reason, details = abort_reason_for_rerun(args, rerun_records, candidate_names, logs)
+    abort_reason, details = abort_reason_for_rerun(args, rerun_records, record_names, logs)
     if abort_reason:
         raise RuntimeError(f"attach refused by quality guard: {abort_reason} {details}")
     original_rows = read_success_rows(Path(audit_folder_text) / "success_records.csv")
-    merged_rows, updated, appended = merge_records(original_rows, rerun_records, candidate_names)
-    summary.update(rebuild_outputs(args, source_folder, Path(audit_folder_text), period, merged_rows, candidate_names))
+    merged_rows, updated, appended = merge_records(original_rows, rerun_records, record_names)
+    summary.update(
+        rebuild_outputs(
+            args,
+            source_folder,
+            Path(audit_folder_text),
+            period,
+            merged_rows,
+            record_names,
+        )
+    )
     summary.update({"updated": updated, "appended": appended})
     write_dict_csv(summary_path, existing + [summary], list(summary.keys()))
-    if not args.keep_staging:
+    if not args.keep_staging and not capped_names:
         shutil.rmtree(current_dir, ignore_errors=True)
     return summary
 
@@ -1071,10 +1936,10 @@ def split_groups_at_current_staging(
 
     items = list(grouped.items())
     matches: list[int] = []
-    for index, ((source_folder_text, _audit_folder_text, period), _rows) in enumerate(items):
+    for index, ((source_folder_text, audit_folder_text, period), _rows) in enumerate(items):
         source_folder = Path(source_folder_text).resolve()
-        digest = hashlib.sha1(str(source_folder).encode("utf-8")).hexdigest()[:8]
-        if current_dir.name.startswith(f"{period}_") and current_dir.name.endswith(f"_{digest}"):
+        audit_folder = Path(audit_folder_text).resolve()
+        if _staging_dir_matches_group(current_dir, period, source_folder, audit_folder):
             matches.append(index)
     if len(matches) != 1:
         raise RuntimeError(
@@ -1083,6 +1948,34 @@ def split_groups_at_current_staging(
     active_index = matches[0]
     active_key, active_rows = items[active_index]
     return {active_key: active_rows}, items[active_index + 1 :]
+
+
+def _staging_dir_matches_group(
+    staging_dir: Path,
+    period: str,
+    source_folder: Path,
+    audit_folder: Path,
+) -> bool:
+    """Match normal rerun stages and the older period-priority stage contract.
+
+    Normal reruns end in the SHA-1 digest of the resolved source folder.  The
+    202606 period-priority run predates that convention and ends in the first
+    eight characters of the durable folder id embedded in its audit directory.
+    Accept that legacy identity only when period and audit folder id both bind
+    exactly; the later source-map partition check still protects every photo.
+    """
+
+    name = staging_dir.name
+    if not name.startswith(f"{period}_"):
+        return False
+    source_digest = hashlib.sha1(str(source_folder.resolve()).encode("utf-8")).hexdigest()[:8]
+    if name.endswith(f"_{source_digest}"):
+        return True
+    audit_name = audit_folder.name
+    match = re.search(rf"(?:^|_){re.escape(period)}_([0-9a-fA-F]{{12,64}})(?:_|$)", audit_name)
+    if not match:
+        return False
+    return name.endswith(f"_{match.group(1)[:8].lower()}")
 
 
 def resume_existing_then_continue(
@@ -1096,9 +1989,12 @@ def resume_existing_then_continue(
     active_rows = [row for group_rows in active_grouped.values() for row in group_rows]
     active_key = next(iter(active_grouped))
     stats = dict(status.get("stats") or {})
-    processed = int(stats.get("processed") or 0)
-    total = int(stats.get("total") or 0)
-    if status.get("is_running") is False and total > 0 and processed < total:
+    processed, deferred, total = _completed_or_deferred_count(status)
+    if (
+        status.get("is_running") is False
+        and total > 0
+        and processed + deferred < total
+    ):
         current_dir = _status_work_dir(status)
         response = json_request(
             args.backend_url,
@@ -1114,7 +2010,11 @@ def resume_existing_then_continue(
         if str(response.get("status") or "") != "started":
             raise RuntimeError(f"resume refused: active incomplete staging did not start: {response}")
         wait_for_resume_start(args.backend_url)
-        print(f"[resume] continued incomplete active group {current_dir} {processed}/{total}", flush=True)
+        print(
+            "[resume] continued incomplete active group "
+            f"{current_dir} {processed}+{deferred}/{total}",
+            flush=True,
+        )
     original_keep_staging = bool(args.keep_staging)
     # Keep the active staging directory until the dashboard is moved back to
     # the original source folder.  Deleting it first creates a visible broken-
@@ -1136,7 +2036,8 @@ def resume_existing_then_continue(
             raise RuntimeError(
                 f"resume refused cleanup: active staging directory is outside staging root: {active_staging_dir}"
             ) from exc
-        shutil.rmtree(active_staging_dir, ignore_errors=True)
+        if int(active_summary.get("deferred_capped") or 0) == 0:
+            shutil.rmtree(active_staging_dir, ignore_errors=True)
     summaries = read_dict_csv(Path(args.run_summary_csv))
     active_dir = str(active_summary.get("staging_dir") or "")
     if not any(str(row.get("staging_dir") or "") == active_dir for row in summaries):

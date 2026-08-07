@@ -2,6 +2,16 @@
 
 本專案目標是用 LM Studio 本機視覺模型辨識 Samsung 通路陳列照片，輸出類別、型號、價格，再用結果輔助人工審核與歷年照片檔名整理。
 
+> 目前正式環境、即時快照、歷史原因、尚未解決問題與下一位 AI 接手順序，以 [handoff_20260807_next_ai.md](handoff_20260807_next_ai.md) 為現況入口；永久規則仍以本手冊與根目錄 AGENTS.md 為準。
+
+### 2026-08-07 `.96` 實體價牌終局守門
+
+- 歷史照片若本機模型自然語句已從同一主體實體價牌讀到型號與價格，後段程式不得只因結構欄誤回 `label_ownership=not_applicable` 就清空兩欄或固定耗滿三次。
+- 同一實體價牌同時印短 SKU 與完整 SKU 時，只有兩者為嚴格前綴關係且差距不超過 3 字元，才可收斂為較長者；零售端短碼只有在既有型號目錄唯一補全且差距不超過 2 字元時才能補全。
+- 歷史同價牌的首字母 OCR 差異只允許 `S/C/F/P`，另只允許少一個尾碼；仍須同一原圖、同一 source identity、request 綁定、無前輪答案、無跨圖污染、共同價格且型號目錄唯一驗證。任何跨價牌或多解候選都失敗封閉。
+- `.96` 不授權第 4 次模型呼叫。三次已用滿者只能用既有同圖 evidence trace 零模型重驗；證據不足就保留 unresolved。
+- 正式換版必須在照片邊界以 runtime fuse 保護、完整回歸、隔離本機模型試跑與內容綁定 clearance receipt 驗證；Dashboard 保持 port 5002 在線，通過後從原檢查點自動續跑。
+
 ## 最高鐵律：固定本機程式自行保證正確
 
 1. 優先序永久固定為：**照片辨識正確性 ＞ 節省 OpenAI／Codex tokens ＞ 完成時間**。
@@ -46,6 +56,16 @@
 - 當年度依月份完成後，必須自動接續 2025、2024，逐年往前至 2015。歷史年度仍要辨識遠景／單機、型號與店內價格，但不做 2026 官網價格比對，也不輸出 `↑/↓/✓/？`。
 - 不得把「2026 已完成」顯示或報告成「全案已完成」。總盤、守護程序與完成收據都必須以全年度 frozen inventory 為權威；只有全部年度都閉環才可解除全案接續請求。
 - 現行 202601–202605 staged runner 結束後，五分鐘隱藏 continuity supervisor 必須接手歷史年度；不得因當年度 runner 自然退出而把 Dashboard 留在待機。若歷史接續尚未取得內容綁定 receipt，狀態只能是「等待安全接續」，不能宣告完成。
+
+### 當年度封存後的永久接續規則（2026-08-02）
+
+- 當年度已存在完成 marker，且 canonical evidence summary 證明 `unique sources = terminal sources = verified + human audited`、候選為 0、缺失／衝突／無效上傳工作均為 0、逐張上傳佇列為 0 時，這份「封存終結權威」高於之後被舊程序改寫的 mutable risk/review 報表。不得因舊報表過期或殘留舊 review 列而把已封存年度送回 OCR。
+- 歷年接續仍必須取得 `historical_continuation_receipt.json`；receipt 要綁定 request、當年度 marker、upload proof、封存終結摘要與 frozen source inventory 的路徑、SHA-256 與數量。只有上述完整權威成立時，才可接受逾 30 分鐘但與完成 marker 完全一致的 upload proof。
+- Supervisor 每次守護時可遷移既有接續 request 的守門修訂碼，但必須保留原始 `requested_at` 與目標；不得重建使用者意圖，也不得再啟動當年度 finalizer。receipt-bound 歷年 runner 必須略過執行當年度與未來年度。
+- 唯一、帶正式 receipt 的歷年 runner 是健康主線，不得被 Supervisor 誤報為 `staged_or_recursive_state_ambiguous`。只有多重 runner、缺 receipt 或命令未綁 receipt 才失敗封閉。
+- Dashboard 的右側完成縮圖是「全案目前守門修訂碼的累積紀錄」，不得以每月資料夾作為清空鍵。跨月／跨年切換只能更新目前照片與處理狀態，最近完成卡與有用的最後判讀必須保留；同一原圖仍以 `source_item_id` 去重。
+- 後端正在逐月核對既有完成資料時，介面應顯示「自動銜接中」並維持綠色運作狀態；不得把正常的資料夾切換空檔顯示成長時間待機。全案總進度只在新照片取得終局結果時增加，已完成月份的安全略過不可重複灌水。
+- 「自動銜接中」必須以 `dashboard/dist/pipeline-status.json` 的 Supervisor 真實心跳為依據，不得再以 upload worker、舊資料夾狀態或 GPU 使用率猜測。心跳每分鐘由唯一 receipt-bound runner 更新，超過 90 秒即視為過期；警報必須立即改寫為 `blocked`，禁止假綠燈。
 
 ## 檔名規格
 
@@ -184,6 +204,17 @@ $env:OCR_NO_PAUSE = "1"
 ```
 
 守門失敗時，不要直接改全域 Prompt；先確認是否是模型版本、圖片裁切、後處理或特定案例標準答案問題。
+
+## 2026-07-31 正式營運補充契約（`.87`）
+
+以下規則優先於本文件中較早的狀態快照；它們是正式續跑、Dashboard 呈現與監督判讀的共同底線。
+
+1. 優先序再次固定為：**正確性 ＞ 節省 tokens ＞ 時間**。雲端代理（含 Codex／OpenAI）不得執行全批或逐張正式 OCR；僅能協助檢查系統性根因、文件、測試與本機程式產生的摘要。正式 OCR 仍由 LM Studio 本機模型與固定本機流程完成。
+2. Dashboard 的 GPU 區塊必須讀取即時 telemetry；靜態快照一旦超過 10 秒，必須隱藏或明確標示為逾時，不能繼續顯示成目前 GPU 狀態。GPU 利用率與顯示記憶體保留量是不同指標：利用率不可由已保留 VRAM 推導，VRAM 也不可由瞬時利用率推導。單一低利用率樣本更不得當成 OCR 停滯證據。
+3. Supervisor 做 safe reload 時，若停止批次尚未完成，必須明確帶入 `-AllowIncompleteStoppedBatch`；不得把未完成的安全停止誤判為不可重載。只有 `processed + capped == total` 時，該批才是 `settled`；僅看 `processed == total` 或 `is_running=false` 都不足以宣告結案。
+4. `evidence_guard_revision=20260731.87`：Smart Monitor M5、M7、M8 或其面板 SKU／友善名稱本身只能證明 Smart Monitor 家族，**不能單獨證明 FollowMe**。首輪可直接結案為 FollowMe 的門檻是「同一台實機可讀的直接 FollowMe 標示」加上可歸屬的實體結構；實體結構必須真的在原圖中的同一主體，例如移動式直立支架、落地圓形底座、託盤或同等可辨識組合。不得把螢幕播放畫面、附近海報／立牌、鄰機配件、一般桌上短架、黑色底座或模型自行臆測的物理線索借給主體。家族、確切型號與價格仍須各自有同主體可讀證據。
+5. 內容完整性 fuse 或修復只可在照片邊界暫停 OCR／該張上傳；Dashboard、後端 status API、LM Studio、唯一 uploader 與既有瀏覽器分頁必須持續在線並如實同步停止原因。修復完成後必須從同一 saved checkpoint 自動續跑，不得重建 staging、清空 attempts、增加第四輪、關閉／另開瀏覽器分頁。
+6. 目前 202605 仍在複核，不能宣告完成；202604 尚有 **416 筆**未解決，也不得以進度、success 或上傳計數冒充完成。所有可發布結果均須維持逐張上傳及精確 receipt 閉環。
 # Dashboard Live Sync Contract (2026-07-01)
 
 When changing the live dashboard, keep the preview, AI narration, and OCR result scoped by filename:
@@ -727,7 +758,7 @@ The isolated `.11` seven-photo convergence smoke is the permanent reference set.
 Revision `.12` adds a second permanent prompt-conformance smoke: the three single-unit photos ending 665, 666, and 667. Their raw model JSON—not merely normalized output—must contain all four evidence fields on every pass. The expected pacing is 665 two passes for price-difference confirmation, 666 one pass, and 667 two passes for short-SKU completion confirmation; any missing evidence field, third pass caused only by schema omission, prior-answer exposure, or prompt contamination is a regression. Passing content/API tests does not substitute for the existing-tab browser verification required by the UI checkpoint.
 # Presentation Synchronization Iron Rule
 
-The backend `presentation_id` is the sole identity key. The active photo, AI live interpretation, active right-side placeholder, revealed card, and inspection modal must all use one immutable presentation snapshot and the same `presentation_id` and sequence. Running UI state must never join by filename, index, source path, `current_file`, `stream_file`, or `recent_results`. Identity is stronger than freshness: while an active snapshot exists, never prefer a newer live stream, latest result, or history row. Reveal a right-side card only after that snapshot's narration completes; never discard the active item through watchdog or backpressure. A previous image may remain visible only while its previous presentation remains active. Once the active key advances, hide the old image until the new image bearing the same key is ready; an image-load failure must never pair the old image with the new narration. Completed events prefer the same result's detailed `thinking` / `full_ai_narration`, and cross-photo narration fallback is forbidden. Any dashboard presentation change requires the deterministic 500-item soak, same-ID assertions for photo/narration/card, and a rebuilt dashboard.
+The backend `presentation_id` is the sole identity key. The active photo, AI live interpretation, active right-side placeholder, revealed card, and inspection modal must all use one immutable presentation snapshot and the same `presentation_id` and sequence. Running UI state must never join unrelated snapshots by filename, index, source path, `recent_results`, or an unbound stream. While `is_running=true` and a nonempty `current_file` exists, that current physical photo owns the left preview and narration surface even before LM Studio emits its first token; an older completed pass/history event may update the right result rail but must never retake the left preview. Within that current presentation, identity is stronger than freshness: no newer history row or different-photo stream may replace its image or narration. When there is no live current photo, the newest completed immutable presentation may be shown. Once the active key advances, hide the old image until the new image bearing the same key is ready; an image-load failure must never pair the old image with the new narration. Completed events prefer the same result's detailed `thinking` / `full_ai_narration`, and cross-photo narration fallback is forbidden. Any dashboard presentation change requires the deterministic soak, same-ID assertions for photo/narration/card, and a rebuilt dashboard.
 
 Staged rerun finalization must fail closed on any `structured_narration_conflict`: if the saved structure says `單機` but its own `thinking`, `stream_buffer`, or raw JSON explicitly concludes `遠景`, do not merge or publish the group. The negation context around single-subject phrases must include wording such as `無法鎖定唯一主角` and `無法讀取唯一主角自己的規格`; those sentences are not positive single-unit evidence. The intended review order remains: first audit FollowMe incorrectly classified as distant, then rerun single-unit rows missing model or price in second/third passes.
 
@@ -1300,11 +1331,17 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   歸屬 `matched`、型號與價格可直接讀取、沒有欄位／敘述／binding
   衝突，第一輪立即結案並逐張上傳。
 - 只有真正風險欄位才升級：短型號唯一補全、2026 價差價牌角色、缺型號
-  或缺價格、遠景、FollowMe 實體疑慮、主體歸屬不明、跨輪不一致，才進
+  或缺價格、遠景／單機衝突、FollowMe 實體疑慮、主體歸屬不明、跨輪不一致，才進
   第二輪。第二輪已用無記憶、request-bound 證據解決時必須立即結案；
-  第三輪只處理第二輪後仍存在的實質衝突，禁止作為固定儀式。唯一保留
-  的三輪內容稽核是使用者已明定的 2026 遠景／寬景疑似 FollowMe
-  篩查；這個例外不可反向套用到一般單機。
+  第三輪只處理第二輪後仍存在的實質衝突，禁止作為固定儀式。乾淨遠景
+  第一輪直接結案；寬景本身不是第二、第三輪理由。2024 年起只有「寬景
+  卻判單機」或可疑的同主體 FollowMe 實體線索，才做一次盲測第二輪；
+  第二輪排除 FollowMe 後立即定案遠景，不得固定追加第三輪。
+- 三星智慧聯網螢幕 M5／M7 在台灣於 2021 年 1 月開賣，但這不等於
+  FollowMe 移動式立架組。專案可查的市場證據最早在 2024 年出現
+  FollowMe 組合，因此 `FOLLOWME_TW_EARLIEST_YEAR=2024`：2023 年以前
+  不啟用 FollowMe 專項複核，符合遠景幾何即首輪結案。年份不明才採
+  保守路徑。
 - 多張價牌不等於歸屬不明。若敘述已明確指出其中一張與主角螢幕對齊，
   並把其餘價牌明確分配給鄰機，不能因文字同時出現「其他價牌屬於旁邊」
   就否定主角價牌的 `matched`。只有該主角價牌本身被說成無法對齊／
@@ -1415,3 +1452,55 @@ Dashboard 的正式總進度必須把 staging leaf 透過 `.ocr_source_map.json`
   定案遠景／無型號／無價格並逐張上傳；完整 critical regressions 及新增
   recovery tests 全通過。換版沿用同一 202602 staging 與既有瀏覽器分頁，
   即時進度由 `278/1,598` 前進到至少 `283/1,598`，fuse/pause 均為空。
+
+## 2026-07-24 FollowMe 螢幕側標優先與結案欄位同步
+
+- 螢幕左上、右上或側邊、且實體附著於同一主體的直式／L 型規格側標，
+  是型號家族的高優先證據；其優先級高於下方鄰機價牌、背景卡片與螢幕
+  播放內容。第二、三輪仍必須重新看原圖，不得收到前輪答案。
+- 側標若只寫 `FollowMe Pro 4K (32"/43")`，只能證明
+  `FollowMe 型號未細分`，不能猜成 32 或 43 吋；只有同一主體另有可讀
+  單一尺寸或精確 SKU 時，才可輸出精確型號。價格仍須由同主體實體價牌
+  獨立成立。
+- 正式事故 `M-台北市-信義區-秀翔培芝-微風南山-455.jpg` 的第三輪其實
+  已讀到右上側標；三輪為 `M7 32"/38400`、`型號未細分/無價格`、
+  `Pro M7 43"/38400`。確定性結案文字已是 `FollowMe 型號未細分 /
+  38400`，但舊結案器只更新摘要、把結構化 `model` 清成 null，造成
+  Dashboard 顯示「（無）」；這是欄位同步錯誤，不是側標不存在。
+- `followme_family_confirmed=true` 且同主體實體證據充分時，結構欄位必須
+  寫入 `FOLLOWME_UNRESOLVED`（介面顯示 `FollowMe 型號未細分`），並同步
+  Label Studio annotation、OCR meta、終端卡片及逐張上傳列。不得只在
+  摘要中保留家族名稱。
+- 已加入上述 455 的固定回歸案例；三輪互斥尺寸但家族與兩輪價格一致時，
+  正確結果為 `單機 / FollowMe 型號未細分 / 38400`，不新增第四輪。
+  `test_three_pass_finalization`、`test_v1945_evidence_contract`、
+  `test_runtime_safety_guards` 與完整 critical regressions 必須全通過。
+## 20260726.81 FollowMe ordered-family early stop and live continuity
+
+- Ordered FollowMe-family early stop is allowed only for same-unit direct FollowMe branding plus at least two strong physical cues, or the complete stand/base/tray set. It establishes the FollowMe family before distant classification; it does not invent a variant.
+- Keep family, exact SKU, and price independent. Family proof may finalize `FollowMe 型號未細分`; exact SKU requires its own same-subject readable evidence, and price requires its own readable aligned card.
+- If narration explicitly denies a readable main-subject price card, withdraw only `price`; do not revoke the independently established business subject, family, or classification.
+- Each photo remains at most three stateless, request-bound calls. Same-photo fuse recovery is hash-bound, restores only the saved checkpoint, and never resets attempts or allows call four.
+- A safe runtime reload resumes the same staging checkpoint automatically. Dashboard/status API, LM Studio, uploader, and the existing browser tab remain online throughout repair or photo-boundary hold.
+- Live proof, 2026-07-27, revision `.81`: same staging, runtime fuse `null`; processed `1450` to at least `1461`, verified `1399` to `1410`, and per-photo upload receipts `4288` to `4293`.
+
+## 2026-08-02 空回覆綁定異常必須單張自復原
+
+- LM Studio 若回傳完全空白、缺少 RequestID 或缺少影像指紋，該次內容一律作廢並消耗該張一次真實呼叫額度；只可把同一張重新排入剩餘額度，不得建立全域熔斷、不得清空右側累積卡片，也不得阻塞下一張。
+- `BatchOrchestrator` 的 runtime-health 判斷只能讀取**本次回覆**的 `thinking`／`narration`。`stream_buffer` 是可變的介面呈現狀態，可能仍保留前一張文字，嚴禁拿它當本張健康證據或 RequestID 綁定證據。
+- 舊版若因殘留 `stream_buffer` 使完全空回覆只留下 `request_binding_unverified + input_image_fingerprint_missing`，自復原器僅在 durable snapshot 的 narration、raw output、image SHA、model、price 全空，且 `request_binding_enforced=true` 時接受這個精確舊式簽章；任何部分資料或矛盾一律失敗封閉。
+- Supervisor 必須在每分鐘週期先乾跑、再套用 `recover_contained_request_binding_fuse.py`，保留已消耗次數與同一 staging checkpoint 後自動續跑。不得等待人工按鈕、不得重建 staging、不得重置輪次或呼叫第四次。
+- 事故實證：202606 backfill 曾在 3／1,309 因埔里 690 的空回覆停止；修正載入後同一 staging 自動恢復，連續 Supervisor 檢查均為 `healthy_noop`，進度至少到 160／1,309、右側 12 筆事件持續更新、逐張上傳 canonical receipt 由 61,059 增至 61,084，fuse／pause 皆空。
+
+## 2026-08-03 來源遠近景權威與可替換提示詞契約
+
+- 未來擷取流程可在 `.ocr_source_map.json` 明確提供 `source_view_hint=遠景|近景`、`source_view_hint_locked=true`、非空 `source_view_hint_source` 與 `source_view_hint_version`。四者齊全才是受信權威；舊檔名、資料夾名稱與歷史照片一律不得推測或補填。
+- 受信來源標示是分類權威，不是模型建議。`遠景` 固定輸出遠景、無型號、無價格；`近景` 固定輸出單機，只把本機模型時間用於同主體側標、型號、價牌、價格與 FollowMe 實體證據。模型若回錯視角，程式保留 observed/conflict 稽核欄後直接校正，不得為重新分類消耗第二、第三次呼叫。
+- 第一輪提示詞可依本機視覺模型更換；第二、第三輪固定使用 `skills/review_pass_contract.py` 的獨立欄位協定，不讀第一輪提示詞、不收到前輪答案。近景缺型號／價格或歸屬衝突時才補證；每一張跨重啟最多三次實際 LM Studio 呼叫。
+- 來源鎖定只適用未來明確標記的照片；目前 2022 與其他歷史照片仍走既有像素分類與有界複核。正式逐張 OCR 只由本機 LM Studio 執行，Codex／OpenAI 僅做低頻監督與程式維護。
+
+## 2026-08-03 `.91` 歷史舊型號同牌首輪結案
+
+- 2025 年以前的舊型號未出現在現行型號表，不代表照片無型號。若同一輪已綁定原圖／RequestID、唯一主角、`label_ownership=matched`，且同一張實體側標／價牌清楚載有完整 Samsung SKU 與價格，第一輪即可保留並結案；不得只因現行型號表未收錄就固定再跑兩輪。
+- 本機模型若開頭結論把型號首字誤寫，後文又正確逐字引用同主體實體側標／價牌，程式以實體標籤句為優先；若實體標籤句本身出現兩個不同候選或旁邊另一張牌，仍失敗封閉並補證。
+- 此規則不從純敘述猜型號、不放寬多價牌歸屬，也不取消 2026 官方價差標示。每張照片仍最多三次無記憶本機模型呼叫。

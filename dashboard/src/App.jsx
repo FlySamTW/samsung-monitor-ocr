@@ -113,14 +113,15 @@ const getLoadedAssetFingerprint = async () => {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('').slice(0, 16);
 };
 
-const ResultThumbnail = ({ res, onClick }) => {
+const ResultThumbnail = ({ res, onClick, title = "檢視照片" }) => {
   const [failed, setFailed] = useState(false);
   const src = failed ? null : getResultThumbSrc(res);
+  const interactive = typeof onClick === "function";
   return (
     <button
       type="button"
       onClick={onClick}
-      title="檢視照片"
+      title={title}
       style={{
         width: '56px',
         height: '56px',
@@ -130,7 +131,7 @@ const ResultThumbnail = ({ res, onClick }) => {
         borderRadius: '4px',
         background: '#0a0a0a',
         overflow: 'hidden',
-        cursor: 'pointer',
+        cursor: interactive ? 'pointer' : 'default',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center'
@@ -157,6 +158,7 @@ const COMPACT_STATUS_CONTRACT = "compact-v2";
 const COMPACT_STATUS_POLL_MS = 2000;
 const LEGACY_STATUS_POLL_MS = 5000;
 const MAX_CLIENT_STATUS_PRESENTATIONS = 24;
+const MAX_CLIENT_CAPPED_ADJUDICATIONS = 20;
 const stripHeavyStatusFields = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const {
@@ -182,6 +184,14 @@ const sanitizeStatusPayload = (apiResult) => ({
       ...stripHeavyStatusFields(item),
       result: stripHeavyStatusFields(item?.result)
     })),
+  capped_adjudication: {
+    ...(apiResult?.capped_adjudication || {}),
+    items: (Array.isArray(apiResult?.capped_adjudication?.items)
+      ? apiResult.capped_adjudication.items
+      : [])
+      .slice(-MAX_CLIENT_CAPPED_ADJUDICATIONS)
+      .map(stripHeavyStatusFields)
+  },
   // Running presentation state is sourced only from presentation_queue.
   // Keeping legacy recent_results retains tens of duplicate image payloads.
   recent_results: []
@@ -229,6 +239,8 @@ const App = () => {
       latest_result_file: null,
       sys: { cpu: 0, mem: 0 },
       recent_results: [],
+      capped_adjudication: { count: 0, message: "", last_event: null, items: [] },
+      zero_model_adjudication: { active: false, phase: "", processed: 0, total: 0 },
       dynamic_examples_list: [],
       stream_buffer: "" // Real-time thinking buffer
   };
@@ -280,19 +292,126 @@ const App = () => {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewDrafts, setReviewDrafts] = useState({});
   const [reviewMsg, setReviewMsg] = useState('');
+  const [gpuTelemetry, setGpuTelemetry] = useState({});
+  const [pipelineTelemetry, setPipelineTelemetry] = useState({});
   const stats = data.stats || defaultState.stats;
   const isRunning = Boolean(data.is_running || stats.is_running);
+  const gpuTelemetryTimestamp = Date.parse(String(gpuTelemetry.updated_at || ''));
+  const gpuTelemetryAgeMs = Date.now() - gpuTelemetryTimestamp;
+  const freshGpuTelemetry = Number.isFinite(gpuTelemetryTimestamp)
+    && gpuTelemetryAgeMs >= 0
+    && gpuTelemetryAgeMs <= 10000
+    ? gpuTelemetry
+    : {};
+  const gpuUtilization = data.resources?.gpu ?? freshGpuTelemetry.gpu;
+  const gpuVramUsedMb = data.resources?.vram_used_mb ?? freshGpuTelemetry.vram_used_mb;
+  const gpuVramTotalMb = data.resources?.vram_total_mb ?? freshGpuTelemetry.vram_total_mb;
+  const gpuVramPercent = data.resources?.vram_percent ?? freshGpuTelemetry.vram_percent;
+  useEffect(() => {
+    let cancelled = false;
+    const refreshGpu = () => fetch(`/gpu-status.json?t=${Date.now()}`, { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (!cancelled && payload && typeof payload === 'object') setGpuTelemetry(payload);
+      })
+      .catch(() => {});
+    refreshGpu();
+    const timer = setInterval(refreshGpu, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const refreshPipeline = () => fetch(`/pipeline-status.json?t=${Date.now()}`, { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (!cancelled && payload && typeof payload === 'object') setPipelineTelemetry(payload);
+      })
+      .catch(() => {});
+    refreshPipeline();
+    const timer = setInterval(refreshPipeline, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
   const serverGuardRevision = String(data.evidence_guard_revision || "").trim();
+  const zeroModelActivity = data.zero_model_adjudication || {};
+  const uploadPendingCount = Math.max(0, Number(data.stream_upload?.pending || 0));
+  const uploadWorkingCount = Math.max(0, Number(data.stream_upload?.working || 0));
+  const streamUploadActive = data.stream_upload?.worker_state === 'running'
+    && (uploadPendingCount > 0 || uploadWorkingCount > 0);
+  const pipelineTelemetryTimestamp = Date.parse(String(pipelineTelemetry.updated_at || ''));
+  const pipelineTelemetryAgeMs = Date.now() - pipelineTelemetryTimestamp;
+  const pipelineActivityActive = pipelineTelemetry.active === true
+    && ['photo_ocr', 'historical_continuation'].includes(pipelineTelemetry.phase)
+    && Number.isFinite(pipelineTelemetryTimestamp)
+    && pipelineTelemetryAgeMs >= 0
+    && pipelineTelemetryAgeMs <= 90000;
+  const automaticHandoffActive = !isRunning
+    && Number(data.overall_progress?.remaining_images || 0) > 0
+    && data.overall_progress?.current_folder?.status === 'active_idle'
+    && pipelineActivityActive;
+  const zeroModelPhase = String(zeroModelActivity.phase || "");
+  const zeroModelPauseActive = !isRunning
+    && data.pipeline_pause?.reason === 'capped_zero_model_adjudication_apply';
+  const zeroModelActivityFailed = /(?:failed|stale_worker)$/i.test(zeroModelPhase);
+  const zeroModelAdjudicationActive = !isRunning && (
+    zeroModelActivity.active === true
+    || (zeroModelPauseActive && !zeroModelActivityFailed)
+  );
+  const zeroModelAdjudicationRepair = zeroModelPauseActive
+    && zeroModelActivityFailed;
+  const visibleOperationActive = isRunning
+    || zeroModelAdjudicationActive
+    || streamUploadActive
+    || automaticHandoffActive;
+  const zeroModelProcessed = Math.max(0, Number(zeroModelActivity.processed || 0));
+  const zeroModelTotal = Math.max(
+    0,
+    Number(
+      zeroModelActivity.total
+      || data.capped_adjudication?.count
+      || data.stats?.total
+      || 0
+    )
+  );
+  const zeroModelPhaseLabel = zeroModelPhase.includes('trace_scan')
+    ? '掃描既有三輪證據'
+    : zeroModelPhase.includes('revalidation')
+      ? '逐張重驗證據綁定'
+      : zeroModelPhase.includes('upload_enqueue')
+        ? '逐張建立上傳工作'
+        : zeroModelPhase.includes('evidence')
+          ? '逐張自動定案'
+          : zeroModelPhase.includes('waiting_for_exact_photo_boundary')
+            ? '等待目前照片完成'
+            : '依既有三輪證據自動定案';
+  const zeroModelProgressText = zeroModelTotal > 0
+    ? `${zeroModelPhaseLabel} ${formatCount(zeroModelProcessed)}/${formatCount(zeroModelTotal)} 張`
+    : zeroModelPhaseLabel;
   const contentRepairActive = Boolean(
     data.runtime_health_fuse?.active
     || data.runtime_health_fuse?.reason
     || data.runtime_health_fuse?.reasons?.length
+    || data.pipeline_pause?.reason
+    || data.pipeline_pause?.paused_at
   );
   const operationStatusLabel = isRunning
     ? '正在執行'
-    : contentRepairActive
-      ? '內容守門修復中'
-      : '待機中';
+    : zeroModelAdjudicationActive
+      ? '零模型自動定案中'
+      : zeroModelAdjudicationRepair
+        ? '零模型定案修復中'
+        : streamUploadActive
+          ? '逐張上傳中'
+          : automaticHandoffActive
+            ? '自動銜接中'
+          : contentRepairActive
+            ? '內容守門修復中'
+            : '待機中';
 
   // Refs for auto-scroll
   const logsContainerRef = useRef(null);
@@ -351,6 +470,7 @@ const App = () => {
   // but the viewer only sees: photo -> typed AI narration -> right-side result.
   const MAX_PENDING_PRESENTATIONS = 400;
   const MAX_REVEALED_RESULTS = 200;
+  const MAX_CAPPED_RAIL_ITEMS = 200;
   const MAX_LIVE_BACKLOG = 14;
   const MAX_DISPLAY_NARRATION_CHARS = 360;
   const LIVE_TYPEWRITER_INTERVAL_MS = 32;
@@ -360,6 +480,7 @@ const App = () => {
   const [pendingQueue, setPendingQueue] = useState([]);
   const [activePresentation, setActivePresentation] = useState(null);
   const [revealedResults, setRevealedResults] = useState([]);
+  const [cappedRailItems, setCappedRailItems] = useState([]);
   const [resultRailBatchKey, setResultRailBatchKey] = useState("");
   const [displayedBuffer, setDisplayedBuffer] = useState("");
   const [narrationDisplay, setNarrationDisplay] = useState({
@@ -413,6 +534,7 @@ const App = () => {
   const presentationHydratedRef = useRef(false);
   const activePresentationRef = useRef(null);
   const narrationDisplayRef = useRef(narrationDisplay);
+  const displayTargetSnapshotRef = useRef({ key: "", fileName: "", target: "", isQueue: false });
   const latestDisplayQueueKeysRef = useRef(new Set());
   const displayWatchdogRef = useRef({ key: "", length: 0, updatedAt: Date.now() });
   const [displayTargetKey, setDisplayTargetKey] = useState("");
@@ -510,40 +632,118 @@ const App = () => {
       .map((item, index) => ({ ...item, _isCurrent: index === 0 }));
   };
 
-  const currentResultRailBatchKey = `${String(data.current_relative_dir || data.image_dir || "")}|run:${String(data.presentation_run_id || "legacy")}`;
+  const normalizeBatchPath = (value) => String(value || "")
+    .replace(/\//g, "\\")
+    .replace(/\\+$/, "")
+    .toLowerCase();
+
+  const normalizeCappedAdjudicationItem = (item, batchPath) => {
+    if (!item || typeof item !== "object") return null;
+    const sourceItemId = String(item.source_item_id || "").trim();
+    const sourcePath = String(item.source_path || "").trim();
+    const fileName = String(item.file_name || "").trim();
+    const normalizedSourcePath = normalizeBatchPath(sourcePath);
+    const normalizedBatchPath = normalizeBatchPath(batchPath);
+    // A deferred card is never allowed to borrow a thumbnail by filename.
+    // Its source identity and exact staged source path must both belong to the
+    // currently displayed folder.
+    if (
+      !sourceItemId
+      || !sourcePath
+      || !fileName
+      || !normalizedBatchPath
+      || (
+        normalizedSourcePath !== normalizedBatchPath
+        && !normalizedSourcePath.startsWith(`${normalizedBatchPath}\\`)
+      )
+    ) return null;
+    return {
+      ...stripHeavyStatusFields(item),
+      source_item_id: sourceItemId,
+      source_path: sourcePath,
+      file_name: fileName,
+      verified: false,
+      uploaded: false,
+      _isCappedAdjudication: true,
+      _queueKey: `capped:${sourceItemId}`
+    };
+  };
+
+  const cappedAdjudicationTime = (item) => {
+    const parsed = Date.parse(item?.updated_at || item?.queued_at || "");
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const mergeCappedRailItems = (items) => {
+    const newestBySourceItem = new Map();
+    [...items]
+      .filter(Boolean)
+      .sort((left, right) => cappedAdjudicationTime(right) - cappedAdjudicationTime(left))
+      .forEach((item) => {
+        const identity = String(item.source_item_id || "");
+        if (identity && !newestBySourceItem.has(identity)) newestBySourceItem.set(identity, item);
+      });
+    return [...newestBySourceItem.values()].slice(0, MAX_CAPPED_RAIL_ITEMS);
+  };
+
+  // Folder changes are routine during the 2025 -> 2015 continuation.  The
+  // supervisor-facing rail therefore belongs to the project/revision, not to
+  // one transient folder.  Exact source identity still deduplicates each
+  // physical photo and the revision suffix prevents stale evidence replay.
+  const currentResultRailBatchKey = [
+    normalizeBatchPath(data.source_root || data.image_dir || ""),
+    serverGuardRevision ? `revision:${serverGuardRevision}` : ""
+  ].filter(Boolean).join("|");
   const resultRailStorageKey = "samsung_ocr_result_rail_v2";
 
   // Preserve the current batch's completed cards across an asset refresh.
   useEffect(() => {
     if (!currentResultRailBatchKey || currentResultRailBatchKey === resultRailBatchKey) return;
     let restored = [];
+    let restoredCapped = [];
     try {
       const saved = JSON.parse(sessionStorage.getItem(resultRailStorageKey) || "null");
       if (saved?.batchKey === currentResultRailBatchKey && Array.isArray(saved.items)) {
         restored = saved.items.map(normalizePresentationItem).filter(Boolean);
       }
+      if (saved?.batchKey === currentResultRailBatchKey && Array.isArray(saved.cappedItems)) {
+        restoredCapped = saved.cappedItems
+          .map((item) => normalizeCappedAdjudicationItem(item, currentResultRailBatchKey))
+          .filter(Boolean);
+      }
     } catch (_) {}
-    setRevealedResults(mergeResultRailItems(restored));
+    // Completed cards are a rolling project ledger. A folder transition must
+    // not blank the supervisor-facing rail while the next folder warms up.
+    setRevealedResults((prev) => mergeResultRailItems([
+      ...restored,
+      ...prev.filter((item) => (
+        !serverGuardRevision
+        || String(item?.evidence_guard_revision || "") === serverGuardRevision
+      ))
+    ]));
+    setCappedRailItems(mergeCappedRailItems(restoredCapped));
     setActivePresentation(null);
     setPendingQueue([]);
     setNarrationDisplay({ text: "", key: "", phase: "idle", fileName: "", nextFileName: "" });
     setDisplayedBuffer("");
     setDisplayTargetKey("");
+    displayTargetSnapshotRef.current = { key: "", fileName: "", target: "", isQueue: false };
     setCurrentThumb(null);
     setCurrentImageTarget({ src: "", key: "", fileName: "" });
     setVisibleImageTarget({ src: "", key: "", fileName: "" });
     setResultRailBatchKey(currentResultRailBatchKey);
-  }, [currentResultRailBatchKey, resultRailBatchKey]);
+  }, [currentResultRailBatchKey, resultRailBatchKey, serverGuardRevision]);
 
   useEffect(() => {
     if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
     try {
       sessionStorage.setItem(resultRailStorageKey, JSON.stringify({
         batchKey: resultRailBatchKey,
-        items: revealedResults
+        items: revealedResults,
+        cappedItems: cappedRailItems
       }));
     } catch (_) {}
-  }, [revealedResults, resultRailBatchKey, currentResultRailBatchKey]);
+  }, [revealedResults, cappedRailItems, resultRailBatchKey, currentResultRailBatchKey]);
 
   useEffect(() => {
     if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
@@ -553,19 +753,21 @@ const App = () => {
       .then((payload) => {
         if (cancelled || !Array.isArray(payload?.items)) return;
         const allowed = new Set(Array.isArray(payload.source_item_ids) ? payload.source_item_ids.map(String) : []);
-        const expectedRunId = String(payload.run_id || "");
-        if (!expectedRunId) {
-          setRevealedResults([]);
-          return;
-        }
+        const isAllowedCurrentRevision = (item) => (
+          allowed.has(String(item?.source_item_id || ""))
+          && (
+            !serverGuardRevision
+            || String(item?.evidence_guard_revision || "") === serverGuardRevision
+          )
+        );
         const restored = payload.items
           .map(normalizePresentationItem)
-          .filter((item) => item && String(item.run_id || "") === expectedRunId);
+          .filter((item) => item && isAllowedCurrentRevision(item));
         setRevealedResults((prev) => mergeResultRailItems([
           ...restored,
           ...prev.filter((item) => (
-            allowed.has(String(item.source_item_id || ""))
-            && String(item.run_id || "") === expectedRunId
+            !serverGuardRevision
+            || String(item?.evidence_guard_revision || "") === serverGuardRevision
           ))
         ]));
       })
@@ -579,7 +781,60 @@ const App = () => {
     resultRailBatchKey,
     currentResultRailBatchKey,
     data.review_progress?.processed,
-    data.stats?.processed
+    data.stats?.processed,
+    serverGuardRevision
+  ]);
+
+  // A newly attached repair batch may contain only unresolved/retry rows even
+  // though the project has many recent, accepted photos. Keep the right rail
+  // useful in that state by hydrating it from the durable global history. The
+  // current guard revision and completed-result predicate remain mandatory, so
+  // stale, failed, or waiting rows can never impersonate a completed card.
+  useEffect(() => {
+    if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
+    let cancelled = false;
+    fetch("/api/presentation_history?limit=200")
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (cancelled || !Array.isArray(payload?.items)) return;
+        const recentCompleted = payload.items
+          .map(normalizePresentationItem)
+          .filter((item) => (
+            item
+            && (!serverGuardRevision || String(item.evidence_guard_revision || "") === serverGuardRevision)
+            && isCompletedRailResult(item)
+          ));
+        if (!recentCompleted.length) return;
+        setRevealedResults((prev) => mergeResultRailItems([...recentCompleted, ...prev]));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [
+    resultRailBatchKey,
+    currentResultRailBatchKey,
+    data.overall_progress?.processed_images,
+    data.stream_upload?.canonical_uploaded,
+    serverGuardRevision
+  ]);
+
+  // The backend exposes only a compact recent window, so retain each
+  // source-bound deferred item as it passes the window. This is presentation
+  // state only: these cards are explicitly not completed, verified, failed, or
+  // uploaded results.
+  useEffect(() => {
+    if (!resultRailBatchKey || resultRailBatchKey !== currentResultRailBatchKey) return;
+    const incoming = (Array.isArray(data.capped_adjudication?.items)
+      ? data.capped_adjudication.items
+      : [])
+      .map((item) => normalizeCappedAdjudicationItem(item, currentResultRailBatchKey))
+      .filter(Boolean);
+    if (!incoming.length) return;
+    setCappedRailItems((prev) => mergeCappedRailItems([...incoming, ...prev]));
+  }, [
+    data.capped_adjudication?.items,
+    data.capped_adjudication?.last_event?.source_item_id,
+    resultRailBatchKey,
+    currentResultRailBatchKey
   ]);
 
   const getPassLabel = (item) => item?.pass_label || ({
@@ -629,6 +884,15 @@ const App = () => {
     item?.technical_retry_exhausted === true
     || String(item?.review_status || "").includes("技術錯誤")
   );
+  const isCompletedRailResult = (item) => {
+    if (!item || isStaleGuardRevision(item) || isTerminalTechnicalFailure(item) || isExplicitlyUnresolved(item)) {
+      return false;
+    }
+    const decision = String(item.decision || "").trim().toLowerCase();
+    return item.auto_verified === true
+      || item.accepted === true
+      || decision === "accepted";
+  };
   const getUnresolvedCardStatus = (item) => {
     if (isStaleGuardRevision(item)) {
       return {
@@ -639,7 +903,7 @@ const App = () => {
     if (isTerminalTechnicalFailure(item)) {
       return {
         label: "技術錯誤／該張未上傳",
-        detail: "系統修復後自動重跑",
+        detail: "已達三輪上限；等待自動修復器定案或重新排程",
       };
     }
     const passIndex = Number(item?.pass_index || item?.ocr_attempt || 0);
@@ -725,6 +989,12 @@ const App = () => {
       reviewMode: String(data.review_progress?.mode || "")
     });
     const sameFileStream = humanizeStructuredModelOutput(rawSameFileStream, pendingNarration);
+    const hasModelText = Boolean(rawSameFileStream || detailedThinking);
+    // While OCR is running, the left panel belongs exclusively to the current
+    // physical photo.  Yielding an empty-token gap to an older completed event
+    // made the same old photo flash back between new photos. Completed events
+    // already populate the right rail independently, so they must never retake
+    // the live preview merely because LM Studio has not emitted its first token.
     const liveText = sameFileStream
       || detailedThinking
       || pendingNarration;
@@ -733,26 +1003,31 @@ const App = () => {
       text: trimDisplayNarration(liveText),
       key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`,
       passIndex: livePassIndex,
-      hasModelText: Boolean(rawSameFileStream || detailedThinking)
+      hasModelText
     };
   };
 
   const getLatestBackendNarration = () => {
     const queue = Array.isArray(data.presentation_queue) ? data.presentation_queue : [];
-    const latest = normalizePresentationItem(queue[queue.length - 1]) || revealedResults[0] || null;
+    const latestCompleted = revealedResults.find(isCompletedRailResult) || null;
+    const latestQueueItem = [...queue]
+      .reverse()
+      .map(normalizePresentationItem)
+      .find((item) => item && (isRunning || isCompletedRailResult(item))) || null;
+    // When OCR is idle, a retry placeholder must not replace the last truthful
+    // completed narration with a misleading "still reading" story.
+    const latest = !isRunning && latestCompleted
+      ? latestCompleted
+      : (latestQueueItem || latestCompleted);
     if (!latest) return null;
     const text = getQueueDisplayText(latest);
     return text ? { fileName: latest.file_name || "", text, key: `latest:${latest._queueKey}` } : null;
   };
 
-  const getNarrationFileName = () => {
-    if (activePresentation?.file_name) return activePresentation.file_name;
-    return getSyncedLiveStream()?.fileName || getLatestBackendNarration()?.fileName || "";
-  };
 
   const prepareNarrationHandoff = (nextKey = "", nextFileName = "") => {
     setNarrationDisplay((prev) => {
-      const fileName = nextFileName || getNarrationFileName();
+      const fileName = String(nextFileName || "");
       if (prev.text) {
         return {
           ...prev,
@@ -780,14 +1055,16 @@ const App = () => {
 
   useEffect(() => {
     if (!displayedBuffer) return;
+    const snapshot = displayTargetSnapshotRef.current;
+    if (!snapshot.key || snapshot.key !== displayTargetKey) return;
     const phase = revealedKeysRef.current.has(displayTargetKey) ? "revealed" : "typing";
     setNarrationDisplay({
       text: displayedBuffer,
-      key: displayTargetKey,
+      key: snapshot.key,
       phase,
-      fileName: activePresentation?.file_name || ""
+      fileName: snapshot.fileName || ""
     });
-  }, [displayedBuffer, displayTargetKey, activePresentation?.file_name, data.stream_file, data.current_file]);
+  }, [displayedBuffer, displayTargetKey]);
 
   // Copy completed backend items into a local queue before the backend list rolls.
   useEffect(() => {
@@ -797,6 +1074,16 @@ const App = () => {
     }
     const incomingQueue = Array.isArray(data.presentation_queue) ? data.presentation_queue : [];
     latestDisplayQueueKeysRef.current = new Set(incomingQueue.map((raw) => getQueueKey(raw)).filter(Boolean));
+    const currentFile = String(data.current_file || "").trim();
+    const liveFileOwnsPreview = Boolean(currentFile && currentFile !== "None");
+    if (liveFileOwnsPreview) {
+      // Backend history may contain one event per pass. Those events belong in
+      // the right result rail, not in the live photo/narration surface.
+      setPendingQueue([]);
+      setActivePresentation(null);
+      isAdvancingRef.current = false;
+      return;
+    }
     if (incomingQueue.length === 0) return;
 
     // The legacy backend exposes 200 historical events.  On initial load the
@@ -835,7 +1122,7 @@ const App = () => {
         .sort(comparePresentationsAscending)
         .slice(0, MAX_PENDING_PRESENTATIONS);
     });
-  }, [data.presentation_queue]);
+  }, [data.presentation_queue, data.current_file, isRunning]);
 
   // The live LLM stream must never block completed photos from accumulating in
   // the right rail.  Hydrate the whole compact backend window, then continuously
@@ -860,6 +1147,7 @@ const App = () => {
       setPresentationInvariantError(`presentation key divergence: ${activeKey} != ${narrationKey}`);
       setDisplayedBuffer("");
       setDisplayTargetKey("");
+      displayTargetSnapshotRef.current = { key: "", fileName: "", target: "", isQueue: false };
       setTypewriterReady(false);
       setActivePresentation(null);
       return;
@@ -907,19 +1195,20 @@ const App = () => {
 
   const getDisplayTarget = () => {
     const live = getSyncedLiveStream();
-    if (live) return { target: live.text, isQueue: false, key: live.key };
+    if (live) return { target: live.text, isQueue: false, key: live.key, fileName: live.fileName || "" };
     if (activePresentation) {
       return {
         target: getQueueDisplayText(activePresentation),
         isQueue: true,
-        key: activePresentation._queueKey
+        key: activePresentation._queueKey,
+        fileName: activePresentation.file_name || ""
       };
     }
     if (!isRunning) {
       const latest = getLatestBackendNarration();
-      if (latest) return { target: latest.text, isQueue: false, key: latest.key };
+      if (latest) return { target: latest.text, isQueue: false, key: latest.key, fileName: latest.fileName || "" };
     }
-    return { target: "", isQueue: false, key: "" };
+    return { target: "", isQueue: false, key: "", fileName: "" };
   };
 
   const liveVisualSnapshot = getSyncedLiveStream();
@@ -946,10 +1235,12 @@ const App = () => {
 
   // Stage the illusion deliberately: photo first, then AI narration, then result.
   useEffect(() => {
-    const { key } = getDisplayTarget();
-    if (!key || key === displayTargetKey) return;
-    prepareNarrationHandoff(key, getNarrationFileName());
-    setDisplayTargetKey(key);
+    const nextTarget = getDisplayTarget();
+    if (!nextTarget.key) return;
+    displayTargetSnapshotRef.current = nextTarget;
+    if (nextTarget.key === displayTargetKey) return;
+    prepareNarrationHandoff(nextTarget.key, nextTarget.fileName);
+    setDisplayTargetKey(nextTarget.key);
     setDisplayedBuffer("");
     setTypewriterReady(false);
   }, [activePresentation?._queueKey, data.current_file, data.current_relative_dir, data.stream_file, data.stream_buffer, data.lm_logs]);
@@ -962,31 +1253,34 @@ const App = () => {
   }, [displayTargetKey, imageReadyForDisplay]);
 
   useEffect(() => {
-    const { target, isQueue } = getDisplayTarget();
-    if (!typewriterReady) return;
-    if (!target) {
-      prepareNarrationHandoff(displayTargetKey, getNarrationFileName());
+    const snapshot = getDisplayTarget();
+    if (!typewriterReady || snapshot.key !== displayTargetKey) return;
+    displayTargetSnapshotRef.current = snapshot;
+    if (!snapshot.target) {
+      prepareNarrationHandoff(displayTargetKey, snapshot.fileName);
       return;
     }
 
-    if (target.length < displayedBuffer.length) {
-      setDisplayedBuffer(target);
+    if (snapshot.target.length < displayedBuffer.length) {
+      setDisplayedBuffer(snapshot.target);
       return;
     }
 
     const backlog = pendingQueue.length;
-    const charStep = isQueue
+    const charStep = snapshot.isQueue
       ? Math.min(12, Math.max(3, Math.ceil((backlog + 1) / 7)))
       : 3;
     const timer = setInterval(() => {
       setDisplayedBuffer((prev) => {
-        const { target: latestTarget } = getDisplayTarget();
-        if (prev.length < latestTarget.length) {
-          return latestTarget.slice(0, Math.min(prev.length + charStep, latestTarget.length));
+        const latest = getDisplayTarget();
+        if (latest.key !== displayTargetKey) return prev;
+        displayTargetSnapshotRef.current = latest;
+        if (prev.length < latest.target.length) {
+          return latest.target.slice(0, Math.min(prev.length + charStep, latest.target.length));
         }
         return prev;
       });
-    }, isQueue ? QUEUE_TYPEWRITER_INTERVAL_MS : LIVE_TYPEWRITER_INTERVAL_MS);
+    }, snapshot.isQueue ? QUEUE_TYPEWRITER_INTERVAL_MS : LIVE_TYPEWRITER_INTERVAL_MS);
 
     return () => clearInterval(timer);
   }, [activePresentation, data.stream_buffer, data.lm_logs, pendingQueue.length, typewriterReady, displayTargetKey]);
@@ -1372,15 +1666,24 @@ const App = () => {
         _pendingReveal: true
       }
     : null;
-  const pendingPanelResult = livePendingResult || activePendingResult;
+  const pendingPanelCandidate = livePendingResult || activePendingResult;
+  const pendingPanelResult = pendingPanelCandidate?._queueKey === displayTargetKey
+    ? pendingPanelCandidate
+    : null;
   const visiblePassPresentation = liveStreamSnapshot ? livePendingResult : activePresentation;
-  const rightPanelItems = revealedResults.slice(0, MAX_REVEALED_RESULTS);
+  // The right rail is a completed-result ledger, not a pass-history or repair
+  // queue. Pending/retry/technical rows stay in their dedicated counters and
+  // history views so they can never cover or impersonate completed thumbnails.
+  const rightPanelItems = revealedResults
+    .filter(isCompletedRailResult)
+    .slice(0, MAX_REVEALED_RESULTS);
+  const cappedAdjudicationCount = Math.max(0, Number(data.capped_adjudication?.count || 0));
   const latestBackendNarration = getLatestBackendNarration();
   const heldNarrationSnapshot = !activePresentation && !liveStreamSnapshot && narrationDisplay.text
     ? {
-        fileName: narrationDisplay.fileName || visibleImageTarget.fileName || "",
+        fileName: narrationDisplay.fileName || "",
         text: narrationDisplay.text,
-        key: narrationDisplay.key || visibleImagePresentationKey
+        key: narrationDisplay.key || ""
       }
     : null;
   // The API snapshot is the display authority.  Animation state may lag or be
@@ -1402,9 +1705,9 @@ const App = () => {
     || activeNarrationSnapshot
     || (!isRunning ? latestBackendNarration : heldNarrationSnapshot)
     || heldNarrationSnapshot;
-  const displayedFileName = liveStreamSnapshot?.fileName
+  const displayedFileName = visibleNarrationSnapshot?.fileName
+    || liveStreamSnapshot?.fileName
     || activePresentation?.file_name
-    || visibleNarrationSnapshot?.fileName
     || (!isRunning ? latestBackendNarration?.fileName : "")
     || (visibleImage ? "上一張畫面保留" : "-");
   const sourceRootLabel = data.source_root || 'D:\\00_商化\\00_未整理商化照片';
@@ -1438,7 +1741,15 @@ const App = () => {
     && displayTargetKey === visibleNarrationKey
     && (typewriterReady || displayedBuffer)
   );
-  const visibleNarration = !isRunning && visibleNarrationSnapshot?.text
+  const visibleNarration = zeroModelAdjudicationActive
+    ? `系統正在${zeroModelProgressText}；全程只使用本機既有三輪證據，不會再次呼叫 LLM。每張通過守門後立即排入逐張上傳。`
+    : zeroModelAdjudicationRepair
+      ? `零模型定案遇到技術問題，已停在照片邊界並保留原檢查點；Supervisor 正在修復，不會重複呼叫模型。${zeroModelActivity.error || ''}`
+    : streamUploadActive && !isRunning
+      ? `本批照片已完成判讀；逐張上傳仍在進行，剩餘 ${formatCount(uploadPendingCount + uploadWorkingCount)} 張。上傳佇列清空後，Supervisor 會自動銜接下一個資料匣，不需要人工按鈕。`
+    : automaticHandoffActive
+      ? `本批照片已完成判讀與逐張上傳；Supervisor 正在核對年度完成證明並銜接下一個資料匣。這是自動主流程，不需要人工按鈕。`
+    : !isRunning && visibleNarrationSnapshot?.text
     ? visibleNarrationSnapshot.text
     : narrationAnimationOwnsDisplay
     ? (displayedBuffer || "正在接收本張照片的 LLM 判讀文字...")
@@ -1447,7 +1758,9 @@ const App = () => {
       || displayedBuffer
       || (isRunning ? "照片已進入判讀流程，等待 AI 輸出..." : ""));
   const isHeldNarration = !isRunning || (!visibleNarrationKey.startsWith("live:") && narrationPhase !== "typing");
-  const matchingVisibleImage = effectiveVisibleImagePresentationKey === expectedVisualKey && visibleImage === currentImage
+  const matchingVisibleImage = effectiveVisibleImagePresentationKey === expectedVisualKey
+    && (!visibleNarrationKey || effectiveVisibleImagePresentationKey === visibleNarrationKey)
+    && visibleImage === currentImage
     ? visibleImage
     : null;
   const heldPresentation = !activePresentation && visibleNarrationKey && !visibleNarrationKey.startsWith("live:")
@@ -1458,7 +1771,15 @@ const App = () => {
     ? visibleNarrationKey
     : (visiblePresentation?.presentation_id || "");
   const visiblePresentationSequence = visiblePresentation?.presentation_sequence ?? "";
-  const narrationStatusLabel = !isRunning && visibleNarration
+  const narrationStatusLabel = zeroModelAdjudicationActive
+    ? "零模型證據定案中（未呼叫 LLM）"
+    : zeroModelAdjudicationRepair
+      ? "零模型定案修復中（未呼叫 LLM）"
+    : streamUploadActive && !isRunning
+      ? "逐張上傳中 · OCR 自動銜接"
+    : automaticHandoffActive
+      ? "年度完成核對中 · OCR 自動銜接"
+    : !isRunning && visibleNarration
     ? "最新完成判讀"
     : visibleNarrationKey.startsWith("live:")
     ? "LLM 即時判讀中"
@@ -1562,20 +1883,30 @@ const App = () => {
                     <span>資料匣 {formatCount(folderDone)}/{formatCount(folderTotal)}</span>
                     <span aria-hidden="true">·</span>
                     <span data-testid="review-pass-progress">
-                      {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
-                      {isReviewRun && completedPassCount ? ` · ${completedPassLabel} ${formatCount(completedPassCount)} 次` : ''}
-                      {isReviewRun && reviewProgress.current_pass
-                        ? Number(reviewProgress.current_pass) <= 3
-                          ? ` · 本張第 ${reviewProgress.current_pass}/3 輪`
-                          : ' · 本張三輪已完成'
-                        : ''}
+                      {zeroModelAdjudicationActive
+                        ? `${reviewPeriodLabel} ${zeroModelProgressText} · 待定案 ${formatCount(data.capped_adjudication?.count || 0)}`
+                        : <>
+                            {streamUploadActive && !isRunning
+                              ? `逐張上傳中 · 待上傳 ${formatCount(uploadPendingCount + uploadWorkingCount)} 張 · OCR 自動銜接中`
+                              : automaticHandoffActive
+                                ? '年度完成核對中 · OCR 自動銜接下一個資料匣'
+                              : <>
+                                  {isReviewRun ? `${reviewPeriodLabel} 複核` : '本資料夾'} {formatCount(stats.processed)}/{formatCount(stats.total || 0)}
+                                  {isReviewRun && completedPassCount ? ` · ${completedPassLabel} ${formatCount(completedPassCount)} 次` : ''}
+                                  {isReviewRun && reviewProgress.current_pass
+                                    ? Number(reviewProgress.current_pass) <= 3
+                                      ? ` · 本張第 ${reviewProgress.current_pass}/3 輪`
+                                      : ' · 本張三輪已完成'
+                                    : ''}
+                                </>}
+                          </>}
                     </span>
                   </div>
                 </div>
                <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', justifySelf: 'end' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#ff4b2b', boxShadow: isRunning ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }}></div>
-                    <span style={{ fontSize: '0.7rem', color: contentRepairActive ? '#fbbf24' : '#888' }}>{operationStatusLabel}</span>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: visibleOperationActive ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#ff4b2b', boxShadow: visibleOperationActive ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }}></div>
+                    <span style={{ fontSize: '0.7rem', color: visibleOperationActive ? '#86efac' : contentRepairActive ? '#fbbf24' : '#888' }}>{operationStatusLabel}</span>
                   </div>
                   <span data-testid="stream-upload-progress" style={{ fontSize: '0.56rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
                     上傳總數 {formatCount(streamUpload.canonical_uploaded)} · 待上傳 {formatCount(streamUpload.pending)}
@@ -1612,15 +1943,15 @@ const App = () => {
                   </div>
                 </div>
                 <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: '8px', minWidth: '118px' }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRunning ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#f97316', boxShadow: isRunning ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }} />
-                  <span style={{ color: isRunning ? '#d1fae5' : '#fed7aa', fontSize: '0.75rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: visibleOperationActive ? '#22c55e' : contentRepairActive ? '#f59e0b' : '#f97316', boxShadow: visibleOperationActive ? '0 0 10px #22c55e' : contentRepairActive ? '0 0 8px #f59e0b' : 'none' }} />
+                  <span style={{ color: visibleOperationActive ? '#d1fae5' : '#fed7aa', fontSize: '0.75rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
                     {operationStatusLabel}
                   </span>
                 </div>
               </div>
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                {!isRunning && (
+                {!visibleOperationActive && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '260px', maxWidth: '520px', flex: '1 1 320px' }}>
                     <span style={{ fontSize: '0.68rem', color: '#9ca3af', fontWeight: 800, whiteSpace: 'nowrap' }}>起始資料匣</span>
                     <select
@@ -1637,12 +1968,12 @@ const App = () => {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginLeft: 'auto' }}>
-                  <button onClick={() => handleStart(false)} disabled={isRunning}
-                      style={{ background: isRunning ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: isRunning?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                  <button onClick={() => handleStart(false)} disabled={visibleOperationActive}
+                      style={{ background: visibleOperationActive ? '#333' : '#22c55e', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: visibleOperationActive?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                       <Play size={12} /> 續跑
                   </button>
-                 <button onClick={handleStop}
-                     style={{ background: '#ef4444', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
+                 <button onClick={handleStop} disabled={zeroModelAdjudicationActive}
+                     style={{ background: zeroModelAdjudicationActive ? '#4b5563' : '#ef4444', color: '#fff', border:'1px solid #333', padding:'5px 12px', borderRadius:'4px', cursor: zeroModelAdjudicationActive ? 'not-allowed' : 'pointer', fontSize:'0.75rem', fontWeight:'bold', display:'flex', alignItems:'center', gap:'4px' }}>
                      <Square size={12} /> 停止
                  </button>
                  <button onClick={() => window.open(`/failed_records.html?v=${Date.now()}`, '_blank')}
@@ -1730,7 +2061,7 @@ const App = () => {
                                         background: isHeldNarration ? '#64748b' : '#22d3ee',
                                         boxShadow: isHeldNarration ? 'none' : '0 0 8px #22d3ee'
                                       }} />
-                                      LLM 判讀內容 · {narrationStatusLabel}
+                                      {streamUploadActive && !isRunning ? '系統處理內容' : 'LLM 判讀內容'} · {narrationStatusLabel}
                                    </div>
                                    {false && isHeldNarration && (
                                       <div style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: '800', marginBottom: '4px', letterSpacing: 0 }}>
@@ -1812,8 +2143,13 @@ const App = () => {
               <div className="result-sidebar" style={{ width: 'clamp(360px, 23vw, 430px)', minWidth: '360px', flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#111', borderRadius: '6px', border: '1px solid #333', overflow: 'hidden' }}>
                   <div style={{ padding: '8px', borderBottom: '1px solid #333', display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'4px' }}>
                       {[
-                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'自動定案中', v:stats.review_required ?? 0, c:'#f59e0b'},
-                        {l:'失敗', v:stats.failed, c:'#ef4444'}, {l:'處理器', v:`${data.resources?.cpu??0}%`, c:'#00f5ff'},
+                        {l:'完成判讀', v:stats.success, c:'#22c55e'}, {l:'自動定案中', v:cappedAdjudicationCount, c:'#f59e0b', title:data.capped_adjudication?.message || '三次已用滿、尚未完成且尚未上傳的照片'},
+                        {l:'失敗', v:stats.failed, c:'#ef4444'}, {
+                          l:'GPU',
+                          v:gpuUtilization == null ? '-' : `${gpuUtilization}%`,
+                          c:'#00f5ff',
+                          title:`即時 GPU；顯示記憶體 ${gpuVramUsedMb ?? '-'} / ${gpuVramTotalMb ?? '-'} MB（${gpuVramPercent ?? '-'}%） · CPU ${data.resources?.cpu ?? '-'}%`
+                        },
                         {l:'記憶體', v:`${data.resources?.ram??0}%`, c:'#a855f7'},
                         {l:'近期平均', v:recentAverageDuration || data.metrics?.last_duration || '-', c:'#a855f7', title:'最近 5 張實際耗時平均；不讓先前的逾時永久扭曲目前速度'}
                       ].map((item, i)=>(
@@ -1855,11 +2191,18 @@ const App = () => {
                                   <div data-testid="active-placeholder-file" title={pendingPanelResult.file_name} style={{ color: '#fff', fontSize: '0.8rem', lineHeight: 1.18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingPanelResult.file_name}</div>
                                   <div style={{ display: 'flex', gap: '5px', marginTop: '5px', alignItems: 'center' }}>
                                     <span data-testid="active-placeholder-badge" style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '3px', background: '#0ea5e9', color: '#fff', fontWeight: '800' }}>處理中</span>
-                                    <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>LLM 即時判讀中</span>
+                                    <span data-testid="active-placeholder-text" style={{ fontSize: '0.62rem', color: '#cbd5e1' }}>
+                                      {zeroModelAdjudicationActive ? '零模型證據定案中' : 'LLM 即時判讀中'}
+                                    </span>
                                   </div>
                                   {hasPassMetadata(pendingPanelResult) && <div style={{ fontSize: '0.62rem', color: '#93c5fd', marginTop: '4px' }}>{getPassHeading(pendingPanelResult)}</div>}
                                 </div>
                               </div>
+                            </div>
+                          )}
+                          {!pendingPanelResult && rightPanelItems.length === 0 && (
+                            <div data-testid="result-rail-hydrating" style={{ color: '#64748b', fontSize: '0.72rem', padding: '12px 6px', textAlign: 'center' }}>
+                              正在載入最近完成的判讀縮圖…
                             </div>
                           )}
                           {rightPanelItems.map((res, i) => (
@@ -1875,7 +2218,7 @@ const App = () => {
                                                     處理中
                                                 </span>
                                                 <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>
-                                                    LLM 即時判讀中
+                                                    {zeroModelAdjudicationActive ? '零模型證據定案中' : 'LLM 即時判讀中'}
                                                 </span>
                                             </div>
                                           )}
@@ -1986,7 +2329,24 @@ const App = () => {
                                      </div>
                                  </div>
                              </div>
-                          ))}
+                           ))}
+                          {cappedAdjudicationCount > 0 && (
+                            <div
+                              data-testid="capped-adjudication-summary"
+                              style={{
+                                background: '#1c1917',
+                                border: '1px solid #92400e',
+                                borderRadius: '5px',
+                                padding: '7px 8px',
+                                marginTop: '4px',
+                                color: '#fbbf24',
+                                fontSize: '0.68rem',
+                                lineHeight: 1.35
+                              }}
+                            >
+                              另有 {formatCount(cappedAdjudicationCount)} 張依既有三輪證據自動定案中，不占用完成結果縮圖區。
+                            </div>
+                          )}
                       </div>
                   </div>
               </div>

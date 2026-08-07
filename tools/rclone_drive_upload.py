@@ -573,6 +573,21 @@ def invalidate_shared_upload_gate(manifest_dir: Path) -> None:
     (manifest_dir / "upload_gate_proof.json").unlink(missing_ok=True)
 
 
+def sync_stream_dashboard_upload_count(output_dir: Path, uploaded_log: Path) -> dict:
+    """Keep the Dashboard total aligned after the legacy uploader writes receipts.
+
+    The per-photo worker owns the shared status file, while this legacy uploader
+    owns some current-year catch-up uploads.  Import lazily to avoid the module
+    cycle (the stream worker also reuses helpers from this module).
+    """
+    from tools.stream_drive_upload import refresh_status
+
+    return refresh_status(
+        Path(output_dir).resolve(),
+        canonical_uploaded=len(read_csv(Path(uploaded_log).resolve())),
+    )
+
+
 def load_staged_paths(manifest_dir: Path, rows: list[dict[str, str]]) -> dict[tuple[str, str], Path]:
     """Return only staged files belonging to this manifest batch."""
     staging_root = (manifest_dir / "staging").resolve()
@@ -678,6 +693,8 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         ensure_backend_idle(args.backend_url)
         ensure_no_active_ocr_runner()
     if not rows:
+        if args.execute and not args.dry_run:
+            sync_stream_dashboard_upload_count(args.output_dir, args.uploaded_log)
         print("[upload] no pending ready rows", flush=True)
         return 0
 
@@ -761,6 +778,7 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         if rc == 124:
             if args.execute and not args.dry_run and uploaded_rows:
                 append_uploaded(args.uploaded_log, uploaded_rows)
+                sync_stream_dashboard_upload_count(args.output_dir, args.uploaded_log)
                 prepare_manifest(args, args.limit)
                 invalidate_shared_upload_gate(args.manifest_dir)
             if not args.continue_on_timeout:
@@ -770,6 +788,7 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
         if unconfirmed:
             if args.execute and not args.dry_run and uploaded_rows:
                 append_uploaded(args.uploaded_log, uploaded_rows)
+                sync_stream_dashboard_upload_count(args.output_dir, args.uploaded_log)
                 prepare_manifest(args, args.limit)
                 invalidate_shared_upload_gate(args.manifest_dir)
             raise SystemExit(
@@ -778,6 +797,7 @@ def upload_once(args, batch_id: str, cycle: int) -> int:
 
     if args.execute and not args.dry_run:
         append_uploaded(args.uploaded_log, uploaded_rows)
+        sync_stream_dashboard_upload_count(args.output_dir, args.uploaded_log)
         # Refresh manifest summary after logging successful uploads.
         prepare_manifest(args, args.limit)
         invalidate_shared_upload_gate(args.manifest_dir)

@@ -19,6 +19,53 @@ from tools.rerun_staged_candidates import stage_images
 
 
 class PresentationHistoryTests(unittest.TestCase):
+    def test_terminal_current_year_authority_prevents_progress_regression(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audit = root / "output" / "_ocr_audit"
+            drive = root / "output" / "_drive_upload"
+            audit.mkdir(parents=True)
+            drive.mkdir(parents=True)
+            folders = {
+                "a": {"period": "202601", "image_count": 2, "processed": 2, "status": "copied"},
+                "b": {"period": "202606", "image_count": 3, "processed": 1, "status": "blocked"},
+                "c": {"period": "202512", "image_count": 4, "processed": 1, "status": "active"},
+            }
+            marker = {
+                "upload_gate_schema": "gate/v1",
+                "pending_count": 0,
+                "audit_input_sha256": "audit",
+                "manifest_summary_sha256": "manifest",
+                "pending_sha256": "pending",
+                "backfill_run_id": "run",
+            }
+            gate = {
+                "schema": "gate/v1",
+                "gate_open": True,
+                "pending_count": 0,
+                "upload_scope_years": ["2026"],
+                "audit_input_sha256": "audit",
+                "manifest_summary_sha256": "manifest",
+                "pending_sha256": "pending",
+                "backfill_run_id": "run",
+            }
+            terminal = {
+                "year_source_rows": 5,
+                "unique_year_sources": 5,
+                "terminal_authorized_year_sources": 5,
+                "missing_sources": 0,
+                "conflicting_sources": 0,
+                "invalid_rows": 0,
+            }
+            (audit / "current_year_rerun_cycle_complete.json").write_text(json.dumps(marker), encoding="utf-8")
+            (drive / "upload_gate_proof.json").write_text(json.dumps(gate), encoding="utf-8")
+            (audit / "v1945_evidence_backfill_2026.csv.summary.json").write_text(json.dumps(terminal), encoding="utf-8")
+            with patch.object(backend, "AUDIT_DIR", audit):
+                self.assertTrue(backend._apply_terminal_current_year_progress(folders))
+            self.assertEqual(folders["b"]["processed"], 3)
+            self.assertEqual(folders["b"]["status"], "current_year_terminal_complete")
+            self.assertEqual(folders["c"]["processed"], 1)
+
     def test_staging_progress_maps_to_original_folder_and_moves_total_counter(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -445,6 +492,7 @@ class PresentationHistoryTests(unittest.TestCase):
                     "presentation_sequence": 500,
                     "source_item_id": "a" * 64,
                     "run_id": "run-old",
+                    "evidence_guard_revision": "rev-old",
                     "file_name": "old.jpg",
                     "source_path": "D:/photos/old.jpg",
                     "completed_at": "2026-07-14T23:59:00",
@@ -456,6 +504,7 @@ class PresentationHistoryTests(unittest.TestCase):
                     "presentation_sequence": 1,
                     "source_item_id": "b" * 64,
                     "run_id": "run-new",
+                    "evidence_guard_revision": "rev-current",
                     "file_name": "new.jpg",
                     "source_path": "D:/photos/new.jpg",
                     "completed_at": "2026-07-15T00:01:00",
@@ -479,6 +528,29 @@ class PresentationHistoryTests(unittest.TestCase):
 
             scoped = orchestrator.get_recent_presentation_history(limit=10, source_item_ids={"b" * 64})
             self.assertEqual([item["presentation_id"] for item in scoped], ["p-new-process"])
+            guard_scoped = orchestrator.get_recent_presentation_history(
+                limit=10,
+                source_item_ids={"a" * 64, "b" * 64},
+                evidence_guard_revision="rev-current",
+            )
+            self.assertEqual([item["presentation_id"] for item in guard_scoped], ["p-new-process"])
+            repeated_source = {
+                **disk_items[1],
+                "presentation_id": "p-newer-same-source",
+                "run_id": "run-newer",
+                "completed_at": "2026-07-15T00:02:00",
+            }
+            orchestrator.display_queue.append(repeated_source)
+            latest_per_source = orchestrator.get_recent_presentation_history(
+                limit=10,
+                source_item_ids={"b" * 64},
+                evidence_guard_revision="rev-current",
+                latest_per_source=True,
+            )
+            self.assertEqual(
+                [item["presentation_id"] for item in latest_per_source],
+                ["p-newer-same-source"],
+            )
             run_scoped = orchestrator.get_recent_presentation_history(
                 limit=10,
                 source_item_ids={"a" * 64, "b" * 64},
@@ -541,7 +613,7 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertEqual(orchestrator.recent_results, [])
             self.assertEqual(orchestrator.priority_queue, [])
 
-    def test_current_batch_without_marker_recovers_latest_nonlegacy_run(self):
+    def test_current_batch_unions_same_folder_across_run_ids_at_current_revision(self):
         class FakeOrchestrator:
             current_run_id = ""
 
@@ -550,7 +622,10 @@ class PresentationHistoryTests(unittest.TestCase):
 
             def get_recent_presentation_history(self, **kwargs):
                 self.kwargs = kwargs
-                return [{"presentation_id": "p-latest", "run_id": "run-latest"}]
+                return [
+                    {"presentation_id": "p-new", "run_id": "run-new"},
+                    {"presentation_id": "p-old", "run_id": "run-old"},
+                ]
 
         previous = backend.orchestrator
         fake = FakeOrchestrator()
@@ -560,13 +635,20 @@ class PresentationHistoryTests(unittest.TestCase):
                 "/api/presentation_history?limit=200&scope=current_batch"
             )
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.get_json()["run_id"], "run-latest")
-            self.assertTrue(fake.kwargs["latest_run_only"])
-            self.assertFalse(fake.kwargs["legacy_run_only"])
+            payload = response.get_json()
+            self.assertEqual(payload["run_id"], "")
+            self.assertEqual([item["presentation_id"] for item in payload["items"]], ["p-new", "p-old"])
+            self.assertNotIn("run_id", fake.kwargs)
+            self.assertNotIn("latest_run_only", fake.kwargs)
+            self.assertEqual(
+                fake.kwargs["evidence_guard_revision"],
+                backend.EVIDENCE_GUARD_REVISION,
+            )
+            self.assertTrue(fake.kwargs["latest_per_source"])
         finally:
             backend.orchestrator = previous
 
-    def test_current_batch_without_marker_refuses_legacy_no_run_history(self):
+    def test_current_batch_history_response_identifies_guard_revision(self):
         class FakeOrchestrator:
             current_run_id = ""
 
@@ -574,17 +656,21 @@ class PresentationHistoryTests(unittest.TestCase):
                 return {"c" * 64}
 
             def get_recent_presentation_history(self, **kwargs):
-                return [{"presentation_id": "p-legacy", "run_id": ""}]
+                self.kwargs = kwargs
+                return []
 
         previous = backend.orchestrator
-        backend.orchestrator = FakeOrchestrator()
+        fake = FakeOrchestrator()
+        backend.orchestrator = fake
         try:
             response = backend.flask_app.test_client().get(
                 "/api/presentation_history?limit=200&scope=current_batch"
             )
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.get_json()["run_id"], "")
-            self.assertEqual(response.get_json()["items"], [])
+            payload = response.get_json()
+            self.assertEqual(payload["items"], [])
+            self.assertEqual(payload["evidence_guard_revision"], backend.EVIDENCE_GUARD_REVISION)
+            self.assertEqual(fake.kwargs["source_item_ids"], {"c" * 64})
         finally:
             backend.orchestrator = previous
 
@@ -639,11 +725,22 @@ class PresentationHistoryTests(unittest.TestCase):
             def get_current_source_item_ids(self):
                 return {"b" * 64}
 
-            def get_recent_presentation_history(self, limit=200, source_item_ids=None, run_id="", latest_run_only=False, legacy_run_only=False):
+            def get_recent_presentation_history(
+                self,
+                limit=200,
+                source_item_ids=None,
+                run_id="",
+                latest_run_only=False,
+                legacy_run_only=False,
+                evidence_guard_revision="",
+                latest_per_source=False,
+            ):
                 self.received_scope = source_item_ids
                 self.received_run_id = run_id
                 self.received_latest_run_only = latest_run_only
                 self.received_legacy_run_only = legacy_run_only
+                self.received_guard_revision = evidence_guard_revision
+                self.received_latest_per_source = latest_per_source
                 return [{"presentation_id": "p-current", "source_item_id": "b" * 64}]
 
         previous = backend.orchestrator
@@ -657,11 +754,13 @@ class PresentationHistoryTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["scope"], "current_batch")
             self.assertEqual(response.get_json()["source_item_ids"], ["b" * 64])
-            self.assertEqual(response.get_json()["run_id"], "run-current")
+            self.assertEqual(response.get_json()["run_id"], "")
             self.assertEqual(fake.received_scope, {"b" * 64})
-            self.assertEqual(fake.received_run_id, "run-current")
-            self.assertTrue(fake.received_latest_run_only)
+            self.assertEqual(fake.received_run_id, "")
+            self.assertFalse(fake.received_latest_run_only)
             self.assertFalse(fake.received_legacy_run_only)
+            self.assertEqual(fake.received_guard_revision, backend.EVIDENCE_GUARD_REVISION)
+            self.assertTrue(fake.received_latest_per_source)
         finally:
             backend.orchestrator = previous
 

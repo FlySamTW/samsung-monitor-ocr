@@ -300,8 +300,14 @@ def validate_finalization_proof(
         for row in results
     ]
     duplicate_source_identities = len(candidate_ids) - len(set(candidate_ids)) if candidate_ids else 0
+    # A zero-candidate rebuild means every source is already terminally
+    # authorised by the durable evidence inventory below.  Result/run-summary
+    # files from an earlier non-zero backfill are historical artefacts, not the
+    # result set for this empty candidate snapshot.  Requiring those stale rows
+    # to disappear made finalisation loop forever even after all sources were
+    # verified and all stream uploads had drained.
     result_source_set_matches = (
-        not candidates and not results
+        not candidates
     ) or (
         bool(candidate_ids)
         and all(candidate_ids)
@@ -400,7 +406,7 @@ def validate_finalization_proof(
         and expected_source_count > 0
         and duplicate_source_identities == 0
         and result_source_set_matches
-        and len(summaries) == len(grouped)
+        and (not candidates or len(summaries) == len(grouped))
         and not missing_groups
         and not invalid_groups
         and finalized_rows == len(candidates)
@@ -454,6 +460,8 @@ def validate_finalization_proof(
         "duplicate_source_identities": duplicate_source_identities,
         "duplicate_source_identity": duplicate_source_identities + _safe_int(inventory.get("duplicate_source_identities"), 0),
         "result_source_set_matches": result_source_set_matches,
+        "stale_result_rows_ignored": len(results) if not candidates else 0,
+        "stale_summary_rows_ignored": len(summaries) if not candidates else 0,
         "missing_inputs": missing_inputs,
         "candidate_summary_valid": candidate_summary_valid,
         "canonical_inventory": inventory,

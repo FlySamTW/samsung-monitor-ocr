@@ -45,7 +45,14 @@ def main():
     root = Path(args.source_root).resolve()
     output = Path(args.output or (Path(__file__).resolve().parents[1] / "logs" / f"v1945_live_validation_{time.strftime('%Y%m%d_%H%M%S')}.json"))
     output.parent.mkdir(parents=True, exist_ok=True)
-    client = OpenAI(base_url=args.endpoint, api_key="lm-studio", timeout=180.0, max_retries=1)
+    # Never let the SDK issue an uncounted second request.  This validation
+    # helper must obey the same transport contract as production.
+    client = OpenAI(
+        base_url=args.endpoint,
+        api_key="lm-studio",
+        timeout=180.0,
+        max_retries=0,
+    )
     production.api_client = client
     production.model_name_global = args.model
     production.orchestrator = None

@@ -36,6 +36,75 @@ RECEIPT_NAME = "historical_continuation_receipt.json"
 MARKER_NAME = "current_year_rerun_cycle_complete.json"
 PROOF_NAME = "upload_gate_proof.json"
 REVIEW_NAME = "drive_upload_review_required.csv"
+TERMINAL_CANDIDATE_TEMPLATE = "v1945_evidence_backfill_{year}.csv"
+
+
+def _csv_row_count(path: Path) -> int:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return sum(1 for _row in csv.DictReader(handle))
+
+
+def _sealed_terminal_authority(output_dir: Path, current_year: int) -> Tuple[Optional[dict], List[str]]:
+    """Validate the immutable terminal inventory used after a year is sealed.
+
+    The ordinary upload manifest/risk report remains intentionally mutable.  A
+    later historical-run accident must not send a year that already received a
+    completion marker back through OCR.  This authority is accepted only when
+    the current evidence builder proves every source terminal and the candidate
+    set is exactly empty; it never turns a partial/review batch into a handoff.
+    """
+
+    audit_dir = output_dir.resolve() / "_ocr_audit"
+    candidate_path = audit_dir / TERMINAL_CANDIDATE_TEMPLATE.format(year=current_year)
+    summary_path = candidate_path.with_suffix(candidate_path.suffix + ".summary.json")
+    errors: List[str] = []
+    if not candidate_path.is_file():
+        errors.append(f"terminal_candidate_missing:{candidate_path}")
+    if not summary_path.is_file():
+        errors.append(f"terminal_summary_missing:{summary_path}")
+    if errors:
+        return None, errors
+    try:
+        summary = _read_json(summary_path)
+        candidate_rows = _csv_row_count(candidate_path)
+    except (OSError, UnicodeError, ValueError, TypeError, csv.Error, json.JSONDecodeError) as exc:
+        return None, [f"terminal_authority_unreadable:{exc}"]
+
+    unique_sources = int(summary.get("unique_year_sources") or 0)
+    verified_sources = int(summary.get("already_verified_year_sources") or 0)
+    human_audited_sources = int(summary.get("human_audited_year_sources") or 0)
+    terminal_sources = int(summary.get("terminal_authorized_year_sources") or 0)
+    expected_output = str(candidate_path.resolve()).casefold()
+    supplied_output = str(Path(str(summary.get("output") or ".")).resolve()).casefold()
+    checks = {
+        "terminal_summary_not_executed": summary.get("executed") is True,
+        "terminal_summary_year_mismatch": str(summary.get("year") or "") == str(current_year),
+        "terminal_summary_output_mismatch": supplied_output == expected_output,
+        "terminal_candidate_rows_nonzero": candidate_rows == 0 and int(summary.get("candidate_rows") or 0) == 0,
+        "terminal_source_inventory_empty": unique_sources > 0,
+        "terminal_authorized_count_mismatch": terminal_sources == unique_sources,
+        "terminal_resolution_count_mismatch": verified_sources + human_audited_sources == unique_sources,
+        "terminal_missing_sources_nonzero": int(summary.get("missing_sources") or 0) == 0,
+        "terminal_conflicting_sources_nonzero": int(summary.get("conflicting_sources") or 0) == 0,
+        "terminal_invalid_rows_nonzero": int(summary.get("invalid_rows") or 0) == 0,
+        "terminal_invalid_upload_receipts_nonzero": int(summary.get("invalid_upload_receipts") or 0) == 0,
+        "terminal_invalid_upload_jobs_nonzero": int(summary.get("invalid_upload_queue_jobs") or 0) == 0,
+        "terminal_upload_queue_nonempty": int(summary.get("current_upload_queue_source_ids") or 0) == 0,
+    }
+    errors.extend(name for name, valid in checks.items() if not valid)
+    if errors:
+        return None, errors
+    return {
+        "candidate_path": str(candidate_path.resolve()),
+        "candidate_sha256": file_sha256(candidate_path),
+        "summary_path": str(summary_path.resolve()),
+        "summary_sha256": file_sha256(summary_path),
+        "year": current_year,
+        "unique_year_sources": unique_sources,
+        "verified_sources": verified_sources,
+        "human_audited_sources": human_audited_sources,
+        "terminal_authorized_sources": terminal_sources,
+    }, []
 
 
 def file_sha256(path: Path) -> str:
@@ -185,14 +254,21 @@ def build_authority_snapshot(
     if request.get("accuracy_priority") is not True:
         errors.append("request_accuracy_priority_missing")
 
+    terminal_authority, terminal_errors = _sealed_terminal_authority(output_dir, current_year)
+    sealed_terminal = terminal_authority is not None
+
     if proof.get("gate_open") is not True or int(proof.get("pending_count", -1)) != 0:
         errors.append("upload_gate_not_finalized")
-    if list(proof.get("upload_scope_years") or []) != [current_year]:
+    try:
+        upload_scope_years = [int(value) for value in list(proof.get("upload_scope_years") or [])]
+    except (TypeError, ValueError):
+        upload_scope_years = []
+    if upload_scope_years != [current_year]:
         errors.append("upload_scope_not_current_year_only")
     if require_backend_idle:
         try:
             proof_age_minutes = (datetime.now(timezone.utc) - _parse_time(proof.get("generated_at"))).total_seconds() / 60
-            if proof_age_minutes < -5 or proof_age_minutes > 30:
+            if (proof_age_minutes < -5 or proof_age_minutes > 30) and not sealed_terminal:
                 errors.append(f"upload_gate_proof_stale:{proof_age_minutes:.1f}")
         except ValueError as exc:
             errors.append(f"upload_gate_proof_timestamp_invalid:{exc}")
@@ -215,8 +291,13 @@ def build_authority_snapshot(
     except (OSError, UnicodeError, csv.Error) as exc:
         errors.append(f"review_required_unreadable:{exc}")
         review_count = -1
-    if review_count != 0:
+    if review_count != 0 and not sealed_terminal:
         errors.append(f"current_year_review_required_nonzero:{review_count}")
+    if not sealed_terminal and terminal_errors:
+        # Keep the normal fresh-proof path backward compatible.  Terminal
+        # authority errors are diagnostic only unless the sealed fallback is
+        # actually needed for stale proof/review state.
+        terminal_errors = list(terminal_errors)
 
     backend_snapshot: Dict[str, object] = {}
     if require_backend_idle:
@@ -256,6 +337,9 @@ def build_authority_snapshot(
         "review_required_path": str(paths["review_required"].resolve()),
         "review_required_sha256": file_sha256(paths["review_required"]),
         "current_year_review_required": 0,
+        "sealed_terminal_completion": sealed_terminal,
+        "legacy_current_year_review_rows_ignored": review_count if sealed_terminal else 0,
+        "terminal_authority": terminal_authority or {},
         "audit_input_sha256": str(proof.get("audit_input_sha256") or ""),
         "backfill_run_id": str(proof.get("backfill_run_id") or ""),
     }

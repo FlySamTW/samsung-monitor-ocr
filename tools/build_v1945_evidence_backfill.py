@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,34 +25,30 @@ from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
     KNOWN_SOURCE_AUDIT_AUTHORITIES,
     adjudication_field_invariant_reasons,
+    generic_smart_monitor_without_direct_followme_identity,
 )
 
 
 FIELDS = ("source_path", "file_name", "period", "audit_folder", "reason", "source_item_id")
 AUTHORITY_MANIFEST_SCHEMA = "samsung-ocr-bound-visual-authorities/v1"
-# These revisions belong to the same accepted .64 evidence contract.  Later
-# increments only added exact source-bound authorities, recovery bookkeeping,
-# and process interlocks; they did not invalidate already verified .64+ rows.
-# Keep this explicit: a future content-rule revision is not compatible unless
-# it is reviewed and added here.
+# Revisions .87/.88 narrow one exact .86 first-pass defect: an ordinary
+# Smart Monitor M5/M7/M8 product card plus hallucinated fixture geometry could
+# terminally lock FollowMe without direct same-unit identity. Unrelated .86
+# through .88 evidence remains compatible; only this signature must be emitted
+# again. Revisions .89/.90 change live output reliability and early-exit
+# efficiency, not prior safe finals.
 BACKFILL_COMPATIBLE_GUARD_REVISIONS = frozenset(
     {
-        "20260721.64",
-        "20260721.65",
-        "20260721.66",
-        "20260721.67",
-        "20260721.68",
-        "20260721.69",
-        "20260721.70",
-        "20260721.71",
-        "20260722.72",
-        "20260722.73",
-        "20260723.74",
-        "20260723.75",
-        "20260723.76",
+        EVIDENCE_GUARD_REVISION,
+        "20260730.86",
+        "20260731.87",
+        "20260731.88",
+        "20260731.89",
     }
 )
-
+STREAM_RECEIPT_SCHEMA = "samsung-ocr-stream-receipt-v1"
+STREAM_UPLOAD_SCHEMA = "samsung-ocr-stream-upload-v1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 def has_v71_verified_field_erasure(item: dict) -> bool:
     """Identify .71 finals that erased a value still present in the bound call.
@@ -154,6 +151,13 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
                     if verified_row_conflicts_with_known_authority(item):
                         continue
                     parsed = item.get("parsed_output") or {}
+                    if (
+                        item.get("evidence_guard_revision")
+                        in {"20260730.86", "20260731.87"}
+                        and parsed.get("ordered_followme_early_exit") is True
+                        and generic_smart_monitor_without_direct_followme_identity(parsed)
+                    ):
+                        continue
                     if adjudication_field_invariant_reasons(parsed):
                         # Compatibility is revision-level only.  Every inherited
                         # terminal row must still satisfy the current cross-field
@@ -180,6 +184,161 @@ def load_verified_source_ids(audit_dir: Path) -> set[str]:
         except (OSError, UnicodeError, ValueError, TypeError):
             continue
     return verified
+
+
+def _receipt_timestamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def load_current_upload_receipt_source_ids(
+    audit_dir: Path,
+) -> tuple[set[str], list[str]]:
+    """Load exact current-revision Drive receipts as terminal evidence.
+
+    A model trace is the authority while a photo is being judged.  Once the
+    same source identity has a current-revision, hash-bound Drive receipt, that
+    receipt is the stronger completion authority and the backfill controller
+    must not schedule the photo again.  Older revisions remain excluded so a
+    later evidence-rule change can still select the affected source.
+    """
+
+    verified: set[str] = set()
+    invalid: list[str] = []
+    receipt_dir = audit_dir.resolve().parent / "_drive_upload_stream" / "receipts"
+    if not receipt_dir.is_dir():
+        return verified, invalid
+
+    for path in sorted(receipt_dir.glob("*.json"), key=lambda item: item.name):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8-sig"))
+            if item.get("schema") != STREAM_RECEIPT_SCHEMA:
+                continue
+            if item.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION:
+                continue
+            source_id = str(item.get("source_item_id") or "").strip().lower()
+            original_text = str(item.get("original_source_path") or "").strip()
+            source_hash = str(item.get("source_sha256") or "").strip().lower()
+            if (
+                not _SHA256_RE.fullmatch(source_id)
+                or not _SHA256_RE.fullmatch(source_hash)
+                or not original_text
+            ):
+                raise ValueError("receipt has incomplete source binding")
+            original = Path(original_text).resolve()
+            if not original.is_file() or stable_source_id(original) != source_id:
+                raise ValueError("receipt source path or identity no longer matches")
+
+            confirmed = _receipt_timestamp(item.get("confirmed_at"))
+            if confirmed is None:
+                must_hash = True
+            else:
+                source_mtime = datetime.fromtimestamp(
+                    original.stat().st_mtime,
+                    tz=confirmed.tzinfo,
+                )
+                must_hash = source_mtime.timestamp() > confirmed.timestamp() + 2.0
+            if must_hash and file_sha256(original) != source_hash:
+                raise ValueError("receipt source bytes no longer match")
+            verified.add(source_id)
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            invalid.append(f"{path}: {exc}")
+    return verified, invalid
+
+
+def load_current_upload_queue_source_ids(
+    audit_dir: Path,
+) -> tuple[set[str], list[str]]:
+    """Load durable current-revision uploads that are pending or in flight.
+
+    A locally verified result is already terminal once its exact source bytes,
+    current evidence revision, final structured result, and upload job have
+    been written atomically.  Waiting for a slow Drive readback must not make
+    the backfill scheduler stage and judge the same photo again.  Failed jobs
+    are deliberately excluded: after a job leaves ``pending``/``working`` it
+    becomes eligible again unless a confirmed receipt exists.
+
+    The worker moves jobs atomically between directories.  Collecting names
+    first and resolving their current location avoids a transient move being
+    mistaken for a missing job; a move to ``receipts`` is handled by the
+    receipt scan that immediately follows this function.
+    """
+
+    queued: set[str] = set()
+    invalid: list[str] = []
+    stream_root = audit_dir.resolve().parent / "_drive_upload_stream"
+    pending_dir = stream_root / "pending"
+    working_dir = stream_root / "working"
+    names: set[str] = set()
+    for directory in (pending_dir, working_dir):
+        if directory.is_dir():
+            names.update(path.name for path in directory.glob("*.json"))
+
+    signatures: dict[str, tuple[str, str, str, str]] = {}
+    for name in sorted(names):
+        path = next(
+            (
+                candidate
+                for candidate in (pending_dir / name, working_dir / name)
+                if candidate.is_file()
+            ),
+            None,
+        )
+        if path is None:
+            # The worker may have completed the atomic move to receipts after
+            # the directory snapshot.  The subsequent receipt scan owns it.
+            continue
+        try:
+            item = json.loads(path.read_text(encoding="utf-8-sig"))
+            if item.get("schema") != STREAM_UPLOAD_SCHEMA:
+                continue
+            if item.get("evidence_guard_revision") != EVIDENCE_GUARD_REVISION:
+                continue
+            source_id = str(item.get("source_item_id") or "").strip().lower()
+            original_text = str(item.get("original_source_path") or "").strip()
+            source_hash = str(item.get("source_sha256") or "").strip().lower()
+            input_hash = str(item.get("input_image_sha256") or "").strip().lower()
+            period = str(item.get("period") or "").strip()
+            target_name = str(item.get("target_name") or "").strip()
+            final_result = item.get("final_result")
+            if (
+                not _SHA256_RE.fullmatch(source_id)
+                or path.stem.lower() != source_id
+                or not _SHA256_RE.fullmatch(source_hash)
+                or not _SHA256_RE.fullmatch(input_hash)
+                or not original_text
+                or not re.fullmatch(r"20\d{4}", period)
+                or not target_name
+                or not isinstance(final_result, dict)
+            ):
+                raise ValueError("queued upload has incomplete terminal binding")
+            original = Path(original_text).resolve()
+            if not original.is_file() or stable_source_id(original) != source_id:
+                raise ValueError("queued upload source path or identity no longer matches")
+            if file_sha256(original) != source_hash:
+                raise ValueError("queued upload source bytes no longer match")
+            if not str(final_result.get("view_type") or final_result.get("category") or "").strip():
+                raise ValueError("queued upload has no terminal view type")
+            invariant_reasons = adjudication_field_invariant_reasons(final_result)
+            if invariant_reasons:
+                raise ValueError(
+                    "queued upload failed terminal field invariant: "
+                    + ",".join(invariant_reasons)
+                )
+            signature = (original_text, source_hash, input_hash, target_name)
+            previous = signatures.get(source_id)
+            if previous is not None and previous != signature:
+                raise ValueError("queued upload has conflicting durable bindings")
+            signatures[source_id] = signature
+            queued.add(source_id)
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            invalid.append(f"{path}: {exc}")
+    return queued, invalid
 
 
 def load_bound_visual_authorities(audit_dir: Path) -> dict[str, dict]:
@@ -258,7 +417,14 @@ def build_candidates(
     year: str,
     known_source_authorities: dict[str, dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, str]], dict]:
-    verified = load_verified_source_ids(audit_dir)
+    trace_verified = load_verified_source_ids(audit_dir)
+    upload_queued, invalid_upload_queue = load_current_upload_queue_source_ids(
+        audit_dir
+    )
+    upload_verified, invalid_upload_receipts = load_current_upload_receipt_source_ids(
+        audit_dir
+    )
+    verified = trace_verified | upload_verified | upload_queued
     authorities = dict(
         load_bound_visual_authorities(audit_dir)
         if known_source_authorities is None
@@ -317,6 +483,11 @@ def build_candidates(
                 candidates[source_id] = item
 
     rows = sorted(candidates.values(), key=lambda row: (row["period"], row["source_path"].casefold()))
+    terminal_authorized = {
+        source_id
+        for source_id in seen
+        if source_id in verified or source_id in human_audited
+    }
     summary = {
         "audit_dir": str(audit_dir.resolve()),
         "year": year,
@@ -324,13 +495,23 @@ def build_candidates(
         "year_source_rows": year_rows,
         "unique_year_sources": len(seen),
         "verified_source_ids": len(verified),
+        "trace_verified_source_ids": len(trace_verified),
+        "current_upload_receipt_source_ids": len(upload_verified),
+        "current_upload_queue_source_ids": len(upload_queued),
+        "invalid_upload_receipts": len(invalid_upload_receipts),
+        "invalid_upload_queue_jobs": len(invalid_upload_queue),
         "already_verified_year_sources": sum(1 for source_id in seen if source_id in verified),
         "human_audited_year_sources": len(human_audited),
+        # Completion is the union, not the arithmetic sum: a source can have
+        # both a current receipt and a byte-bound human visual authority.
+        "terminal_authorized_year_sources": len(terminal_authorized),
         "candidate_rows": len(rows),
         "missing_sources": len(missing),
         "conflicting_sources": len(conflicts),
         "invalid_rows": len(invalid),
         "error_samples": (missing + conflicts + invalid)[:20],
+        "upload_receipt_error_samples": invalid_upload_receipts[:20],
+        "upload_queue_error_samples": invalid_upload_queue[:20],
     }
     return rows, summary
 

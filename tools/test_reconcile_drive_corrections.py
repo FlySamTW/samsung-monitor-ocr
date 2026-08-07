@@ -1,8 +1,9 @@
 from pathlib import Path
-import csv, json, sys, tempfile, unittest
+import csv, json, subprocess, sys, tempfile, unittest
+from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from tools.reconcile_drive_corrections import Reconciler
+from tools.reconcile_drive_corrections import Reconciler, default_runner, run_phase
 
 class FakeRclone:
     def __init__(self, listings): self.listings=listings; self.calls=[]
@@ -25,6 +26,18 @@ class MissingPathErrorsRclone(FakeRclone):
                 return 3, '', 'ERROR : error listing: directory not found'
             return 0, json.dumps(self.listings[path]), ''
         return super().__call__(_exe, args)
+
+class FlatYearRclone:
+    def __init__(self, entries): self.entries={entry['Name']:dict(entry) for entry in entries}; self.calls=[]
+    def __call__(self, _exe, args):
+        self.calls.append(args)
+        if args[0] == 'lsjson' and args[1].endswith(':2026'):
+            return 0, json.dumps(list(self.entries.values())), ''
+        if args[0] == 'deletefile':
+            name=args[1].split(':',1)[1].rsplit('/',1)[-1]
+            self.entries.pop(name,None)
+            return 0, 'trashed', ''
+        return 1, '', 'unexpected'
 
 class ReconcileDriveTests(unittest.TestCase):
     def make(self, root, status='new_ready', **extra):
@@ -65,6 +78,30 @@ class ReconcileDriveTests(unittest.TestCase):
             self.assertEqual(rec.rows[0]['status'],'old_trashed_verified')
             self.assertEqual([call[0] for call in fake.calls],['lsjson','lsjson'])
 
+    def test_batch_trash_uses_one_year_snapshot_before_and_after(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
+            entries=[]; rows=[]
+            for index in (1,2):
+                entries.extend([
+                    {'Name':f'old-{index}.jpg','ID':f'old-{index}','Size':3,'Hashes':{'MD5':'old'}},
+                    {'Name':f'new-{index}.jpg','ID':f'new-{index}','Size':3,'Hashes':{'MD5':md5}},
+                ])
+                rows.append(self.make(
+                    root,
+                    status='new_uploaded_verified',
+                    old_remote_path=f'2026/old-{index}.jpg',
+                    old_drive_file_id=f'old-{index}',
+                    new_remote_path=f'2026/new-{index}.jpg',
+                    new_drive_file_id=f'new-{index}',
+                    new_remote_size=3,
+                    new_remote_md5=md5,
+                ))
+            fake=FlatYearRclone(entries); rec=self.rec(root,rows,fake)
+            rec.trash_old_batch(rec.rows)
+            self.assertEqual([row['status'] for row in rec.rows],['old_trashed_verified']*2)
+            self.assertEqual([call[0] for call in fake.calls],['lsjson','deletefile','deletefile','lsjson'])
+
     def test_lowercase_rclone_md5_key_is_accepted(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); md5='22af645d1859cb5ca6da0c484f1f37ea'
@@ -96,6 +133,26 @@ class ReconcileDriveTests(unittest.TestCase):
             self.assertEqual(fake.calls,[])
             self.assertEqual(rec.rows[0]['status'],'detected')
             self.assertIn('status=new_ready',rec.rows[0]['last_error'])
+
+    def test_phase_runner_skips_deferred_legacy_rows_without_remote_calls_or_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); fake=FakeRclone({}); row=self.make(root,status='detected',old_drive_file_id='')
+            rec=self.rec(root,[row],fake)
+            for phase in ('discover-old','upload-new','trash-old'):
+                run_phase(rec,phase,dry_plan=False)
+            self.assertEqual(fake.calls,[])
+            self.assertEqual(rec.rows[0]['status'],'detected')
+            self.assertNotIn('last_error',rec.rows[0])
+
+    def test_default_runner_has_a_bounded_remote_timeout(self):
+        with patch(
+            'tools.reconcile_drive_corrections.subprocess.run',
+            side_effect=subprocess.TimeoutExpired(['rclone', 'lsjson'], 180),
+        ):
+            rc, out, err = default_runner('rclone', ['lsjson', 'remote:file'])
+        self.assertEqual(rc, 124)
+        self.assertEqual(out, '')
+        self.assertIn('timed out', err)
 
     def test_execute_requires_phase_and_schema_tokens(self):
         src=(Path(__file__).parent/'reconcile_drive_corrections.py').read_text(encoding='utf-8')

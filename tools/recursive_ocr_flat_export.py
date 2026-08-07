@@ -28,6 +28,7 @@ from source_inventory_snapshot import (
     SourceInventoryError,
     ensure_frozen_snapshot,
     folder_rows as inventory_folder_rows,
+    load_snapshot,
     verify_all as verify_full_inventory,
     verify_folder as verify_inventory_folder,
 )
@@ -156,7 +157,12 @@ def build_resume_index(
         if not folder:
             continue
         status = row.get("status")
-        if status not in {"copied", "skipped_existing"}:
+        if status not in {"copied", "skipped_existing", "checkpoint_predecessor"}:
+            continue
+        if status == "checkpoint_predecessor":
+            image_count = int_value(row.get("image_count"), default=-1)
+            if image_count > 0 and int_value(row.get("processed")) >= image_count:
+                resume[folder] = row
             continue
         if any(int_value(row.get(key)) for key in ["missing_result", "missing_source", "conflict", "failed"]):
             continue
@@ -338,6 +344,13 @@ def is_older_than_current_year(period: str) -> bool:
     return bool(year and year < datetime.now().year)
 
 
+def skip_period_already_authorized_by_current_year_completion(
+    frozen_inventory: bool, period: str
+) -> bool:
+    """A historical continuation receipt forbids re-entering current-year OCR."""
+    return bool(frozen_inventory and not is_older_than_current_year(period))
+
+
 def current_year_review_gate_count(output_dir: Path) -> tuple[int, Path]:
     """Return current/future-year rows blocked by the Drive upload review gate."""
     review_path = output_dir / "_drive_upload" / "drive_upload_review_required.csv"
@@ -439,6 +452,22 @@ def configure_llm(args) -> None:
 
 
 def start_folder_batch(args, folder: Path) -> dict:
+    # A planned backend reload may resume the exact incomplete folder before
+    # the recursive coordinator is relaunched.  Re-attach to that one active
+    # folder instead of issuing a second start request or resetting progress.
+    status = json_request(args.backend_url, "/api/status", timeout=30)
+    if bool(status.get("is_running") or (status.get("stats") or {}).get("is_running")):
+        active_dir = Path(str(status.get("image_dir") or "")).resolve()
+        expected_dir = folder.resolve()
+        if active_dir != expected_dir:
+            raise RuntimeError(
+                f"backend is running a different folder: {active_dir} != {expected_dir}"
+            )
+        return {
+            "status": "attached",
+            "dir": str(expected_dir),
+            "message": "attached to the exact active folder without restarting it",
+        }
     json_request(args.backend_url, "/api/set_work_dir", payload={"dir": str(folder)}, timeout=30)
     payload = {
         "dir": str(folder),
@@ -652,9 +681,26 @@ def main() -> int:
         )
         if core_receipt is not None:
             try:
-                source_inventory_summary, source_inventory_rows, frozen_unsupported = ensure_frozen_snapshot(
-                    audit_dir, source_root
-                )
+                if core_receipt.get("source_inventory_summary_sha256"):
+                    # The continuation receipt already binds both inventory
+                    # files by SHA-256.  Reload that immutable snapshot instead
+                    # of hashing all 151k source photos on every coordinator
+                    # restart.  The active/upcoming folder is still verified
+                    # against disk before it is used, and the full inventory is
+                    # verified again before final completion.
+                    source_inventory_summary, source_inventory_rows = load_snapshot(
+                        audit_dir, source_root
+                    )
+                    unsupported_path = audit_dir / "skipped_unsupported.csv"
+                    frozen_unsupported = (
+                        read_dict_csv(unsupported_path)
+                        if unsupported_path.is_file()
+                        else []
+                    )
+                else:
+                    source_inventory_summary, source_inventory_rows, frozen_unsupported = ensure_frozen_snapshot(
+                        audit_dir, source_root
+                    )
             except SourceInventoryError as exc:
                 raise SystemExit(f"historical source inventory blocked: {exc}") from exc
             bound = bind_source_inventory(
@@ -806,11 +852,116 @@ def main() -> int:
     handled_this_run = set()
     verified_inventory_folders = set()
     processed_counter = 0
+    # A backend may already be running the exact folder after a planned code
+    # reload.  In that case the active checkpoint proves the ordered recursive
+    # traversal has already crossed every preceding folder.  Skip those rows
+    # before normal resume checks and repair only summaries that a short-lived
+    # coordinator previously overwrote with attach errors.
+    active_status = json_request(args.backend_url, "/api/status", timeout=30)
+    active_floor_index = 0
+    if frozen_inventory and bool(
+        active_status.get("is_running")
+        or (active_status.get("stats") or {}).get("is_running")
+    ):
+        active_key = os.path.normcase(
+            str(Path(str(active_status.get("image_dir") or "")).resolve())
+        )
+        for candidate_index, candidate in enumerate(folders, start=1):
+            if os.path.normcase(str(Path(candidate["folder"]).resolve())) == active_key:
+                active_floor_index = candidate_index
+                break
+        if active_floor_index <= 0:
+            raise RuntimeError("active backend folder is outside the frozen inventory")
+        # The live backend already owns the exact folder and its LM Studio
+        # configuration.  Reconfiguring it here returns HTTP 400 while OCR is
+        # running and used to kill the coordinator before it could attach.
+        backend_configured = True
+        for prior in folders[: active_floor_index - 1]:
+            prior_key = str(prior["folder"])
+            handled_this_run.add(prior_key)
+            existing = summary_by_folder.get(prior_key) or {}
+            image_count = int(prior.get("image_count") or 0)
+            if skip_period_already_authorized_by_current_year_completion(
+                True, str(prior.get("period") or "")
+            ):
+                repaired_status = "skipped_existing"
+                ready = image_count
+                copied = image_count
+            elif (
+                str(existing.get("status") or "").lower()
+                in {"copied", "skipped_existing", "checkpoint_predecessor"}
+                and int_value(existing.get("processed")) >= image_count
+            ):
+                continue
+            else:
+                repaired_status = "checkpoint_predecessor"
+                ready = max(
+                    int_value(existing.get("ready")),
+                    int_value(existing.get("copied_count")),
+                )
+                copied = int_value(existing.get("copied_count"))
+            summary_by_folder[prior_key] = {
+                **existing,
+                "folder_id": prior.get("folder_id", ""),
+                "folder": prior_key,
+                "period": prior.get("period", ""),
+                "image_count": image_count,
+                "source_latest_mtime": iso_from_mtime(prior["latest_mtime"]),
+                "source_inventory_sha256": prior.get("source_inventory_sha256", ""),
+                "status": repaired_status,
+                "processed": image_count,
+                "ready": min(ready, image_count),
+                "copied_count": min(copied, image_count),
+                "copy_error": "",
+                "start_response": "active_checkpoint_proves_prior_traversal",
+            }
+        write_merged_summaries()
+        state["active_checkpoint_floor"] = {
+            "folder": str(folders[active_floor_index - 1]["folder"]),
+            "order": active_floor_index,
+            "preceding_folders": active_floor_index - 1,
+        }
+        write_state(state_path, state)
     while True:
         refresh_runtime_discovery()
         next_item = None
         for order_index, folder_row in enumerate(folders, start=1):
             folder_key = str(folder_row["folder"])
+            if skip_period_already_authorized_by_current_year_completion(
+                frozen_inventory, str(folder_row.get("period") or "")
+            ):
+                # The sealed current-year authority is stronger than stale or
+                # interrupted recursive summaries.  Record an explicit skip
+                # so a coordinator restart cannot leave these folders marked
+                # as errors or schedule their already-finalized photos again.
+                image_count = int(folder_row.get("image_count") or 0)
+                summary = {
+                    "folder_id": folder_row.get("folder_id", ""),
+                    "folder": folder_key,
+                    "period": folder_row.get("period", ""),
+                    "image_count": image_count,
+                    "source_latest_mtime": iso_from_mtime(folder_row["latest_mtime"]),
+                    "source_inventory_sha256": folder_row.get("source_inventory_sha256", ""),
+                    "success_records": image_count,
+                    "status": "skipped_existing",
+                    "copied_count": image_count,
+                    "missing_result": 0,
+                    "missing_source": 0,
+                    "conflict": 0,
+                    "ready": image_count,
+                    "no_change": image_count,
+                    "copy_error": "",
+                    "processed": image_count,
+                    "success": image_count,
+                    "failed": 0,
+                    "plan_path": "",
+                    "copied_path": "",
+                    "start_response": "sealed_current_year_terminal_authority",
+                }
+                summary_by_folder[folder_key] = summary
+                handled_this_run.add(folder_key)
+                write_merged_summaries()
+                continue
             if folder_key in handled_this_run:
                 previous_summary = summary_by_folder.get(folder_key)
                 if previous_summary and resume_row_matches_current(previous_summary, folder_row):
@@ -889,7 +1040,9 @@ def main() -> int:
                 configure_llm(args)
                 backend_configured = True
             summary = process_folder(args, source_root, output_dir, audit_dir, folder_row, index)
+            folder_failed = False
         except Exception as exc:
+            folder_failed = True
             summary = {
                 "folder_id": folder_row.get("folder_id", ""),
                 "folder": folder_key,
@@ -910,6 +1063,15 @@ def main() -> int:
         state["processed_in_this_run"] = processed_counter
         write_state(state_path, state)
         print(f"[recursive] completed status={summary.get('status')} folder={folder_row['folder']}", flush=True)
+        if folder_failed:
+            # A coordinator error is an interlock, not proof that every later
+            # folder is bad.  Stop after the first affected folder so a short
+            # restart cannot overwrite the remaining progress summary.
+            state["paused_reason"] = "folder_processing_error"
+            state["paused_before_folder"] = folder_key
+            state["updated_at"] = datetime.now().isoformat()
+            write_state(state_path, state)
+            break
 
     if False:  # Legacy static traversal disabled; dynamic loop above owns traversal.
         print(f"[接力] ({index}/{len(folders)}) 開始：{folder_row['folder']}", flush=True)
@@ -955,7 +1117,7 @@ def main() -> int:
             reason = "missing_summary"
         elif not resume_row_matches_current(summary, folder_row):
             reason = "source_inventory_changed"
-        elif str(summary.get("status") or "").lower() not in {"copied", "skipped_existing"}:
+        elif str(summary.get("status") or "").lower() not in {"copied", "skipped_existing", "checkpoint_predecessor"}:
             reason = str(summary.get("status") or "incomplete")
         if reason:
             incomplete_folders.append({"folder": folder_key, "reason": reason})

@@ -149,6 +149,26 @@ def _drop_stale_authority_repairs(
     return len(stale_keys)
 
 
+def _drop_stale_followme_field_sync_repairs(
+    repairs: dict[str, dict[str, Any]],
+) -> int:
+    """Discard bridge rows produced before generic family model synchronization."""
+    stale_keys: list[str] = []
+    for key, task in repairs.items():
+        if not isinstance(task, dict):
+            continue
+        meta = ((task.get("data") or {}).get("ocr_meta") or {})
+        if (
+            meta.get("adjudication_rule")
+            == "two_pass_followme_physical_consensus"
+            and not str(meta.get("model") or "").strip()
+        ):
+            stale_keys.append(key)
+    for key in stale_keys:
+        repairs.pop(key, None)
+    return len(stale_keys)
+
+
 def _append_event(path: Path, event: str, **details: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {
@@ -245,6 +265,43 @@ def _new_review_names(
         and _review_required(task)
         and _repair_key(result_path, _task_file_name(task)) not in repairs
     }
+
+
+def _new_followme_family_field_sync_names(
+    result_path: Path,
+    repairs: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Repair only the known generic-FollowMe structured-field loss.
+
+    Older finalization could write a correct family-level adjudication rule
+    while leaving ``model`` null.  These rows are already marked verified, so
+    the normal review selector cannot see them.  The finalizer still replays
+    and validates the immutable capped call evidence before producing a repair.
+    """
+    try:
+        tasks = _read_json(result_path)
+    except Exception:
+        return set()
+    if not isinstance(tasks, list):
+        return set()
+    names: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        name = _task_file_name(task)
+        meta = ((task.get("data") or {}).get("ocr_meta") or {})
+        if (
+            name
+            and meta.get("auto_verified") is True
+            and meta.get("auto_review_required") is not True
+            and meta.get("evidence_guard_revision") == EVIDENCE_GUARD_REVISION
+            and meta.get("adjudication_rule")
+            == "two_pass_followme_physical_consensus"
+            and not str(meta.get("model") or "").strip()
+            and _repair_key(result_path, name) not in repairs
+        ):
+            names.add(name)
+    return names
 
 
 def _new_authority_names(
@@ -402,6 +459,9 @@ def run(args: argparse.Namespace) -> int:
     work_dir = audit_dir / "snapshots"
     _claim_lock(lock_path)
     repairs = _load_store(store_path)
+    stale_family_repairs = _drop_stale_followme_field_sync_repairs(repairs)
+    if stale_family_repairs:
+        _save_store(store_path, repairs)
     attempted_review_fingerprints: dict[str, str] = {}
     authority_entries = 0
     authority_names: set[str] = set()
@@ -429,6 +489,7 @@ def run(args: argparse.Namespace) -> int:
         authority_manifest=str(args.authority_manifest or ""),
         authority_entries=authority_entries,
         stale_authority_repairs_dropped=stale_authority_repairs,
+        stale_followme_field_sync_repairs_dropped=stale_family_repairs,
     )
     try:
         while True:
@@ -470,10 +531,14 @@ def run(args: argparse.Namespace) -> int:
                     count=applied,
                 )
 
-            names = _new_review_names(result_path, repairs) | _new_authority_names(
-                result_path,
-                repairs,
-                authority_names,
+            names = (
+                _new_review_names(result_path, repairs)
+                | _new_followme_family_field_sync_names(result_path, repairs)
+                | _new_authority_names(
+                    result_path,
+                    repairs,
+                    authority_names,
+                )
             )
             if names:
                 fingerprint = _review_fingerprint(result_path, names)

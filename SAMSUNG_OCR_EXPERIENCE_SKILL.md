@@ -1,4 +1,4 @@
-﻿---
+---
 description: Technical Rulebook & Post-Mortem for Samsung OCR Project
 ---
 
@@ -804,3 +804,24 @@ Required regression coverage is `tools/test_current_year_upload_finalization.py`
   that exact source inside the same formal batch, keep the three-call cap, and
   require a terminal result plus exact stream-upload receipt before failed can
   return to zero.
+## 20260726.81 FollowMe ordered-family early stop and live continuity
+
+- Ordered FollowMe-family early stop is allowed only for same-unit direct FollowMe branding plus at least two strong physical cues, or the complete stand/base/tray set. It establishes the FollowMe family before distant classification; it does not invent a variant.
+- Keep family, exact SKU, and price independent. Family proof may finalize `FollowMe 型號未細分`; exact SKU requires its own same-subject readable evidence, and price requires its own readable aligned card.
+- If narration explicitly denies a readable main-subject price card, withdraw only `price`; do not revoke the independently established business subject, family, or classification.
+- Each photo remains at most three stateless, request-bound calls. Same-photo fuse recovery is hash-bound, restores only the saved checkpoint, and never resets attempts or allows call four.
+- A safe runtime reload resumes the same staging checkpoint automatically. Dashboard/status API, LM Studio, uploader, and the existing browser tab remain online throughout repair or photo-boundary hold.
+- Live proof, 2026-07-27, revision `.81`: same staging, runtime fuse `null`; processed `1450` to at least `1461`, verified `1399` to `1410`, and per-photo upload receipts `4288` to `4293`.
+
+## Source-designated view contract (2026-08-03)
+
+- Trust `source_view_hint` only with an explicit boolean lock, source name and version. Never infer it from legacy filenames or folders.
+- A trusted `遠景` designation is canonical and closes without model/price extraction. A trusted `近景` designation is canonical `單機`; spend local inference only on the main unit's attached side label, exact model, owned price card and FollowMe evidence.
+- Preserve a conflicting model observation as audit metadata, then deterministically restore the source view. Do not consume another pass merely to classify the view again.
+- The first-pass prompt is replaceable. Passes two and three use the permanent stateless field contract, receive no prior answer, target only unresolved fields and remain within the lifetime three-call cap.
+
+## Historical same-card SKU contract (2026-08-03)
+
+- Current catalogue absence alone never invalidates a discontinued historical Samsung SKU. A bound, healthy first pass may close when one main subject owns one physical side label/card carrying the exact SKU and price.
+- Prefer model tokens quoted inside physical-label clauses over an inconsistent opening conclusion. Two different physical-label candidates remain ambiguous and must not be guessed.
+- Do not recover an explicitly null structured field from free prose alone. Keep source/image/request binding, matched ownership, conflict checks and the three-call lifetime cap intact.

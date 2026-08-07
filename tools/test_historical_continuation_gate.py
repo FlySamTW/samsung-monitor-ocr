@@ -173,6 +173,75 @@ class HistoricalContinuationGateTests(unittest.TestCase):
             self.assertFalse(result["valid"])
             self.assertTrue(any("upload_gate_proof_stale" in item for item in result["errors"]))
 
+    def test_sealed_terminal_authority_survives_stale_mutable_review_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, output, audit, drive = self.build_fixture(Path(tmp))
+            proof_path = drive / PROOF_NAME
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            proof["generated_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            # Production proofs historically used string years; normalize both.
+            proof["upload_scope_years"] = ["2026"]
+            proof_path.write_text(json.dumps(proof), encoding="utf-8")
+            with (drive / REVIEW_NAME).open("a", encoding="utf-8-sig", newline="") as handle:
+                csv.writer(handle).writerow(["2026", "stale_legacy_review_row"])
+
+            candidate = audit / "v1945_evidence_backfill_2026.csv"
+            with candidate.open("w", encoding="utf-8-sig", newline="") as handle:
+                csv.DictWriter(handle, fieldnames=["source_item_id"]).writeheader()
+            summary = {
+                "audit_dir": str(audit),
+                "year": "2026",
+                "unique_year_sources": 10,
+                "already_verified_year_sources": 8,
+                "human_audited_year_sources": 2,
+                "terminal_authorized_year_sources": 10,
+                "candidate_rows": 0,
+                "missing_sources": 0,
+                "conflicting_sources": 0,
+                "invalid_rows": 0,
+                "invalid_upload_receipts": 0,
+                "invalid_upload_queue_jobs": 0,
+                "current_upload_queue_source_ids": 0,
+                "output": str(candidate.resolve()),
+                "executed": True,
+            }
+            candidate.with_suffix(candidate.suffix + ".summary.json").write_text(
+                json.dumps(summary), encoding="utf-8"
+            )
+
+            result = write_receipt(
+                source, output, current_year=2026,
+                backend_url="http://127.0.0.1:5002", status_reader=self.idle_status,
+            )
+            self.assertTrue(result["valid"], result.get("errors"))
+            self.assertTrue(result["receipt"]["sealed_terminal_completion"])
+            self.assertEqual(result["receipt"]["legacy_current_year_review_rows_ignored"], 1)
+            self.assertEqual(result["receipt"]["terminal_authority"]["terminal_authorized_sources"], 10)
+
+    def test_incomplete_terminal_summary_cannot_bypass_stale_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, output, audit, drive = self.build_fixture(Path(tmp))
+            proof_path = drive / PROOF_NAME
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            proof["generated_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            proof_path.write_text(json.dumps(proof), encoding="utf-8")
+            candidate = audit / "v1945_evidence_backfill_2026.csv"
+            with candidate.open("w", encoding="utf-8-sig", newline="") as handle:
+                csv.DictWriter(handle, fieldnames=["source_item_id"]).writeheader()
+            candidate.with_suffix(candidate.suffix + ".summary.json").write_text(json.dumps({
+                "year": "2026", "unique_year_sources": 10,
+                "already_verified_year_sources": 8,
+                "human_audited_year_sources": 1,
+                "terminal_authorized_year_sources": 9,
+                "candidate_rows": 0, "output": str(candidate.resolve()), "executed": True,
+            }), encoding="utf-8")
+            result = write_receipt(
+                source, output, current_year=2026,
+                backend_url="http://127.0.0.1:5002", status_reader=self.idle_status,
+            )
+            self.assertFalse(result["valid"])
+            self.assertTrue(any("upload_gate_proof_stale" in item for item in result["errors"]))
+
     def test_authority_tamper_invalidates_existing_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, output, audit, drive = self.build_fixture(Path(tmp))

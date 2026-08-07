@@ -114,6 +114,16 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("presentation key divergence", app)
         self.assertIn("presentation_sequence || 0", app)
 
+    def test_gpu_card_rejects_stale_static_snapshot_without_changing_six_card_layout(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("gpuTelemetryAgeMs <= 10000", app)
+        self.assertIn("const freshGpuTelemetry =", app)
+        self.assertIn("data.resources?.gpu ?? freshGpuTelemetry.gpu", app)
+        self.assertNotIn("data.resources?.gpu ?? gpuTelemetry.gpu", app)
+        self.assertIn("gridTemplateColumns:'repeat(3, 1fr)'", app)
+        for label in ("完成判讀", "自動定案中", "失敗", "GPU", "記憶體", "近期平均"):
+            self.assertIn(f"l:'{label}'", app)
+
     def test_live_stream_does_not_leave_a_false_stalled_invariant(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         watchdog_start = app.index("const watchdog = setInterval")
@@ -126,10 +136,13 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("Date.now() - watched.updatedAt", watchdog)
         self.assertNotIn("const latestKeys =", watchdog)
 
-    def test_running_mode_uses_same_file_live_stream_and_keeps_live_priority(self):
+    def test_running_mode_keeps_current_photo_during_empty_stream(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn('const rawSameFileStream = liveFile === currentFile', app)
         self.assertIn('const sameFileStream = humanizeStructuredModelOutput(rawSameFileStream, pendingNarration)', app)
+        self.assertIn('const hasModelText = Boolean(rawSameFileStream || detailedThinking);', app)
+        self.assertNotIn('if (!hasModelText && (activePresentation || pendingQueue.length > 0)) return null;', app)
+        self.assertIn('the left panel belongs exclusively to the current', app)
         self.assertIn('key: `live:${liveDir}|${currentFile}|pass:${livePassIndex}`', app)
         self.assertIn("const visiblePassPresentation = liveStreamSnapshot ? livePendingResult : activePresentation", app)
         self.assertIn("getPassHeading(visiblePassPresentation)", app)
@@ -145,13 +158,46 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('data.stream_buffer', live)
         self.assertNotIn('activePresentation?.file_name || data.stream_file || data.current_file', app)
         self.assertNotIn('prepareNarrationHandoff("", data.current_file', app)
-        self.assertNotIn('setActivePresentation(null);\n    setDisplayedBuffer("");\n    setDisplayTargetKey("");', app)
+        self.assertIn('const liveFileOwnsPreview = Boolean(currentFile && currentFile !== "None");', app)
+        self.assertIn('setPendingQueue([]);', app)
+        self.assertIn('setActivePresentation(null);', app)
         self.assertIn('Never discard an unrevealed item', app)
         self.assertIn('incomingQueue.slice(-1)', app)
         self.assertIn('const visibleNarrationSnapshot = liveStreamSnapshot', app)
         self.assertIn('|| (!isRunning ? latestBackendNarration : heldNarrationSnapshot)', app)
         self.assertIn('currentFileThinking', app)
         self.assertIn('!value.startsWith("這張已完成辨識：")', app)
+
+    def test_live_display_target_snapshots_its_own_filename_not_stale_active_filename(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        target_start = app.index('const getDisplayTarget = () =>')
+        target_end = app.index('const imageReadyForDisplay', target_start)
+        target = app[target_start:target_end]
+
+        self.assertIn(
+            'if (live) return { target: live.text, isQueue: false, key: live.key, fileName: live.fileName || "" };',
+            target,
+        )
+        self.assertIn('fileName: activePresentation.file_name || ""', target)
+        self.assertIn('const displayTargetSnapshotRef = useRef({ key: "", fileName: "", target: "", isQueue: false });', app)
+        self.assertIn('displayTargetSnapshotRef.current = nextTarget;', app)
+        self.assertIn('prepareNarrationHandoff(nextTarget.key, nextTarget.fileName);', app)
+        self.assertNotIn('prepareNarrationHandoff(nextTarget.key, activePresentation?.file_name', app)
+
+    def test_held_snapshot_cannot_borrow_or_cross_connect_image_identity(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        held_start = app.index('const heldNarrationSnapshot =')
+        held_end = app.index('// The API snapshot is the display authority.', held_start)
+        held = app[held_start:held_end]
+        match_start = app.index('const matchingVisibleImage =')
+        match_end = app.index('const heldPresentation =', match_start)
+        matching_image = app[match_start:match_end]
+
+        self.assertIn('fileName: narrationDisplay.fileName || ""', held)
+        self.assertIn('key: narrationDisplay.key || ""', held)
+        self.assertNotIn('visibleImageTarget.fileName', held)
+        self.assertNotIn('visibleImagePresentationKey', held)
+        self.assertIn('(!visibleNarrationKey || effectiveVisibleImagePresentationKey === visibleNarrationKey)', matching_image)
 
     def test_empty_live_stream_uses_identity_bound_task_narration(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
@@ -208,7 +254,10 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('item.accepted === false', unresolved)
         self.assertIn('data-review-state={isStaleGuardRevision(res) ? "stale-revision" : isTerminalTechnicalFailure(res) ? "technical-failure" : isExplicitlyUnresolved(res) ? "auto-finalizing" : "completed"}', rail)
         self.assertIn('label: "技術錯誤／該張未上傳"', unresolved_status)
-        self.assertIn('detail: "系統修復後自動重跑"', unresolved_status)
+        self.assertIn(
+            'detail: "已達三輪上限；等待自動修復器定案或重新排程"',
+            unresolved_status,
+        )
         self.assertIn('{getUnresolvedCardStatus(res).label}', rail)
         self.assertIn('{getUnresolvedCardStatus(res).detail}', rail)
         self.assertIn('label: "第三輪已完成／自動定案中"', unresolved_status)
@@ -233,7 +282,8 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertNotIn('待人工校正 ({stats.review_required ?? 0})', app)
         self.assertIn('自動定案紀錄', app)
         self.assertIn("{l:'完成判讀', v:stats.success", app)
-        self.assertIn("{l:'自動定案中', v:stats.review_required ?? 0", app)
+        self.assertIn("{l:'自動定案中', v:cappedAdjudicationCount", app)
+        self.assertIn("Number(data.capped_adjudication?.count || 0)", app)
         self.assertNotIn('成功記錄 ({stats.success})', app)
 
     def test_history_is_loaded_on_demand_and_user_labels_are_localized(self):
@@ -321,13 +371,71 @@ class PresentationSoakTests(unittest.TestCase):
     def test_active_content_repair_is_not_labeled_idle(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
         self.assertIn("const contentRepairActive = Boolean(", app)
+        self.assertIn("data.pipeline_pause?.reason", app)
+        self.assertIn("data.pipeline_pause?.paused_at", app)
         self.assertIn("? '內容守門修復中'", app)
         self.assertIn("{operationStatusLabel}", app)
 
-    def test_result_rail_refuses_blank_run_identity(self):
+    def test_stream_upload_is_visible_work_and_reports_automatic_handoff(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn('if (!expectedRunId)', app)
-        self.assertIn('setRevealedResults([]);', app)
+        self.assertIn("const streamUploadActive = data.stream_upload?.worker_state === 'running'", app)
+        self.assertIn("const visibleOperationActive = isRunning", app)
+        self.assertIn("|| zeroModelAdjudicationActive", app)
+        self.assertIn("|| streamUploadActive", app)
+        self.assertIn("? '逐張上傳中'", app)
+        self.assertIn("逐張上傳中 · OCR 自動銜接", app)
+        self.assertIn("上傳佇列清空後，Supervisor 會自動銜接下一個資料匣", app)
+        self.assertIn("'系統處理內容' : 'LLM 判讀內容'", app)
+
+    def test_idle_completed_folder_is_visible_as_automatic_handoff_not_idle(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("const automaticHandoffActive = !isRunning", app)
+        self.assertIn("data.overall_progress?.current_folder?.status === 'active_idle'", app)
+        self.assertIn("['photo_ocr', 'historical_continuation'].includes(pipelineTelemetry.phase)", app)
+        self.assertIn("pipelineTelemetryAgeMs <= 90000", app)
+        self.assertNotIn("&& Number(data.stream_upload?.worker_pid || 0) > 0;", app)
+        self.assertIn("|| automaticHandoffActive", app)
+        self.assertIn("? '自動銜接中'", app)
+        self.assertIn("年度完成核對中 · OCR 自動銜接下一個資料匣", app)
+
+    def test_zero_model_adjudication_is_active_and_never_impersonates_live_llm(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn(
+            "data.pipeline_pause?.reason === 'capped_zero_model_adjudication_apply'",
+            app,
+        )
+        self.assertIn("const zeroModelAdjudicationActive = !isRunning", app)
+        self.assertIn("? '零模型自動定案中'", app)
+        self.assertIn('"零模型證據定案中（未呼叫 LLM）"', app)
+        self.assertIn(
+            "zeroModelAdjudicationActive ? '零模型證據定案中' : 'LLM 即時判讀中'",
+            app,
+        )
+        self.assertIn("const zeroModelProgressText =", app)
+        self.assertIn("zeroModelActivity.processed", app)
+        self.assertIn("zeroModelActivity.total", app)
+        self.assertIn("disabled={visibleOperationActive}", app)
+
+    def test_zero_model_mode_does_not_depend_on_the_capped_counter(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        start = app.index("const zeroModelPauseActive =")
+        end = app.index("const zeroModelAdjudicationRepair =", start)
+        mode_contract = app[start:end]
+        self.assertIn("data.pipeline_pause?.reason", mode_contract)
+        self.assertIn("zeroModelActivity.active === true", mode_contract)
+        self.assertNotIn("cappedAdjudicationCount", mode_contract)
+
+    def test_result_rail_refuses_blank_folder_scope(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn(
+            "if (!currentResultRailBatchKey || currentResultRailBatchKey === resultRailBatchKey) return;",
+            app,
+        )
+        self.assertIn(
+            'normalizeBatchPath(data.source_root || data.image_dir || "")',
+            app,
+        )
+        self.assertIn('serverGuardRevision ? `revision:${serverGuardRevision}` : ""', app)
 
     def test_backend_narration_snapshot_cannot_be_hidden_by_animation_state(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
@@ -337,12 +445,13 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn('displayTargetKey === visibleNarrationKey', app)
         self.assertIn('displayedBuffer || "正在接收本張照片的 LLM 判讀文字..."', app)
         self.assertIn('data-narration-source={visibleNarrationKey}', app)
-        self.assertIn("LLM 判讀內容 · {narrationStatusLabel}", app)
+        self.assertIn("'系統處理內容' : 'LLM 判讀內容'} · {narrationStatusLabel}", app)
         self.assertIn("!isRunning && visibleNarrationSnapshot?.text", app)
 
     def test_idle_dashboard_uses_latest_completed_history_without_fake_live_state(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
-        self.assertIn("normalizePresentationItem(queue[queue.length - 1]) || revealedResults[0] || null", app)
+        self.assertIn("const latestCompleted = revealedResults.find(isCompletedRailResult) || null", app)
+        self.assertIn("const latest = !isRunning && latestCompleted", app)
         self.assertIn("if (!isRunning && revealedResults[0])", app)
         self.assertIn("key: `latest:${latest._queueKey}`", app)
         self.assertIn('!isRunning && visibleNarration\n    ? "最新完成判讀"', app)
@@ -402,22 +511,83 @@ class PresentationSoakTests(unittest.TestCase):
         self.assertIn("data.stats?.processed", app)
         self.assertIn("rehydrate durable", app)
         self.assertIn("samsung_ocr_result_rail_v2", app)
-        self.assertIn("data.presentation_run_id || \"legacy\"", app)
+        self.assertIn("normalizeBatchPath(data.source_root || data.image_dir || \"\")", app)
         self.assertIn('/api/presentation_history?limit=200&scope=current_batch', app)
-        self.assertIn('allowed.has(String(item.source_item_id || ""))', app)
-        self.assertIn('String(item.run_id || "") === expectedRunId', app)
-        self.assertIn('.filter((item) => item && String(item.run_id || "") === expectedRunId)', app)
+        self.assertIn('fetch("/api/presentation_history?limit=200")', app)
+        self.assertIn("&& isCompletedRailResult(item)", app)
+        self.assertIn("data.overall_progress?.processed_images", app)
+        self.assertIn("data.stream_upload?.canonical_uploaded", app)
+        self.assertIn('allowed.has(String(item?.source_item_id || ""))', app)
+        self.assertIn('String(item?.evidence_guard_revision || "") === serverGuardRevision', app)
+        self.assertNotIn('String(item.run_id || "") === expectedRunId', app)
+        self.assertNotIn('data.presentation_run_id || "legacy"', app)
         self.assertIn('setCurrentImageTarget({ src: "", key: "", fileName: "" })', app)
         self.assertIn('setVisibleImageTarget({ src: "", key: "", fileName: "" })', app)
         self.assertIn('isRunning && data.current_file && data.current_file !== "None"', app)
         self.assertIn("saved?.batchKey === currentResultRailBatchKey", app)
         self.assertIn("items: revealedResults", app)
+        self.assertIn("cappedItems: cappedRailItems", app)
         rail_start = app.index("// The live LLM stream must never block completed photos")
         rail_end = app.index("// Never let a stale async update", rail_start)
         self.assertNotIn("getSyncedLiveStream", app[rail_start:rail_end])
         self.assertNotIn("if (!isRunning) return;", app[rail_start:rail_end])
         self.assertIn("}, [data.presentation_queue]);", app[rail_start:rail_end])
         self.assertNotIn("slice(-1)", app[rail_start:rail_end])
+
+    def test_capped_adjudication_count_is_separate_from_completed_result_cards(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        self.assertIn("MAX_CLIENT_CAPPED_ADJUDICATIONS = 20", app)
+        self.assertIn("normalizeCappedAdjudicationItem", app)
+        self.assertIn('const sourceItemId = String(item.source_item_id || "").trim();', app)
+        self.assertIn('const sourcePath = String(item.source_path || "").trim();', app)
+        self.assertIn('const fileName = String(item.file_name || "").trim();', app)
+        self.assertIn("normalizedSourcePath.startsWith(`${normalizedBatchPath}\\\\`)", app)
+        self.assertIn("_queueKey: `capped:${sourceItemId}`", app)
+        self.assertIn('data-testid="capped-adjudication-summary"', app)
+        self.assertIn("不占用完成結果縮圖區", app)
+        self.assertNotIn('data-testid="capped-adjudication-card"', app)
+        self.assertNotIn("{cappedPanelItems.map((res) => (", app)
+        completed_cards = app.index("{rightPanelItems.map((res, i) => (")
+        capped_summary = app.index('data-testid="capped-adjudication-summary"')
+        self.assertLess(completed_cards, capped_summary)
+
+    def test_result_rail_excludes_retry_review_and_technical_history(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        helper_start = app.index("const isCompletedRailResult =")
+        helper_end = app.index("const getUnresolvedCardStatus =", helper_start)
+        helper = app[helper_start:helper_end]
+        self.assertIn("isStaleGuardRevision(item)", helper)
+        self.assertIn("isTerminalTechnicalFailure(item)", helper)
+        self.assertIn("isExplicitlyUnresolved(item)", helper)
+        self.assertIn('decision === "accepted"', helper)
+        self.assertIn("item.auto_verified === true", helper)
+        self.assertIn("item.accepted === true", helper)
+        self.assertIn(
+            "const rightPanelItems = revealedResults\n    .filter(isCompletedRailResult)\n    .slice(0, MAX_REVEALED_RESULTS);",
+            app,
+        )
+
+    def test_result_rail_preserves_recent_completed_cards_across_folder_transitions(self):
+        app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")
+        key_line = next(line for line in app.splitlines() if "const currentResultRailBatchKey =" in line)
+        key_block = app[app.index(key_line):app.index("const resultRailStorageKey", app.index(key_line))]
+        self.assertIn("normalizeBatchPath", key_block)
+        self.assertIn("source_root", key_block)
+        self.assertIn("image_dir", key_block)
+        self.assertIn("serverGuardRevision", key_block)
+        self.assertNotIn("current_relative_dir", key_block)
+        self.assertNotIn("presentation_run_id", key_line)
+        history_start = app.index('fetch("/api/presentation_history?limit=200&scope=current_batch")')
+        history_end = app.index("// The backend exposes only a compact recent window", history_start)
+        history = app[history_start:history_end]
+        self.assertIn("isAllowedCurrentRevision", history)
+        self.assertIn("allowed.has", history)
+        self.assertIn("serverGuardRevision", history)
+        self.assertNotIn("expectedRunId", history)
+        self.assertIn("...prev.filter", app)
+        self.assertIn("serverGuardRevision", app)
+        self.assertNotIn("setRevealedResults(restored)", app)
+        self.assertIn('data-testid="result-rail-hydrating"', app)
 
     def test_legacy_status_polling_is_bounded_non_overlapping_and_lightweight(self):
         app = (Path(__file__).resolve().parents[1] / "dashboard" / "src" / "App.jsx").read_text(encoding="utf-8")

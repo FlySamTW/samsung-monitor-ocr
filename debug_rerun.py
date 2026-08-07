@@ -21,7 +21,14 @@ try:
     
     # Initialize Global Client manualy
     print("Setting up global API Client...")
-    client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio", timeout=60, max_retries=1)
+    # Keep debug execution under the same one-reservation/one-request rule as
+    # production; the orchestrator owns any later stateless attempt.
+    client = OpenAI(
+        base_url="http://127.0.0.1:1234/v1",
+        api_key="lm-studio",
+        timeout=60,
+        max_retries=0,
+    )
     
     # INJECT into module scope
     samsung_ocr_batch_processor.api_client = client

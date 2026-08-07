@@ -4,7 +4,7 @@ param(
     [string]$SourceRoot,
     [string]$OutputDir,
     [string]$BackendUrl = "http://127.0.0.1:5002",
-    [int]$IntervalSeconds = 300,
+    [int]$IntervalSeconds = 60,
     [int]$ChildTimeoutSeconds = 240
 )
 $ErrorActionPreference = "Stop"

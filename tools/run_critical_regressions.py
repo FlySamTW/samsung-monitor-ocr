@@ -14,6 +14,7 @@ def main() -> int:
         [sys.executable, str(ROOT / "tools" / "test_presentation_history_api.py")],
         [sys.executable, str(ROOT / "tools" / "test_immediate_retry_queue.py")],
         [sys.executable, "-m", "unittest", "-v", "tools.test_v1945_evidence_contract"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_review_pass_contract"],
         [sys.executable, str(ROOT / "tools" / "test_runtime_safety_guards.py")],
         [sys.executable, "-m", "unittest", "-v", "tools.test_runtime_health_gate"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_recover_legacy_instruction_echo_fuse"],
@@ -38,7 +39,10 @@ def main() -> int:
         [sys.executable, "-m", "unittest", "-v", "tools.test_continue_after_period_priority"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_recover_failed_fuse_uploads"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_revalidate_frozen_guard_results"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_revalidate_completed_source_results"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_recover_consumed_cap_missing_result"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_finalize_safe_consumed_cap_batch"],
+        [sys.executable, "-m", "unittest", "-v", "tools.test_migrate_lifetime_cap_fuse_to_deferred"],
         [sys.executable, "-m", "unittest", "-v", "tools.test_build_visual_authority_manifest"],
     ]
     for command in commands:

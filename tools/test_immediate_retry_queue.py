@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import tempfile
@@ -33,10 +34,23 @@ def main() -> None:
         calls: list[tuple[str, int, int]] = []
 
         def processor(fname, image_b64, prompt_mgr, image_processor, processed_image=None, ocr_attempt=1, previous_results=None):
+            input_hash = __import__("hashlib").sha256(
+                __import__("base64").b64decode(image_b64)
+            ).hexdigest()
+            reservation = orchestrator.reserve_actual_model_call(
+                filename=fname,
+                input_image_sha256=input_hash,
+                requested_attempt=ocr_attempt,
+            )
+            ocr_attempt = int(reservation["call_number"])
             calls.append((fname, ocr_attempt, len(previous_results or [])))
             binding = {
                 "request_id_verified": True,
-                "input_image_sha256": __import__("hashlib").sha256(__import__("base64").b64decode(image_b64)).hexdigest(),
+                "input_image_sha256": input_hash,
+                "lifetime_model_call_count": int(reservation["consumed_calls"]),
+                "model_call_reservation_id": reservation["reservation_id"],
+                "model_call_binding_key": reservation["binding_key"],
+                "source_file_sha256": reservation["source_file_sha256"],
             }
             if fname == "A.jpg" and ocr_attempt == 1:
                 return {
@@ -62,6 +76,20 @@ def main() -> None:
             "max_dimensions": (2560, 1440),
             "max_auto_attempts": 3,
         })
+        # This is a queue/pass-state regression, not an image-processing
+        # benchmark.  Running the production accuracy-first retry crops five
+        # times makes the old 20-second fixture deadline machine-dependent and
+        # can let TemporaryDirectory delete the photos while the worker is
+        # still preprocessing.  Keep the exact source bytes while isolating the
+        # state machine under test.
+        def prepared_source(path, **_kwargs):
+            source_path = Path(path).resolve()
+            return {
+                "base64": base64.b64encode(source_path.read_bytes()).decode("ascii"),
+                "metadata": {"source_path": str(source_path)},
+            }
+
+        orchestrator.img_proc.process = prepared_source
         orchestrator.set_processor_function(processor)
         orchestrator.set_result_review_function(immediate_retry_decision)
         old_session = image_dir / "20200101-0000-OCR成功.json"
@@ -80,7 +108,17 @@ def main() -> None:
         deadline = time.time() + 20
         while orchestrator.is_running and time.time() < deadline:
             time.sleep(0.05)
-        assert not orchestrator.is_running
+        assert not orchestrator.is_running, {
+            "calls": calls[-20:],
+            "retry_queue": list(orchestrator.retry_queue),
+            "priority_queue": list(orchestrator.priority_queue),
+            "auto_attempts": dict(orchestrator.auto_attempts),
+            "history_sizes": {
+                key: len(value)
+                for key, value in orchestrator.auto_result_history.items()
+            },
+            "stop_event": orchestrator.stop_event.is_set(),
+        }
         assert [item[0] for item in calls[:5]] == ["A.jpg", "A.jpg", "B.jpg", "B.jpg", "B.jpg"], calls
         assert calls[1][1:] == (2, 1), calls
         assert calls[3][1:] == (2, 1), calls

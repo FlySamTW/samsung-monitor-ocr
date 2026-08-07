@@ -70,7 +70,220 @@ def unresolved():
     }
 
 
+def write_friendly_model_repair_fixture(
+    root: Path,
+    *,
+    existing_model=None,
+    existing_price="45900",
+    third_price="45900",
+):
+    name = "M-高雄市-鼓山區-集雅社-高雄義享SMS-602.jpg"
+    source = root / name
+    source.write_bytes(b"bound-sms-602-photo")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    source_id = hashlib.sha256(
+        str(source.resolve()).casefold().encode("utf-8")
+    ).hexdigest()
+    input_sha = "b" * 64
+    rows = []
+    for attempt, request_id, narration in (
+        (
+            1,
+            "1" * 32,
+            "我看到本輪結論：單機，型號 ViewFinity S9 S27C900PAC，"
+            "價格 $45,900。主角價牌與螢幕空間對齊。",
+        ),
+        (
+            2,
+            "2" * 32,
+            "我看到本輪結論：單機，型號 ViewFinity S9 S27C900PAC，"
+            "價格 $45,900。中央只有一台完整螢幕。",
+        ),
+        (
+            3,
+            "3" * 32,
+            "我看到本輪結論：單機，型號 ViewFinity S9 S27C900PAC，"
+            "價格 $45,900。標籤屬於唯一主角。",
+        ),
+    ):
+        raw = json.dumps(
+            {
+                "request_id": request_id,
+                "narration": narration,
+                "view_type": "單機",
+                "model": "ViewFinity S9 S27C900PAC",
+                "price": third_price if attempt == 3 else "45900",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+                "followme_physical_evidence": [],
+                "screen_status": "正常",
+                "quality_issue": "無",
+            },
+            ensure_ascii=False,
+        )
+        parsed = make_pass(
+            model=None,
+            price="45900",
+            count=1,
+            unique=True,
+            ownership="matched",
+            raw_objects=[raw],
+            ocr_attempt=attempt,
+            file_name=name,
+            source_item_id=source_id,
+            source_path=str(source),
+            original_source_path=str(source),
+            source_file_sha256=source_sha,
+            input_image_sha256=input_sha,
+            period="202602",
+            timestamp=f"2026-07-28T01:18:0{attempt}",
+            run_id="sms-602-bound-run",
+            runtime_health={"healthy": True, "reasons": []},
+        )
+        rows.append(
+            {
+                "file_name": name,
+                "source_item_id": source_id,
+                "run_id": parsed["run_id"],
+                "timestamp": parsed["timestamp"],
+                "parsed_output": parsed,
+            }
+        )
+    trace = root / "trace.jsonl"
+    trace.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    result_file = root / "result.json"
+    result_file.write_text(
+        json.dumps(
+            [
+                {
+                    "id": 2,
+                    "data": {
+                        "image": str(source),
+                        "ocr_meta": {
+                            "view_type": "單機",
+                            "quality_issue": "不合格-沒有規格牌",
+                            "ocr_attempt": 3,
+                            "auto_verified": True,
+                            "auto_review_required": False,
+                            "review_status": "已完成",
+                            "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                            "evidence_contract_valid": True,
+                            "adjudication_rule": "three_pass_single_subject_consensus",
+                            "three_pass_adjudicated": True,
+                        },
+                    },
+                    "annotations": [
+                        {
+                            "id": 2,
+                            "result": [
+                                {
+                                    "from_name": "model",
+                                    "value": {
+                                        "text": [
+                                            str(existing_model)
+                                            if existing_model
+                                            else "null"
+                                        ]
+                                    },
+                                },
+                                {
+                                    "from_name": "price",
+                                    "value": {"text": [str(existing_price)]},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return name, trace, result_file
+
+
 class ThreePassFinalizationTests(unittest.TestCase):
+    def test_elife_281_attempt_two_three_owned_identity_tail_closes_consumed_cap(self):
+        name = "M-高雄市-楠梓區-eLife-軍校DC-281.jpg"
+        source_id = (
+            "70aafb0ca7e9a3b76a841ffcb46d27f44dab0d4f9d2d46919ba1ac92ba7b417d"
+        )
+        image_hash = (
+            "0f33cc0b0dcd5a8cddeff443d522dc4aca47f52803af9fa22e8d4c9c8c815062"
+        )
+        second_narration = (
+            "我看到主螢幕左上角貼紙有 FollowMe 字樣，但未見白色直立支架與"
+            "完整圓形落地底座，因此無法確認 FollowMe。主螢幕正下方有實體"
+            "價牌，可逐字讀取 S27FG502SC 與 13,900 元，且與螢幕空間對齊。"
+            "背景右側可見另一台螢幕，但未完整入鏡。"
+        )
+        third_narration = (
+            "我看到中央主角螢幕正下方有實體價牌，可逐字讀取 S27FG502SC 與"
+            "13,900 元，且與螢幕空間對齊。左側與右側無其他完整螢幕，"
+            "也無 FollowMe 移動式支架或託盤線索。"
+        )
+        second = make_pass(
+            view="單機",
+            model="S27FG502SC",
+            price="13900",
+            count=2,
+            unique=True,
+            ownership="matched",
+            image_hash=image_hash,
+            period="202602",
+            file_name=name,
+            source_item_id=source_id,
+            ocr_attempt=2,
+            thinking=second_narration,
+            narration=second_narration,
+        )
+        current = make_pass(
+            view="單機",
+            model="S27FG502SC",
+            price="13900",
+            count=1,
+            unique=True,
+            ownership="matched",
+            image_hash=image_hash,
+            period="202602",
+            file_name=name,
+            source_item_id=source_id,
+            ocr_attempt=3,
+            thinking=third_narration,
+            narration=third_narration,
+        )
+        terminal = unresolved()
+        terminal["reasons"] = [
+            "core_evidence_disagreement",
+            "three_call_hard_limit_reached",
+        ]
+
+        decision = finalize_three_pass_outcome(current, [second], terminal)
+
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertFalse(decision["unresolved"])
+        self.assertFalse(decision["technical_retry_required"])
+        self.assertEqual(decision["technical_retry_reason"], "")
+        self.assertEqual(
+            decision["adjudication_rule"],
+            "two_current_bound_owned_identity_tail_after_consumed_cap",
+        )
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], "S27FG502SC")
+        self.assertEqual(current["price"], "13900")
+        self.assertEqual(current["complete_screen_count"], 1)
+        self.assertEqual(
+            [item["attempt"] for item in current["adjudication_pass_summaries"]],
+            [2, 3],
+        )
+        self.assertIn("沒有增加第 4 次模型呼叫", current["adjudication_summary"])
+
     def test_terminal_quality_issue_tracks_adjudicated_model_and_price(self):
         row = {
             "view_type": "單機",
@@ -395,11 +608,61 @@ class ThreePassFinalizationTests(unittest.TestCase):
 
         self.assertTrue(result["verified"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
         self.assertTrue(current["followme_family_confirmed"])
         valid, errors, _ = validate_evidence_contract(current)
         self.assertTrue(valid, errors)
+
+    def test_black_ordinary_stand_counterevidence_vetoes_false_followme_consensus(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+        ]
+        positive = (
+            "我看到中央主螢幕下方有白色直立支架與完整圓形底座，"
+            "所以判定為 FollowMe。"
+        )
+        ordinary = (
+            "我看到中央主螢幕下方是黑色直立支架與銀色圓形底座，"
+            "左上角寫 Samsung Odyssey，並非 FollowMe。"
+        )
+        history = [
+            make_pass(
+                model=None,
+                price="36900",
+                physical=fixture,
+                thinking=positive,
+                narration=positive,
+            ),
+            make_pass(
+                model=None,
+                price="36900",
+                count=3,
+                physical=fixture,
+                thinking=ordinary,
+                narration=ordinary,
+            ),
+        ]
+        current = make_pass(
+            model=None,
+            price="36900",
+            physical=fixture,
+            thinking=positive,
+            narration=positive,
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertFalse(
+            result.get("verified") is True
+            and current.get("followme_family_confirmed") is True
+        )
+        self.assertNotEqual(
+            result.get("adjudication_rule"),
+            "two_pass_followme_physical_consensus",
+        )
+        self.assertNotEqual(current.get("model"), "FollowMe 型號未細分")
 
     def test_live_guard_accepts_third_clean_duplicate_confirmation(self):
         fixture = [
@@ -707,6 +970,47 @@ class ThreePassFinalizationTests(unittest.TestCase):
             [1, 3],
         )
 
+    def test_restart_recovery_prefers_cross_run_one_two_three_over_latest_two_three_tail(self):
+        from tools.finalize_existing_three_pass_reviews import _load_three_call_groups
+
+        with TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.jsonl"
+            rows = []
+            for attempt, run_id, timestamp in (
+                (1, "run-a", "2026-07-27T03:00:00"),
+                (2, "run-b", "2026-07-27T15:19:48"),
+                (3, "run-b", "2026-07-27T15:20:06"),
+            ):
+                parsed = make_pass(
+                    "單機", "S27CG552EC", "4990", 3, True, "matched"
+                )
+                parsed.update({
+                    "file_name": "nanzi-1585.jpg",
+                    "source_item_id": "same-source",
+                    "period": "202602",
+                    "ocr_attempt": attempt,
+                    "timestamp": timestamp,
+                    "run_id": run_id,
+                })
+                rows.append({
+                    "file_name": "nanzi-1585.jpg",
+                    "source_item_id": "same-source",
+                    "run_id": run_id,
+                    "timestamp": timestamp,
+                    "parsed_output": parsed,
+                })
+            trace.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            groups = _load_three_call_groups(trace)
+
+        self.assertEqual(
+            [item["ocr_attempt"] for item in groups["nanzi-1585.jpg"]],
+            [1, 2, 3],
+        )
+
     def test_prior_revision_known_pixel_row_is_repaired_without_fourth_call(self):
         from tools.finalize_existing_three_pass_reviews import finalize_file
 
@@ -1012,6 +1316,208 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(meta["price"], "42900")
         self.assertEqual(queued["model"], "S49DG952SC")
         self.assertEqual(queued["price"], "42900")
+
+    def test_current_revision_friendly_model_dry_run_is_pure_and_visible(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(root)
+            before = result_file.read_bytes()
+            with (
+                patch(
+                    "tools.finalize_existing_three_pass_reviews."
+                    "refresh_authoritative_price_comparison"
+                ) as refresh,
+                patch(
+                    "tools.finalize_existing_three_pass_reviews."
+                    "enqueue_finalized_result"
+                ) as enqueue,
+            ):
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=False,
+                    only_file_names={name},
+                )
+
+            self.assertEqual(result_file.read_bytes(), before)
+            self.assertFalse(list(root.rglob("*.tmp")))
+
+        self.assertEqual(
+            report,
+            [
+                {
+                    "file": name,
+                    "status": "would_finalize",
+                    "rule": "three_pass_raw_model_price_consensus_repair",
+                    "view_type": "單機",
+                    "model": "S27C900PAC",
+                    "price": "45900",
+                }
+            ],
+        )
+        refresh.assert_not_called()
+        enqueue.assert_not_called()
+
+    def test_current_revision_friendly_model_apply_replaces_temp_task_and_requeues(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        def comparison(row, _model, _price):
+            row.update(
+                {
+                    "price_status": "unknown",
+                    "price_symbol": "?",
+                    "official_price": None,
+                    "price_diff_percent": None,
+                }
+            )
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(root)
+            with (
+                patch(
+                    "tools.finalize_existing_three_pass_reviews."
+                    "refresh_authoritative_price_comparison",
+                    side_effect=comparison,
+                ) as refresh,
+                patch(
+                    "tools.finalize_existing_three_pass_reviews."
+                    "enqueue_finalized_result",
+                    return_value=root / "queued.json",
+                ) as enqueue,
+            ):
+                report = finalize_file(
+                    result_file,
+                    trace,
+                    root,
+                    apply=True,
+                    only_file_names={name},
+                )
+            saved = json.loads(result_file.read_text(encoding="utf-8"))[0]
+            meta = saved["data"]["ocr_meta"]
+            annotation = {
+                item["from_name"]: item["value"]
+                for item in saved["annotations"][0]["result"]
+            }
+            queued = enqueue.call_args.args[0]
+
+        self.assertEqual(report[0]["status"], "finalized")
+        self.assertEqual(meta["model"], "S27C900PAC")
+        self.assertEqual(meta["price"], "45900")
+        self.assertEqual(meta["quality_issue"], "無")
+        self.assertEqual(
+            meta["adjudication_rule"],
+            "three_pass_raw_model_price_consensus_repair",
+        )
+        self.assertEqual(annotation["model"]["text"], ["S27C900PAC"])
+        self.assertEqual(annotation["price"]["text"], ["45900"])
+        self.assertEqual(queued["model"], "S27C900PAC")
+        self.assertEqual(queued["price"], "45900")
+        refresh.assert_called_once()
+        enqueue.assert_called_once()
+
+    def test_current_revision_friendly_model_repair_is_exact_scope_and_exact_raw(self):
+        from tools.finalize_existing_three_pass_reviews import finalize_file
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(root)
+            no_scope = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=False,
+            )
+            multiple_scope = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=False,
+                only_file_names={name, "another.jpg"},
+            )
+        self.assertEqual(no_scope, [])
+        self.assertEqual(multiple_scope, [])
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(
+                root,
+                third_price="44900",
+            )
+            raw_disagreement = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=False,
+                only_file_names={name},
+            )
+        self.assertEqual(raw_disagreement, [])
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(
+                root,
+                existing_model="S27C900PAC",
+            )
+            existing_model = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=False,
+                only_file_names={name},
+            )
+        self.assertEqual(existing_model, [])
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            name, trace, result_file = write_friendly_model_repair_fixture(
+                root,
+                existing_price="44900",
+            )
+            existing_price_disagreement = finalize_file(
+                result_file,
+                trace,
+                root,
+                apply=False,
+                only_file_names={name},
+            )
+        self.assertEqual(existing_price_disagreement, [])
+
+        for broken_field, broken_value in (
+            ("request_binding_enforced", False),
+            ("independent_pass", False),
+            ("source_file_sha256", "c" * 64),
+        ):
+            with self.subTest(broken_field=broken_field):
+                with TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    name, trace, result_file = (
+                        write_friendly_model_repair_fixture(root)
+                    )
+                    rows = [
+                        json.loads(line)
+                        for line in trace.read_text(encoding="utf-8").splitlines()
+                        if line
+                    ]
+                    rows[-1]["parsed_output"][broken_field] = broken_value
+                    trace.write_text(
+                        "\n".join(
+                            json.dumps(row, ensure_ascii=False) for row in rows
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    broken_binding = finalize_file(
+                        result_file,
+                        trace,
+                        root,
+                        apply=False,
+                        only_file_names={name},
+                    )
+                self.assertEqual(broken_binding, [])
 
     def test_pass_one_task_cannot_erase_a_bound_three_call_authority(self):
         from tools.finalize_existing_three_pass_reviews import finalize_file
@@ -1588,7 +2094,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         # remains.  Keep the model consensus but do not attach an unsafe price.
         self.assertIsNone(current["price"])
 
-    def test_two_narrated_fixture_passes_override_structured_wide_distant_votes(self):
+    def test_narrated_fixture_negation_cannot_override_structured_distant_votes(self):
         second_narration = (
             "我看到中央偏左有白色立柱與圓形底座，但沒有螢幕連接，"
             "沒有可讀型號與價格，所以……"
@@ -1617,15 +2123,53 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(
             result["adjudication_rule"],
-            "two_pass_narrated_followme_fixture_consensus",
+            "three_pass_mixed_wide_distant_consensus",
         )
-        self.assertEqual(current["view_type"], "單機")
-        self.assertEqual(current["complete_screen_count"], 3)
-        self.assertTrue(current["followme_family_confirmed"])
-        self.assertTrue(has_sufficient_followme_physical_evidence(current))
+        self.assertEqual(current["view_type"], "遠景")
+        self.assertFalse(current.get("followme_family_confirmed", False))
+        self.assertFalse(has_sufficient_followme_physical_evidence(current))
         self.assertIsNone(current["model"])
         self.assertIsNone(current["price"])
 
+    def test_narrated_fixture_echo_cannot_turn_odyssey_into_followme(self):
+        second_narration = (
+            "我看到中央偏左有白色立柱與圓形底座，但沒有螢幕連接，"
+            "沒有可讀型號與價格，所以……"
+        )
+        current_narration = (
+            "我看到中央偏左有一台螢幕，其正下方有白色直立支架與圓形底座，"
+            "但沒有可讀的型號或價格牌，所以……"
+        )
+        first = make_pass(
+            "單機", None, "36900", 1, True, "matched",
+            thinking="唯一主角是 Samsung Odyssey OLED G8，沒有 FollowMe 實體標示。",
+            raw_structured_model="Samsung Odyssey OLED G8",
+            raw_structured_price="36900",
+        )
+        second = make_pass(
+            "單機", None, "36900", 1, True, "matched",
+            thinking=second_narration,
+            narration=second_narration,
+            raw_structured_model="Samsung Odyssey OLED G8",
+            raw_structured_price="36900",
+        )
+        current = make_pass(
+            "單機", None, "36900", 1, True, "matched",
+            thinking=current_narration,
+            narration=current_narration,
+            raw_structured_model="Samsung Odyssey OLED G8",
+            raw_structured_price="36900",
+        )
+
+        result = finalize_three_pass_outcome(current, [first, second], unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "three_pass_single_subject_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertIsNone(current["model"])
+        self.assertEqual(current["price"], "36900")
+        self.assertFalse(current.get("followme_family_confirmed", False))
+        self.assertFalse(has_sufficient_followme_physical_evidence(current))
     def test_structured_followme_consensus_precedes_narration_only_fallback(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -2532,7 +3076,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(current["view_type"], "單機")
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
 
     def test_followme_local_narration_conflict_finishes_after_three_bound_calls(self):
@@ -2558,7 +3102,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
 
     def test_first_distant_then_two_followme_fixture_votes_finalize_without_fourth_call(self):
@@ -2594,8 +3138,41 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
         self.assertEqual(current["view_type"], "單機")
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
+
+    def test_attached_followme_side_strip_variant_disagreement_keeps_family_and_price(self):
+        fixture = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_followme_product_card", "same_subject": True, "strength": "strong"},
+        ]
+        history = [
+            make_pass(
+                model='FollowMe M7 32"', price="38400", count=3,
+                ownership="matched", physical=fixture,
+                thinking="同主體右上側標寫 FollowMe Pro 4K（32/43）。",
+            ),
+            make_pass(
+                model="FollowMe 型號未細分", price=None, count=3,
+                ownership="not_visible", physical=fixture,
+                thinking="同主體白色支架與圓形底座可見。",
+            ),
+        ]
+        current = make_pass(
+            model='FollowMe Pro M7 43"', price="38400", count=3,
+            ownership="matched", physical=fixture,
+            thinking="同主體右上側標寫 FollowMe Pro 4K（32/43）。",
+        )
+
+        result = finalize_three_pass_outcome(current, history, unresolved())
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
+        self.assertEqual(current["price"], "38400")
+        self.assertEqual(current["label_ownership"], "matched")
 
     def test_one_structural_distant_does_not_override_two_identity_free_single_votes(self):
         structural = make_pass(
@@ -2809,7 +3386,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(current["view_type"], "單機")
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
 
@@ -2848,7 +3425,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["adjudication_rule"], "two_pass_followme_physical_consensus")
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertEqual(current["price"], "17990")
 
     def test_two_followme_narrations_with_incomplete_background_set_count_one(self):
@@ -3148,7 +3725,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertFalse(result["unresolved"])
         self.assertEqual(current["view_type"], "單機")
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
         self.assertTrue(current["followme_family_confirmed"])
         self.assertEqual(
@@ -3291,7 +3868,7 @@ class ThreePassFinalizationTests(unittest.TestCase):
         self.assertTrue(calls[1]["recovered_from_contained_followme_scene_fuse"])
         self.assertTrue(outcome["verified"])
         self.assertTrue(current["followme_family_confirmed"])
-        self.assertIsNone(current["model"])
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
         self.assertIsNone(current["price"])
 
 

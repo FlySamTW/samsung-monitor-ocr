@@ -45,6 +45,35 @@ def strict_known_model(value: object, valid_models: list[str]) -> str | None:
     return unique_normalized_models(valid_models or []).get(target)
 
 
+def unique_known_first_letter_alternative(
+    value: object,
+    valid_models: list[str],
+) -> str | None:
+    """Return one catalog SKU that differs only in the first character.
+
+    Historical retail cards are frequently read with an ``S/C/F/P`` first-
+    letter substitution.  A current catalog match is useful counterevidence,
+    but it is not enough to overwrite the pixels in one pass.  Callers use
+    this narrow detector to prevent an unsafe first-pass lock and wait for the
+    remaining independent, image-bound observations.
+    """
+    candidate = normalize_samsung_model(value)
+    if not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,}", candidate):
+        return None
+    matches = {
+        normalized: model
+        for normalized, model in unique_normalized_models(valid_models or []).items()
+        if (
+            len(normalized) == len(candidate)
+            and normalized != candidate
+            and normalized[1:] == candidate[1:]
+        )
+    }
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
+
+
 def unique_embedded_known_model(value: object, valid_models: list[str]) -> str | None:
     """Recover one exact catalog SKU embedded in a decorative model label.
 
@@ -204,7 +233,7 @@ def has_photo_label_model_evidence(
     if payload.get("label_ownership") == "matched" and payload.get("unique_main") is True:
         return True
 
-    has_label = bool(re.search(r"(?:價牌|規格牌|產品卡|商品標籤|實體標籤)", text))
+    has_label = bool(re.search(r"(?:側標|價牌|規格牌|產品卡|商品標籤|實體標籤)", text))
     has_readable = bool(re.search(r"(?:清楚|清晰|標示|寫著|印著|可讀)", text))
     has_same_subject = bool(re.search(r"(?:主角|中間|中央|正下方|自己的|同一台|歸屬明確)", text))
     return has_label and has_readable and has_same_subject
@@ -225,19 +254,44 @@ def resolve_photo_label_model_candidate(
     distant views, or unrelated model strings remain fail-closed.
     """
     structured = normalize_samsung_model(value)
-    if (
-        not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,}", structured)
-        or is_placeholder_model(structured)
-    ):
+    if not re.fullmatch(r"[A-Z]\d{2}[A-Z0-9]{5,}", structured):
+        embedded = list(dict.fromkeys(extract_samsung_models(str(value or ""))))
+        if len(embedded) != 1:
+            return None
+        structured = embedded[0]
+    if is_placeholder_model(structured):
         return None
 
     payload = record if isinstance(record, dict) else {}
     text = str(narration or payload.get("thinking") or payload.get("narration") or "").strip()
-    candidates = [
-        candidate
-        for candidate in extract_samsung_models(text)
-        if has_photo_label_model_evidence(candidate, payload, text)
+    # Prefer tokens in physical-label clauses.  Qwen can mistype the family
+    # letter in its opening conclusion and then correctly quote the card later
+    # in the same response; that opening typo must not create a false second
+    # candidate that clears a readable discontinued SKU.
+    label_clauses = [
+        clause
+        for clause in re.split(r"[。；;\n]+", text)
+        if re.search(
+            r"(?:側標|價牌|規格牌|產品卡|商品標籤|實體標籤|旁邊另一張牌|另一張牌)",
+            clause,
+        )
     ]
+    candidates = list(
+        dict.fromkeys(
+            candidate
+            for clause in label_clauses
+            for candidate in extract_samsung_models(clause)
+            if has_photo_label_model_evidence(candidate, payload, clause)
+        )
+    )
+    if not candidates:
+        candidates = list(
+            dict.fromkeys(
+                candidate
+                for candidate in extract_samsung_models(text)
+                if has_photo_label_model_evidence(candidate, payload, text)
+            )
+        )
     if len(candidates) != 1:
         return None
 
@@ -263,21 +317,42 @@ def recover_pipeline_unlisted_model_candidate(record: dict | None) -> str | None
     """
     if not isinstance(record, dict):
         return None
+    blocked_fields = {
+        str(value or "").strip().lower()
+        for value in record.get("structured_authority_blocked_fields") or []
+    }
+    suppression_reasons = [
+        str(value or "").strip().lower()
+        for value in record.get("field_suppression_reasons") or []
+    ]
+    catalog_only_suppression = bool(suppression_reasons) and all(
+        reason in {
+            "model:suppressed_after_structured_parse",
+            "model:catalog_not_listed",
+        }
+        for reason in suppression_reasons
+    )
+    model_suppressed = any(
+        reason == "model"
+        or reason.startswith(("model:", "model_", "model-", "model."))
+        for reason in suppression_reasons
+    ) and not catalog_only_suppression
+    material_conflict = any(
+        record.get(flag)
+        for flag in (
+            "structured_identity_conflict",
+            "narrated_product_family_conflict",
+            "brand_evidence_conflict",
+        )
+    )
+    if "model" in blocked_fields or model_suppressed or material_conflict:
+        record["model"] = None
+        return None
     if record.get("model") not in (None, ""):
         return str(record.get("model") or "").strip().upper() or None
     if record.get("unlisted_model_candidate") is not True:
         return None
     if str(record.get("view_type") or record.get("category") or "").strip() == "遠景":
-        return None
-    if any(
-        record.get(flag)
-        for flag in (
-            "model_validation_failed",
-            "structured_identity_conflict",
-            "narrated_product_family_conflict",
-            "brand_evidence_conflict",
-        )
-    ):
         return None
 
     raw_objects = record.get("raw_objects") or []
@@ -307,4 +382,12 @@ def recover_pipeline_unlisted_model_candidate(record: dict | None) -> str | None
         return None
     record["model"] = unique[0]
     record["official_model_unverified"] = True
+    # ``model_validation_failed`` may be the footprint of the obsolete
+    # catalog-only erasure itself.  Once the exact same-photo candidate is
+    # recovered under the narrow contract above, that flag no longer
+    # describes a real evidence conflict.
+    record["model_validation_failed"] = False
+    if catalog_only_suppression:
+        record["field_suppression_reasons"] = []
+        record["catalog_only_model_erasure_recovered"] = True
     return unique[0]

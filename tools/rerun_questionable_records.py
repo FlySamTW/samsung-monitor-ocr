@@ -370,12 +370,16 @@ def wait_for_folder_done(
         total = int(stats.get("total") or 0)
         success = int(stats.get("success") or 0)
         failed = int(stats.get("failed") or 0)
+        capped = status.get("capped_adjudication") or {}
+        deferred = int(capped.get("count") or 0) if isinstance(capped, dict) else 0
+        settled = processed + deferred
         now = time.time()
         if now - last_line >= poll_seconds:
             print(
-                "[wait] {name} processed={processed}/{total} success={success} failed={failed} running={running}".format(
+                "[wait] {name} processed={processed}+deferred={deferred}/{total} success={success} failed={failed} running={running}".format(
                     name=folder.name,
                     processed=processed,
+                    deferred=deferred,
                     total=total,
                     success=success,
                     failed=failed,
@@ -385,14 +389,15 @@ def wait_for_folder_done(
             )
             last_line = now
         if not running and total > 0:
-            if processed >= total:
+            if settled >= total:
                 return status
             raise RuntimeError(
                 f"folder stopped before completion: {folder} "
-                f"processed={processed} total={total}; preserve staging and do not advance"
+                f"processed={processed} deferred={deferred} total={total}; "
+                "preserve staging and do not advance"
             )
-        done_tuple = (processed, success, failed, total)
-        if total > 0 and processed >= total:
+        done_tuple = (processed, deferred, success, failed, total)
+        if total > 0 and settled >= total:
             if done_tuple == last_done_tuple:
                 stable_done_polls += 1
             else:

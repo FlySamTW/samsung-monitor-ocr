@@ -37,6 +37,16 @@ _FIRST_PASS_CONTAINABLE_CONTENT_REASONS = {
     "ui_narration_contains_raw_structure",
 }
 
+# Output-contract sentinels are not photo-specific prior answers. They appear
+# in every neutral FollowMe review prompt and must not trip the memory fuse.
+_NON_SPECIFIC_PRIOR_MODEL_VALUES = {
+    "followme型號未細分",
+    "followme（型號未細分）",
+    "followme(型號未細分)",
+    "無型號",
+    "型號未辨識",
+}
+
 _RAW_FIELD_PATTERN = re.compile(
     r"(?:[\"']?(?:view_type|category|model|price|quality_issue|screen_status|"
     r"complete_screen_count|unique_main|label_ownership|followme_physical_evidence|"
@@ -50,10 +60,10 @@ _CORRECTION_CONTEXT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PRIOR_FIELD_PATTERN = re.compile(
-    r"(?:(?:上一輪|前一輪|前輪|先前|原|previous|prior).{0,40}"
+    r"(?:(?:上一輪|前一輪|前輪|先前|原(?:答案|判斷|結果|分類|型號|價格)|previous|prior).{0,40}"
     r"(?:view_type|category|model|price|reason|分類|型號|價格|理由))|"
     r"(?:(?:view_type|category|model|price|reason|分類|型號|價格|理由).{0,40}"
-    r"(?:上一輪|前一輪|前輪|先前|原|previous|prior))",
+    r"(?:上一輪|前一輪|前輪|先前|原(?:答案|判斷|結果|分類|型號|價格)|previous|prior))",
     re.IGNORECASE,
 )
 _PRICE_SPEC_PATTERN = re.compile(
@@ -259,6 +269,38 @@ def response_narration_format_failure_is_photo_local(
     return normalized == {"ui_narration_instruction_echo"}
 
 
+def empty_unbound_response_can_contain(
+    reasons: Iterable[Any],
+    record: Mapping[str, Any] | None,
+) -> bool:
+    """Treat one completely empty model reply as a photo-local technical call.
+
+    The call remains consumed and contributes no evidence.  This predicate is
+    intentionally exact: a partial payload, an image fingerprint, narration,
+    model, price, or any prompt/content reason is not an empty transport reply
+    and must continue through the normal fail-closed health policy.
+    """
+    normalized = {str(reason) for reason in reasons if str(reason)}
+    value = dict(record or {})
+    return bool(
+        normalized
+        == {
+            "request_binding_unverified",
+            "input_image_fingerprint_missing",
+            "ui_narration_missing",
+        }
+        and value.get("request_binding_enforced") is True
+        and value.get("request_id_verified") is not True
+        and not str(value.get("input_image_sha256") or "").strip()
+        and not str(value.get("thinking") or value.get("narration") or "").strip()
+        and not str(value.get("raw_model_output") or "").strip()
+        and value.get("model") in (None, "")
+        and value.get("price") in (None, "")
+        and value.get("prior_answer_exposed") is not True
+        and value.get("prompt_contamination") is not True
+    )
+
+
 def _flatten_content(value: Any) -> str:
     if value is None:
         return ""
@@ -349,6 +391,8 @@ def review_prompt_leak_reasons(
         # that a prior answer leaked into the new pass.
         for key in ("model", "price"):
             prior_value = re.sub(r"\s+", "", str(prior.get(key) or "")).casefold()
+            if key == "model" and prior_value in _NON_SPECIFIC_PRIOR_MODEL_VALUES:
+                continue
             if prior_value and prior_value in compact_review:
                 reasons.append("review_prior_value_present")
                 break
@@ -427,6 +471,7 @@ def _followme_variant_authority_conflict_is_photo_local(
         and normalized <= {
             "structured_authority_material_conflict:model",
             "structured_narration_followme_conflict",
+            "ui_narration_contains_raw_structure",
         }
         and "structured_authority_material_conflict:model" in normalized
         and view_type == "單機"
@@ -435,7 +480,7 @@ def _followme_variant_authority_conflict_is_photo_local(
         and not absurd_price_reason(price)
         and value.get("complete_screen_count") == 1
         and value.get("unique_main") is True
-        and value.get("label_ownership") == "matched"
+        and value.get("label_ownership") in {"matched", "not_applicable"}
         and has_sufficient_followme_physical_evidence(value)
     )
 
@@ -465,6 +510,7 @@ def _owned_single_model_authority_conflict_is_photo_local(
         and normalized <= {
             "structured_authority_material_conflict:model",
             "structured_narration_followme_conflict",
+            "ui_narration_contains_raw_structure",
         }
         and "structured_authority_material_conflict:model" in normalized
         and view_type in {"單機", "遠景"}
@@ -474,7 +520,7 @@ def _owned_single_model_authority_conflict_is_photo_local(
         and not isinstance(complete_screen_count, bool)
         and complete_screen_count >= 0
         and unique_main in {True, False}
-        and label_ownership in {"matched", "ambiguous", "not_visible"}
+        and label_ownership in {"matched", "ambiguous", "not_visible", "not_applicable"}
     )
 
 

@@ -1,6 +1,8 @@
 # Samsung Monitor OCR 專案完整移交
 
-> 更新時間：2026-07-16（Asia/Taipei）
+> 現況權威入口：請先讀 [handoff_20260807_next_ai.md](handoff_20260807_next_ai.md)。本文件保留完整歷史時間軸；早期快照、舊連接埠、舊守門修訂碼與舊恢復方式不得直接當成現況。
+>
+> 更新時間：2026-08-07（Asia/Taipei）
 > 專案根目錄：`D:\00_商化\samsung-monitor-ocr`
 > 本文件供下一個 AI 直接接手。所有數字都可能隨執行變動，接手後必須先查 API、程序、audit 與上傳摘要，不可直接沿用本文數字。
 
@@ -15,6 +17,29 @@
 7. 新啟動程序前先辨識並關閉確定無用的舊程序；不得累積多組後端、runner 或 PowerShell 視窗。
 8. Git 工作不得回復使用者或其他 AI 的既有修改。使用者口中的 `git` 包含更新 README、使用手冊、開發手冊、SKILL、commit 及 push。
 9. 第一、第二、第三輪的三層即時守門，必須遵循 [three_layer_accuracy_gate.md](three_layer_accuracy_gate.md)。內容不一致由 `.25` 定案器保守收斂；每張照片總模型呼叫硬上限為三次，只有請求綁定、跨圖汙染、系統輸出或 Drive 回讀等技術錯誤可不上傳該張。
+
+### 2026-08-02 歷年接續與介面續航修復
+
+- 根因不是 LM Studio 停止，而是 Supervisor 每分鐘先相信被舊 finalizer 改寫的 mutable 2026 risk/review 報表，未採用已證明 7,344／7,344 張終結的 canonical evidence summary，因而反覆重啟當年度 finalizer，沒有把工作交給 2025→2015。
+- `historical_continuation_gate.py` 現在只在 canonical summary 同時證明 candidate=0、missing/conflict/invalid=0、verified 7,164＋human audited 180＝terminal 7,344、invalid upload receipt/job=0、current upload queue=0 時接受封存終結權威；新 receipt 已綁定 marker、proof、review、terminal summary 與 frozen inventory hashes。
+- 正式 receipt 於 21:26 建立，唯一歷年 runner 已以 `--historical-continuation-receipt` 啟動並明確略過 2026。全案總進度已由 66,724 增至 66,725；其後正在由 202512 往前核對既有完成月份，真正下一個大量未辨識缺口為 202208，因此略過既有月份時總數不重複增加。
+- Supervisor 已把唯一 receipt-bound runner 視為 `historical_pipeline_active`，不再每分鐘寫入假 `staged_or_recursive_state_ambiguous`；舊 alert 已清除。Dashboard／port 5002、LM Studio、逐張上傳 worker 全程保留。
+- Dashboard 縮圖保存鍵已由「目前資料夾」改為「來源專案＋守門修訂碼」，跨月切換不再取消全域歷程 hydration 或清空右側累積完成卡；仍以原圖 `source_item_id` 去重並排除 review／技術錯誤。全域 API 目前可提供 200 筆 `.90` 歷程，其中最新抽樣有 16／20 筆 accepted 且 20／20 具自然語句判讀。
+- 介面運作燈已改讀 Supervisor 發布的 `pipeline-status.json` 真實心跳：receipt-bound 歷年 runner 才能顯示「自動銜接中」，90 秒未更新或任何警報即取消綠燈。這取代原本用 upload worker 存活狀態猜測 OCR 是否執行的錯誤條件。
+- 2026-08-03 現場已越過既有完成月份並進入第一個大量缺口 202208；全案由 66,724 前進至 67,439／151,714，202208 為 714／1,109、失敗 0，12 秒內再新增 2 張且逐張上傳由 61,446 增至 61,448。`current_file` 與 `stream_file` 相同，API 即時縮圖佇列為 12 張。
+- 驗證：historical gate 9/9、Supervisor 31/31、recursive completion 4/4、presentation soak 36/36 通過；Python compile、PowerShell parser 與 Dashboard production build 通過。瀏覽器控制層未能附著現有 Chrome，因此本次只證明 API、asset fingerprint、歷程資料與程式契約，不冒充已取得新畫面截圖。
+
+### 2026-08-03 `.91` 歷史舊型號效率修正
+
+- 202208 已完成 1,109／1,109，歷年接力自動切到 202207；現場全案由 67,834 前進至至少 67,919／151,714，逐張上傳也同步增加，證明不是停在介面假動作。
+- 抽查發現 `C27R500FHC／5,691` 等舊型號因現行型號表未收錄，加上模型開頭首字口誤，遭程式清空並浪費二、三輪。`.91` 改為實體側標／價牌句優先；完整同牌 SKU＋價格且來源、請求、主角歸屬與健康證據齊全時，歷史照片首輪即可結案。
+
+### 2026-08-03 歷史接力與左側預覽回跳修正
+
+- 202207 已從 `768/1,240` 持續前進；19:30 現場為 `1,028/1,240`，全案 `68,862/151,714`，逐張上傳 canonical `62,569`、pending `0`、runtime fuse 無啟用。Dashboard、唯一 backend、唯一歷年協調程式、唯一 uploader 與隱藏 continuity daemon 均在線。
+- 修正歷年接力在 backend 已執行時未附著協調程式、啟動時重算 151,714 張雜湊、已執行 backend 仍重設模型而收到 HTTP 400，以及單張空回覆誤觸全域熔斷。這些情況現在分別採 receipt 綁定附著、frozen inventory 快速啟動、現行設定直接接管與照片級三次額度處理；不得再因可預知單張技術問題停整批。
+- 使用者發現左側預覽每隔一張又回到同一張女明星照片。根因是 compact queue 同時保留同一原圖的第 1／2／3 輪事件，而前端在新照片第一個 token 尚未出現時，讓舊完成事件重新取得左側控制權。現改為 OCR 執行中由 `current_file` 對應的目前照片獨占左側預覽／判讀區；舊輪次只更新右側結果卡，不得搶回左側。`tools.test_presentation_soak` 36/36 與 production Vite build 已通過，既有 Chrome 分頁依 asset fingerprint 原地更新，不開新分頁。
+- 目前正式程序仍載入 `.90` 並持續跑 202207；`.91` 已通過 173 項證據測試與完整 critical regressions，必須在安全邊界連同 uploader 一起載入，不得為換版重開瀏覽器或中斷既有分頁。
 
 ### 2026-07-16 `.22` 三次呼叫硬上限與介面續航修正
 
@@ -848,3 +873,61 @@
   分頁未重開。兩次 live 取樣為 `280→283/1,598`，verified `265→268`、
   failed 0、fuse/pause 皆空；逐張上傳 `56,793→56,794`，最新已跨到
   `新光三越南西-517`，OCR、Dashboard、uploader 與 hidden daemon 均在線。
+
+## 2026-07-24 21:00 FollowMe 側標與結構欄位修正
+
+- `微風南山-455` 右上實體側標清楚寫 `FollowMe Pro 4K (32"/43")`。現行
+  prompt 原本已有上／側標與 L 型標示歸屬規則；本次失敗主因是三輪結案
+  摘要已判 `FollowMe 型號未細分 / 38400`，但結構化 model 被清為 null。
+- 已最小化補強 prompt：同主體左上／右上／側邊規格條優先於鄰機卡片；
+  同時列 32/43 只可定家族、不可猜尺寸。結案器同步寫入
+  `FOLLOWME_UNRESOLVED`，並新增 455 型三輪證據固定回歸。
+- 完整 critical regressions 退出碼 0。主 OCR 未因修改或測試中斷；21:07
+  即時狀態為 202602 `414/1,598`、verified 397、review 17、failed 0，
+  上傳總數 56,905、pending 0、fuse/pause 皆空。
+
+## 2026-07-24 FollowMe 年份邊界與遠景選擇性升級
+
+- 遠景不固定跑三輪。首輪結構與敘述一致、沒有同主體 FollowMe 實體
+  線索時立即結案。
+- 2024 年起，只有寬景單機候選／FollowMe 實體候選才做一次盲測第二輪；
+  第二輪解除疑點即結案，仍有實質衝突才用第三輪。
+- 2023 年以前不啟用 FollowMe 專項複核。Smart Monitor M5／M7 在台灣
+  2021 年上市不等於 FollowMe 移動式立架組；專案保守採 2024 為
+  FollowMe 可能年份下界。
+- 對應守門常數為 `FOLLOWME_TW_EARLIEST_YEAR = 2024`，回歸測試鎖定
+  「2019 寬景首輪結案」及「2026 寬景最多先做一次 FollowMe 確認，
+  不固定第三輪」。
+## 20260726.81 FollowMe ordered-family early stop and live continuity
+
+- Ordered FollowMe-family early stop is allowed only for same-unit direct FollowMe branding plus at least two strong physical cues, or the complete stand/base/tray set. It establishes the FollowMe family before distant classification; it does not invent a variant.
+- Keep family, exact SKU, and price independent. Family proof may finalize `FollowMe 型號未細分`; exact SKU requires its own same-subject readable evidence, and price requires its own readable aligned card.
+- If narration explicitly denies a readable main-subject price card, withdraw only `price`; do not revoke the independently established business subject, family, or classification.
+- Each photo remains at most three stateless, request-bound calls. Same-photo fuse recovery is hash-bound, restores only the saved checkpoint, and never resets attempts or allows call four.
+- A safe runtime reload resumes the same staging checkpoint automatically. Dashboard/status API, LM Studio, uploader, and the existing browser tab remain online throughout repair or photo-boundary hold.
+- Live proof, 2026-07-27, revision `.81`: same staging, runtime fuse `null`; processed `1450` to at least `1461`, verified `1399` to `1410`, and per-photo upload receipts `4288` to `4293`.
+
+## 2026-07-31 `.87` 交接：即時 telemetry、未完成批次與證據防幻覺
+
+- 本節為目前營運契約，優先於本檔較早的數字快照。正確性永遠高於節省 tokens 與時間；雲端代理不做全批 OCR，正式逐張 OCR 只由 LM Studio 本機模型與本機流程執行。
+- Dashboard GPU 數值必須來自即時 telemetry。任何靜態 GPU 快照超過 10 秒即不得當成目前狀態顯示，應清空或明標逾時；GPU 利用率與已保留／已使用顯示記憶體必須分欄呈現、分別解讀，不能互相推論。瞬時 0% 利用率不等於卡住，仍須看 processed、current file 與逐張 receipt 是否前進。
+- Supervisor safe reload 面對未完成但已安全停止的批次，必須使用 `-AllowIncompleteStoppedBatch`。批次的唯一 settled 判準是 `processed + capped == total`；`is_running=false`、`processed==total` 或單看 success 都不構成完成宣告。capped 項目必須有如實終局或明確待複核狀態，不能被隱藏。
+- evidence guard 已升為 `20260731.87`。Smart Monitor M5／M7／M8 名稱、SKU 或面板身分不能獨立建立 FollowMe；它們至多是 Smart Monitor 家族線索。若首輪同時看見同一實機的直接 FollowMe 標示與可歸屬實體結構，可在首輪結案為 FollowMe 家族；確切型號與價格仍各需同主體可讀證據。必須防守物理線索幻覺：螢幕內宣傳畫面、附近文宣／立牌、鄰機配件、普通桌上短架、黑色底座或未能連到主體的支架都不可補成 FollowMe 證據。
+- 內容完整性停止只可在照片邊界暫停 OCR／該張上傳。Dashboard、backend/status API、LM Studio、唯一 uploader 與既有瀏覽器分頁必須持續在線、顯示真實停止狀態；修復後從同一 saved checkpoint 自動續跑，禁止重建 staging、重置 attempts、第四輪或另開瀏覽器。
+- 當前已知工作不可粉飾：**202605 正在複核**；**202604 仍有 416 筆未解決**。兩者都不得報為完成。每個已結案結果維持逐張上傳，並以 source identity、雜湊與唯一 Drive receipt 閉環。
+
+## 2026-08-02 目前接手基準：202606 重新複核已原位恢復
+
+- 先前長時間待機與右側無新縮圖不是 GPU 或 LM Studio 停止；根因有兩層：Supervisor 把已刪除的舊 staging 當成可續跑路徑，以及完全空白的模型回覆誤用了前一張的 `stream_buffer`，因而把單張 RequestID 綁定故障升級成全域熔斷。
+- `rerun_staged_candidates.py` 現可用 durable audit folder ID 辨識舊 period-priority staging；Supervisor 只在 staging 目錄真實存在時選 resume，否則建立正確 202606 backfill。現行 staging 為 `20260802_080720/202606_商化照片-202606_59ea6723`。
+- runtime-health 已禁止讀取跨照片 `stream_buffer`；`recover_contained_request_binding_fuse.py` 與 Supervisor 已接通精確單張自復原，保留已用呼叫額度並從相同 checkpoint 接續，不再等待人工，也不允許第四次呼叫。
+- 即時恢復證據：Supervisor 於 08:45 記錄 `contained_request_binding_auto_recovered`；其後每分鐘均為 `healthy_noop`。同一批由 3 前進至至少 160／1,309，verified 107、review 53、failed 0；presentation queue 保留最新 12 筆且序號持續增加；canonical uploaded 由 61,059 增至 61,084，pending 0、last_error 空白；GPU 約 96%，port 5002 與 1234 各只有一個 listener，fuse／pause 皆不存在。
+- 上方 `66,724／151,714` 是唯一來源照片的去重初辨識數；這 1,309 張屬既有 202606 照片的新版證據複核，因此不得重複增加。主管可見的即時進展以 `202606 複核 processed/total`、verified/review、目前檔名、右側卡片與逐張上傳總數共同證明。
+- Chrome 程序、擴充功能與 native host 均存在，但本次控制通道無法附著既有分頁；不得因此新增分頁或視窗。API／事件契約已證明介面資料持續前進，尚未取得本次修復後的實際畫面截圖，接手者不得把 API 證據誇稱為目視驗收。
+
+## 2026-08-03 接手規則：未來由來源指定遠景／近景
+
+- 新擷取系統只使用兩種受信分類：`遠景`、`近景`。必須同時有 lock、來源與版本；沒有完整 provenance 就視為舊照片，禁止依檔名猜測。
+- 受信遠景不再叫模型重做分類，終局固定無型號／無價格；受信近景固定單機，模型只讀同主體側標、型號與價牌。模型觀察若不同，保留稽核欄但不得覆蓋來源標示或單純因視角再跑一輪。
+- 第一輪提示詞可替換；永久不可變的是固定輸出欄位、第二／三輪完全無記憶、只補不確定欄位、跨重啟總呼叫上限三次，以及完成後逐張上傳。
+- 本規則已由 `review_pass_contract.py`、`audit_fields.py`、`batch_orchestrator.py` 與 `test_review_pass_contract.py` 實作；目前歷史主批次不會因這項未來功能改變分類方式或中斷。

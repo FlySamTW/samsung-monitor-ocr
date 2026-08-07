@@ -12,6 +12,7 @@ param(
     [switch]$CurrentYearOnly,
     [switch]$SkipCurrentYearPhases,
     [switch]$SkipCurrentYearFirstPass,
+    [switch]$FinalizeCurrentYearOnly,
     [switch]$AllowPlannedBackendUpgradeInterlock,
     [switch]$SkipRecursiveResume
 )
@@ -34,6 +35,9 @@ if (-not $SourceRoot) {
 if (-not $OutputDir) {
     throw "OutputDir is required"
 }
+if ($FinalizeCurrentYearOnly -and (-not $CurrentYearOnly -or $SkipCurrentYearPhases)) {
+    throw "FinalizeCurrentYearOnly requires CurrentYearOnly and current-year phases"
+}
 
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $LogDir = Join-Path $RepoRoot "logs"
@@ -46,11 +50,13 @@ $BenchmarkLockPath = Join-Path $OutputDir "_ocr_audit\model_benchmark.lock"
 $UploadGateProofBuilder = Join-Path $RepoRoot "tools\build_upload_gate_proof.py"
 $UploadGateProofPath = Join-Path $OutputDir "_drive_upload\upload_gate_proof.json"
 $HistoricalUploadAuthorizationPath = Join-Path $OutputDir "_ocr_audit\historical_upload_authorization.json"
+$HistoricalContinuationReceiptPath = Join-Path $OutputDir "_ocr_audit\historical_continuation_receipt.json"
 $DriveCorrectionBuilder = Join-Path $RepoRoot "tools\build_drive_correction_reconciliation.py"
 $DriveCorrectionReconciler = Join-Path $RepoRoot "tools\reconcile_drive_corrections.py"
 $DriveCorrectionLedgerPath = Join-Path $OutputDir "_drive_upload\drive_correction_reconciliation.jsonl"
 $DriveCorrectionSummaryPath = "$DriveCorrectionLedgerPath.summary.json"
 $script:UploadCompleted = $false
+$script:DriveCorrectionReady = $false
 
 function Write-RunLog {
     param([string]$Message)
@@ -253,15 +259,26 @@ function Rebuild-DriveCorrectionLedgerIfSafe {
         $summary.ledger_written -ne $true -or
         $summary.ledger_integrity_ok -ne $true -or
         $summary.all_rows_accounted -ne $true -or
-        $summary.all_replacements_gate_ready -ne $true
+        [int]$summary.mapping_errors -ne 0 -or
+        [int]$summary.current_mapping_errors -ne 0
     ) {
-        throw "drive correction ledger is not complete and gate-ready: $builderText"
+        throw "drive correction ledger integrity is invalid: $builderText"
     }
-    if ($builderExit -ne 0 -and $summary.safe_to_upload_new -ne $true) {
-        throw "drive correction ledger rebuild failed closed exit=$builderExit detail=$builderText"
+    $ready = [int]$summary.new_ready
+    $deferred = [int]$summary.gate_blocked
+    Write-RunLog ("drive correction ledger rebuilt rows={0} ready={1} deferred={2} multi_stale_sources={3} discover_old={4}" -f `
+        $summary.ledger_rows, $ready, $deferred, $summary.multi_stale_source_identities, $summary.old_drive_id_discovery_required)
+    if ($deferred -gt 0) {
+        # Old rows without current evidence remain recorded for later cleanup,
+        # but they must not hold the OCR pipeline hostage. Only row-level
+        # new_ready authorities may mutate Drive in this cycle.
+        Write-RunLog "Drive correction backlog deferred without blocking OCR rows=$deferred"
     }
-    Write-RunLog ("drive correction ledger rebuilt rows={0} ready={1} multi_stale_sources={2} discover_old={3}" -f `
-        $summary.ledger_rows, $summary.new_ready, $summary.multi_stale_source_identities, $summary.old_drive_id_discovery_required)
+    if ($builderExit -ne 0 -and $ready -le 0) {
+        Write-RunLog "no row-level safe Drive corrections are ready; cleanup remains deferred exit=$builderExit"
+        return $false
+    }
+    return ($ready -gt 0)
 }
 
 function Read-DriveCorrectionRows {
@@ -315,40 +332,46 @@ function Complete-DriveCorrectionReconciliation {
         $summary.ledger_written -ne $true -or
         $summary.ledger_integrity_ok -ne $true -or
         $summary.all_rows_accounted -ne $true -or
-        $summary.all_replacements_gate_ready -ne $true
+        [int]$summary.mapping_errors -ne 0 -or
+        [int]$summary.current_mapping_errors -ne 0
     ) {
         throw "drive correction authority is incomplete; current-year completion remains blocked"
     }
     $rows = @(Read-DriveCorrectionRows)
-    if ($rows.Count -eq 0) {
-        Write-RunLog "no stale Drive correction rows"
+    $actionableRows = @($rows | Where-Object { [string]$_.status -eq "new_ready" })
+    $deferredRows = @($rows | Where-Object { [string]$_.status -eq "detected" })
+    if ($actionableRows.Count -eq 0) {
+        Write-RunLog "no row-level safe Drive corrections; deferred=$($deferredRows.Count)"
         return
     }
-    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_ready")
+    Assert-DriveCorrectionRows -Rows $actionableRows -AllowedStatuses @("new_ready")
 
     $discoverOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase discover-old 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "Drive correction old-ID discovery failed: $($discoverOutput -join "`n")"
     }
     $rows = @(Read-DriveCorrectionRows)
-    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_ready") -RequireOldDriveId
+    $actionableRows = @($rows | Where-Object { [string]$_.status -ne "detected" })
+    Assert-DriveCorrectionRows -Rows $actionableRows -AllowedStatuses @("new_ready") -RequireOldDriveId
 
     $uploadOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase upload-new 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "Drive correction new-file verification failed: $($uploadOutput -join "`n")"
     }
     $rows = @(Read-DriveCorrectionRows)
-    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("new_uploaded_verified","unchanged_remote_verified")
+    $actionableRows = @($rows | Where-Object { [string]$_.status -ne "detected" })
+    Assert-DriveCorrectionRows -Rows $actionableRows -AllowedStatuses @("new_uploaded_verified","unchanged_remote_verified")
 
     $trashOutput = @(& $Python $DriveCorrectionReconciler --output-dir $OutputDir --execute --phase trash-old 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "Drive correction old-file disposal failed: $($trashOutput -join "`n")"
     }
     $rows = @(Read-DriveCorrectionRows)
-    Assert-DriveCorrectionRows -Rows $rows -AllowedStatuses @("old_trashed_verified","unchanged_remote_verified")
-    $trashed = @($rows | Where-Object { $_.status -eq "old_trashed_verified" }).Count
-    $unchanged = @($rows | Where-Object { $_.status -eq "unchanged_remote_verified" }).Count
-    Write-RunLog "Drive corrections completed rows=$($rows.Count) old_trashed=$trashed unchanged_verified=$unchanged"
+    $actionableRows = @($rows | Where-Object { [string]$_.status -ne "detected" })
+    Assert-DriveCorrectionRows -Rows $actionableRows -AllowedStatuses @("old_trashed_verified","unchanged_remote_verified")
+    $trashed = @($actionableRows | Where-Object { $_.status -eq "old_trashed_verified" }).Count
+    $unchanged = @($actionableRows | Where-Object { $_.status -eq "unchanged_remote_verified" }).Count
+    Write-RunLog "Drive corrections completed actionable=$($actionableRows.Count) deferred=$($deferredRows.Count) old_trashed=$trashed unchanged_verified=$unchanged"
 }
 
 function Start-Uploader-IfNeeded {
@@ -415,6 +438,10 @@ function Start-Uploader-IfNeeded {
 
 function Start-Recursive-IfNeeded {
     Wait-ForBenchmarkLock "recursive launch/check"
+    if ($CurrentYearOnly) {
+        Write-RunLog "current-year finalizer completed; Supervisor owns historical continuation gate and recursive launch"
+        return
+    }
     $recursive = Stop-ExtraOwnedProcesses "recursive_ocr_flat_export.py" "runner"
     if ($recursive.Count -gt 0) {
         Write-RunLog "recursive runner already active; not starting another"
@@ -433,7 +460,8 @@ function Start-Recursive-IfNeeded {
             "--api-key", "lm-studio",
             "--model", $PrimaryModel,
             "--poll-seconds", "20",
-            "--timeout-minutes", "10080"
+            "--timeout-minutes", "10080",
+            "--historical-continuation-receipt", $HistoricalContinuationReceiptPath
         ) `
         -WorkingDirectory $RepoRoot `
         -WindowStyle Hidden `
@@ -674,18 +702,22 @@ try {
     }
 
     if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
-        if ($SkipCurrentYearFirstPass) {
+        if ($FinalizeCurrentYearOnly) {
+            Write-RunLog "phase=current_year_questionable_passes skipped_terminal_evidence_complete"
+        } elseif ($SkipCurrentYearFirstPass) {
             Write-RunLog "phase=current_year_first_pass skipped_by_recovery"
         } else {
             Write-RunLog "phase=current_year_first_pass"
             Invoke-QuestionablePass -Label "current_year_first_pass" -Model $PrimaryModel -IncludeOlder $false
         }
-        Write-RunLog "phase=current_year_immediate_pass_2"
-        Invoke-QuestionablePass -Label "current_year_immediate_pass_2" -Model $PrimaryModel -IncludeOlder $false
-        Write-RunLog "phase=current_year_immediate_pass_3"
-        Invoke-QuestionablePass -Label "current_year_immediate_pass_3" -Model $PrimaryModel -IncludeOlder $false
-        Write-RunLog "phase=current_year_distant_followme_review"
-        Invoke-QuestionablePass -Label "current_year_distant_followme_review" -Model $PrimaryModel -IncludeOlder $false
+        if (-not $FinalizeCurrentYearOnly) {
+            Write-RunLog "phase=current_year_immediate_pass_2"
+            Invoke-QuestionablePass -Label "current_year_immediate_pass_2" -Model $PrimaryModel -IncludeOlder $false
+            Write-RunLog "phase=current_year_immediate_pass_3"
+            Invoke-QuestionablePass -Label "current_year_immediate_pass_3" -Model $PrimaryModel -IncludeOlder $false
+            Write-RunLog "phase=current_year_distant_followme_review"
+            Invoke-QuestionablePass -Label "current_year_distant_followme_review" -Model $PrimaryModel -IncludeOlder $false
+        }
         Write-RunLog "phase=current_year_complete"
     }
 
@@ -713,7 +745,7 @@ try {
     }
     Refresh-UploadAndReviewSplit
     if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
-        Rebuild-DriveCorrectionLedgerIfSafe
+        $script:DriveCorrectionReady = [bool](Rebuild-DriveCorrectionLedgerIfSafe)
     } else {
         Write-RunLog "preserving completed current-year Drive correction ledger during historical continuation"
     }
@@ -721,7 +753,11 @@ try {
     Start-Uploader-IfNeeded -WaitForCompletion
     if ($CurrentYearFirst -and -not $SkipCurrentYearPhases) {
         if (-not $script:UploadCompleted) { throw "current-year verified uploads are not complete" }
-        Complete-DriveCorrectionReconciliation
+        if ($script:DriveCorrectionReady) {
+            Complete-DriveCorrectionReconciliation
+        } else {
+            Write-RunLog "Drive correction cleanup remains deferred; verified current upload completion is not blocked"
+        }
         $gate = Get-Content -LiteralPath $UploadGateProofPath -Raw | ConvertFrom-Json
         $markerPath = Join-Path $OutputDir "_ocr_audit\current_year_rerun_cycle_complete.json"
         [pscustomobject]@{

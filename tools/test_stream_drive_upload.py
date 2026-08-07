@@ -12,7 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from skills.audit_fields import EVIDENCE_GUARD_REVISION
 from tools.photo_rename_planner import copy_planned_image_idempotent, plan_single_image
-from tools.rclone_drive_upload import md5_file, read_csv
+from tools.rclone_drive_upload import (
+    append_uploaded,
+    md5_file,
+    read_csv,
+    sync_stream_dashboard_upload_count,
+)
 from tools.stream_drive_upload import (
     _equivalent_upload_job,
     COMPATIBLE_PENDING_REVISION_MIGRATIONS,
@@ -28,6 +33,7 @@ from tools.stream_drive_upload import (
     read_stream_status,
     requeue_transient_job,
     remote_stat_exact,
+    run_worker,
 )
 
 
@@ -115,6 +121,32 @@ class FakeRclone:
 
 
 class StreamDriveUploadTests(unittest.TestCase):
+    def test_legacy_uploader_refreshes_shared_dashboard_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            uploaded_log = output / "_drive_upload" / "drive_upload_uploaded.csv"
+            append_uploaded(
+                uploaded_log,
+                [
+                    {
+                        "batch": "legacy-test",
+                        "year": "2026",
+                        "source_path": str(output / "source.jpg"),
+                        "file_name": "renamed.jpg",
+                        "drive_folder_id": "drive-year-2026",
+                        "drive_file_id": "drive-file-1",
+                        "url": "rclone://samsung_ocr_drive/2026/renamed.jpg",
+                        "uploaded_at": "2026-08-02T16:00:00",
+                        "uploader": "rclone",
+                    }
+                ],
+            )
+
+            status = sync_stream_dashboard_upload_count(output, uploaded_log)
+
+            self.assertEqual(status["canonical_uploaded"], 1)
+            self.assertEqual(read_stream_status(output)["canonical_uploaded"], 1)
+
     def test_enqueue_rejects_terminal_quality_issue_contradiction(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,6 +189,156 @@ class StreamDriveUploadTests(unittest.TestCase):
                 RuntimeError("source bytes changed after OCR finalization")
             )
         )
+        self.assertTrue(
+            is_transient_upload_failure(
+                RuntimeError("pipeline pause is active: test")
+            )
+        )
+
+    def test_pipeline_pause_worker_stays_status_only_and_does_not_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            pause = output / "_ocr_audit" / "pipeline_pause.json"
+            pause.parent.mkdir(parents=True)
+            pause.write_text(
+                json.dumps(
+                    {
+                        "schema": "samsung-ocr-pipeline-pause/v1",
+                        "reason": "content_repair",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "tools.stream_drive_upload.recover_working_jobs"
+                ) as recover_mock,
+                patch(
+                    "tools.stream_drive_upload.migrate_compatible_pending_jobs"
+                ) as migrate_mock,
+                patch(
+                    "tools.stream_drive_upload.claim_next_job"
+                ) as claim_mock,
+            ):
+                self.assertEqual(
+                    run_worker(
+                        output_dir=output,
+                        rclone=Path("unused-rclone"),
+                        once=True,
+                    ),
+                    0,
+                )
+            recover_mock.assert_not_called()
+            migrate_mock.assert_not_called()
+            claim_mock.assert_not_called()
+
+    def test_worker_reinitializes_and_clears_repair_status_after_late_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            pause = output / "_ocr_audit" / "pipeline_pause.json"
+            pause.parent.mkdir(parents=True)
+            sleep_calls = 0
+
+            def toggle_pause(_seconds):
+                nonlocal sleep_calls
+                sleep_calls += 1
+                if sleep_calls == 1:
+                    pause.write_text(
+                        json.dumps(
+                            {
+                                "schema": "samsung-ocr-pipeline-pause/v1",
+                                "reason": "content_repair",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                elif sleep_calls == 2:
+                    pause.unlink()
+
+            with (
+                patch(
+                    "tools.stream_drive_upload.recover_working_jobs"
+                ) as recover_mock,
+                patch(
+                    "tools.stream_drive_upload.migrate_compatible_pending_jobs",
+                    return_value=0,
+                ) as migrate_mock,
+                patch(
+                    "tools.stream_drive_upload.claim_next_job",
+                    side_effect=[None, RuntimeError("stop after recovery")],
+                ),
+                patch(
+                    "tools.stream_drive_upload.refresh_status"
+                ) as status_mock,
+                patch(
+                    "tools.stream_drive_upload.time.sleep",
+                    side_effect=toggle_pause,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stop after recovery"):
+                    run_worker(
+                        output_dir=output,
+                        rclone=Path("unused-rclone"),
+                    )
+
+            self.assertEqual(recover_mock.call_count, 2)
+            self.assertEqual(migrate_mock.call_count, 4)
+            self.assertTrue(
+                any(
+                    call.kwargs.get("mutation_blocked") is False
+                    and call.kwargs.get("repair_reason") == ""
+                    and call.kwargs.get("pipeline_pause") is None
+                    for call in status_mock.call_args_list
+                )
+            )
+
+    def test_pipeline_pause_blocks_local_publish_before_drive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-台中市-南區-TK3C-台中旗艦-944.jpg"
+            make_image(source)
+            output = root / "output"
+            job = enqueue_finalized_result(
+                verified_result(source),
+                output_dir=output,
+            )
+            pause = output / "_ocr_audit" / "pipeline_pause.json"
+            pause.parent.mkdir(parents=True, exist_ok=True)
+            pause.write_text(
+                json.dumps(
+                    {
+                        "schema": "samsung-ocr-pipeline-pause/v1",
+                        "reason": "content_repair",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake = FakeRclone()
+            with self.assertRaisesRegex(RuntimeError, "pipeline pause is active"):
+                process_one_job(
+                    job,
+                    output_dir=output,
+                    rclone=Path("unused-rclone"),
+                    runner=fake,
+                )
+            self.assertEqual(fake.copy_calls, 0)
+            self.assertFalse(any(output.glob("*.jpg")))
+
+    def test_removed_pause_clears_stale_dashboard_repair_badge(self):
+        from tools.stream_drive_upload import clear_stale_pause_status, refresh_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            refresh_status(
+                output,
+                mutation_blocked=True,
+                repair_reason="pipeline_pause",
+                pipeline_pause={"reason": "content_repair"},
+            )
+            status = clear_stale_pause_status(output)
+            self.assertFalse(status["mutation_blocked"])
+            self.assertEqual(status["repair_reason"], "")
+            self.assertIsNone(status["pipeline_pause"])
 
     def test_transient_failure_returns_job_to_delayed_pending_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,6 +442,71 @@ class StreamDriveUploadTests(unittest.TestCase):
 
     def test_rev70_pending_jobs_do_not_migrate_across_geometry_fix(self):
         self.assertNotIn("20260721.70", COMPATIBLE_PENDING_REVISION_MIGRATIONS)
+
+    def test_rev78_and_rev79_transport_jobs_migrate_to_rev80(self):
+        self.assertEqual(
+            COMPATIBLE_PENDING_REVISION_MIGRATIONS.get("20260724.78"),
+            "20260724.80",
+        )
+        self.assertEqual(
+            COMPATIBLE_PENDING_REVISION_MIGRATIONS.get("20260724.79"),
+            "20260724.80",
+        )
+
+    def test_safe_rev86_pending_job_is_explicitly_compatible_with_current_revision(self):
+        self.assertEqual(
+            COMPATIBLE_PENDING_REVISION_MIGRATIONS.get("20260730.86"),
+            EVIDENCE_GUARD_REVISION,
+        )
+
+    def test_rev86_generic_m7_followme_early_exit_cannot_migrate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-unsafe-m7.jpg"
+            make_image(source)
+            output = root / "output"
+            job_path = enqueue_finalized_result(
+                verified_result(source), output_dir=output
+            )
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job["evidence_guard_revision"] = "20260730.86"
+            job["final_result"].update(
+                {
+                    "model": "FollowMe 型號未細分",
+                    "price": "9990",
+                    "ordered_followme_early_exit": True,
+                    "followme_family_confirmed": True,
+                    "thinking": (
+                        "同一台 Samsung Smart Monitor M7 商品卡，"
+                        "白色支架與圓形底座。"
+                    ),
+                    "followme_physical_evidence": [
+                        {
+                            "cue": "white_vertical_stand",
+                            "same_subject": True,
+                            "strength": "strong",
+                        },
+                        {
+                            "cue": "round_base",
+                            "same_subject": True,
+                            "strength": "strong",
+                        },
+                        {
+                            "cue": "attached_price_tray",
+                            "same_subject": True,
+                            "strength": "strong",
+                        },
+                    ],
+                }
+            )
+            job_path.write_text(
+                json.dumps(job, ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "unsafe legacy generic Smart Monitor FollowMe result",
+            ):
+                migrate_compatible_pending_jobs(output)
 
     def test_historical_rev68_migration_does_not_chain_into_current_revision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -575,6 +822,46 @@ class StreamDriveUploadTests(unittest.TestCase):
             self.assertFalse((receipt_dir / f"{key}.json").exists())
             archived = list((output / "_drive_upload_stream" / "superseded_receipts").glob("*.json"))
             self.assertEqual(len(archived), 1)
+
+    def test_old_revision_pending_job_is_archived_and_replaced_by_correction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "M-test-940.jpg"
+            make_image(source)
+            output = root / "output"
+            first = enqueue_finalized_result(
+                verified_result(source, price="4990"),
+                output_dir=output,
+            )
+            stale = json.loads(first.read_text(encoding="utf-8"))
+            stale["evidence_guard_revision"] = "20260727.84"
+            first.write_text(
+                json.dumps(stale, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            replaced = enqueue_finalized_result(
+                verified_result(source, price="5990", price_status="high"),
+                output_dir=output,
+            )
+            payload = json.loads(replaced.read_text(encoding="utf-8"))
+
+            self.assertEqual(payload["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
+            self.assertNotEqual(payload["target_name"], stale["target_name"])
+            self.assertEqual(
+                payload["superseded_pending_job"]["target_name"],
+                stale["target_name"],
+            )
+            archived = list(
+                (output / "_drive_upload_stream" / "revision_migrations").glob(
+                    "*.superseded_pending.json"
+                )
+            )
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(
+                json.loads(archived[0].read_text(encoding="utf-8")),
+                stale,
+            )
 
     def test_current_exact_receipt_remains_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:

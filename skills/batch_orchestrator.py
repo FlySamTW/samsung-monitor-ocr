@@ -5,6 +5,7 @@ import csv
 import logging
 import hashlib
 import gzip
+import inspect
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,7 @@ from skills.model_catalog_rules import (
 from skills.field_extraction import FieldNormalizer
 from skills.evaluation import Evaluator
 from skills.audit_fields import (
+    EVIDENCE_GUARD_REVISION,
     apply_human_audited_pixel_authority,
     enrich_result_for_review,
     finalize_three_pass_outcome,
@@ -36,14 +38,28 @@ from skills.model_validation import (
     unique_embedded_known_model,
 )
 from skills.runtime_health_gate import (
+    empty_unbound_response_can_contain,
     evaluate_runtime_health,
     final_content_conflict_can_isolate,
     first_pass_content_conflict_can_retry,
     photo_local_narration_failure_can_contain,
     trip_runtime_health_fuse,
 )
+from skills.model_call_ledger import (
+    LifetimeModelCallLedger,
+    LifetimeModelCallCapReached,
+    LifetimeModelCallLedgerError,
+    build_source_image_binding,
+)
+from skills.review_pass_contract import (
+    REVIEW_PASS_CONTRACT_VERSION,
+    apply_trusted_source_view_lock,
+    trusted_source_view_metadata,
+)
 
 log = logging.getLogger("rich")
+
+_CAPPED_ADJUDICATION_SCHEMA = "samsung-ocr-capped-adjudication-queue/v1"
 
 
 # An invalid request-id echo is never usable evidence, but two isolated model
@@ -249,6 +265,17 @@ class BatchOrchestrator:
         self.max_total_attempts = self.max_auto_attempts
         self.auto_attempts = {}
         self.auto_result_history = {}
+        # Photos that have already consumed the lifetime three-call budget are
+        # not failures and must not stop unrelated work.  They wait for the
+        # deterministic, zero-model resolver in a separate durable queue.
+        self.capped_adjudication_queue = {}
+        self.last_capped_adjudication_event = None
+        self.model_call_ledger = LifetimeModelCallLedger(
+            audit_dir=Path(
+                str(config.get("audit_dir") or self.output_dir)
+            ).resolve(),
+            evidence_trace_path=config.get("evidence_trace_path"),
+        )
         self.runtime_health_incident_sources = {}
         self.request_binding_incident_events = []
         self.source_metadata_map = {}
@@ -359,6 +386,13 @@ class BatchOrchestrator:
         
         # 3. Inject into Priority Queue
         with self._state_lock:
+            self._restore_capped_adjudication_queue()
+            if filename in self.capped_adjudication_queue:
+                self.log_system(
+                    "🧭 這張已用滿三次，須先由零模型自動定案器解除佇列；"
+                    "不會重新送進本機模型。"
+                )
+                return False
             self.auto_attempts.pop(filename, None)
             self.auto_result_history.pop(filename, None)
             if filename not in self.priority_queue:
@@ -392,6 +426,8 @@ class BatchOrchestrator:
                 self.session_results = []
                 self.auto_attempts = {}
                 self.auto_result_history = {}
+                self.capped_adjudication_queue = {}
+                self.last_capped_adjudication_event = None
                 self.runtime_health_incident_sources = {}
 
             self.image_dir = target_dir
@@ -433,8 +469,221 @@ class BatchOrchestrator:
         """Set the accuracy gate evaluated before any result becomes visible."""
         self.result_review_fn = fn
 
+    def reserve_actual_model_call(
+        self,
+        *,
+        filename: str,
+        input_image_sha256: str,
+        requested_attempt: int,
+    ) -> dict:
+        """Consume one crash-safe lifetime slot immediately before inference.
+
+        ``auto_attempts`` is only a staging-local checkpoint.  The sharded
+        ledger is authoritative across staging rebuilds, backend restarts, and
+        evidence-guard revisions.  The ledger write happens first; a crash
+        between it and LM Studio may conservatively consume a call, but can
+        never make call four possible.
+        """
+
+        name = str(filename or "")
+        processing_dir = str(self.active_image_dir or self.image_dir or "")
+        processing_path = Path(processing_dir, name).resolve()
+        metadata = self._source_metadata(name, processing_path)
+        binding = build_source_image_binding(
+            source_item_id=metadata.get("source_item_id"),
+            original_source_path=metadata.get("original_source_path"),
+            input_image_sha256=input_image_sha256,
+        )
+        requested = max(1, int(requested_attempt or 1))
+        checkpoint_count = max(0, int(self.auto_attempts.get(name, 0)))
+        # A direct recovery caller may carry an explicit pass number even when
+        # its staging-local checkpoint was lost.  Treat all earlier numbered
+        # passes as already consumed; never reinterpret "attempt 3" as call 1.
+        task_attempt_floor = max(checkpoint_count, requested - 1)
+        reservation = self.model_call_ledger.reserve(
+            binding=binding,
+            run_id=self.current_run_id,
+            requested_attempt=requested,
+            checkpoint_attempt=checkpoint_count,
+            task_attempt=task_attempt_floor,
+            file_name=name,
+        )
+
+        # Mirror the authoritative lifetime count into the local retry
+        # checkpoint only after the atomic ledger reservation succeeded.
+        self.auto_attempts[name] = int(reservation["consumed_calls"])
+        self._persist_retry_state()
+        return {
+            **reservation,
+            **binding.as_dict(),
+        }
+
     def _retry_state_path(self) -> Path:
         return Path(self.image_dir) / ".ocr_retry_queue.json"
+
+    def _capped_adjudication_path(self) -> Path:
+        return Path(self.image_dir) / ".ocr_capped_adjudication_queue.json"
+
+    def _persist_capped_adjudication_queue(self) -> None:
+        """Atomically persist photos awaiting zero-model final adjudication."""
+
+        if not self.image_dir or not os.path.isdir(self.image_dir):
+            return
+        path = self._capped_adjudication_path()
+        items = [
+            dict(item)
+            for _, item in sorted(self.capped_adjudication_queue.items())
+            if isinstance(item, dict)
+        ]
+        payload = {
+            "schema": _CAPPED_ADJUDICATION_SCHEMA,
+            "image_dir": str(Path(self.image_dir).resolve()),
+            "items": items,
+            "updated_at": datetime.now().astimezone().isoformat(),
+        }
+        temp_path = path.with_name(path.name + f".tmp.{os.getpid()}")
+        try:
+            temp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temp_path, path)
+        except OSError as exc:
+            self.log_system(f"⚠️ 儲存三次額度自動定案佇列失敗: {exc}")
+            raise
+
+    def _restore_capped_adjudication_queue(self) -> None:
+        """Load the independent queue that survives backend/full restarts."""
+
+        path = self._capped_adjudication_path()
+        if not path.is_file():
+            self.capped_adjudication_queue = {}
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            if payload.get("schema") != _CAPPED_ADJUDICATION_SCHEMA:
+                raise ValueError("unsupported capped adjudication queue schema")
+            expected = str(Path(self.image_dir).resolve())
+            if str(payload.get("image_dir") or "") != expected:
+                raise ValueError("capped adjudication queue belongs to another folder")
+            restored = {}
+            for raw in payload.get("items") or []:
+                if not isinstance(raw, dict):
+                    continue
+                name = str(raw.get("file_name") or "").strip()
+                if not name or not os.path.isfile(os.path.join(self.image_dir, name)):
+                    continue
+                restored[name] = {
+                    **raw,
+                    "file_name": name,
+                    "state": "awaiting_zero_model_adjudication",
+                    "verified": False,
+                    "uploaded": False,
+                }
+            self.capped_adjudication_queue = restored
+            if restored:
+                self.log_system(
+                    f"🧭 已恢復三次額度自動定案佇列 {len(restored)} 張；"
+                    "主批次會略過這些照片並繼續。"
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            # Losing this queue could make a restart call the model a fourth
+            # time.  Surface the corruption as a ledger error so the normal
+            # fail-closed path remains authoritative.
+            raise LifetimeModelCallLedgerError(
+                f"capped adjudication queue cannot be restored: {exc}"
+            ) from exc
+
+    def _defer_capped_photo(
+        self,
+        *,
+        filename: str,
+        source_path: str | Path,
+        consumed_calls: int,
+        attempt: int,
+        run_id: str,
+        error: str,
+    ) -> dict:
+        """Move exactly one exhausted photo out of the live model worklist."""
+
+        name = str(filename or "").strip()
+        if not name:
+            raise LifetimeModelCallLedgerError(
+                "cannot defer capped photo without a filename"
+            )
+        resolved_source = Path(source_path).resolve()
+        metadata = self._source_metadata(name, resolved_source)
+        now = datetime.now().astimezone().isoformat()
+        previous = self.capped_adjudication_queue.get(name) or {}
+        record = {
+            "file_name": name,
+            "source_path": str(resolved_source),
+            "original_source_path": str(
+                metadata.get("original_source_path") or resolved_source
+            ),
+            "source_item_id": str(metadata.get("source_item_id") or ""),
+            "consumed_calls": min(
+                self.max_total_attempts,
+                max(0, int(consumed_calls or 0)),
+            ),
+            "attempt": min(
+                self.max_total_attempts,
+                max(0, int(attempt or 0)),
+            ),
+            "run_id": str(run_id or ""),
+            "state": "awaiting_zero_model_adjudication",
+            "message": (
+                "本張已用滿三次本機模型呼叫，已轉交零模型自動定案；"
+                "未算完成、未上傳，主批次繼續。"
+            ),
+            "error": str(error or "")[:1000],
+            "verified": False,
+            "uploaded": False,
+            "queued_at": str(previous.get("queued_at") or now),
+            "updated_at": now,
+        }
+        self.capped_adjudication_queue[name] = record
+        self.priority_queue = [item for item in self.priority_queue if item != name]
+        self.retry_queue = [item for item in self.retry_queue if item != name]
+        self.session_processed.add(name)
+        self.last_capped_adjudication_event = dict(record)
+        self._persist_capped_adjudication_queue()
+        self._persist_retry_state()
+        return record
+
+    def get_capped_adjudication_status(self) -> dict:
+        """Return a compact, honest status payload for the Dashboard/API."""
+
+        items = [
+            dict(item)
+            for _, item in sorted(self.capped_adjudication_queue.items())
+            if isinstance(item, dict)
+        ]
+        return {
+            "count": len(items),
+            "message": (
+                f"{len(items)} 張已用滿三次，正等待零模型自動定案；"
+                "這些照片尚未算完成、尚未上傳。"
+                if items
+                else ""
+            ),
+            "last_event": (
+                dict(self.last_capped_adjudication_event)
+                if isinstance(self.last_capped_adjudication_event, dict)
+                else None
+            ),
+            # Keep /api/status bounded.  The durable file is authoritative.
+            "items": items[-20:],
+        }
+
+    def _durable_lifetime_call_count(self, filename: str) -> int:
+        """Read an existing call count before a queued retry reaches inference."""
+
+        processing_dir = str(self.active_image_dir or self.image_dir or "")
+        processing_path = Path(processing_dir, str(filename or "")).resolve()
+        metadata = self._source_metadata(str(filename or ""), processing_path)
+        source_id = str(metadata.get("source_item_id") or "").strip().lower()
+        return int(self.model_call_ledger.consumed_calls(source_id))
 
     def _persist_retry_state(self) -> None:
         if not self.image_dir or not os.path.isdir(self.image_dir):
@@ -474,11 +723,18 @@ class BatchOrchestrator:
                 for k, v in (payload.get("auto_attempts") or {}).items()
                 if existing(k)
             }
-            self.retry_queue = [
-                name
-                for name in self.retry_queue
-                if int(self.auto_attempts.get(name, 0)) < self.max_total_attempts
-            ]
+            # Offline revalidation can retain a retry filename after the
+            # staging-local attempt map was cleared.  Reconcile queue entries
+            # with the global ledger before the processor is entered, so an
+            # exhausted photo is dequeued exactly once without a fake "pass 1"
+            # presentation or a fourth LM Studio request.
+            for name in dict.fromkeys([*self.priority_queue, *self.retry_queue]):
+                durable_count = self._durable_lifetime_call_count(name)
+                if durable_count:
+                    self.auto_attempts[name] = max(
+                        int(self.auto_attempts.get(name, 0)),
+                        min(self.max_total_attempts, durable_count),
+                    )
             self.auto_result_history = {
                 str(k): list(v) for k, v in (payload.get("auto_result_history") or {}).items() if existing(k)
             }
@@ -539,10 +795,11 @@ class BatchOrchestrator:
         the absolute three model-call slots.  Missing/unverified echoes commonly
         accompany a truncated or repetitive model response; they remain local
         to that photo even if another photo later has the same transport
-        failure.  An explicit non-empty mismatch is batch-wide only after three
-        distinct photos hit it inside a ten-minute rolling window.  This keeps
-        a rare model transcription slip photo-local without ever accepting its
-        unbound payload as evidence.
+        failure.  An explicit non-empty request-id mismatch is batch-wide only
+        after three distinct photos hit it inside a ten-minute rolling window.
+        An empty model response is a predictable transport failure: it consumes
+        that photo's call budget and remains photo-local even when repeated, so
+        it can never stop unrelated photos or the whole folder.
         """
         source_id = str(
             result.get("file_name")
@@ -566,11 +823,14 @@ class BatchOrchestrator:
             if seen_at >= cutoff:
                 recent_events.append(dict(item))
         current_reasons = sorted({str(item) for item in reasons if str(item)})
+        systemic_transport_reasons = {
+            "request_id_mismatch",
+        }
         for reason in current_reasons:
             prior = set(self.runtime_health_incident_sources.get(reason, []))
             prior.add(source_id)
             self.runtime_health_incident_sources[reason] = sorted(prior)
-            if reason == "request_id_mismatch" and not any(
+            if reason in systemic_transport_reasons and not any(
                 item.get("reason") == reason and item.get("source_id") == source_id
                 for item in recent_events
             ):
@@ -585,24 +845,122 @@ class BatchOrchestrator:
             -REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES * 4 :
         ]
         self._persist_retry_state()
-        distinct_mismatch_sources = {
-            str(item.get("source_id") or "")
-            for item in self.request_binding_incident_events
-            if item.get("reason") == "request_id_mismatch"
-        }
-        return (
-            "request_id_mismatch" in current_reasons
-            and len(distinct_mismatch_sources)
+        return any(
+            reason in current_reasons
+            and len({
+                str(item.get("source_id") or "")
+                for item in self.request_binding_incident_events
+                if item.get("reason") == reason
+            })
             >= REQUEST_BINDING_SYSTEMIC_DISTINCT_SOURCES
+            for reason in systemic_transport_reasons
         )
 
     @staticmethod
     def _history_snapshot(result: dict, reasons: list[str]) -> dict:
+        raw_structured_model = result.get("raw_structured_model")
+        raw_structured_price = result.get("raw_structured_price")
+        # Preserve the original request-bound narration separately from
+        # ``thinking``.  The latter may already be a deterministic UI summary
+        # produced after field suppression (for example, "無型號／無價格").
+        # Losing the original narration here made later adjudication blind to
+        # two independent passes that had both transcribed the same physical
+        # product card correctly.
+        original_narration = result.get("narration")
+        raw_objects = result.get("raw_objects") or []
+        if not isinstance(raw_objects, list):
+            raw_objects = [raw_objects]
+        for raw in raw_objects:
+            parsed = raw
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            if not isinstance(parsed, dict):
+                continue
+            # ``finalize_evidence_contract`` stores raw objects as
+            # {"raw": "...", "value": {...}}.  Older snapshots may instead
+            # contain the object itself or a JSON string.  Preserve the actual
+            # model/price from every supported shape so downstream three-pass
+            # adjudication never mistakes post-processing erasure for a model
+            # omission.
+            if isinstance(parsed.get("value"), dict):
+                payload = parsed["value"]
+            elif isinstance(parsed.get("data"), dict):
+                payload = parsed["data"]
+            elif isinstance(parsed.get("raw"), str):
+                try:
+                    decoded_raw = json.loads(parsed["raw"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    decoded_raw = None
+                payload = decoded_raw if isinstance(decoded_raw, dict) else parsed
+            else:
+                payload = parsed
+            if raw_structured_model in (None, "") and payload.get("model") not in (None, ""):
+                raw_structured_model = payload.get("model")
+            if raw_structured_price in (None, "") and payload.get("price") not in (None, ""):
+                raw_structured_price = payload.get("price")
+            if original_narration in (None, "") and payload.get("narration") not in (None, ""):
+                original_narration = payload.get("narration")
+
+        def _bounded_raw(value: object) -> str:
+            if isinstance(value, (dict, list)):
+                try:
+                    return json.dumps(value, ensure_ascii=False)[:12000]
+                except (TypeError, ValueError):
+                    pass
+            return str(value)[:12000]
+
+        suppression_reasons = [
+            str(value)
+            for value in result.get("field_suppression_reasons") or []
+            if str(value)
+        ]
+        blocked_fields = [
+            str(value)
+            for value in result.get("structured_authority_blocked_fields") or []
+            if str(value)
+        ]
+        normalized_suppression = [value.strip().lower() for value in suppression_reasons]
+        if (
+            raw_structured_model not in (None, "")
+            and result.get("model") in (None, "")
+            and not any(value == "model" or value.startswith(("model:", "model_", "model-", "model.")) for value in normalized_suppression)
+        ):
+            suppression_reasons.append("model:suppressed_after_structured_parse")
+        if (
+            raw_structured_price not in (None, "")
+            and result.get("price") in (None, "")
+            and not any(value == "price" or value.startswith(("price:", "price_", "price-", "price.")) for value in normalized_suppression)
+        ):
+            suppression_reasons.append("price:suppressed_after_structured_parse")
+
         return {
             "view_type": result.get("view_type"),
             "category": result.get("category"),
             "model": result.get("model"),
             "price": result.get("price"),
+            "raw_structured_model": raw_structured_model,
+            "raw_structured_price": raw_structured_price,
+            "raw_objects": [_bounded_raw(value) for value in raw_objects[:3]],
+            "period": result.get("period"),
+            "file_name": result.get("file_name"),
+            "source_path": result.get("source_path"),
+            "ocr_attempt": result.get("ocr_attempt"),
+            "unlisted_model_candidate": result.get("unlisted_model_candidate") is True,
+            "official_model_unverified": result.get("official_model_unverified") is True,
+            "photo_label_model_correction_from": result.get("photo_label_model_correction_from"),
+            "photo_label_model_correction_to": result.get("photo_label_model_correction_to"),
+            "catalog_confusable_first_letter_candidate": result.get(
+                "catalog_confusable_first_letter_candidate"
+            )
+            is True,
+            "catalog_confusable_first_letter_alternative": result.get(
+                "catalog_confusable_first_letter_alternative"
+            ),
+            "field_suppression_reasons": suppression_reasons,
+            "structured_authority_blocked_fields": blocked_fields,
             "screen_status": result.get("screen_status"),
             "quality_issue": result.get("quality_issue"),
             "complete_screen_count": result.get("complete_screen_count"),
@@ -625,10 +983,10 @@ class BatchOrchestrator:
             "price_diff_percent": result.get("price_diff_percent"),
             "price_status": result.get("price_status"),
             "brand_evidence_conflict": result.get("brand_evidence_conflict") is True,
+            "narration": str(original_narration or "")[:4000],
             "thinking": str(result.get("thinking") or "")[:1200],
             "reasons": list(reasons),
         }
-
     @staticmethod
     def _source_item_id(source_path: object) -> str:
         """Stable identity for every pass of one source image in this batch."""
@@ -668,11 +1026,14 @@ class BatchOrchestrator:
         processing = str(Path(str(processing_path)).resolve())
         original = str(mapped.get("original_source_path") or mapped.get("source_path") or processing)
         source_item_id = str(mapped.get("source_item_id") or self._source_item_id(original))
+        source_view = trusted_source_view_metadata(mapped)
         return {
             "source_item_id": source_item_id,
             "original_source_path": original,
             "period": str(mapped.get("period") or self._infer_period(original, processing, filename)),
             "audit_folder": str(mapped.get("audit_folder") or ""),
+            **source_view,
+            "review_pass_contract_version": REVIEW_PASS_CONTRACT_VERSION,
         }
 
     def _pass_metadata(self, attempt: int) -> tuple[int, str]:
@@ -944,11 +1305,14 @@ class BatchOrchestrator:
         run_id: str = "",
         latest_run_only: bool = False,
         legacy_run_only: bool = False,
+        evidence_guard_revision: str = "",
+        latest_per_source: bool = False,
     ) -> list[dict]:
         """Return newest durable presentation events, optionally scoped to one work directory."""
         limit = max(1, min(200, int(limit or 200)))
         allowed = None if source_item_ids is None else {str(value) for value in source_item_ids if value}
         wanted_run_id = str(run_id or "").strip()
+        wanted_guard_revision = str(evidence_guard_revision or "").strip()
         if allowed == set():
             return []
 
@@ -956,9 +1320,24 @@ class BatchOrchestrator:
             source_allowed = allowed is None or str(item.get("source_item_id") or "") in allowed
             item_run_id = str(item.get("run_id") or "")
             run_allowed = (not item_run_id) if legacy_run_only else (not wanted_run_id or item_run_id == wanted_run_id)
-            return source_allowed and run_allowed
+            guard_allowed = (
+                not wanted_guard_revision
+                or str(item.get("evidence_guard_revision") or "") == wanted_guard_revision
+            )
+            return source_allowed and run_allowed and guard_allowed
 
         found: dict[str, dict] = {}
+
+        def enough_items() -> bool:
+            if not latest_per_source:
+                return len(found) >= limit
+            identities = {
+                str(item.get("source_item_id") or "")
+                for item in found.values()
+                if item.get("source_item_id")
+            }
+            return len(identities) >= limit
+
         with self._state_lock:
             live_items = list(self.display_queue)
         for item in reversed(live_items):
@@ -967,13 +1346,13 @@ class BatchOrchestrator:
                 found[presentation_id] = self._public_presentation_event(item)
 
         audit_dir = self._presentation_audit_dir()
-        if audit_dir.is_dir() and len(found) < limit:
+        if audit_dir.is_dir() and not enough_items():
             paths = sorted(audit_dir.glob("presentation_*.jsonl*"), key=lambda p: p.stat().st_mtime, reverse=True)
             for path in paths:
                 try:
                     if path.suffix.lower() == ".gz":
                         with gzip.open(path, "rt", encoding="utf-8") as handle:
-                            lines = list(handle)[-(limit * 4):]
+                            lines = list(handle)[-(limit * 8):]
                     else:
                         with path.open("rb") as handle:
                             size = handle.seek(0, os.SEEK_END)
@@ -989,11 +1368,11 @@ class BatchOrchestrator:
                         presentation_id = str(item.get("presentation_id") or "")
                         if presentation_id and presentation_id not in found and belongs_to_scope(item):
                             found[presentation_id] = self._public_presentation_event(item)
-                        if len(found) >= limit:
+                        if enough_items():
                             break
                 except (OSError, UnicodeError):
                     continue
-                if len(found) >= limit:
+                if enough_items():
                     break
 
         ordered = sorted(
@@ -1008,6 +1387,18 @@ class BatchOrchestrator:
             latest_run_id = next((str(item.get("run_id") or "") for item in ordered if item.get("run_id")), "")
             if latest_run_id:
                 ordered = [item for item in ordered if str(item.get("run_id") or "") == latest_run_id]
+        if latest_per_source:
+            newest_by_source: list[dict] = []
+            seen_source_ids: set[str] = set()
+            for item in ordered:
+                source_item_id = str(item.get("source_item_id") or "")
+                if not source_item_id or source_item_id in seen_source_ids:
+                    continue
+                seen_source_ids.add(source_item_id)
+                newest_by_source.append(item)
+                if len(newest_by_source) >= limit:
+                    break
+            ordered = newest_by_source
         return ordered[:limit]
 
     def get_all_records(self):
@@ -1546,6 +1937,8 @@ class BatchOrchestrator:
                     self.retry_queue = []
                     self.auto_attempts = {}
                     self.auto_result_history = {}
+                    self.capped_adjudication_queue = {}
+                    self.last_capped_adjudication_event = None
                     self.runtime_health_incident_sources = {}
                     self.request_binding_incident_events = []
                     self.session_processed = set()
@@ -1556,6 +1949,10 @@ class BatchOrchestrator:
             batch_image_dir = str(Path(self.image_dir).resolve())
             self.active_image_dir = batch_image_dir
             self.source_metadata_map = self._load_source_metadata_map(batch_image_dir)
+            # This queue is intentionally independent from restart semantics.
+            # A restart may rebuild ordinary results, but must never grant an
+            # exhausted source a fourth local-model call.
+            self._restore_capped_adjudication_queue()
             batch_run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             self._persist_presentation_run_id(batch_image_dir, batch_run_id)
             self.current_run_id = batch_run_id
@@ -1580,6 +1977,14 @@ class BatchOrchestrator:
                     self.log_system(f"⚠️ 清除舊複核佇列失敗: {exc}")
             else:
                 self._restore_retry_state()
+
+            deferred_names = set(self.capped_adjudication_queue)
+            self.priority_queue = [
+                name for name in self.priority_queue if name not in deferred_names
+            ]
+            self.retry_queue = [
+                name for name in self.retry_queue if name not in deferred_names
+            ]
 
         # Presentation data belongs to one batch only.  Keeping rows from a
         # staging rerun makes the dashboard replay deleted files in the next
@@ -1651,7 +2056,8 @@ class BatchOrchestrator:
             "latest_result_file": self.latest_result_file,
             "failed_files": self.failed_files,  # [v11.0] Include failed files
             "recent_results": self.recent_results, # [v16.9 Fix] Add missing sync
-            "unknown_models": sorted(list(self.unknown_models)) # [v16.10]
+            "unknown_models": sorted(list(self.unknown_models)), # [v16.10]
+            "capped_adjudication": self.get_capped_adjudication_status(),
         }
     
     def _save_failed_files(self):
@@ -1679,6 +2085,13 @@ class BatchOrchestrator:
                 self.is_running = False
                 self.stats['is_running'] = False
                 self.active_image_dir = None
+                # A finished or safely fused worker must never leave a stale
+                # photo/stream pair that the always-online Dashboard can
+                # cross-join with the next presentation.  The durable result
+                # and checkpoint remain available through their own fields.
+                self.current_file = None
+                self.stream_file = None
+                self.stream_buffer = ""
                 if self._worker_thread is current_thread():
                     self._worker_thread = None
 
@@ -1788,6 +2201,25 @@ class BatchOrchestrator:
         processed_success = scan_res['processed_success']
         processed_failed = scan_res['processed_failed']
         processed_all = scan_res['processed_all']
+
+        # A capped photo remains pending in the business sense, but it is not
+        # eligible for another model call.  Keep it out of every live worklist
+        # until the zero-model resolver removes its durable queue record.
+        deferred_names = set(self.capped_adjudication_queue)
+        if deferred_names:
+            pending_files = [
+                name for name in pending_files if name not in deferred_names
+            ]
+            self.priority_queue = [
+                name for name in self.priority_queue if name not in deferred_names
+            ]
+            self.retry_queue = [
+                name for name in self.retry_queue if name not in deferred_names
+            ]
+            self.log_system(
+                f"🧭 {len(deferred_names)} 張三次額度已滿，"
+                "已交由零模型自動定案；主批次繼續。"
+            )
         
         # [v11.8 UX Fix] Update Total
         self.stats['total'] = len(all_files)
@@ -1847,8 +2279,15 @@ class BatchOrchestrator:
         if len(processed_all) > 0:
             self.log_system(f"ℹ️ 已略過 {len(processed_all)} 個已處理檔案 (成功:{self.base_success_count}, 失敗:{self.base_failed_count})。")
         
-        if not pending_files and not self.priority_queue:
-            self.log_system("🎉 全部檔案皆已處理完畢！")
+        if not pending_files and not self.priority_queue and not self.retry_queue:
+            if self.capped_adjudication_queue:
+                self.log_system(
+                    f"🧭 模型主工作列已完成；仍有 "
+                    f"{len(self.capped_adjudication_queue)} 張等待零模型自動定案，"
+                    "尚未算完成或上傳。"
+                )
+            else:
+                self.log_system("🎉 全部檔案皆已處理完畢！")
             self.is_running = False
             self.stats['is_running'] = False
             return # Exit early if nothing to do
@@ -1912,6 +2351,13 @@ class BatchOrchestrator:
                 is_retry = False
             else:
                 break
+
+            if fname in self.capped_adjudication_queue:
+                self.log_system(
+                    f"🧭 [自動定案佇列] {fname} 尚未解除，略過模型工作列。"
+                )
+                self.session_processed.add(fname)
+                continue
                 
             # [v19.1] Global Deduplication Check
             if fname in self.session_processed and not is_priority:
@@ -1930,18 +2376,25 @@ class BatchOrchestrator:
 
             prior_call_count = int(self.auto_attempts.get(fname, 0))
             if prior_call_count >= self.max_total_attempts:
-                self.log_system(
-                    f"⛔ [Three-call cap] {fname} 已用滿 {self.max_total_attempts} 次模型呼叫，"
-                    "略過過期重試佇列，不會產生第 4 輪。"
+                self._defer_capped_photo(
+                    filename=fname,
+                    source_path=Path(batch_image_dir, fname),
+                    consumed_calls=prior_call_count,
+                    attempt=prior_call_count,
+                    run_id=run_id,
+                    error="lifetime call budget already exhausted before inference",
                 )
-                self.session_processed.add(fname)
-                self._persist_retry_state()
+                self.stream_buffer = (
+                    "本張已用滿三次本機模型呼叫，已轉交零模型自動定案；"
+                    "尚未算完成、尚未上傳，主批次繼續。"
+                )
+                self.stream_file = fname
+                self.log_system(
+                    f"🧭 [三次額度自動定案] {fname} 已用滿 "
+                    f"{self.max_total_attempts} 次；主批次繼續，不會產生第 4 次呼叫。"
+                )
                 continue
             attempt_number = prior_call_count + 1
-            self.auto_attempts[fname] = attempt_number
-            # Persist the consumed call slot before invoking the model so a
-            # process crash cannot reset the budget and create a hidden call 4.
-            self._persist_retry_state()
             previous_results = [
                 item
                 for item in self.auto_result_history.get(fname, [])
@@ -1958,6 +2411,7 @@ class BatchOrchestrator:
             self.log_system(f"▶️ 載入圖片: {fname}")
             pass_started_at = datetime.now().isoformat()
             img_path = os.path.join(batch_image_dir, fname)
+            source_metadata = self._source_metadata(fname, img_path)
 
             try:
                 # A. Preprocess
@@ -1985,7 +2439,7 @@ class BatchOrchestrator:
                 
                 start_t = time.time()
                 contained_request_binding_failure = False
-                raw_result = self.processor_fn(
+                processor_kwargs = dict(
                     fname=fname,
                     image_b64=proc_res['base64'], 
                     prompt_mgr=self.prompt_mgr,
@@ -1993,17 +2447,42 @@ class BatchOrchestrator:
                     processed_image=proc_res,
                     ocr_attempt=attempt_number,
                     previous_results=previous_results,
+                    source_metadata=source_metadata,
                 )
+                try:
+                    signature = inspect.signature(self.processor_fn)
+                    accepts_kwargs = any(
+                        parameter.kind == inspect.Parameter.VAR_KEYWORD
+                        for parameter in signature.parameters.values()
+                    )
+                    if not accepts_kwargs and "source_metadata" not in signature.parameters:
+                        processor_kwargs.pop("source_metadata", None)
+                except (TypeError, ValueError):
+                    pass
+                raw_result = self.processor_fn(**processor_kwargs)
                 duration = time.time() - start_t
+                # A lifetime ledger reconstructed from an older revision may
+                # have a higher floor than this staging-local checkpoint.
+                # Every downstream retry/cap decision must use the actual
+                # write-ahead reservation count, never the stale local guess.
+                attempt_number = max(
+                    attempt_number,
+                    int(self.auto_attempts.get(fname, 0)),
+                )
 
                 if isinstance(raw_result, dict) and raw_result.get("runtime_health_stop"):
                     reasons = [str(x) for x in raw_result.get("runtime_health_reasons", []) if str(x)]
-                    binding_only = bool(
+                    photo_local_structured_fault = bool(
                         reasons
-                        and set(reasons) <= {"request_id_missing", "request_id_mismatch"}
+                        and set(reasons) <= {
+                            "request_id_missing",
+                            "request_id_mismatch",
+                            "structured_narration_invalid",
+                        }
                     )
                     repeated_binding_fault = bool(
-                        binding_only
+                        photo_local_structured_fault
+                        and set(reasons) <= {"request_id_missing", "request_id_mismatch"}
                         and self._request_binding_incident_repeated_across_sources(
                             reasons,
                             {
@@ -2012,7 +2491,7 @@ class BatchOrchestrator:
                             },
                         )
                     )
-                    if binding_only and not repeated_binding_fault:
+                    if photo_local_structured_fault and not repeated_binding_fault:
                         contained_request_binding_failure = True
                         raw_result = dict(raw_result)
                         raw_result["runtime_health_stop"] = False
@@ -2022,9 +2501,14 @@ class BatchOrchestrator:
                         raw_result["independent_pass"] = True
                         raw_result["prior_answer_exposed"] = False
                         raw_result["prompt_contamination"] = False
+                        local_fault_label = (
+                            "敘述格式不完整"
+                            if "structured_narration_invalid" in reasons
+                            else "回覆識別碼無效"
+                        )
                         self.log_system(
-                            "⚠️ [回覆綁定門] 本輪回覆識別碼無效，已隔離且不參與定案；"
-                            f"仍受總模型呼叫上限 {self.max_total_attempts} 約束。"
+                            f"⚠️ [單張回覆隔離] 本輪{local_fault_label}，已隔離且不參與定案；"
+                            f"仍受總模型呼叫上限 {self.max_total_attempts} 約束，主批次不停止。"
                         )
                     else:
                         self._persist_runtime_health_fuse(
@@ -2089,7 +2573,14 @@ class BatchOrchestrator:
                 # Add Metadata
                 norm_result['file_name'] = fname
                 norm_result['source_path'] = str(Path(img_path).resolve())
-                norm_result.update(self._source_metadata(fname, img_path))
+                norm_result.update(source_metadata)
+                apply_trusted_source_view_lock(norm_result)
+                source_valid, source_errors, source_normalized = validate_evidence_contract(
+                    norm_result
+                )
+                norm_result["normalized_evidence"] = source_normalized
+                norm_result["evidence_contract_valid"] = bool(source_valid)
+                norm_result["evidence_contract_errors"] = source_errors[:20]
                 norm_result['timestamp'] = datetime.now().isoformat()
                 norm_result['duration'] = round(duration, 2)
                 norm_result['run_id'] = run_id
@@ -2118,7 +2609,14 @@ class BatchOrchestrator:
                             "本張不准第一輪驗證，必須從原圖無記憶重讀。"
                         )
 
-                candidate_narration = str(norm_result.get("thinking") or self.stream_buffer or "").strip()
+                # Health authority must come only from this response.  The UI
+                # stream buffer is mutable presentation state and may still
+                # contain the previous photo when LM Studio returns an empty
+                # response; using it here turns a photo-local transport fault
+                # into a false batch-wide fuse.
+                candidate_narration = str(
+                    norm_result.get("thinking") or norm_result.get("narration") or ""
+                ).strip()
                 runtime_health = evaluate_runtime_health(
                     norm_result,
                     candidate_narration,
@@ -2130,19 +2628,60 @@ class BatchOrchestrator:
                     for reason in runtime_health.reasons
                     if str(reason)
                 }
+                local_unbound_response_reasons = {
+                    "request_binding_unverified",
+                    # An unbound/truncated response may also be internally
+                    # inconsistent or expose its unfinished JSON envelope.
+                    # Discard the whole call; never turn those defects into
+                    # business evidence or a batch-wide stop.
+                    "structured_narration_followme_conflict",
+                    "ui_narration_contains_raw_structure",
+                }
+                empty_unbound_response = empty_unbound_response_can_contain(
+                    normalized_binding_reasons,
+                    norm_result,
+                )
+                repeated_unbound_transport_fault = (
+                    self._request_binding_incident_repeated_across_sources(
+                        (
+                            ["empty_model_response"]
+                            if empty_unbound_response
+                            else normalized_binding_reasons
+                        ),
+                        norm_result,
+                    )
+                    if (
+                        empty_unbound_response
+                        or (
+                            "request_binding_unverified" in normalized_binding_reasons
+                            and normalized_binding_reasons <= local_unbound_response_reasons
+                            and re.fullmatch(
+                                r"[0-9a-f]{64}",
+                                str(
+                                    norm_result.get("input_image_sha256") or ""
+                                ).strip().lower(),
+                            )
+                        )
+                    )
+                    else False
+                )
                 if (
                     not contained_request_binding_failure
                     and not runtime_health.allow_processing
-                    and normalized_binding_reasons
-                    and normalized_binding_reasons <= {"request_binding_unverified"}
-                    and re.fullmatch(
-                        r"[0-9a-f]{64}",
-                        str(norm_result.get("input_image_sha256") or "").strip().lower(),
+                    and (
+                        empty_unbound_response
+                        or (
+                            "request_binding_unverified" in normalized_binding_reasons
+                            and normalized_binding_reasons <= local_unbound_response_reasons
+                            and re.fullmatch(
+                                r"[0-9a-f]{64}",
+                                str(
+                                    norm_result.get("input_image_sha256") or ""
+                                ).strip().lower(),
+                            )
+                        )
                     )
-                    and not self._request_binding_incident_repeated_across_sources(
-                        normalized_binding_reasons,
-                        norm_result,
-                    )
+                    and not repeated_unbound_transport_fault
                 ):
                     # evaluate_runtime_health normalizes a missing/mismatched
                     # request echo to request_binding_unverified.  Keep that
@@ -2160,6 +2699,9 @@ class BatchOrchestrator:
                         normalized_binding_reasons
                     )
                     raw_result["contained_request_binding_failure"] = True
+                    raw_result["empty_model_response"] = bool(
+                        empty_unbound_response
+                    )
                 norm_result["runtime_health"] = runtime_health.to_dict()
                 runtime_health_force_unresolved = False
                 can_retry_conflict = False
@@ -2596,6 +3138,95 @@ class BatchOrchestrator:
             except Exception as e:
                 import traceback
                 error_msg = str(e)
+                attempt_number = max(
+                    attempt_number,
+                    int(self.auto_attempts.get(fname, 0)),
+                )
+
+                if isinstance(e, LifetimeModelCallCapReached):
+                    # Exhaustion is photo-local and expected for legacy
+                    # evidence.  Persist it for the deterministic resolver,
+                    # then continue with unrelated photos.  It is deliberately
+                    # not a success/failure/upload and does not trip the
+                    # batch-wide runtime fuse.
+                    consumed_calls = max(
+                        int(getattr(e, "consumed_calls", 0) or 0),
+                        attempt_number,
+                    )
+                    try:
+                        self._defer_capped_photo(
+                            filename=fname,
+                            source_path=img_path,
+                            consumed_calls=consumed_calls,
+                            attempt=consumed_calls,
+                            run_id=run_id,
+                            error=error_msg,
+                        )
+                    except Exception as queue_exc:
+                        # If the durable hand-off cannot be written, continuing
+                        # could lose the cap across restart and permit call 4.
+                        self._persist_runtime_health_fuse(
+                            ["capped_adjudication_queue_persist_failed"],
+                            source_file=fname,
+                            attempt=consumed_calls,
+                            run_id=run_id,
+                            record_snapshot={
+                                "file_name": fname,
+                                "source_path": str(Path(img_path).resolve()),
+                                "error": str(queue_exc)[:1000],
+                                "lifetime_model_call_count": consumed_calls,
+                            },
+                        )
+                        self.stream_buffer = (
+                            "本張三次額度已滿，但自動定案佇列無法安全寫入；"
+                            "已在照片邊界停止，絕不產生第 4 次呼叫。"
+                        )
+                        self.stream_file = fname
+                        self.log_system(
+                            f"🛑 [自動定案佇列寫入失敗] {fname}：{queue_exc}"
+                        )
+                        self.stop_event.set()
+                        break
+                    self.stream_buffer = (
+                        "本張已用滿三次本機模型呼叫，已轉交零模型自動定案；"
+                        "尚未算完成、尚未上傳，主批次繼續。"
+                    )
+                    self.stream_file = fname
+                    self.log_system(
+                        f"🧭 [三次額度自動定案] {fname} 已持久化排隊；"
+                        "未列入完成或上傳，主批次繼續。"
+                    )
+                    consecutive_failures = 0
+                    continue
+
+                if isinstance(e, LifetimeModelCallLedgerError):
+                    # Missing/broken binding is not equivalent to a clean cap.
+                    # It may indicate source identity drift, so it still
+                    # fails closed at the photo boundary.
+                    self._persist_runtime_health_fuse(
+                        ["lifetime_model_call_ledger_blocked"],
+                        source_file=fname,
+                        attempt=attempt_number,
+                        run_id=run_id,
+                        record_snapshot={
+                            "file_name": fname,
+                            "source_path": str(Path(img_path).resolve()),
+                            "error": error_msg[:1000],
+                            "lifetime_model_call_count": int(
+                                self.auto_attempts.get(fname, 0)
+                            ),
+                        },
+                    )
+                    self.stream_buffer = (
+                        "本張模型呼叫額度或原圖綁定無法安全證明，"
+                        "已在照片邊界停止；不會產生第 4 次呼叫。"
+                    )
+                    self.log_system(
+                        "🛑 [全域三次硬限制] "
+                        f"{fname} 已安全停止：{error_msg}"
+                    )
+                    self.stop_event.set()
+                    break
                 
                 # [v10.9] Distinguish permanent failures from retryable errors
                 is_missing_runtime = isinstance(e, FileNotFoundError)

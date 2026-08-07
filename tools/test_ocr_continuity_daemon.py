@@ -15,6 +15,8 @@ class ContinuityDaemonTests(unittest.TestCase):
             self.assertIn('Start-Sleep -Seconds', text)
             self.assertIn('ocr_continuity_daemon_shutdown.json', text)
             self.assertIn('WindowStyle Hidden', text)
+        self.assertIn('[int]$IntervalSeconds = 60', self.daemon)
+        self.assertIn('-IntervalSeconds 60', self.installer)
     def test_user_registration_and_safe_uninstall(self):
         self.assertIn('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', self.installer)
         self.assertIn('SamsungOCRContinuityDaemon', self.installer)

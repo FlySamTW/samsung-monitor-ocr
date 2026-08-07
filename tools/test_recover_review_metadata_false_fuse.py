@@ -153,6 +153,59 @@ class RecoverReviewMetadataFalseFuseTests(unittest.TestCase):
             self.assertEqual(report["persisted_attempt_before"], 2)
             self.assertEqual(report["persisted_attempt_after"], 1)
 
+    def test_restart_before_inference_can_bind_to_exact_prior_run_trace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staging = root / "staging"
+            audit = root / "audit"
+            staging.mkdir()
+            audit.mkdir()
+            prior_call = self._call(1)
+            retry = {
+                "auto_attempts": {"sample-639.jpg": 2},
+                "auto_result_history": {"sample-639.jpg": [prior_call]},
+            }
+            (staging / ".ocr_retry_queue.json").write_text(
+                json.dumps(retry), encoding="utf-8"
+            )
+            trace = audit / "trace.jsonl"
+            trace.write_text(
+                json.dumps({
+                    "file_name": "sample-639.jpg",
+                    "run_id": "prior-run",
+                    "parsed_output": {**prior_call, "run_id": "prior-run"},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            fuse = audit / "runtime_health_fuse.json"
+            fuse.write_text(
+                json.dumps({
+                    "schema": "samsung-ocr-runtime-health-fuse/v1",
+                    "active": True,
+                    "reasons": ["review_prior_value_present"],
+                    "source_file": "sample-639.jpg",
+                    "attempt": 2,
+                    "run_id": "new-run",
+                    "record_snapshot": {
+                        "view_type": "失敗",
+                        "model": None,
+                        "price": None,
+                        "raw_model_output": "",
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            report = recover(
+                staging_dir=staging,
+                trace_path=trace,
+                fuse_file=fuse,
+                apply=True,
+            )
+
+            self.assertEqual(report["trace_run_ids"], ["prior-run"])
+            self.assertFalse(fuse.exists())
+
     def test_real_model_output_cannot_use_this_recovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

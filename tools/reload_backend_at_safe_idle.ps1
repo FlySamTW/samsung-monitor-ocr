@@ -42,6 +42,28 @@ function Get-Owned([string]$Pattern) {
         $_.CommandLine -notmatch "Get-CimInstance|reload_backend_at_safe_idle"
     })
 }
+function Test-SameExecutable([string]$Left, [string]$Right) {
+    if (-not $Left -or -not $Right) { return $false }
+    try {
+        return [System.IO.Path]::GetFullPath($Left).Equals(
+            [System.IO.Path]::GetFullPath($Right),
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    } catch { return $false }
+}
+function Get-VenvRuntimePython {
+    $config = Join-Path $RepoRoot ".venv\pyvenv.cfg"
+    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return "" }
+    foreach ($line in Get-Content -LiteralPath $config) {
+        if ([string]$line -match "^\s*executable\s*=\s*(.+?)\s*$") {
+            $candidate = [string]$Matches[1]
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                return [System.IO.Path]::GetFullPath($candidate)
+            }
+        }
+    }
+    return ""
+}
 function Get-BackendProcessTree {
     $all = @(Get-CimInstance Win32_Process)
     $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $backendPort -ErrorAction Stop)
@@ -50,11 +72,36 @@ function Get-BackendProcessTree {
     $byId = @{}
     foreach ($proc in $all) { $byId[[int]$proc.ProcessId] = $proc }
     if (-not $byId.ContainsKey($listenerPid)) { throw "backend listener process missing" }
-    if ([string]$byId[$listenerPid].CommandLine -notmatch "samsung_ocr_batch_processor\.py") {
-        throw "port is not owned by the OCR backend"
+    $listener = $byId[$listenerPid]
+    $listenerCommand = [string]$listener.CommandLine
+    $parent = if ($byId.ContainsKey([int]$listener.ParentProcessId)) {
+        $byId[[int]$listener.ParentProcessId]
+    } else { $null }
+    $directRepoListener = (
+        $listenerCommand -match "samsung_ocr_batch_processor\.py" -and
+        $listenerCommand -match [regex]::Escape($RepoRoot)
+    )
+    # The project venv launcher can remain as the repo-owned parent while the
+    # bundled runtime Python child owns port 5002.  Accept only that exact,
+    # pyvenv.cfg-bound delegation; an arbitrary Python listener or a parent
+    # from another checkout still fails closed.
+    $runtimePython = Get-VenvRuntimePython
+    $delegatedRuntimeListener = (
+        $parent -and
+        [string]$parent.CommandLine -match "samsung_ocr_batch_processor\.py" -and
+        [string]$parent.CommandLine -match [regex]::Escape($RepoRoot) -and
+        (Test-SameExecutable ([string]$parent.ExecutablePath) $python) -and
+        (Test-SameExecutable ([string]$listener.ExecutablePath) $runtimePython)
+    )
+    if (-not $directRepoListener -and -not $delegatedRuntimeListener) {
+        throw "port is not owned by the OCR backend or approved venv runtime delegate"
     }
-    $tree = @()
-    $current = $byId[$listenerPid]
+    $tree = @($listener)
+    if ($delegatedRuntimeListener) {
+        $tree += $parent
+        return @($tree | Sort-Object ProcessId -Unique)
+    }
+    $current = $parent
     while ($current -and [string]$current.CommandLine -match "samsung_ocr_batch_processor\.py") {
         if ([string]$current.CommandLine -notmatch [regex]::Escape($RepoRoot)) {
             throw "backend process tree is not repo-owned"
@@ -104,11 +151,20 @@ try {
     ) {
         $candidate = [System.IO.Path]::GetFullPath([string]$status.image_dir)
         $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $OutputDir "_ocr_staging"))
+        $sourceRootFull = [System.IO.Path]::GetFullPath($SourceRoot)
+        $insideStaging = $candidate.StartsWith(
+            $stagingRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+        $insideSource = $candidate.StartsWith(
+            $sourceRootFull + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
         if (
-            -not $candidate.StartsWith($stagingRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+            (-not $insideStaging -and -not $insideSource) -or
             -not (Test-Path -LiteralPath $candidate -PathType Container)
         ) {
-            throw "incomplete recovery directory is not a live OCR staging folder"
+            throw "incomplete recovery directory is outside the approved source/staging roots"
         }
         $resumeIncompleteDir = $candidate
     }
@@ -203,17 +259,32 @@ try {
             throw "fresh backend did not resume the preserved incomplete staging batch"
         }
         $resumed = Get-Status
+        $resumedProcessed = if ($resumed -and $resumed.stats) { [int]$resumed.stats.processed } else { 0 }
+        $resumedTotal = if ($resumed -and $resumed.stats) { [int]$resumed.stats.total } else { 0 }
+        $resumedCapped = if ($resumed -and $resumed.capped_adjudication) { [int]$resumed.capped_adjudication.count } else { 0 }
+        # A restored batch whose only unfinished photos are already protected
+        # by the durable three-call capped queue can settle back to the photo
+        # boundary before this immediate verification poll. That is a valid
+        # resume, not a failure: the zero-model finalizer owns those photos.
+        $resumedSettledAtBoundary = (
+            -not [bool]$resumed.is_running -and
+            $resumedTotal -gt 0 -and
+            ($resumedProcessed + $resumedCapped) -eq $resumedTotal
+        )
         if (
             -not $resumed -or
-            -not [bool]$resumed.is_running -or
+            (-not [bool]$resumed.is_running -and -not $resumedSettledAtBoundary) -or
             [System.IO.Path]::GetFullPath([string]$resumed.image_dir) -ne $resumeIncompleteDir
         ) {
             throw "preserved incomplete staging batch resume verification failed"
         }
-        Log-Reload "incomplete_staging_resumed" @{
+        Log-Reload "incomplete_checkpoint_resumed" @{
             image_dir=$resumeIncompleteDir
-            processed=$resumed.stats.processed
-            total=$resumed.stats.total
+            processed=$resumedProcessed
+            capped=$resumedCapped
+            total=$resumedTotal
+            running=[bool]$resumed.is_running
+            settled_at_boundary=$resumedSettledAtBoundary
         }
     }
 } catch {

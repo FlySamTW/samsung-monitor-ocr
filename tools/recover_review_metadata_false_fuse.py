@@ -17,7 +17,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -47,7 +47,6 @@ def _trace_calls(
     trace_path: Path,
     *,
     file_name: str,
-    run_id: str,
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     with trace_path.open("r", encoding="utf-8") as handle:
@@ -56,12 +55,29 @@ def _trace_calls(
                 row = json.loads(line)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            if row.get("file_name") != file_name or row.get("run_id") != run_id:
+            if row.get("file_name") != file_name:
                 continue
             parsed = row.get("parsed_output")
             if isinstance(parsed, dict):
-                calls.append(dict(parsed))
-    return sorted(calls, key=lambda item: int(item.get("ocr_attempt") or 0))
+                call = dict(parsed)
+                call["_trace_run_id"] = str(row.get("run_id") or "")
+                calls.append(call)
+    return calls
+
+
+def _matches_persisted_history(call: Mapping[str, Any], saved: Mapping[str, Any]) -> bool:
+    keys = (
+        "input_image_sha256",
+        "request_id_verified",
+        "independent_pass",
+        "prior_answer_exposed",
+        "prompt_contamination",
+        "view_type",
+        "category",
+        "model",
+        "price",
+    )
+    return all(call.get(key) == saved.get(key) for key in keys)
 
 
 def recover(
@@ -132,10 +148,22 @@ def recover(
             "persisted attempt/history state does not match the pre-inference block"
         )
 
-    calls = _trace_calls(trace_path, file_name=file_name, run_id=run_id)
-    if [int(item.get("ocr_attempt") or 0) for item in calls] != completed_attempts:
+    all_calls = _trace_calls(trace_path, file_name=file_name)
+    calls: list[dict[str, Any]] = []
+    needed = len(completed_attempts)
+    for start in range(len(all_calls) - needed, -1, -1):
+        candidate = all_calls[start:start + needed]
+        if [int(item.get("ocr_attempt") or 0) for item in candidate] != completed_attempts:
+            continue
+        if all(
+            _matches_persisted_history(call, saved)
+            for call, saved in zip(candidate, history)
+        ):
+            calls = candidate
+            break
+    if not calls:
         raise RuntimeError(
-            "evidence trace must contain exactly the calls completed before the block"
+            "evidence trace must contain the exact persisted calls completed before the block"
         )
     source_ids = {str(item.get("source_item_id") or "") for item in calls}
     image_hashes = {
@@ -182,6 +210,9 @@ def recover(
         "run_id": run_id,
         "input_image_sha256": image_hash,
         "trace_attempts": completed_attempts,
+        "trace_run_ids": list(dict.fromkeys(
+            str(item.get("_trace_run_id") or "") for item in calls
+        )),
         "persisted_attempt_before": blocked_attempt,
         "persisted_attempt_after": blocked_attempt - 1,
         "fourth_call_allowed": False,

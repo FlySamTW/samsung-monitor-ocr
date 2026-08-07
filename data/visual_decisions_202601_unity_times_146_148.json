@@ -1,0 +1,53 @@
+{
+  "schema": "samsung-ocr-visual-decisions/v1",
+  "period": "202601",
+  "audit_date": "2026-07-21",
+  "audit_method": "full_resolution_dual_visual_review",
+  "reviewers": [
+    "primary_full_resolution_review",
+    "low_power_visual_audit"
+  ],
+  "decisions": [
+    {
+      "file_name": "M-台北市-信義區-集雅社-統一時代二-146.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "S32DG802SC",
+      "price": 33900,
+      "label_ownership": "matched",
+      "followme_physical_expected": false,
+      "followme_physical_evidence": [],
+      "pixel_basis": "中央 G8 螢幕四邊完整，左右鄰機被原圖邊界裁切；中央同主體實體牌可讀 S32DG802SC 與 33,900 元。"
+    },
+    {
+      "file_name": "M-台北市-信義區-集雅社-統一時代二-147.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 1,
+      "model": "FollowMe M7 32\"",
+      "price": 13990,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "attached_price_tray", "same_subject": true, "strength": "strong"},
+        {"cue": "attached_followme_product_card", "same_subject": true, "strength": "strong"}
+      ],
+      "pixel_basis": "唯一主角為白色立柱與託盤的 Samsung Follow Me 4K；同主體實體牌可讀 S32FM7/FOLLOWME 與 13,990 元。"
+    },
+    {
+      "file_name": "M-台北市-信義區-集雅社-統一時代二-148.jpg",
+      "view_type": "單機",
+      "complete_screen_count": 0,
+      "model": "FollowMe M7 32\"",
+      "price": 13990,
+      "label_ownership": "matched",
+      "followme_physical_expected": true,
+      "followme_physical_evidence": [
+        {"cue": "white_vertical_stand", "same_subject": true, "strength": "strong"},
+        {"cue": "attached_price_tray", "same_subject": true, "strength": "strong"},
+        {"cue": "attached_followme_product_card", "same_subject": true, "strength": "strong"}
+      ],
+      "pixel_basis": "近拍裁切了螢幕上緣，但畫面唯一商品主體的白色立柱、託盤及同位實體牌清楚；牌面可讀 S32FM7/FOLLOWME 與 13,990 元。"
+    }
+  ]
+}

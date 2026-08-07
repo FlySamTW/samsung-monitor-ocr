@@ -155,6 +155,35 @@ class CurrentYearUploadFinalizationTests(unittest.TestCase):
             self.assertEqual(proof["expected_candidate_count"], 1)
             self.assertEqual(proof["scanned_result_count"], 1)
 
+    def test_zero_candidate_ignores_stale_results_from_previous_backfill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            item = self.build_fixture(Path(tmp), candidate_count=0)
+            stale_row = {
+                "source_path": str((item["output"] / "stale.jpg").resolve()),
+                "file_name": "stale.jpg",
+                "period": "202601",
+                "audit_folder": str(item["audit"].resolve()),
+                "source_folder": str(item["output"].resolve()),
+            }
+            write_csv(item["result"], [stale_row], list(stale_row))
+            stale_summary = {
+                "folder": str(item["output"].resolve()),
+                "period": "202601",
+                "audit_folder": str(item["audit"].resolve()),
+                "queued": 1,
+                "staged": 1,
+                "processed": 1,
+                "aborted": 0,
+                "failed_replacements": 0,
+            }
+            write_csv(item["summary"], [stale_summary], list(stale_summary))
+            with patch("tools.audit_distant_followme_risk.build_candidates", return_value=self.completed_backfill()):
+                proof = validate_finalization_proof(item["output"], 2026, item["candidate"], item["result"], item["summary"])
+            self.assertTrue(proof["complete"])
+            self.assertTrue(proof["result_source_set_matches"])
+            self.assertEqual(proof["stale_result_rows_ignored"], 1)
+            self.assertEqual(proof["stale_summary_rows_ignored"], 1)
+
     def test_missing_selected_result_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             item = self.build_fixture(Path(tmp))

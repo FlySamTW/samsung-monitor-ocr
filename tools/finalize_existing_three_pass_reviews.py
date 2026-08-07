@@ -23,10 +23,11 @@ from skills.audit_fields import (
     clear_superseded_terminal_content_flags,
     finalize_three_pass_outcome,
     has_sufficient_followme_physical_evidence,
+    immediate_retry_decision,
     refresh_authoritative_price_comparison,
     validate_evidence_contract,
 )
-from skills.model_catalog_rules import normalize_samsung_model
+from skills.model_catalog_rules import extract_samsung_models, normalize_samsung_model
 from skills.model_validation import normalize_model_token, strict_known_model
 from tools.stream_drive_upload import enqueue_finalized_result
 
@@ -43,6 +44,34 @@ def _atomic_json(path: Path, payload: Any) -> None:
 
 def _task_file_name(task: dict[str, Any]) -> str:
     return Path(str((task.get("data") or {}).get("image") or "")).name
+
+
+def _task_annotation_text(task: dict[str, Any], field: str) -> Any:
+    for annotation in task.get("annotations") or []:
+        if not isinstance(annotation, dict):
+            continue
+        for item in annotation.get("result") or []:
+            if (
+                not isinstance(item, dict)
+                or str(item.get("from_name") or "") != field
+            ):
+                continue
+            text = (item.get("value") or {}).get("text")
+            if isinstance(text, list) and text:
+                return text[0]
+    return None
+
+
+def _existing_task_identity_field(
+    task: dict[str, Any], meta: dict[str, Any], field: str
+) -> Any:
+    if field in meta:
+        return meta.get(field)
+    return _task_annotation_text(task, field)
+
+
+def _empty_existing_model(value: Any) -> bool:
+    return normalize_model_token(value) in {"", "NULL", "NONE"}
 
 
 def _sync_label_studio_annotation(
@@ -650,9 +679,19 @@ def _load_three_call_groups(trace_path: Path) -> dict[str, list[dict[str, Any]]]
             if attempts != [1, 2, 3] or "" in hashes or len(hashes) != 1:
                 continue
             previous = latest.get(name)
-            if previous is None or (
-                str(candidate[-1].get("timestamp") or "")
-                > str(previous[-1].get("timestamp") or "")
+            candidate_timestamp = str(candidate[-1].get("timestamp") or "")
+            previous_timestamp = (
+                str(previous[-1].get("timestamp") or "")
+                if previous
+                else ""
+            )
+            if (
+                previous is None
+                or candidate_timestamp > previous_timestamp
+                or (
+                    candidate_timestamp == previous_timestamp
+                    and len(candidate) > len(previous)
+                )
             ):
                 latest[name] = candidate
             recovered_three_call_group = True
@@ -860,13 +899,148 @@ def _raw_single_model_price_consensus(
     return pair
 
 
-def _calls_bind_to_result_source(
-    calls: list[dict[str, Any]], result_path: Path, file_name: str
+def _targeted_friendly_model_raw_consensus(
+    calls: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    """Recover one catalog SKU embedded in three identical raw structures.
+
+    This path is intentionally stricter than the older raw-pair repair.  It is
+    used only for an explicitly selected, already-finalized current-revision
+    row whose parsed model was cleared.  All three calls must be clean,
+    stateless and request-bound, and every raw structured field except the
+    unique request token and free-form narration must be identical.
+    """
+    if len(calls) != 3:
+        return None
+    attempts = sorted(int(call.get("ocr_attempt") or 0) for call in calls)
+    image_hashes = {
+        str(call.get("input_image_sha256") or "").strip().lower()
+        for call in calls
+    }
+    if (
+        attempts != [1, 2, 3]
+        or len(image_hashes) != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", next(iter(image_hashes), ""))
+    ):
+        return None
+    try:
+        valid_models = [
+            line.strip()
+            for line in MODEL_LIST_PATH.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError):
+        return None
+    if not valid_models:
+        return None
+
+    request_ids: set[str] = set()
+    structured_signatures: set[str] = set()
+    pairs: set[tuple[str, str]] = set()
+    for call in calls:
+        runtime = call.get("runtime_health") or {}
+        if (
+            call.get("request_id_verified") is not True
+            or call.get("request_binding_enforced") is not True
+            or call.get("independent_pass") is not True
+            or call.get("prior_answer_exposed") is True
+            or call.get("prompt_contamination") is True
+            or not isinstance(runtime, dict)
+            or runtime.get("healthy") is not True
+            or bool(runtime.get("reasons"))
+        ):
+            return None
+        raw_objects = call.get("raw_objects")
+        if not isinstance(raw_objects, list) or len(raw_objects) != 1:
+            return None
+        try:
+            payload = (
+                json.loads(raw_objects[0])
+                if isinstance(raw_objects[0], str)
+                else dict(raw_objects[0])
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        request_id = str(payload.get("request_id") or "").strip().lower()
+        if (
+            not re.fullmatch(r"[0-9a-f]{32}", request_id)
+            or request_id in request_ids
+        ):
+            return None
+        request_ids.add(request_id)
+        if (
+            str(payload.get("view_type") or "").strip() != "單機"
+            or payload.get("complete_screen_count") != 1
+            or payload.get("unique_main") is not True
+            or str(payload.get("label_ownership") or "").strip() != "matched"
+            or bool(payload.get("followme_physical_evidence"))
+        ):
+            return None
+
+        friendly_model = str(payload.get("model") or "").strip()
+        model_tokens = extract_samsung_models(friendly_model)
+        if len(model_tokens) != 1:
+            return None
+        model = strict_known_model(model_tokens[0], valid_models)
+        if (
+            not model
+            or normalize_model_token(friendly_model)
+            == normalize_model_token(model)
+        ):
+            return None
+        price = re.sub(r"[^0-9]", "", str(payload.get("price") or ""))
+        if not price or not price.isdigit() or int(price) <= 2000:
+            return None
+
+        narration = str(
+            payload.get("narration") or payload.get("thinking") or ""
+        )
+        narration_tokens = extract_samsung_models(narration)
+        formatted_price = f"{int(price):,}"
+        if (
+            len(narration_tokens) != 1
+            or strict_known_model(narration_tokens[0], valid_models) != model
+            or not re.search(
+                rf"(?:{re.escape(price)}|{re.escape(formatted_price)})",
+                narration,
+            )
+        ):
+            return None
+
+        structured_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"request_id", "narration", "thinking"}
+        }
+        structured_signatures.add(
+            json.dumps(
+                structured_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        pairs.add((model, price))
+
+    if (
+        len(request_ids) != 3
+        or len(structured_signatures) != 1
+        or len(pairs) != 1
+    ):
+        return None
+    return next(iter(pairs))
+
+
+def _calls_bind_to_source_path(
+    calls: list[dict[str, Any]], target: Path, file_name: str
 ) -> bool:
     """Prove that cross-staging traces contain the exact current photo bytes."""
     if len(calls) != 3 or not file_name:
         return False
-    target = (result_path.resolve().parent / file_name).resolve()
+    target = target.resolve()
     source_paths = [Path(str(call.get("source_path") or "")).resolve() for call in calls]
     original_paths = {
         Path(str(call.get("original_source_path") or "")).resolve()
@@ -892,6 +1066,77 @@ def _calls_bind_to_result_source(
         return False
     hashes = {_sha256_file(path) for path in [target, original, *source_paths]}
     return len(hashes) == 1
+
+
+def _calls_bind_to_trace_source(
+    calls: list[dict[str, Any]], file_name: str
+) -> bool:
+    """Verify immutable call/source binding when the result is a snapshot copy."""
+    if len(calls) != 3 or not file_name:
+        return False
+    source_paths = [Path(str(call.get("source_path") or "")).resolve() for call in calls]
+    original_paths = {
+        Path(str(call.get("original_source_path") or "")).resolve()
+        for call in calls
+    }
+    source_ids = {str(call.get("source_item_id") or "") for call in calls}
+    image_hashes = {
+        str(call.get("input_image_sha256") or "").strip().lower()
+        for call in calls
+    }
+    if (
+        any(not path.is_file() or path.name != file_name for path in source_paths)
+        or len(original_paths) != 1
+        or len(source_ids) != 1
+        or "" in source_ids
+        or len(image_hashes) != 1
+        or "" in image_hashes
+    ):
+        return False
+    original = next(iter(original_paths))
+    source_id = next(iter(source_ids))
+    image_hash = next(iter(image_hashes))
+    if not original.is_file() or original.name != file_name:
+        return False
+    if source_id != hashlib.sha256(str(original).casefold().encode("utf-8")).hexdigest():
+        return False
+    byte_hashes = {_sha256_file(path) for path in [original, *source_paths]}
+    return len(byte_hashes) == 1 and image_hash in byte_hashes
+
+
+def _calls_bind_to_result_source(
+    calls: list[dict[str, Any]], result_path: Path, file_name: str
+) -> bool:
+    return _calls_bind_to_source_path(
+        calls,
+        result_path.resolve().parent / file_name,
+        file_name,
+    )
+
+
+def _targeted_calls_bind_to_result_source(
+    calls: list[dict[str, Any]], result_path: Path, file_name: str
+) -> bool:
+    """Require both immutable source bytes and one prepared-input identity."""
+    if not _calls_bind_to_result_source(calls, result_path, file_name):
+        return False
+    input_hashes = {
+        str(call.get("input_image_sha256") or "").strip().lower()
+        for call in calls
+    }
+    source_hashes = {
+        str(call.get("source_file_sha256") or "").strip().lower()
+        for call in calls
+    }
+    if (
+        len(input_hashes) != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", next(iter(input_hashes), ""))
+        or len(source_hashes) != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", next(iter(source_hashes), ""))
+    ):
+        return False
+    target = result_path.resolve().parent / file_name
+    return next(iter(source_hashes)) == _sha256_file(target)
 
 
 def _recover_known_authority_after_restart(
@@ -1001,6 +1246,127 @@ def _recover_clean_single_tail_after_restart(
     }
     if "" in image_hashes or len(image_hashes) != 1:
         return False
+
+    # A legacy guard may have blocked the parsed call after the local model had
+    # already returned clean, request-bound FollowMe evidence.  Replay only the
+    # immutable raw JSON through the *current* ordered-family rule.  This is
+    # intentionally narrower than trusting an unhealthy parsed result: both
+    # persisted tail calls must independently reach the current one-pass
+    # FollowMe early exit, bind to the same source and full image, and agree on
+    # every retained field.  No model request is made here.
+    ordered_followme_tail: list[dict[str, Any]] = []
+    source_ids = {str(item.get("source_item_id") or "").strip() for item in calls}
+    original_paths = {
+        str(item.get("original_source_path") or "").strip() for item in calls
+    }
+    if "" not in source_ids and len(source_ids) == 1 and "" not in original_paths and len(original_paths) == 1:
+        for item in calls:
+            raw_objects = item.get("raw_objects") or []
+            if not isinstance(raw_objects, list) or len(raw_objects) != 1:
+                ordered_followme_tail = []
+                break
+            try:
+                raw_payload = (
+                    json.loads(raw_objects[0])
+                    if isinstance(raw_objects[0], str)
+                    else dict(raw_objects[0])
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                ordered_followme_tail = []
+                break
+            if not isinstance(raw_payload, dict):
+                ordered_followme_tail = []
+                break
+            if isinstance(raw_payload.get("data"), dict):
+                raw_payload = dict(raw_payload["data"])
+            narration = str(
+                raw_payload.get("narration")
+                or raw_payload.get("thinking")
+                or ""
+            ).strip()
+            replay = {
+                **raw_payload,
+                "thinking": narration,
+                "narration": narration,
+                "raw_objects": list(raw_objects),
+                "period": item.get("period"),
+                "file_name": item.get("file_name"),
+                "source_path": item.get("source_path"),
+                "source_item_id": item.get("source_item_id"),
+                "original_source_path": item.get("original_source_path"),
+                "input_image_sha256": item.get("input_image_sha256"),
+                "request_id_verified": item.get("request_id_verified"),
+                "independent_pass": item.get("independent_pass"),
+                "prior_answer_exposed": item.get("prior_answer_exposed"),
+                "prompt_contamination": item.get("prompt_contamination"),
+            }
+            valid, _errors, normalized = validate_evidence_contract(replay)
+            replay["normalized_evidence"] = normalized
+            if not valid:
+                ordered_followme_tail = []
+                break
+            decision = immediate_retry_decision(replay, 1, [], 3)
+            if (
+                decision.get("verified") is not True
+                or replay.get("ordered_followme_early_exit") is not True
+                or replay.get("followme_family_confirmed") is not True
+            ):
+                ordered_followme_tail = []
+                break
+            ordered_followme_tail.append(replay)
+
+    if len(ordered_followme_tail) == 2:
+        model_keys = [
+            normalize_model_token(item.get("model"))
+            for item in ordered_followme_tail
+        ]
+        price_keys = [
+            re.sub(r"[^0-9]", "", str(item.get("price") or ""))
+            for item in ordered_followme_tail
+        ]
+        if model_keys[0] and model_keys[0] == model_keys[1]:
+            model = ordered_followme_tail[-1].get("model")
+            price = (
+                ordered_followme_tail[-1].get("price")
+                if price_keys[0] and price_keys[0] == price_keys[1]
+                else None
+            )
+            evidence = ordered_followme_tail[-1].get("normalized_evidence") or {}
+            current.update({
+                "view_type": "單機",
+                "category": "單機",
+                "complete_screen_count": evidence.get("complete_screen_count", 1),
+                "unique_main": True,
+                "model": model,
+                "price": price,
+                "label_ownership": "matched",
+                "followme_physical_evidence": list(
+                    evidence.get("followme_physical_evidence") or []
+                ),
+                "followme_family_confirmed": True,
+                "ordered_followme_family_lock": True,
+                "ordered_followme_early_exit": True,
+                "screen_status": "正常",
+                "quality_issue": "無",
+                "three_pass_adjudicated": True,
+                "adjudication_rule": (
+                    "two_current_ordered_followme_tail_calls_after_persisted_attempt_one"
+                ),
+                "restart_recovery_missing_attempt_one_trace": True,
+                "thinking": (
+                    "模型呼叫總數已由持久化輪次計數到第 3 輪；第 1 輪在停止邊界前未寫入 trace。"
+                    "現存第 2、3 輪的原始同圖、無記憶證據各自通過目前的 FollowMe 有序早停，"
+                    "並一致支持 FollowMe 家族"
+                    + (f"與價格 {int(price_keys[0]):,} 元" if price else "")
+                    + "；沒有進行第 4 次呼叫。"
+                ),
+            })
+            current["narration"] = current["thinking"]
+            valid, _errors, normalized = validate_evidence_contract(current)
+            if valid:
+                current["normalized_evidence"] = normalized
+                return True
+
     for item in calls:
         runtime = item.get("runtime_health") or {}
         if (
@@ -1086,8 +1452,39 @@ def finalize_file(
         calls = groups.get(name) or []
         recovered_official_sku = _recover_full_official_sku_consensus(calls)
         recovered_raw_pair = _raw_single_model_price_consensus(calls)
-        raw_calls_bind_same_source = _calls_bind_to_result_source(
-            calls, result_path, name
+        targeted_raw_pair = _targeted_friendly_model_raw_consensus(calls)
+        targeted_existing_model = _existing_task_identity_field(
+            task, existing_meta, "model"
+        )
+        targeted_existing_price = re.sub(
+            r"[^0-9]",
+            "",
+            str(
+                _existing_task_identity_field(task, existing_meta, "price")
+                or ""
+            ),
+        )
+        raw_calls_bind_same_source = (
+            _calls_bind_to_result_source(calls, result_path, name)
+            or _calls_bind_to_trace_source(calls, name)
+        )
+        targeted_raw_model_price_repair = bool(
+            only_file_names is not None
+            and len(only_file_names) == 1
+            and name in only_file_names
+            and targeted_raw_pair
+            and _empty_existing_model(targeted_existing_model)
+            and targeted_existing_price == targeted_raw_pair[1]
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision")
+            == EVIDENCE_GUARD_REVISION
+            and int(existing_meta.get("ocr_attempt") or 0) == 3
+            and existing_meta.get("adjudication_rule")
+            == "three_pass_single_subject_consensus"
+            and _targeted_calls_bind_to_result_source(
+                calls, result_path, name
+            )
         )
         raw_pair_matches_existing_model = bool(
             recovered_raw_pair
@@ -1139,6 +1536,19 @@ def finalize_file(
             or stale_terminal_blocker_repair
             or official_sku_repair
             or raw_model_price_repair
+            or targeted_raw_model_price_repair
+        )
+        followme_family_field_sync_repair = bool(
+            apply
+            and existing_meta.get("auto_verified") is True
+            and existing_meta.get("auto_review_required") is not True
+            and existing_meta.get("evidence_guard_revision")
+            == EVIDENCE_GUARD_REVISION
+            and existing_meta.get("adjudication_rule")
+            == "two_pass_followme_physical_consensus"
+            and not str(existing_meta.get("model") or "").strip()
+            and len(calls) in {2, 3}
+            and raw_calls_bind_same_source
         )
         known_pixel_repair = bool(
             (apply or only_file_names is not None)
@@ -1153,13 +1563,31 @@ def finalize_file(
             ).get("authority") == "human_audited_pixel_authority"
         )
         completed_current_adjudication = completed_current_adjudication or known_pixel_repair
-        if not _review_required(task) and not completed_current_adjudication:
+        if (
+            not _review_required(task)
+            and not completed_current_adjudication
+            and not followme_family_field_sync_repair
+        ):
             continue
         if len(calls) not in {2, 3}:
             report.append({"file": name, "status": "unchanged", "reason": "bounded_call_evidence_missing"})
             continue
         current = dict(calls[-1])
-        if completed_current_adjudication:
+        if followme_family_field_sync_repair:
+            decision = finalize_three_pass_outcome(
+                current,
+                calls[:-1],
+                {
+                    "attempt": 3,
+                    "retry": False,
+                    "unresolved": True,
+                    "verified": False,
+                    "reasons": ["followme_family_structured_field_sync"],
+                },
+            )
+            recovered_restart_authority = False
+            recovered_clean_tail = False
+        elif completed_current_adjudication:
             for field in (
                 "view_type", "screen_status", "quality_issue", "model", "price",
                 "complete_screen_count", "unique_main",
@@ -1192,8 +1620,12 @@ def finalize_file(
                     "三輪原始結構化答案均讀到同一完整官方料號；"
                     "已將完整料號正規化為型號表短碼，不增加第 4 次模型呼叫。"
                 )
-            if raw_model_price_repair:
-                recovered_model, recovered_price = recovered_raw_pair
+            if raw_model_price_repair or targeted_raw_model_price_repair:
+                recovered_model, recovered_price = (
+                    targeted_raw_pair
+                    if targeted_raw_model_price_repair
+                    else recovered_raw_pair
+                )
                 current.update({
                     "view_type": "單機",
                     "category": "單機",
@@ -1212,9 +1644,10 @@ def finalize_file(
                         "沒有增加第 4 次模型呼叫。"
                     ),
                 })
-                refresh_authoritative_price_comparison(
-                    current, recovered_model, recovered_price
-                )
+                if apply:
+                    refresh_authoritative_price_comparison(
+                        current, recovered_model, recovered_price
+                    )
             current["category"] = current.get("view_type")
             decision = {
                 "attempt": 3,
@@ -1224,15 +1657,19 @@ def finalize_file(
                 "reasons": [],
             }
         else:
-            recovered_restart_authority = _recover_known_authority_after_restart(
-                current, calls, existing_meta
-            )
+            recovered_restart_authority = False
             recovered_clean_tail = False
-            if not recovered_restart_authority:
-                recovered_clean_tail = _recover_clean_single_tail_after_restart(
+            if not followme_family_field_sync_repair:
+                recovered_restart_authority = _recover_known_authority_after_restart(
                     current, calls, existing_meta
                 )
-        if completed_current_adjudication:
+                if not recovered_restart_authority:
+                    recovered_clean_tail = _recover_clean_single_tail_after_restart(
+                        current, calls, existing_meta
+                    )
+        if followme_family_field_sync_repair:
+            pass
+        elif completed_current_adjudication:
             authority_reapplied = apply_human_audited_pixel_authority(
                 current, calls[:-1], 3
             )
@@ -1253,9 +1690,12 @@ def finalize_file(
                     expected.get("price"),
                 )
         elif (
-            recovered_restart_authority
-            or recovered_clean_tail
-            or apply_human_audited_pixel_authority(current, calls[:-1], 3)
+            not followme_family_field_sync_repair
+            and (
+                recovered_restart_authority
+                or recovered_clean_tail
+                or apply_human_audited_pixel_authority(current, calls[:-1], 3)
+            )
         ):
             current["three_pass_adjudicated"] = True
             current["adjudication_summary"] = (

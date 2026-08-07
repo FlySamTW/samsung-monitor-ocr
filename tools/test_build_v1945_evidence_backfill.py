@@ -10,6 +10,8 @@ from tools.build_v1945_evidence_backfill import (
     BACKFILL_COMPATIBLE_GUARD_REVISIONS,
     build_candidates,
     load_bound_visual_authorities,
+    load_current_upload_queue_source_ids,
+    load_current_upload_receipt_source_ids,
     load_verified_source_ids,
     run,
     stable_source_id,
@@ -81,8 +83,137 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual([row["file_name"] for row in rows], ["two.jpg"])
             self.assertEqual(rows[0]["reason"], "v1945_evidence_backfill")
 
-    def test_explicit_64_and_current_compatible_trace_is_not_reprocessed(self):
-        self.assertIn(EVIDENCE_GUARD_REVISION, BACKFILL_COMPATIBLE_GUARD_REVISIONS)
+    def test_current_drive_receipt_is_terminal_and_changed_source_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "uploaded.jpg"
+            source.write_bytes(b"original")
+            audit = self.make_audit(root, [source])
+            source_id = stable_source_id(source)
+            receipts = root / "_drive_upload_stream" / "receipts"
+            receipts.mkdir(parents=True)
+            receipt = {
+                "schema": "samsung-ocr-stream-receipt-v1",
+                "source_item_id": source_id,
+                "original_source_path": str(source.resolve()),
+                "source_sha256": hashlib.sha256(b"original").hexdigest(),
+                "period": "202605",
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                "confirmed_at": "2999-01-01T00:00:00",
+            }
+            (receipts / f"{source_id}.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+
+            verified, invalid = load_current_upload_receipt_source_ids(audit)
+            self.assertEqual(verified, {source_id})
+            self.assertEqual(invalid, [])
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["current_upload_receipt_source_ids"], 1)
+
+            receipt["confirmed_at"] = "2000-01-01T00:00:00"
+            source.write_bytes(b"changed")
+            (receipts / f"{source_id}.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            verified, invalid = load_current_upload_receipt_source_ids(audit)
+            self.assertEqual(verified, set())
+            self.assertEqual(len(invalid), 1)
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+
+    def test_old_drive_receipt_revision_does_not_hide_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "old-revision.jpg"
+            source.write_bytes(b"old")
+            audit = self.make_audit(root, [source])
+            source_id = stable_source_id(source)
+            receipts = root / "_drive_upload_stream" / "receipts"
+            receipts.mkdir(parents=True)
+            (receipts / f"{source_id}.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "samsung-ocr-stream-receipt-v1",
+                        "source_item_id": source_id,
+                        "original_source_path": str(source.resolve()),
+                        "source_sha256": hashlib.sha256(b"old").hexdigest(),
+                        "period": "202605",
+                        "evidence_guard_revision": "20260731.89",
+                        "confirmed_at": "2999-01-01T00:00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["current_upload_receipt_source_ids"], 0)
+
+    def test_current_durable_upload_queue_is_terminal_until_upload_finishes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "queued.jpg"
+            source.write_bytes(b"queued-source")
+            audit = self.make_audit(root, [source])
+            source_id = stable_source_id(source)
+            pending = root / "_drive_upload_stream" / "pending"
+            pending.mkdir(parents=True)
+            job = {
+                "schema": "samsung-ocr-stream-upload-v1",
+                "source_item_id": source_id,
+                "original_source_path": str(source.resolve()),
+                "source_sha256": hashlib.sha256(b"queued-source").hexdigest(),
+                "input_image_sha256": hashlib.sha256(b"normalized-image").hexdigest(),
+                "period": "202605",
+                "target_name": "M-202605-queued-遠景.jpg",
+                "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
+                "final_result": {
+                    "view_type": "遠景",
+                    "category": "遠景",
+                    "model": None,
+                    "price": None,
+                    "complete_screen_count": 3,
+                    "unique_main": False,
+                    "label_ownership": "not_visible",
+                    "followme_physical_evidence": [],
+                    "three_pass_adjudicated": True,
+                },
+            }
+            job_path = pending / f"{source_id}.json"
+            job_path.write_text(json.dumps(job), encoding="utf-8")
+
+            queued, invalid = load_current_upload_queue_source_ids(audit)
+            self.assertEqual(queued, {source_id})
+            self.assertEqual(invalid, [])
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual(rows, [])
+            self.assertEqual(summary["current_upload_queue_source_ids"], 1)
+
+            job["source_sha256"] = "0" * 64
+            job_path.write_text(json.dumps(job), encoding="utf-8")
+            queued, invalid = load_current_upload_queue_source_ids(audit)
+            self.assertEqual(queued, set())
+            self.assertEqual(len(invalid), 1)
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+
+    def test_current_and_scoped_safe_86_guard_revisions_are_compatible(self):
+        self.assertEqual(
+            BACKFILL_COMPATIBLE_GUARD_REVISIONS,
+            frozenset(
+                {
+                    EVIDENCE_GUARD_REVISION,
+                    "20260730.86",
+                    "20260731.87",
+                    "20260731.88",
+                    "20260731.89",
+                }
+            ),
+        )
+        self.assertEqual(EVIDENCE_GUARD_REVISION, "20260807.96")
+        self.assertNotIn("20260726.82", BACKFILL_COMPATIBLE_GUARD_REVISIONS)
+        self.assertNotIn("20260726.81", BACKFILL_COMPATIBLE_GUARD_REVISIONS)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "compatible.jpg"
@@ -92,7 +223,7 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
                 json.dumps(
                     {
                         "trace_version": "v19.45",
-                        "evidence_guard_revision": "20260721.64",
+                        "evidence_guard_revision": EVIDENCE_GUARD_REVISION,
                         "source_item_id": stable_source_id(source),
                         "guard_decision": {"verified": True},
                     }
@@ -103,6 +234,89 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             rows, summary = build_candidates(audit, "2026", {})
             self.assertEqual(rows, [])
             self.assertEqual(summary["already_verified_year_sources"], 1)
+
+    def test_revision_86_generic_m7_followme_early_exit_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "unsafe-m7.jpg"
+            source.write_bytes(b"unsafe-m7")
+            audit = self.make_audit(root, [source])
+            parsed = {
+                "view_type": "單機",
+                "model": "FollowMe 型號未細分",
+                "price": "9990",
+                "ordered_followme_early_exit": True,
+                "followme_family_confirmed": True,
+                "thinking": "同一台 Samsung Smart Monitor M7 商品卡，白色支架與圓形底座。",
+                "complete_screen_count": 2,
+                "unique_main": True,
+                "label_ownership": "matched",
+                "followme_physical_evidence": [
+                    {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                    {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                ],
+            }
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260730.86",
+                        "source_item_id": stable_source_id(source),
+                        "parsed_output": parsed,
+                        "guard_decision": {"verified": True},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+
+    def test_revision_81_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "unsafe-81.jpg"
+            source.write_bytes(b"unsafe-81")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260726.81",
+                        "source_item_id": stable_source_id(source),
+                        "guard_decision": {"verified": True},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
+    def test_revision_82_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "unsafe-82.jpg"
+            source.write_bytes(b"unsafe-82")
+            audit = self.make_audit(root, [source])
+            (audit / "v1945_evidence_trace.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trace_version": "v19.45",
+                        "evidence_guard_revision": "20260726.82",
+                        "source_item_id": stable_source_id(source),
+                        "guard_decision": {"verified": True},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows, summary = build_candidates(audit, "2026", {})
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
 
     def test_revision_before_64_is_still_reprocessed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,7 +340,7 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             self.assertEqual([row["file_name"] for row in rows], [source.name])
             self.assertEqual(summary["already_verified_year_sources"], 0)
 
-    def test_revision_70_safe_rule_remains_verified(self):
+    def test_revision_70_safe_rule_is_reprocessed_after_rev82_content_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "safe-70.jpg"
@@ -138,14 +352,12 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
                     "evidence_guard_revision": "20260721.70",
                     "source_item_id": stable_source_id(source),
                     "guard_decision": {"verified": True},
-                    "parsed_output": {"adjudication_rule": "two_pass_single_consensus"},
                 }) + "\n",
                 encoding="utf-8",
             )
             rows, summary = build_candidates(audit, "2026", {})
-            self.assertEqual(rows, [])
-            self.assertEqual(summary["already_verified_year_sources"], 1)
-
+            self.assertEqual([row["file_name"] for row in rows], [source.name])
+            self.assertEqual(summary["already_verified_year_sources"], 0)
     def test_revision_70_offending_geometry_rule_is_reprocessed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -242,6 +454,7 @@ class EvidenceBackfillBuilderTests(unittest.TestCase):
             rows, summary = build_candidates(audit, "2026", authority)
             self.assertEqual(rows, [])
             self.assertEqual(summary["human_audited_year_sources"], 1)
+            self.assertEqual(summary["terminal_authorized_year_sources"], 1)
             self.assertEqual(summary["conflicting_sources"], 0)
 
             rows, summary = build_candidates(

@@ -33,17 +33,31 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
         self.assertLess(running_check, incomplete_check)
         self.assertLess(incomplete_check, runner_check)
 
-    def test_incomplete_reload_resumes_original_staging_before_helper_exits(self):
+    def test_incomplete_reload_resumes_original_approved_checkpoint_before_helper_exits(self):
         self.assertIn('$resumeIncompleteDir = ""', self.source)
         self.assertIn('Join-Path $OutputDir "_ocr_staging"', self.source)
+        self.assertIn('$sourceRootFull = [System.IO.Path]::GetFullPath($SourceRoot)', self.source)
+        self.assertIn('$insideStaging', self.source)
+        self.assertIn('$insideSource', self.source)
+        self.assertIn('outside the approved source/staging roots', self.source)
         self.assertIn('"$BackendUrl/api/start_batch"', self.source)
         self.assertIn('dir=$resumeIncompleteDir', self.source)
         self.assertIn('restart=$false', self.source)
         self.assertIn('confirmed=$true', self.source)
-        self.assertIn('"incomplete_staging_resumed"', self.source)
+        self.assertIn('"incomplete_checkpoint_resumed"', self.source)
         verified = self.source.index('"fresh_backend_verified"')
         resume = self.source.index('"$BackendUrl/api/start_batch"')
         self.assertLess(verified, resume)
+
+    def test_immediately_settled_capped_checkpoint_counts_as_a_successful_resume(self):
+        self.assertIn("$resumedProcessed + $resumedCapped", self.source)
+        self.assertIn("-eq $resumedTotal", self.source)
+        self.assertIn("$resumedSettledAtBoundary", self.source)
+        self.assertIn(
+            "-not [bool]$resumed.is_running -and -not $resumedSettledAtBoundary",
+            self.source,
+        )
+        self.assertIn("settled_at_boundary=$resumedSettledAtBoundary", self.source)
 
     def test_runtime_health_trial_reload_requires_both_interlocks(self):
         self.assertIn("[switch]$RuntimeHealthTrialReload", self.source)
@@ -69,6 +83,28 @@ class SafeIdleBackendReloadTests(unittest.TestCase):
         self.assertIn("Stop-Process -Id $processId", self.source)
         self.assertNotIn("Stop-Process -Name", self.source)
         self.assertNotIn("Stop-Process -Id $processId -Force", self.source)
+
+    def test_accepts_only_venv_bound_runtime_python_listener_child(self):
+        self.assertIn("function Get-VenvRuntimePython", self.source)
+        self.assertIn('Join-Path $RepoRoot ".venv\\pyvenv.cfg"', self.source)
+        self.assertIn('"^\\s*executable\\s*=\\s*(.+?)\\s*$"', self.source)
+        self.assertIn("$delegatedRuntimeListener", self.source)
+        self.assertIn(
+            "Test-SameExecutable ([string]$parent.ExecutablePath) $python",
+            self.source,
+        )
+        self.assertIn(
+            "Test-SameExecutable ([string]$listener.ExecutablePath) $runtimePython",
+            self.source,
+        )
+        self.assertIn(
+            '[string]$parent.CommandLine -match [regex]::Escape($RepoRoot)',
+            self.source,
+        )
+        self.assertIn(
+            "if (-not $directRepoListener -and -not $delegatedRuntimeListener)",
+            self.source,
+        )
 
     def test_fresh_backend_is_hidden_and_never_opens_browser(self):
         self.assertIn('$env:SAMSUNG_OCR_NO_BROWSER = "1"', self.source)

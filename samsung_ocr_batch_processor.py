@@ -43,6 +43,7 @@ def force_reload_skills():
         'skills.followme_reference',
         'skills.model_catalog_rules',
         'skills.model_validation',
+        'skills.review_pass_contract',
         'skills.runtime_health_gate',
     ]
 
@@ -55,6 +56,7 @@ force_reload_skills()
 
 # Import Skills (確保使用最新版本)
 from skills.batch_orchestrator import BatchOrchestrator
+from skills.model_call_ledger import LifetimeModelCallLedgerError
 from skills.prompt_versioning import PromptManager
 from skills.official_price import get_price_manager, validate_ocr_price, try_discover_model, set_price_log_callback  # [v18.70]
 from skills.followme_reference import build_followme_prompt_section, reference_is_stale
@@ -72,6 +74,8 @@ from skills.model_validation import (
     resolve_photo_label_model_candidate,
     safe_known_model_correction,
     strict_known_model,
+    unique_embedded_known_model,
+    unique_known_first_letter_alternative,
     unique_known_model_completion,
 )
 from skills.audit_fields import (
@@ -89,6 +93,13 @@ from skills.runtime_health_gate import (
     public_runtime_health_fuse,
     BLOCKED_NARRATION,
     narration_contains_instruction_echo,
+)
+from skills.review_pass_contract import (
+    RESPONSE_FIELD_NAMES,
+    REVIEW_PASS_CONTRACT_VERSION,
+    build_pass_instruction,
+    build_review_system_prompt,
+    trusted_source_view_metadata,
 )
 from tools.stream_drive_upload import enqueue_finalized_result, read_stream_status
 
@@ -256,8 +267,8 @@ V1945_OUTPUT_CONTRACT = (
     "It must also contain core keys view_type, screen_status, quality_issue, model, price, category "
     "and evidence keys complete_screen_count (integer or null), unique_main (boolean or null), "
     "label_ownership (matched|mismatched|ambiguous|not_visible|not_applicable), "
-    "followme_physical_evidence (one item per cue; cue is one of direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
-    "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in this same object. "
+    "followme_physical_evidence (one item per cue: direct_followme_branding_on_unit, white_vertical_stand, round_base, portrait_display, attached_price_tray, attached_followme_product_card, screen_content_only, nearby_signage_only, unknown; each item has same_subject and strength weak|strong|direct). "
+    "Use [] when no FollowMe physical evidence exists. Keep narration, core, and evidence in one object. "
     "Classification invariant: complete_screen_count 0, 1, or 2 can never be view_type distant/遠景. "
     "Count once from the first original full image; Supplemental crops are duplicate views and crop edges are never evidence. "
     "A complete monitor has all four outer bezel sides and corners inside the ORIGINAL frame. Check its first/last pixel rows and columns: a missing, touching, crossing, or outward-continuing bezel contributes zero; scan the ENTIRE original image region by region. "
@@ -269,12 +280,16 @@ V1945_OUTPUT_CONTRACT = (
     "A dominant full monitor with its aligned readable label is 單機, unique_main=true, label_ownership=matched; partial neighbors do not change that. "
     "PROJECT TARGET PRIORITY: Scan the full original for physical FollowMe before the distant rule. Direct same-unit FollowMe branding, or a display physically joined outside its screen pixels to both a white vertical stand and a complete round floor base, makes that unit the 單機 business subject regardless of surrounding screens; retain full-frame complete_screen_count. Screen content cannot prove and can NEVER negate hardware. "
     "A round base counts only when the complete physical floor base is visible inside the ORIGINAL frame. A white vertical pole alone is insufficient. A continuous retail shelf price rail is not an attached tray. Smart Monitor M7/M5 or an S32FM SKU alone is a product family, not direct FollowMe branding. "
-    "Every physical fixture cue stated in narration must also appear as its own same-subject item in followme_physical_evidence. If narration says the display is portrait, vertical, or upright, include portrait_display. If narration says a same-subject Samsung FollowMe product card, price card, or specification card is visible, include attached_followme_product_card separately from attached_price_tray. Narration and structured evidence may not disagree. "
+    "Every physical fixture cue stated in narration must appear in followme_physical_evidence; for portrait/upright include portrait_display; for a same-unit Samsung FollowMe/spec card include attached_followme_product_card; for a price tray include attached_price_tray. Narration and structure must agree. "
+    "An upper-left, upper-right, or side spec strip attached to that monitor outranks lower/nearby cards for model family. A strip listing multiple sizes (32/43) proves only FollowMe 型號未細分 unless that unit shows one exact SKU or size. "
     "PHYSICAL/PIXEL CHECK: every claimed stand, pole, tray, or base must be outside the illuminated screen rectangle. Screen-only video, advertising, or UI gets screen_content_only, same_subject=false, and no strong cue. "
-    "MANDATORY FINAL SELF-CHECK: sufficient same-subject physical FollowMe anywhere means 單機, unique_main=true even with 3+ complete monitors; unsupported variant or price stays null. Without physical FollowMe, 3+ complete monitors means 遠景, unique_main=false, model=null, price=null. MANDATORY LAST FRAME CHECK: name each actual original-frame bezel contact; no contact means not cropped."
+    "MANDATORY FINAL SELF-CHECK: sufficient same-subject physical FollowMe locks 單機/FollowMe, unique_main=true even with 3+ complete monitors; stop classification, and keep unsupported variant/price as 型號未細分/null. Without physical FollowMe, 3+ complete monitors means 遠景, unique_main=false, model=null, price=null. MANDATORY LAST FRAME CHECK: name each actual original-frame bezel contact; no contact means not cropped."
 )
+from skills.system_resources import read_gpu_resources
 
-REVIEW_FOCUS_PROMPTS = {
+# Historical reference only. Production pass 2/3 use
+# skills.review_pass_contract and never append this first-pass-era text.
+LEGACY_REVIEW_FOCUS_PROMPTS = {
     2: (
         "只根據所附影像，先把第一張全尺寸照片依左／中／右、上／中／下逐區掃完，列出每台四邊四角完整入鏡螢幕的大約位置，再計算總數；確認 FollowMe 文字是否只是"
         "背景宣傳牌，並確認型號與價格是否屬於同一台唯一主角。"
@@ -292,6 +307,7 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
+        "同一台螢幕左上、右上或側邊直接附著的規格側標是型號家族的最優先證據，必須先於下方或鄰近牌面讀取；若同一側標同時列出 32／43 等多個尺寸，只能定案 FollowMe 型號未細分，除非另有同主體完整 SKU 或唯一尺寸。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
         "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
         "送出前最後檢查：先完成全張 FollowMe 實體搜尋；找到同主體白色直立支架＋完整圓形落地底座或直接品牌時走 FollowMe 單機。只有完全沒有實體 FollowMe 候選時，三台以上完整才判遠景。"
@@ -314,6 +330,7 @@ REVIEW_FOCUS_PROMPTS = {
         "螢幕播放廣告、人物、食物或風景只能算弱內容線索，絕不能反向否定同一主體已看見的白色底座、直桿或託盤；已有兩項強實體線索時禁止說它不是實機。"
         "若敘述寫到直立、直式或縱向螢幕，結構證據必須加入 portrait_display。"
         "若敘述寫到同主體 Samsung FollowMe 商品卡、價牌或規格牌，結構證據必須另加入 attached_followme_product_card。"
+        "同一台螢幕左上、右上或側邊直接附著的規格側標是型號家族的最優先證據，必須先於下方或鄰近牌面讀取；若同一側標同時列出 32／43 等多個尺寸，只能定案 FollowMe 型號未細分，除非另有同主體完整 SKU 或唯一尺寸。"
         "敘述提到的每一項實體線索都必須逐項寫入 followme_physical_evidence，不得敘述有底座或託盤卻留下空陣列。"
         "價牌若有金額，必須先在 narration 逐字列出同一實體價牌上所有金額與旁邊的市價／原價／建議售價／限時特價／會員價等原字標籤；不得把市價改口成會員價。有另一個醒目現售價時必須選現售價；只看到一個金額時明說只看到一個。"
         "送出前最後檢查：先完成全張 FollowMe 實體搜尋；找到同主體白色直立支架＋完整圓形落地底座或直接品牌時走 FollowMe 單機。只有完全沒有實體 FollowMe 候選時，三台以上完整才判遠景。"
@@ -1076,12 +1093,47 @@ def enforce_explicit_structured_authority(result, explicit_fields):
             and canonical_final.startswith(canonical_explicit)
             and 1 <= len(canonical_final) - len(canonical_explicit) <= 3
         )
+        allowed_photo_label_correction = bool(
+            result.get("unlisted_model_candidate") is True
+            and canonical_explicit
+            == re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(result.get("photo_label_model_correction_from") or "").upper(),
+            )
+            and canonical_final
+            == re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(result.get("photo_label_model_correction_to") or "").upper(),
+            )
+            and len(canonical_explicit) == len(canonical_final)
+            and canonical_explicit[1:] == canonical_final[1:]
+        )
+        allowed_embedded_catalog_model = bool(
+            result.get("embedded_catalog_model_recovered") is True
+            and canonical_explicit
+            == re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(result.get("embedded_catalog_model_from") or "").upper(),
+            )
+            and canonical_final
+            == re.sub(
+                r"[^A-Z0-9]",
+                "",
+                str(result.get("embedded_catalog_model_to") or "").upper(),
+            )
+            and canonical_final in canonical_explicit
+        )
         if (
             canonical_explicit
             and canonical_final
             and canonical_explicit != canonical_final
             and not allowed_prefix_completion
             and not equivalent_official_samsung_code
+            and not allowed_photo_label_correction
+            and not allowed_embedded_catalog_model
         ):
             blocked.append("model")
             result["model"] = None
@@ -1373,6 +1425,33 @@ def structured_narration_price_conflict(structured_price, narration_price):
     narration_digits = "".join(ch for ch in str(narration_price or "") if ch.isdigit())
     return bool(structured_digits and narration_digits and structured_digits != narration_digits)
 
+
+def narration_denies_readable_price(narration):
+    """Detect an explicit denial of readable price evidence for the main subject.
+
+    The model may emit a numeric JSON price while its own narration says that
+    no readable price card exists. That number is unsafe and must be withdrawn
+    without revoking an independently established subject or product family.
+    Clauses about other/background products and ``no other price`` are excluded.
+    """
+    text = str(narration or "").strip()
+    if not text:
+        return False
+    denial_patterns = (
+        r"(?:未見|沒有看到|看不到|沒有|無法讀到|無法辨識|未能確認).{0,28}(?:可讀|清楚)?(?:價格牌|價牌|售價|價格)",
+        r"(?:價格牌|價牌|售價|價格).{0,16}(?:不可讀|無法讀取|無法辨識|看不清|不清楚|未確認)",
+    )
+    for clause in re.split(r"[。；;\n]+", text):
+        clause = clause.strip()
+        if not clause:
+            continue
+        if re.search(r"(?:沒有|未見|看不到).{0,4}(?:其他|第二|另一).{0,10}(?:價格|價牌)", clause):
+            continue
+        if re.search(r"(?:其他|旁邊|鄰機|背景|另一台).{0,16}(?:價格牌|價牌|售價|價格)", clause):
+            continue
+        if any(re.search(pattern, clause) for pattern in denial_patterns):
+            return True
+    return False
 
 def narration_marks_reference_only_price(structured_price, narration):
     """Detect an amount explicitly described as reference-only, not the shown sale price.
@@ -1710,6 +1789,7 @@ SOURCE_ROOT = Path(os.environ.get("OCR_SOURCE_ROOT", r"D:\00_商化\00_未整理
 DRIVE_MANIFEST_DIR = OUTPUT_ROOT / "_drive_upload"
 AUDIT_DIR = OUTPUT_ROOT / "_ocr_audit"
 PIPELINE_PAUSE_PATH = AUDIT_DIR / "pipeline_pause.json"
+ZERO_MODEL_ACTIVITY_PATH = AUDIT_DIR / "zero_model_adjudication_status.json"
 MANUAL_CORRECTIONS_PATH = AUDIT_DIR / "manual_corrections.csv"
 MANUAL_RULES_PATH = AUDIT_DIR / "manual_learning_rules.csv"
 MANUAL_RULES_CACHE = {"mtime_ns": None, "section": "", "count": 0}
@@ -1721,6 +1801,9 @@ SOURCE_MAP_COUNT_CACHE = {
     "count": 0,
     "original_folder": "",
 }
+# Backward-compatible read-only name for historical regression assertions.
+# Production inference never reads this mapping; see build_pass_instruction().
+REVIEW_FOCUS_PROMPTS = LEGACY_REVIEW_FOCUS_PROMPTS
 
 
 def durable_evidence_trace_count(path):
@@ -1947,11 +2030,88 @@ def _latest_mtime(paths: list[Path]):
     return max(mtimes) if mtimes else None
 
 
+def _read_progress_authority(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return {}
+
+
+def _apply_terminal_current_year_progress(folders: dict[str, dict]) -> bool:
+    """Prevent a later partial staging run from reducing a completed year.
+
+    This only applies when three independent durable authorities agree: the
+    current-year completion marker, its exact zero-pending upload gate, and the
+    terminal evidence summary covering the complete source inventory.
+    """
+    marker = _read_progress_authority(
+        AUDIT_DIR / "current_year_rerun_cycle_complete.json"
+    )
+    gate = _read_progress_authority(
+        AUDIT_DIR.parent / "_drive_upload" / "upload_gate_proof.json"
+    )
+    terminal = _read_progress_authority(
+        AUDIT_DIR / "v1945_evidence_backfill_2026.csv.summary.json"
+    )
+    current_year = str(datetime.now().year)
+    bound_fields = (
+        "audit_input_sha256",
+        "manifest_summary_sha256",
+        "pending_sha256",
+        "backfill_run_id",
+    )
+    if (
+        not marker
+        or not gate
+        or not terminal
+        or gate.get("gate_open") is not True
+        or _safe_int(gate.get("pending_count")) != 0
+        or _safe_int(marker.get("pending_count")) != 0
+        or str(marker.get("upload_gate_schema") or "") != str(gate.get("schema") or "")
+        or [str(value) for value in (gate.get("upload_scope_years") or [])]
+        != [current_year]
+        or any(
+            not str(marker.get(field) or "")
+            or str(marker.get(field)) != str(gate.get(field))
+            for field in bound_fields
+        )
+    ):
+        return False
+    source_count = _safe_int(terminal.get("unique_year_sources"))
+    if (
+        source_count <= 0
+        or _safe_int(terminal.get("year_source_rows")) != source_count
+        or _safe_int(terminal.get("terminal_authorized_year_sources")) != source_count
+        or _safe_int(terminal.get("missing_sources")) != 0
+        or _safe_int(terminal.get("conflicting_sources")) != 0
+        or _safe_int(terminal.get("invalid_rows")) != 0
+    ):
+        return False
+    current_folders = [
+        item for item in folders.values()
+        if str(item.get("period") or "").startswith(current_year)
+    ]
+    if sum(_safe_int(item.get("image_count")) for item in current_folders) != source_count:
+        return False
+    for item in current_folders:
+        item["processed"] = _safe_int(item.get("image_count"))
+        item["status"] = "current_year_terminal_complete"
+    return True
+
+
 def _load_base_overall_progress() -> dict:
     discovery_path = AUDIT_DIR / "folder_discovery.csv"
     summary_path = AUDIT_DIR / "folder_summary.csv"
     rerun_summary_paths = sorted(AUDIT_DIR.glob("missing_result_rerun_summary*.csv"))
-    cache_paths = [discovery_path, summary_path, *rerun_summary_paths]
+    cache_paths = [
+        discovery_path,
+        summary_path,
+        AUDIT_DIR / "current_year_rerun_cycle_complete.json",
+        AUDIT_DIR / "v1945_evidence_backfill_2026.csv.summary.json",
+        AUDIT_DIR.parent / "_drive_upload" / "upload_gate_proof.json",
+        *rerun_summary_paths,
+    ]
     latest_mtime = _latest_mtime(cache_paths)
     cached = OVERALL_PROGRESS_CACHE.get("data")
     if cached is not None and OVERALL_PROGRESS_CACHE.get("mtime") == latest_mtime:
@@ -2036,6 +2196,8 @@ def _load_base_overall_progress() -> dict:
             entry["processed"] = max(_safe_int(entry.get("processed")), processed)
             entry["ready"] = max(_safe_int(entry.get("ready")), _safe_int(row.get("ready")), _safe_int(row.get("copied")))
             entry["status"] = "rerun_complete"
+
+    _apply_terminal_current_year_progress(folders)
 
     total_images = sum(_safe_int(item.get("image_count")) for item in folders.values())
     total_folders = len(folders)
@@ -2124,6 +2286,63 @@ def read_pipeline_pause():
         return payload if isinstance(payload, dict) else None
     except (OSError, UnicodeError, ValueError, TypeError):
         return None
+
+
+def read_zero_model_activity():
+    """Return a bounded, live-checked deterministic adjudication heartbeat."""
+
+    try:
+        payload = json.loads(
+            ZERO_MODEL_ACTIVITY_PATH.read_text(encoding="utf-8")
+        )
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema")
+            != "samsung-ocr-zero-model-activity/v1"
+        ):
+            return {}
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return {}
+
+    result = {
+        key: payload.get(key)
+        for key in (
+            "schema",
+            "active",
+            "phase",
+            "updated_at",
+            "pid",
+            "staging_dir",
+            "period",
+            "processed",
+            "total",
+            "safe",
+            "unresolved",
+            "enqueued",
+            "matched",
+            "unit",
+            "error",
+        )
+    }
+    if result.get("active") is True:
+        try:
+            updated_at = datetime.fromisoformat(
+                str(result.get("updated_at") or "")
+            )
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.astimezone()
+            age_seconds = (
+                datetime.now().astimezone() - updated_at
+            ).total_seconds()
+            worker_alive = psutil.pid_exists(int(result.get("pid") or 0))
+        except (TypeError, ValueError, OverflowError):
+            age_seconds = 999999
+            worker_alive = False
+        if age_seconds < 0 or age_seconds > 120 or not worker_alive:
+            result["active"] = False
+            result["phase"] = "stale_worker"
+            result["error"] = "定案工作心跳已逾時，Supervisor 將接手修復"
+    return result
 
 
 def write_pipeline_pause(reason, current_dir=""):
@@ -2296,6 +2515,92 @@ SAMSUNG_AUDIT_SCHEMA = {
     }
   }
 }
+
+
+V1945_RESPONSE_REQUIRED_KEYS = RESPONSE_FIELD_NAMES
+
+
+def build_v1945_response_format(request_id):
+    """Return the strict LM Studio schema for one bound photo request."""
+    value = str(request_id or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError("request binding token must be 128-bit lowercase hex")
+    nullable_string = {"type": ["string", "null"]}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "samsung_monitor_v1945",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                # Keep narration first so the Dashboard receives useful text
+                # at the beginning of a streamed structured response.
+                "properties": {
+                    "narration": {
+                        "type": "string",
+                        "minLength": 16,
+                        "maxLength": 600,
+                    },
+                    # A single-value enum makes LM Studio emit the current
+                    # binding token instead of asking the VLM to transcribe a
+                    # random 128-bit value free-form.
+                    "request_id": {"type": "string", "enum": [value]},
+                    "view_type": {"type": "string", "enum": ["遠景", "單機"]},
+                    "screen_status": dict(nullable_string),
+                    "quality_issue": dict(nullable_string),
+                    "model": dict(nullable_string),
+                    "price": dict(nullable_string),
+                    "category": {"type": "string", "enum": ["遠景", "單機"]},
+                    "complete_screen_count": {
+                        "type": ["integer", "null"],
+                        "minimum": 0,
+                    },
+                    "unique_main": {"type": ["boolean", "null"]},
+                    "label_ownership": {
+                        "type": "string",
+                        "enum": [
+                            "matched",
+                            "mismatched",
+                            "ambiguous",
+                            "not_visible",
+                            "not_applicable",
+                        ],
+                    },
+                    "followme_physical_evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "cue": {
+                                    "type": "string",
+                                    "enum": [
+                                        "direct_followme_branding_on_unit",
+                                        "white_vertical_stand",
+                                        "round_base",
+                                        "portrait_display",
+                                        "attached_price_tray",
+                                        "attached_followme_product_card",
+                                        "screen_content_only",
+                                        "nearby_signage_only",
+                                        "unknown",
+                                    ],
+                                },
+                                "same_subject": {"type": "boolean"},
+                                "strength": {
+                                    "type": "string",
+                                    "enum": ["weak", "strong", "direct"],
+                                },
+                            },
+                            "required": ["cue", "same_subject", "strength"],
+                        },
+                    },
+                },
+                "required": list(V1945_RESPONSE_REQUIRED_KEYS),
+            },
+        },
+    }
 
 # ... (Original Helper Functions) ...
 
@@ -2774,6 +3079,149 @@ def validate_request_binding(parsed, expected_request_id):
     return ""
 
 
+def normalize_model_narration_prefix(parsed):
+    """Repair a presentation-only prefix without changing model evidence.
+
+    Qwen occasionally returns a complete structured response whose narration
+    omits the fixed boss-facing opener.  That is a formatting defect, not a
+    photo-content failure, so add the deterministic opener before strict shape
+    validation.  Empty/non-string narration still fails closed.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    narration = parsed.get("narration")
+    if not isinstance(narration, str):
+        return parsed
+    narration = narration.strip()
+    if narration and not narration.startswith("我看到本輪結論："):
+        parsed = dict(parsed)
+        parsed["narration"] = "我看到本輪結論：" + narration
+    return parsed
+
+
+def validate_v1945_response_shape(parsed, expected_request_id):
+    """Fail closed if a provider ignores the strict structured-output schema."""
+    if not isinstance(parsed, dict):
+        return "structured_response_not_object"
+    keys = set(parsed)
+    required = set(V1945_RESPONSE_REQUIRED_KEYS)
+    missing = sorted(required - keys)
+    if missing:
+        return "structured_response_missing:" + ",".join(missing)
+    extra = sorted(keys - required)
+    if extra:
+        return "structured_response_extra:" + ",".join(extra)
+    binding_error = validate_request_binding(parsed, expected_request_id)
+    if binding_error:
+        return binding_error
+    narration = parsed.get("narration")
+    if (
+        not isinstance(narration, str)
+        or not narration.strip().startswith("我看到本輪結論：")
+    ):
+        return "structured_narration_invalid"
+    if parsed.get("view_type") not in {"遠景", "單機"}:
+        return "structured_view_type_invalid"
+    if parsed.get("category") not in {"遠景", "單機"}:
+        return "structured_category_invalid"
+    for key in ("screen_status", "quality_issue", "model", "price"):
+        if parsed.get(key) is not None and not isinstance(parsed.get(key), str):
+            return f"structured_{key}_invalid"
+    count = parsed.get("complete_screen_count")
+    if count is not None and (
+        not isinstance(count, int) or isinstance(count, bool) or count < 0
+    ):
+        return "structured_complete_screen_count_invalid"
+    unique_main = parsed.get("unique_main")
+    if unique_main is not None and not isinstance(unique_main, bool):
+        return "structured_unique_main_invalid"
+    if parsed.get("label_ownership") not in {
+        "matched",
+        "mismatched",
+        "ambiguous",
+        "not_visible",
+        "not_applicable",
+    }:
+        return "structured_label_ownership_invalid"
+    physical = parsed.get("followme_physical_evidence")
+    if not isinstance(physical, list):
+        return "structured_followme_evidence_invalid"
+    allowed_cues = {
+        "direct_followme_branding_on_unit",
+        "white_vertical_stand",
+        "round_base",
+        "portrait_display",
+        "attached_price_tray",
+        "attached_followme_product_card",
+        "screen_content_only",
+        "nearby_signage_only",
+        "unknown",
+    }
+    for item in physical:
+        if not isinstance(item, dict) or set(item) != {
+            "cue",
+            "same_subject",
+            "strength",
+        }:
+            return "structured_followme_evidence_item_invalid"
+        if item.get("cue") not in allowed_cues:
+            return "structured_followme_evidence_cue_invalid"
+        if not isinstance(item.get("same_subject"), bool):
+            return "structured_followme_evidence_subject_invalid"
+        if item.get("strength") not in {"weak", "strong", "direct"}:
+            return "structured_followme_evidence_strength_invalid"
+    return ""
+
+
+def _stream_narration_preview(response_text):
+    """Extract useful narration from prose-first or streamed JSON output."""
+    text = str(response_text or "")
+    if not text:
+        return ""
+    json_start = text.find("{")
+    if json_start > 0:
+        return text[:json_start].strip()
+    match = re.search(r'"narration"\s*:\s*"', text)
+    if not match:
+        return "" if json_start == 0 else text.strip()
+    index = match.end()
+    output = []
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            break
+        if char != "\\":
+            output.append(char)
+            index += 1
+            continue
+        if index + 1 >= len(text):
+            break
+        escaped = text[index + 1]
+        replacements = {
+            '"': '"',
+            "\\": "\\",
+            "/": "/",
+            "b": "\b",
+            "f": "\f",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }
+        if escaped == "u":
+            codepoint = text[index + 2:index + 6]
+            if (
+                len(codepoint) < 4
+                or not re.fullmatch(r"[0-9a-fA-F]{4}", codepoint)
+            ):
+                break
+            output.append(chr(int(codepoint, 16)))
+            index += 6
+            continue
+        output.append(replacements.get(escaped, escaped))
+        index += 2
+    return "".join(output).strip()
+
+
 def new_request_id():
     """Return a full 128-bit per-call binding token for production-scale uniqueness."""
     import uuid
@@ -3031,6 +3479,7 @@ def process_single_image(
     processed_image=None,
     ocr_attempt=1,
     previous_results=None,
+    source_metadata=None,
 ):
     """
     Two-Stage Pipeline with Dual Resolution Strategy (Currently Single Stage):
@@ -3043,6 +3492,9 @@ def process_single_image(
 
     # Init Orchestrator reference for logging
     global api_client, model_name_global, orchestrator
+    ocr_attempt = max(1, int(ocr_attempt or 1))
+    previous_results = list(previous_results or [])
+    source_view_contract = trusted_source_view_metadata(source_metadata)
 
     # RESET STREAM BUFFER FOR NEW IMAGE
     if orchestrator:
@@ -3139,34 +3591,33 @@ def process_single_image(
     except Exception:
         pass
 
-    try:
-        # 🔥 強制每次都從檔案讀取，不使用快取
-        # One production prompt is the source of truth for every provider.
-        prompt_file = REPO_ROOT / 'samsung_ocr_prompt.txt'
-        prompt_template = prompt_file.read_text(encoding="utf-8")
-        # 可選：記錄檔案修改時間，方便 debug
-        # import os; mtime = os.path.getmtime(prompt_file)
-        # print(f"[DEBUG] Prompt loaded, mtime={mtime}")
-    except Exception as e:
-        # 最終備份
-        if orchestrator:
-            orchestrator.log_system(f"❌ 讀取 Prompt 失敗: {e}, 使用最小備份")
-        prompt_template = "你是三星螢幕管理員。請提取型號與價格。..." # 簡單備份
+    if ocr_attempt >= 2:
+        # Permanent review contract: pass 2/3 must not read or depend on the
+        # replaceable first-pass prompt file.
+        system_prompt = build_review_system_prompt()
+        used_compact_prompt = False
+        prompt_template = ""
+        followme_daily_reference = ""
+    else:
+        try:
+            # One production prompt is the source of truth for first-pass OCR.
+            prompt_file = REPO_ROOT / 'samsung_ocr_prompt.txt'
+            prompt_template = prompt_file.read_text(encoding="utf-8")
+        except Exception as e:
+            if orchestrator:
+                orchestrator.log_system(f"❌ 讀取 Prompt 失敗: {e}, 使用最小備份")
+            prompt_template = "你是三星螢幕管理員。請提取型號與價格。..."
 
-    # v14.3: Use .replace() instead of .format() to avoid KeyError with JSON braces in prompt
-    # [v18.12] Disabled Injection to prevent Hallucination
-    # system_prompt = prompt_template.replace("{valid_models_str}", valid_models_str) \
-    #                                .replace("{examples_section}", "")
-    followme_daily_reference = build_followme_prompt_section()
-    manual_rule_section, manual_rule_count = load_manual_rule_prompt_section()
-    if manual_rule_section:
-        followme_daily_reference = f"{followme_daily_reference}{manual_rule_section}"
-        if orchestrator:
-            orchestrator.manual_rule_count = manual_rule_count
-    system_prompt, used_compact_prompt = build_runtime_system_prompt(
-        prompt_template,
-        followme_daily_reference,
-    )
+        followme_daily_reference = build_followme_prompt_section()
+        manual_rule_section, manual_rule_count = load_manual_rule_prompt_section()
+        if manual_rule_section:
+            followme_daily_reference = f"{followme_daily_reference}{manual_rule_section}"
+            if orchestrator:
+                orchestrator.manual_rule_count = manual_rule_count
+        system_prompt, used_compact_prompt = build_runtime_system_prompt(
+            prompt_template,
+            followme_daily_reference,
+        )
     if used_compact_prompt:
         prompt_notice = (
             f"提示詞原長度 {len(prompt_template) + len(followme_daily_reference)} 字元，"
@@ -3189,9 +3640,6 @@ def process_single_image(
     # 2. 恢復雙重視野 (Engineering Strategy)
     # 3. 確保每次都建立全新 messages
 
-    ocr_attempt = max(1, int(ocr_attempt or 1))
-    previous_results = list(previous_results or [])
-
     # Construct User Context
     user_images = []
 
@@ -3204,7 +3652,7 @@ def process_single_image(
         bottom_label_b64 = None
         bottom_center_b64 = None
         bottom_left_center_b64 = None
-        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。若是 FollowMe，FollowMe 字樣、FM 型號代碼、移動式支架/托盤線索都可作為判定依據；型號與價格盡量確認屬於同一主角商品。"
+        user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。FollowMe 需同機直接字樣或完整移動支架實證；FM／S32FM／M7／M5 名稱本身不成立。型號與價格須屬同一主角。"
     else:
         # Image 2: High-Resolution (Crop) if detected.
         # When bottom-label strip is enabled, skip the auto label crop because it can grab a huge
@@ -3213,7 +3661,7 @@ def process_single_image(
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{label_b64}"}})
             user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。請執行『視覺歸屬』檢查。」\n圖片: {fname}\nRequestID: {random_salt}\n[提示]\n圖 1 (全景): 用於確認標籤相對於螢幕底座的位置歸屬。\n圖 2 (特寫): 用於讀取該標籤上的細微文字。\n請結合兩者，確保讀到的文字是來自於『歸屬於該螢幕的同一張標籤』。"
         else:
-            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。若是 FollowMe，FollowMe 字樣、FM 型號代碼、移動式支架/托盤線索都可作為判定依據；型號與價格盡量確認屬於同一主角商品。"
+            user_prompt = f"「這是一張全新的照片，與之前的任何辨識無關。」\n圖片: {fname}\nRequestID: {random_salt}\n請提取此照片中的資訊。FollowMe 需同機直接字樣或完整移動支架實證；FM／S32FM／M7／M5 名稱本身不成立。型號與價格須屬同一主角。"
 
         if bottom_label_b64:
             user_images.append({
@@ -3251,7 +3699,7 @@ def process_single_image(
             user_images.append({"type": "text", "text": tile_instruction})
             user_images.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tile['base64']}"}})
 
-    user_prompt += (
+    legacy_classification_prompt = (
         "\n\n先掃描全張原圖，逐區搜尋實體 FollowMe，再計算所有完整螢幕。任何同一實機在發亮螢幕像素範圍外可見直接 FollowMe 品牌，或實際連著白色直立支架與完整圓形落地底座，就以該實體為商業主角判單機、unique_main=true；背景完整螢幕不否決它，完整台數仍照實填。"
         "FollowMe 盲點檢查必須從全圖地面區域的白色圓形底座向上追蹤直桿與螢幕，特別檢查中央偏左、中央與中央偏右；物件較小或位在廣景中不得省略。"
         "若支架、輪架、圓底座或託盤只存在於螢幕播放內容，必須記為 screen_content_only、same_subject=false，禁止當成實體 FollowMe。只有完全沒有實體 FollowMe 候選時，三台以上完整螢幕才判遠景。"
@@ -3266,10 +3714,27 @@ def process_single_image(
         "自然敘述與結構欄必須逐項一致，且自然敘述不得抄寫這些規則。"
     )
 
-    if ocr_attempt == 2:
-        user_prompt += "\n\n" + REVIEW_FOCUS_PROMPTS[2]
-    elif ocr_attempt >= 3:
-        user_prompt += "\n\n" + REVIEW_FOCUS_PROMPTS[3]
+    source_view_hint = str(source_view_contract.get("source_view_hint") or "")
+    if source_view_hint == "遠景":
+        user_prompt += (
+            "\n\n來源擷取系統已鎖定本張為遠景；不得重新分類，也不得花時間讀取個別螢幕型號或價格。"
+            "只需回傳固定 JSON 欄位：view_type/category=遠景、model/price=null、"
+            "unique_main=false、label_ownership=not_applicable。"
+        )
+    elif source_view_hint == "近景":
+        user_prompt += (
+            "\n\n來源擷取系統已鎖定本張為近景；不得重新分類或套用遠景規則。"
+            "只辨識唯一主角：先讀同一螢幕左上、右上或側邊直接附著的規格側標，"
+            "再找同型號、同主體實體價牌的現售價格；欄位看不清楚就填 null。"
+            "FollowMe 只依同一實機直接字樣或實體支架證據判定。"
+        )
+    else:
+        user_prompt += legacy_classification_prompt
+
+    user_prompt += "\n\n" + build_pass_instruction(
+        ocr_attempt,
+        source_view_contract,
+    )
 
 
     # Per-photo OCR must remain stateless.  Historical wrong/correct answers
@@ -3316,6 +3781,7 @@ def process_single_image(
         "black_screen": False,
         "thinking": ""
     }
+    model_call_reservation = {}
 
     # [v9.62 Fix] Allow ANY IP address for Local LLM, not just localhost
     use_local_llm = False
@@ -3524,9 +3990,11 @@ def process_single_image(
         # Move prompt loading inside try to catch formatting errors
         # ... actually already done above ...
 
-        # [v18.90] Price Consistency Retry Loop
-        # 包裝 LLM 呼叫與解析，當價格/型號矛盾時給予二次機會
-        max_retries = max(1, int(os.environ.get("OCR_MAX_RETRIES", "1")))
+        # A business pass is exactly one real LM Studio request.  Parser,
+        # request-binding, repetition, and transport failures return to the
+        # orchestrator and consume the next stateless lifetime slot there.
+        # Never hide an extra model request inside one visible round.
+        max_retries = 0
         final_result = None
 
         base_messages = build_ocr_messages(system_prompt, user_content, ocr_attempt, [])
@@ -3554,9 +4022,20 @@ def process_single_image(
                 "stream": True,
                 "temperature": 0,
                 "stream_options": {"include_usage": True},
+                "response_format": build_v1945_response_format(random_salt),
             }
             request_kwargs["max_tokens"] = int(os.environ.get("OCR_MAX_TOKENS", "900"))
 
+            if not orchestrator:
+                raise RuntimeError(
+                    "lifetime model-call ledger unavailable: orchestrator missing"
+                )
+            model_call_reservation = orchestrator.reserve_actual_model_call(
+                filename=fname,
+                input_image_sha256=input_image_sha256,
+                requested_attempt=ocr_attempt,
+            )
+            ocr_attempt = int(model_call_reservation["call_number"])
             stream = api_client.chat.completions.create(
                 **request_kwargs
                 # top_p=0.8,      # Removed to allow model defaults
@@ -3591,12 +4070,12 @@ def process_single_image(
                     full_response_text += content_tc
                     VERSION = "v18.91 (Debug Log)" # Update locally for display
 
-                    # Display Logic
-                    if '{' in full_response_text:
-                        clean_display = full_response_text.split('{')[0].strip()
-                        current_display = clean_display
-                    else:
-                        current_display = full_response_text
+                    # Strict structured output starts with JSON.  Extract the
+                    # narration value as it streams so the boss-facing panel
+                    # remains useful instead of showing raw JSON or nothing.
+                    current_display = _stream_narration_preview(
+                        full_response_text
+                    )
 
                     current_display = current_display.lstrip('「').rstrip('」').replace('```json', '').replace('```', '').strip()
                     # 獨白欄不需要顯示「思考:」標題前綴
@@ -3609,8 +4088,10 @@ def process_single_image(
                     if len(full_response_text) > 1200 and _detect_repetition(full_response_text):
                         loop_detected = True
                         if orchestrator:
-                            orchestrator.stream_buffer = (current_display[:600] + "\n\n(模型輸出重複，正在重試...)").strip()
-                            orchestrator.log_system("⚠️ [自動重試] AI 輸出重複，正在結束本次回應並重試。")
+                            orchestrator.stream_buffer = (current_display[:600] + "\n\n(模型輸出重複，本次回應已隔離。)").strip()
+                            orchestrator.log_system(
+                                "⚠️ [輸出隔離] AI 輸出重複；本次實際呼叫已計入全域三次上限。"
+                            )
                         try:
                             stream.close()
                         except Exception:
@@ -3637,15 +4118,18 @@ def process_single_image(
                     thinking_text = prefix
             if parsed is not None:
                 parsed = json.loads(sanitize_json(json.dumps(parsed, ensure_ascii=False)))
-                request_binding_error = validate_request_binding(parsed, random_salt)
-                if request_binding_error:
-                    if request_binding_error == "request_id_missing" and attempt < max_retries:
+                parsed = normalize_model_narration_prefix(parsed)
+                response_shape_error = validate_v1945_response_shape(
+                    parsed, random_salt
+                )
+                if response_shape_error:
+                    if response_shape_error == "request_id_missing" and attempt < max_retries:
                         orchestrator.log_system("⚠️ [回覆綁定門] AI 未回傳本張識別碼，將從原圖無記憶重試。")
                         continue
                     return {
-                        "error": "runtime health gate stopped an unbound model response",
+                        "error": "runtime health gate stopped an invalid structured model response",
                         "runtime_health_stop": True,
-                        "runtime_health_reasons": [request_binding_error],
+                        "runtime_health_reasons": [response_shape_error],
                         "thinking": BLOCKED_NARRATION,
                         "view_type": "失敗",
                         "category": "失敗",
@@ -3775,6 +4259,13 @@ def process_single_image(
             "official_model_unverified",
             "model_prefix_completed",
             "model_prefix_completion_from",
+            "photo_label_model_correction_from",
+            "photo_label_model_correction_to",
+            "embedded_catalog_model_recovered",
+            "embedded_catalog_model_from",
+            "embedded_catalog_model_to",
+            "catalog_confusable_first_letter_candidate",
+            "catalog_confusable_first_letter_alternative",
         ):
             data_obj.pop(internal_key, None)
 
@@ -3869,6 +4360,10 @@ def process_single_image(
                 data_obj["model"] = None
             elif valid_models_list and clean_model not in valid_models_list and not is_followme_bypass:
                 exact_model = strict_known_model(clean_model, valid_models_list)
+                embedded_model = unique_embedded_known_model(
+                    raw_model,
+                    valid_models_list,
+                )
                 prefix_completion = unique_known_model_completion(clean_model, valid_models_list)
                 safe_correction = safe_known_model_correction(clean_model, valid_models_list)
                 photo_label_candidate = resolve_photo_label_model_candidate(
@@ -3876,6 +4371,15 @@ def process_single_image(
                 )
                 if exact_model:
                     data_obj["model"] = exact_model
+                elif embedded_model:
+                    # Retail wording can surround the SKU in the structured
+                    # model field (for example "SAMSUNG 24型... F24T350FHC").
+                    # Accept only the one full catalogue SKU embedded in that
+                    # same field; zero or multiple matches stay unresolved.
+                    data_obj["model"] = embedded_model
+                    data_obj["embedded_catalog_model_recovered"] = True
+                    data_obj["embedded_catalog_model_from"] = raw_model
+                    data_obj["embedded_catalog_model_to"] = embedded_model
                 elif prefix_completion:
                     data_obj["model"] = prefix_completion
                     data_obj["model_prefix_completed"] = True
@@ -3901,6 +4405,21 @@ def process_single_image(
                     data_obj["model"] = photo_label_candidate
                     data_obj["unlisted_model_candidate"] = True
                     data_obj["official_model_unverified"] = True
+                    data_obj["photo_label_model_correction_from"] = clean_model
+                    data_obj["photo_label_model_correction_to"] = photo_label_candidate
+                    first_letter_alternative = unique_known_first_letter_alternative(
+                        photo_label_candidate,
+                        valid_models_list,
+                    )
+                    if first_letter_alternative:
+                        # Do not let one pass lock a likely S/C/F/P OCR typo.
+                        # The candidate remains in raw evidence for the bounded
+                        # three-pass adjudicator; only independent observations
+                        # may select the exact physical-card spelling.
+                        data_obj["catalog_confusable_first_letter_candidate"] = True
+                        data_obj["catalog_confusable_first_letter_alternative"] = (
+                            first_letter_alternative
+                        )
                     console.print(
                         "[yellow]⚠️ [Model Guard] 官網未收錄，但同張主角價牌證據明確，"
                         f"保留候選並要求獨立複核: {photo_label_candidate}[/yellow]"
@@ -4102,6 +4621,15 @@ def process_single_image(
                 else:
                     console.print(f"[dim]⚠️ [價格攔截] 獨白價格 {desc_price} 2000 元以下或格式不合，未補回[/dim]")
 
+        if data_obj.get("price") not in (None, "") and narration_denies_readable_price(thinking_text):
+            console.print(
+                f"[yellow]⚠️ [價格守門] 本輪 JSON 填入 {data_obj.get('price')}，"
+                "但同輪敘述明確否認有可讀的主角價格牌；只撤回價格，不推翻主體分類[/yellow]"
+            )
+            data_obj["rejected_narration_denied_price"] = data_obj.get("price")
+            data_obj["price"] = None
+            data_obj["price_conflict_detected"] = True
+
         if narration_marks_reference_only_price(data_obj.get("price"), thinking_text):
             console.print(
                 f"[yellow]⚠️ [價格守門] {data_obj.get('price')} 在同輪敘述中被明示為市價／原價／參考價，"
@@ -4253,7 +4781,27 @@ def process_single_image(
             dict.fromkeys(structured_authority_blocked_fields)
         )
         field_suppression_reasons = []
-        if raw_structured_model not in (None, "") and data_obj.get("model") != raw_structured_model:
+        allowed_photo_label_correction = bool(
+            data_obj.get("unlisted_model_candidate") is True
+            and normalize_samsung_model(raw_structured_model)
+            == normalize_samsung_model(data_obj.get("photo_label_model_correction_from"))
+            and normalize_samsung_model(data_obj.get("model"))
+            == normalize_samsung_model(data_obj.get("photo_label_model_correction_to"))
+        )
+        allowed_embedded_catalog_model = bool(
+            data_obj.get("embedded_catalog_model_recovered") is True
+            and unique_embedded_known_model(
+                raw_structured_model,
+                valid_models_list,
+            )
+            == data_obj.get("model")
+        )
+        if (
+            raw_structured_model not in (None, "")
+            and data_obj.get("model") != raw_structured_model
+            and not allowed_photo_label_correction
+            and not allowed_embedded_catalog_model
+        ):
             field_suppression_reasons.append("raw_structured_model_suppressed_or_changed")
         raw_price_digits = re.sub(r"[^0-9]", "", str(raw_structured_price or ""))
         final_price_digits = re.sub(r"[^0-9]", "", str(data_obj.get("price") or ""))
@@ -4366,13 +4914,36 @@ def process_single_image(
                 # machine-readable physical evidence.  A second generic SKU-list
                 # pass must not erase that verified classification.
                 if not is_followme_model(parsed_model):
-                    exact_model, catalog_available = revalidate_model_without_empty_catalog_erasure(
-                        parsed_model, valid_models_list
+                    same_photo_unlisted = bool(
+                        result_json.get("unlisted_model_candidate") is True
+                        and has_photo_label_model_evidence(
+                            parsed_model,
+                            result_json,
+                            thinking_text,
+                        )
                     )
-                    if catalog_available:
-                        result_json["model"] = exact_model
-                        if not exact_model:
-                            result_json["model_validation_failed"] = True
+                    if (
+                        same_photo_unlisted
+                        and result_json.get(
+                            "catalog_confusable_first_letter_candidate"
+                        )
+                        is not True
+                    ):
+                        # The earlier, stricter physical-label gate already
+                        # accepted this discontinued same-photo SKU.  Do not
+                        # erase it merely because a second generic catalog pass
+                        # cannot find it in today's list.
+                        result_json["model"] = parsed_model
+                        result_json["official_model_unverified"] = True
+                        result_json["model_validation_failed"] = False
+                    else:
+                        exact_model, catalog_available = revalidate_model_without_empty_catalog_erasure(
+                            parsed_model, valid_models_list
+                        )
+                        if catalog_available:
+                            result_json["model"] = exact_model
+                            if not exact_model:
+                                result_json["model_validation_failed"] = True
 
             # ... (Category & Price logic remains same) ...
             current_cat = result_json.get("category")
@@ -4583,6 +5154,12 @@ def process_single_image(
                 else:
                     orchestrator.stream_buffer = ""
 
+    except LifetimeModelCallLedgerError:
+        # The orchestrator owns the fail-safe for a broken image binding or an
+        # exhausted lifetime call budget.  Converting either exception into a
+        # normal OCR result here hides the interlock and makes the same photo
+        # enter the generic technical-retry loop.
+        raise
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
@@ -4623,6 +5200,19 @@ def process_single_image(
     result_json["prompt_contamination"] = False
     result_json["request_id_verified"] = bool(result_json.get("request_id_verified"))
     result_json["input_image_sha256"] = input_image_sha256
+    if model_call_reservation:
+        result_json["lifetime_model_call_count"] = int(
+            model_call_reservation.get("consumed_calls") or 0
+        )
+        result_json["model_call_reservation_id"] = str(
+            model_call_reservation.get("reservation_id") or ""
+        )
+        result_json["model_call_binding_key"] = str(
+            model_call_reservation.get("binding_key") or ""
+        )
+        result_json["source_file_sha256"] = str(
+            model_call_reservation.get("source_file_sha256") or ""
+        )
     if orchestrator:
         final_display_thinking = str(result_json.get('thinking') or '').strip()
         if final_display_thinking:
@@ -4780,7 +5370,11 @@ def get_status():
             "review_progress": review_progress,
             "runtime_health_fuse": public_runtime_health_fuse(read_runtime_health_fuse(AUDIT_DIR)),
             "pipeline_pause": read_pipeline_pause(),
+            "zero_model_adjudication": read_zero_model_activity(),
             "stream_upload": read_stream_status(OUTPUT_ROOT),
+            "capped_adjudication": (
+                getattr(orchestrator, "get_capped_adjudication_status", lambda: {})()
+            ),
             "metrics": metrics,
             "stream_buffer": stream_buffer, # 強制轉字串避免類型錯誤
             "presentation_queue": presentation_queue,
@@ -4802,7 +5396,8 @@ def get_status():
             "current_relative_dir": current_relative_dir,
             "resources": {
                 "cpu": psutil.cpu_percent(interval=0.1),
-                "ram": psutil.virtual_memory().percent
+                "ram": psutil.virtual_memory().percent,
+                **read_gpu_resources(),
             }
         }
         return jsonify(status_obj)
@@ -4848,22 +5443,20 @@ def get_recent_presentation_history():
     try:
         if scope == "current_batch":
             source_item_ids = orchestrator.get_current_source_item_ids()
-            current_run_id = str(getattr(orchestrator, "current_run_id", "") or "")
             items = orchestrator.get_recent_presentation_history(
                 limit=limit,
                 source_item_ids=source_item_ids,
-                run_id=current_run_id,
-                # An idle transition clears current_run_id.  That must not
-                # reopen every legacy no-run event for the selected folder.
-                # Recover exactly the newest durable run instead, so the
-                # boss-facing rail remains the last coherent batch.
-                latest_run_only=True,
-                legacy_run_only=False,
+                # Safe supervisor reloads create a new run_id while retaining
+                # the same exact staging folder. The supervisor-facing rail is
+                # therefore a current-folder, current-revision union, not a
+                # current-process view.
+                evidence_guard_revision=EVIDENCE_GUARD_REVISION,
+                # Reprocessing and safe reloads may emit more than one durable
+                # presentation for the same photo. The rail must contain one
+                # newest card per stable source identity.
+                latest_per_source=True,
             )
-            if not current_run_id and items:
-                current_run_id = str(items[0].get("run_id") or "")
-                if not current_run_id:
-                    items = []
+            current_run_id = ""
         else:
             source_item_ids = None
             current_run_id = ""
@@ -4874,6 +5467,7 @@ def get_recent_presentation_history():
             "scope": scope or "global",
             "source_item_ids": sorted(source_item_ids) if source_item_ids is not None else [],
             "run_id": current_run_id,
+            "evidence_guard_revision": EVIDENCE_GUARD_REVISION if scope == "current_batch" else "",
         })
     except Exception as exc:
         log.error(f"Recent presentation history API error: {exc}")
@@ -5294,7 +5888,14 @@ def set_llm_config():
 
         old_model = model_name_global
         try:
-            new_client = OpenAI(base_url=new_api_base, api_key=new_api_key, timeout=180.0, max_retries=1)
+            # Endpoint switching must preserve the same one-reservation /
+            # one-HTTP-request contract as normal startup.
+            new_client = OpenAI(
+                base_url=new_api_base,
+                api_key=new_api_key,
+                timeout=180.0,
+                max_retries=0,
+            )
         except Exception as e:
             return jsonify({"error": f"建立 OpenAI client 失敗: {e}"}), 500
 
@@ -5610,7 +6211,16 @@ def main():
 
     model_name_global = args.model
     # v14.2: Don't force 127.0.0.1 if localhost works better for user
-    api_client = OpenAI(base_url=args.api_base, api_key=args.api_key, timeout=float(args.timeout), max_retries=1)
+    # The SDK's automatic transport retry is invisible to the business-pass
+    # counter and can otherwise issue two HTTP requests for one reservation.
+    # All retry decisions belong to the stateless orchestrator and its durable
+    # lifetime ledger.
+    api_client = OpenAI(
+        base_url=args.api_base,
+        api_key=args.api_key,
+        timeout=float(args.timeout),
+        max_retries=0,
+    )
 
     # Config for Orchestrator
     config = {

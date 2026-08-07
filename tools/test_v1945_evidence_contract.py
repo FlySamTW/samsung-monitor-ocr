@@ -10,6 +10,7 @@ import samsung_ocr_batch_processor as batch
 
 from skills.audit_fields import (
     EVIDENCE_GUARD_REVISION,
+    FOLLOWME_TW_EARLIEST_YEAR,
     KNOWN_SOURCE_EXPECTATIONS,
     apply_human_audited_pixel_authority,
     evidence_contract_decision,
@@ -18,8 +19,12 @@ from skills.audit_fields import (
     immediate_retry_decision,
     narrated_followme_physical_cues,
     narration_evidence_consistency_reasons,
+    narration_has_followme_subject_counterevidence,
     narration_has_positive_followme_identity,
     narration_has_unmistakable_followme_fixture,
+    _label_ownership_conflicts_with_narration,
+    _historical_same_card_raw_recovery,
+    _narration_supports_only_one_complete_monitor,
     validate_evidence_contract,
 )
 from tools.prepare_drive_upload_manifest import (
@@ -38,13 +43,18 @@ from skills.model_validation import (
     has_photo_label_model_evidence,
     recover_pipeline_unlisted_model_candidate,
     resolve_photo_label_model_candidate,
+    unique_embedded_known_model,
+    unique_known_first_letter_alternative,
     unique_known_model_completion,
 )
 from samsung_ocr_batch_processor import (
     _merge_v1945_json_objects,
+    _stream_narration_preview,
+    build_v1945_response_format,
     new_request_id,
     request_binding_tail,
     validate_request_binding,
+    validate_v1945_response_shape,
 )
 
 
@@ -168,9 +178,205 @@ class EvidenceContractTests(unittest.TestCase):
             followme_variant_evidence_reasons(row),
         )
         decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertTrue(row["ordered_followme_early_exit"])
+        self.assertTrue(row["followme_family_confirmed"])
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
+        self.assertEqual(row["price"], "12990")
+
+    def test_ordered_followme_family_survives_denied_price_without_extra_round(self):
+        narration = (
+            "中央偏左同一台螢幕有白色直立支架、完整圓形落地底座與附著托盤，"
+            "螢幕上方同主體標籤寫 Samsung Follow Me 4K；未見完整 S 開頭型號與可讀價格牌。"
+        )
+        physical = [
+            {"cue": "direct_followme_branding_on_unit", "same_subject": True, "strength": "direct"},
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        row = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "FollowMe 型號未細分",
+            "price": None,
+            "quality_issue": "沒有價格牌",
+            "price_conflict_detected": True,
+            "thinking": narration,
+            **evidence(1, True, "matched", physical),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertTrue(row["ordered_followme_early_exit"])
+        self.assertTrue(row["ordered_followme_price_withdrawn"])
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
+        self.assertIsNone(row["price"])
+
+    def test_generic_m7_tabletop_card_cannot_terminally_lock_followme_on_first_pass(self):
+        narration = (
+            "我看到本輪結論：單機，無型號，9,990元。判讀依據：中央偏左的"
+            "螢幕下方有白色直立支架與完整圓形底座，連著附著托盤與 "
+            "Samsung Smart Monitor M7 商品卡，卡上可逐字讀取 32 與 G83。"
+            "其他螢幕為背景，無足夠實體 FollowMe 證據。"
+        )
+        row = {
+            "file_name": "M-台中市-大里區-SF-大里-194.jpg",
+            "period": "202605",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": "9990",
+            "quality_issue": "不合格-沒有規格牌",
+            "thinking": narration,
+            "narration": narration,
+            **evidence(2, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
         self.assertTrue(decision["retry"])
         self.assertFalse(decision["verified"])
+        self.assertFalse(row["ordered_followme_early_exit"])
+        self.assertFalse(row.get("followme_family_confirmed", False))
+        self.assertTrue(
+            row["generic_smart_monitor_requires_independent_followme_confirmation"]
+        )
 
+    def test_generic_m7_raw_output_cannot_lock_followme_on_lifetime_attempt_two(self):
+        raw = {
+            "narration": (
+                "型號為 Samsung Smart Monitor M7，價格 9,990；"
+                "未見同機 FollowMe 直接品牌。"
+            ),
+            "model": "Samsung Smart Monitor M7",
+            "price": "9990",
+        }
+        row = {
+            "file_name": "M-台中市-大里區-SF-大里-194.jpg",
+            "period": "202605",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": "9990",
+            "quality_issue": "不合格-沒有規格牌",
+            "thinking": (
+                "中央螢幕下方被判成白色直立支架、圓形底座與附著託盤；"
+                "其他螢幕為背景。"
+            ),
+            "raw_model_output": json.dumps(raw, ensure_ascii=False),
+            "raw_objects": [json.dumps(raw, ensure_ascii=False)],
+            **evidence(2, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 2, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertFalse(row["ordered_followme_early_exit"])
+        self.assertFalse(row.get("followme_family_confirmed", False))
+        self.assertTrue(
+            row["generic_smart_monitor_requires_independent_followme_confirmation"]
+        )
+
+    def test_runtime_user_prompt_rejects_fm_and_m7_as_standalone_followme_proof(self):
+        source = Path(batch.__file__).read_text(encoding="utf-8")
+        self.assertIn("FM／S32FM／M7／M5 名稱本身不成立", source)
+        self.assertNotIn("FollowMe 字樣、FM 型號代碼", source)
+
+    def test_youchang_1651_black_stand_counterevidence_repairs_same_pass_json(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "我看到本輪結論：單機，型號 S27D300GAC，價格 3,290。"
+            "中央偏左的螢幕有黑色直立支架與完整圓形底座，下方價牌明確寫 "
+            "SAMSUNG 27型 S3平面螢幕 S27D300GAC 會員價 3,290，與實體支架連接。"
+            "左側與右側螢幕僅局部可見，未完整入鏡。無 FollowMe 字樣或移動式支架線索。"
+        )
+        row = {
+            "file_name": "M-高雄市-楠梓區-TK3C-右昌-1651.jpg",
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27D300GAC",
+            "price": "3290",
+            "thinking": narration,
+            "narration": narration,
+            **evidence(3, True, "matched", physical),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(narration_has_followme_subject_counterevidence(narration))
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertFalse(row["ordered_followme_early_exit"])
+        self.assertNotIn("ordered_followme_family_lock", row)
+        self.assertEqual(row["model"], "S27D300GAC")
+        self.assertEqual(row["complete_screen_count"], 1)
+        self.assertEqual(row["followme_physical_evidence"], [])
+        self.assertTrue(row["same_pass_owned_single_reconciled"])
+        self.assertEqual(row["reconciled_complete_screen_count_from"], 3)
+
+    def test_explicit_fixture_denials_cannot_verify_structured_fixture_claims(self):
+        narration = (
+            "主角是一般桌上型螢幕，沒有白色直立支架、沒有圓形底座，"
+            "也沒有附著托盤；未見正面 FollowMe 標牌。"
+        )
+        row = {
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27D300GAC",
+            "price": "3290",
+            "thinking": narration,
+            "narration": narration,
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertFalse(row["ordered_followme_early_exit"])
+        self.assertIn("narration_denies_structured_followme_fixture", decision["reasons"])
+    def test_youchang_1050_background_negative_does_not_veto_positive_fixture(self):
+        physical = [
+            {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+            {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+        ]
+        narration = (
+            "中央偏左的螢幕下方有白色直立支架與完整圓形底座，支架上附著託盤，"
+            "託盤上有可逐字讀取的型號與價格，且與螢幕正下方空間對齊。"
+            "其他螢幕雖完整入鏡，但無實體 FollowMe 候選，故不影響商業主角判斷。"
+        )
+        row = {
+            "file_name": "M-高雄市-楠梓區-SF-右昌-1050.jpg",
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S27CG552EC",
+            "price": "4990",
+            "thinking": narration,
+            "narration": narration,
+            **evidence(3, True, "matched", physical),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertFalse(narration_has_followme_subject_counterevidence(narration))
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertTrue(row["ordered_followme_early_exit"])
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
     def test_explicit_same_pass_followme_variant_remains_supported(self):
         row = {
             "model": 'FollowMe M7 32"',
@@ -180,6 +386,128 @@ class EvidenceContractTests(unittest.TestCase):
             ),
         }
         self.assertEqual(followme_variant_evidence_reasons(row), [])
+
+    def test_wujia_1267_ordered_family_lock_preserves_owned_ordinary_sku_and_price(self):
+        narration = (
+            "五甲 1267 的同一台主角有白色直立支架、完整圓形底座與附著托盤，"
+            "附著商品卡清楚寫 Samsung S32FM803UC，售價 14,990 元。"
+        )
+        row = {
+            "file_name": "M-高雄市-鳳山區-SF-五甲-1267.jpg",
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S32FM803UC",
+            "price": "14990",
+            "quality_issue": "無",
+            "thinking": narration,
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertTrue(row["ordered_followme_early_exit"])
+        self.assertTrue(row["followme_family_confirmed"])
+        self.assertEqual(row["model"], "S32FM803UC")
+        self.assertEqual(row["price"], "14990")
+
+    def test_wujia_1267_frozen_generic_family_recovers_bound_raw_sku(self):
+        narration = (
+            "中央偏左的同一台螢幕有白色直立支架、完整圓形底座與附著托盤，"
+            "附著商品卡清楚寫 Samsung S32FM803UC，售價 14,990 元。"
+        )
+        raw_value = {
+                "view_type": "單機",
+                "model": "S32FM803UC",
+                "price": "14990",
+            }
+        raw = json.dumps(
+            raw_value,
+            ensure_ascii=False,
+        )
+        row = {
+            "file_name": "M-高雄市-鳳山區-TK3C-五甲-1267.jpg",
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "FollowMe 型號未細分",
+            "price": "14990",
+            "quality_issue": "無",
+            "thinking": narration,
+            "narration": narration,
+            "raw_objects": [{"raw": raw, "value": raw_value}],
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertTrue(row["ordered_followme_early_exit"])
+        self.assertTrue(row["ordered_followme_raw_sku_recovered"])
+        self.assertEqual(row["model"], "S32FM803UC")
+        self.assertEqual(row["price"], "14990")
+
+    def test_followme_fixture_conclusion_only_cannot_rescue_raw_sku(self):
+        narration = (
+            "我看到本輪結論：單機，型號 S32FM803UC，價格 14,990。"
+            "主體有白色直立支架、圓形底座與托盤，但看不清任何標籤。"
+        )
+        raw_value = {
+            "view_type": "單機",
+            "model": "S32FM803UC",
+            "price": "14990",
+        }
+        row = {
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "FollowMe 型號未細分",
+            "price": "14990",
+            "quality_issue": "無",
+            "thinking": narration,
+            "narration": narration,
+            "raw_objects": [{"value": raw_value}],
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertNotIn("ordered_followme_raw_sku_recovered", row)
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
+
+    def test_sf_fengshan_1064_fixture_only_conclusion_cannot_invent_variant(self):
+        narration = (
+            "本輪結論：FollowMe M7 32吋，售價 12,990 元。"
+            "同一台主角可見白色直立支架、完整圓形底座與附著托盤；"
+            "沒有任何價牌、商品卡、標籤或側標清楚印出確切 M5、M7、Pro 或面板型號。"
+        )
+        row = {
+            "file_name": "M-高雄市-鳳山區-SF-鳳山-1064.jpg",
+            "period": "202602",
+            "view_type": "單機",
+            "category": "單機",
+            "model": 'FollowMe M7 32"',
+            "price": "12990",
+            "quality_issue": "無",
+            "thinking": narration,
+            **evidence(1, True, "matched", [
+                {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            ]),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertTrue(row["followme_family_confirmed"])
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
 
     def _multiscreen_single(self, **updates):
         row = {
@@ -229,20 +557,123 @@ class EvidenceContractTests(unittest.TestCase):
                 self.assertEqual(passes[2]["price"], price)
                 self.assertEqual(passes[2]["followme_family_confirmed"], followme)
 
-    def test_three_plus_screen_single_never_verifies_on_first_pass(self):
-        row = self._multiscreen_single()
+    def test_current_wide_single_uses_one_followme_check_not_ritual_three_passes(self):
+        row = self._multiscreen_single(
+            model=None,
+            price=None,
+            unique_main=False,
+            label_ownership="not_visible",
+            thinking=(
+                "我看到三台以上完整螢幕，沒有可歸屬的型號或價格，"
+                "也沒有同主體 FollowMe 實體。"
+            ),
+        )
         first = immediate_retry_decision(dict(row), 1, [], 3)
         self.assertTrue(first["retry"])
         self.assertFalse(first["verified"])
-        self.assertIn("三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
+        self.assertIn("寬景單機候選需第二輪確認是否為 FollowMe", first["reasons"])
 
-        third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
-        self.assertFalse(third["verified"])
-        self.assertTrue(third["unresolved"])
-        self.assertIn(
-            "沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景",
-            third["reasons"],
+        second_row = dict(row)
+        second = immediate_retry_decision(second_row, 2, [dict(row)], 3)
+        self.assertTrue(second["verified"])
+        self.assertFalse(second["retry"])
+        self.assertFalse(second["unresolved"])
+        self.assertEqual(second_row["view_type"], "遠景")
+        self.assertIsNone(second_row["model"])
+        self.assertIsNone(second_row["price"])
+        self.assertTrue(second_row["wide_scene_resolved_without_ritual_third_pass"])
+
+    def test_tk3c_nanzi_1585_owned_side_label_beats_wide_count_and_matches_price_card(self):
+        narration = (
+            "我看到中央主角右上側直接附著的規格側標有完整 S27CG552EC；"
+            "下方雖有多張不同型號價牌，其中與主角空間對齊的一張也印有"
+            "完全相同的 S27CG552EC，實售價為 4,990 元。"
         )
+        row = self._multiscreen_single(
+            period="202602",
+            file_name="M-高雄市-楠梓區-TK3C-楠梓-1585.jpg",
+            model="S27CG552EC",
+            price="4990",
+            complete_screen_count=3,
+            unique_main=True,
+            label_ownership="matched",
+            thinking=narration,
+            narration=narration,
+        )
+
+        decision = immediate_retry_decision(row, 1, [], 3)
+
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertFalse(decision["unresolved"])
+        self.assertEqual(row["view_type"], "單機")
+        self.assertEqual(row["model"], "S27CG552EC")
+        self.assertEqual(row["price"], "4990")
+        self.assertNotIn("wide_scene_resolved_without_ritual_third_pass", row)
+        self.assertNotIn(
+            "沒有 FollowMe 實體證據的三台以上完整螢幕應定案遠景",
+            decision["reasons"],
+        )
+
+        prompt = (
+            Path(__file__).resolve().parents[1]
+            .joinpath("samsung_ocr_prompt.txt")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIn("必須逐張找印有與側標完全相同 SKU 的卡", prompt)
+        self.assertIn("保留側標鎖定的 model，但 price 必須填 null", prompt)
+
+    def test_elife_281_followme_uncertainty_cannot_cross_sentence_into_owned_card(self):
+        narration = (
+            "我沒有看到白色落地支架，因此無法確認 FollowMe。"
+            "主螢幕正下方有實體規格價牌，清楚標示 S27FG502SC 與 13,900 元，"
+            "並且與主螢幕空間對齊。"
+        )
+        self.assertFalse(_label_ownership_conflicts_with_narration(narration))
+
+    def test_side_label_model_survives_but_unmatched_multi_card_price_is_null(self):
+        narration = (
+            "我看到中央主角右上側附著的規格側標清楚寫 S27CG552EC。"
+            "下方有多張價牌，但可讀的 6,990 元只印在另一型號的卡上，"
+            "沒有任何同型號價牌可供主角使用。"
+        )
+        row = self._multiscreen_single(
+            period="202602",
+            model="S27CG552EC",
+            price="6990",
+            complete_screen_count=3,
+            unique_main=True,
+            label_ownership="matched",
+            thinking=narration,
+            narration=narration,
+        )
+
+        decision = immediate_retry_decision(row, 1, [], 3)
+
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["verified"])
+        self.assertEqual(row["view_type"], "單機")
+        self.assertEqual(row["model"], "S27CG552EC")
+        self.assertIsNone(row["price"])
+        self.assertEqual(row["rejected_price_without_exact_model_card"], "6990")
+        self.assertIn("2026 單機缺價格", decision["reasons"])
+
+    def test_1032_partial_edge_neighbors_finish_on_first_owned_pass(self):
+        narration = (
+            "中央一台完整螢幕，型號 S27D300GAC，價格 3,090 元；"
+            "左側與右側螢幕僅局部可見，外框未完整入鏡，不計為完整螢幕。"
+        )
+        first_row = self._multiscreen_single(thinking=narration)
+
+        self.assertTrue(_narration_supports_only_one_complete_monitor(first_row))
+        decision = immediate_retry_decision(first_row, 1, [], 3)
+
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+        self.assertEqual(first_row["view_type"], "單機")
+        self.assertEqual(first_row["complete_screen_count"], 1)
+        self.assertNotIn("wide_scene_resolved_without_ritual_third_pass", first_row)
 
     def test_complete_owned_single_with_partial_neighbor_can_finish_at_count_two(self):
         row = self._multiscreen_single(
@@ -257,7 +688,7 @@ class EvidenceContractTests(unittest.TestCase):
 
         self.assertFalse(decision["retry"])
         self.assertTrue(decision["verified"])
-        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 2)
+        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 1)
         self.assertNotIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
 
     def test_partial_neighbor_count_two_still_retries_without_complete_single_identity(self):
@@ -288,7 +719,7 @@ class EvidenceContractTests(unittest.TestCase):
                     decision["reasons"],
                 )
 
-    def test_partial_neighbor_count_three_still_requires_three_pass_review(self):
+    def test_partial_neighbor_count_three_is_reconciled_when_identity_is_owned(self):
         row = self._multiscreen_single(
             complete_screen_count=3,
             thinking=(
@@ -299,9 +730,10 @@ class EvidenceContractTests(unittest.TestCase):
 
         decision = immediate_retry_decision(row, 1, [], 3)
 
-        self.assertTrue(decision["retry"])
-        self.assertFalse(decision["verified"])
-        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertEqual(row["complete_screen_count"], 1)
+        self.assertTrue(row["same_pass_owned_single_reconciled"])
 
     def test_incompatible_background_marketing_family_retries(self):
         row = self._multiscreen_single(
@@ -475,23 +907,42 @@ class EvidenceContractTests(unittest.TestCase):
             },
         )
 
-    def test_three_plus_screen_single_disagreement_stays_unresolved(self):
+    def test_wide_owned_identity_disagreement_retries_without_erasing_current_evidence(self):
         row = self._multiscreen_single()
         conflicting = self._multiscreen_single(model="S27CG552EC", price="4990")
-        decision = immediate_retry_decision(dict(row), 3, [dict(row), conflicting], 3)
+        current = dict(row)
+        decision = immediate_retry_decision(current, 2, [conflicting], 3)
         self.assertFalse(decision["verified"])
-        self.assertTrue(decision["unresolved"])
+        self.assertTrue(decision["retry"])
+        self.assertFalse(decision["unresolved"])
+        self.assertEqual(current["view_type"], "單機")
+        self.assertEqual(current["model"], "S27D300GAC")
+        self.assertEqual(current["price"], "3090")
         self.assertIn(
-            "沒有 FollowMe 實體證據的三台以上完整螢幕必須依全圖幾何定案遠景",
+            "寬景唯一主角型號跨輪不一致，需完成有界複核",
             decision["reasons"],
         )
 
-    def test_three_plus_screen_single_guard_applies_to_older_years_too(self):
-        row = self._multiscreen_single(period="201901")
-        first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertFalse(first["verified"])
-        self.assertIn("三台以上入鏡的單機候選必須完成三輪獨立複核", first["reasons"])
+    def test_pre_followme_market_wide_scene_closes_as_distant_on_first_pass(self):
+        row = self._multiscreen_single(
+            period="201901",
+            model=None,
+            price=None,
+            unique_main=False,
+            label_ownership="not_visible",
+            thinking=(
+                "我看到三台以上完整螢幕，沒有唯一商業主角，"
+                "也沒有可歸屬的型號或價格。"
+            ),
+        )
+        first_row = dict(row)
+        first = immediate_retry_decision(first_row, 1, [], 3)
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertEqual(first_row["view_type"], "遠景")
+        self.assertIsNone(first_row["model"])
+        self.assertIsNone(first_row["price"])
+        self.assertEqual(FOLLOWME_TW_EARLIEST_YEAR, 2024)
 
     def test_edge_cut_narration_cannot_claim_three_complete_monitors(self):
         row = self._multiscreen_single(
@@ -501,11 +952,9 @@ class EvidenceContractTests(unittest.TestCase):
             )
         )
         decision = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(decision["retry"])
-        self.assertIn(
-            "敘述指出中央一台且左右鄰機被邊界裁切，完整台數不得填三台以上",
-            decision["reasons"],
-        )
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 1)
 
     def test_edge_cut_two_sides_wording_cannot_claim_three_complete_monitors(self):
         row = self._multiscreen_single(
@@ -515,10 +964,11 @@ class EvidenceContractTests(unittest.TestCase):
             )
         )
         decision = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(decision["retry"])
-        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 1)
 
-    def test_wide_multiscreen_single_without_bound_identity_never_verifies(self):
+    def test_wide_multiscreen_without_owned_identity_closes_as_distant_after_check(self):
         row = self._multiscreen_single(
             model=None,
             price=None,
@@ -526,10 +976,11 @@ class EvidenceContractTests(unittest.TestCase):
             complete_screen_count=8,
             thinking="我看到一整排螢幕陳列，上方與下方均有完整螢幕，所以……這是一般單機。",
         )
-        decision = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
-        self.assertFalse(decision["verified"])
-        self.assertTrue(decision["unresolved"])
-        self.assertIn("寬廣多螢幕陳列缺少可歸屬的單機身分證據", decision["reasons"])
+        current = dict(row)
+        decision = immediate_retry_decision(current, 2, [dict(row)], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["unresolved"])
+        self.assertEqual(current["view_type"], "遠景")
 
     def test_three_bound_wide_scene_calls_finish_as_distant_without_fourth_call(self):
         common = {
@@ -604,8 +1055,9 @@ class EvidenceContractTests(unittest.TestCase):
             thinking="我看到前景一台主角，背景其他螢幕均未完整入鏡，所以……這是單機。",
         )
         decision = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(decision["retry"])
-        self.assertIn("敘述明確只有一台完整螢幕，結構完整台數必須為1", decision["reasons"])
+        self.assertFalse(decision["retry"])
+        self.assertTrue(decision["verified"])
+        self.assertEqual(decision["normalized_evidence"]["complete_screen_count"], 1)
 
     def test_known_650_pixels_can_never_auto_verify_as_single(self):
         row = self._multiscreen_single(input_image_sha256=self.RISK_650_SHA)
@@ -772,6 +1224,103 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(current["price"], "19900")
         self.assertEqual(current["complete_screen_count"], 1)
 
+    def test_tainan_yude_183_raw_tail_zero_model_finalizes_ordered_followme(self):
+        name = "M-台南市-北　區-Q哥-台南育德-183.jpg"
+        image_hash = "08fa67ad38423bb455c34afb9c961ab916a1ad0f86924f7b567740b025d8b4c2"
+        source_id = "033790fe16cfb3a193afb16be5eee383999d67756116a75ba9573a5dae4e4997"
+        original = rf"D:\source\商化照片-202602\{name}"
+        payloads = [
+            {
+                "request_id": "1" * 32,
+                "narration": (
+                    "我看到中央偏左一台螢幕，同一主體有 Samsung Follow Me 4K 標籤、"
+                    "白色直立支架、完整圓形落地底座與附著託盤，價格牌標示 13,290。"
+                ),
+                "view_type": "單機",
+                "screen_status": "正常",
+                "quality_issue": "無",
+                "model": "FollowMe 型號未細分",
+                "price": "13290",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+                "followme_physical_evidence": [
+                    {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                    {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+                ],
+            },
+            {
+                "request_id": "2" * 32,
+                "narration": (
+                    "我看到中央偏右一台螢幕，同一主體有 Samsung Follow Me 4K 產品卡、"
+                    "白色直立支架與完整圓形落地底座，價格牌明確標示 13,290。"
+                ),
+                "view_type": "單機",
+                "screen_status": "正常",
+                "quality_issue": "無",
+                "model": "Samsung Follow Me 4K",
+                "price": "13290",
+                "complete_screen_count": 1,
+                "unique_main": True,
+                "label_ownership": "matched",
+                "followme_physical_evidence": [
+                    {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
+                    {"cue": "round_base", "same_subject": True, "strength": "strong"},
+                    {"cue": "attached_followme_product_card", "same_subject": True, "strength": "strong"},
+                ],
+            },
+        ]
+        calls = []
+        for attempt, payload in zip((2, 3), payloads):
+            calls.append({
+                "ocr_attempt": attempt,
+                "period": "202602",
+                "file_name": name,
+                "source_path": rf"D:\staging\{name}",
+                "source_item_id": source_id,
+                "original_source_path": original,
+                "input_image_sha256": image_hash,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                # Reproduce the legacy pass-3 parse: the immutable raw JSON is
+                # sound, but the old guard blocked its parsed model field.
+                "runtime_health": {
+                    "healthy": attempt == 2,
+                    "reasons": [] if attempt == 2 else ["structured_authority_material_conflict:model"],
+                },
+                "view_type": "單機",
+                "category": "單機",
+                "model": payload["model"] if attempt == 2 else None,
+                "price": "13290",
+                "raw_objects": [json.dumps(payload, ensure_ascii=False)],
+                **evidence(1, True, "matched", payload["followme_physical_evidence"]),
+            })
+        current = dict(calls[-1])
+        recovered = _recover_clean_single_tail_after_restart(
+            current,
+            calls,
+            {
+                "auto_retry_reasons": (
+                    "three_pass_current_integrity_invalid；"
+                    "structured_authority_material_conflict:model；"
+                    "three_call_hard_limit_reached"
+                )
+            },
+        )
+        self.assertTrue(recovered)
+        self.assertEqual(current["model"], "FollowMe 型號未細分")
+        self.assertEqual(current["price"], "13290")
+        self.assertTrue(current["followme_family_confirmed"])
+        self.assertTrue(current["ordered_followme_early_exit"])
+        self.assertTrue(current["followme_physical_evidence"])
+        self.assertEqual(
+            current["adjudication_rule"],
+            "two_current_ordered_followme_tail_calls_after_persisted_attempt_one",
+        )
+
     def test_known_650_pixels_require_three_clean_distant_passes(self):
         distant = {
             "period": "202601", "view_type": "遠景", "category": "遠景",
@@ -904,6 +1453,114 @@ class EvidenceContractTests(unittest.TestCase):
         parsed.pop("request_id")
         self.assertEqual(validate_request_binding(parsed, "a1b2c3d4"), "request_id_missing")
 
+    def test_strict_response_schema_is_bound_and_used_by_production_request(self):
+        request_id = "0123456789abcdef0123456789abcdef"
+        response_format = build_v1945_response_format(request_id)
+        self.assertEqual(response_format["type"], "json_schema")
+        definition = response_format["json_schema"]
+        self.assertTrue(definition["strict"])
+        schema = definition["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            next(iter(schema["properties"])),
+            "narration",
+        )
+        self.assertEqual(
+            schema["properties"]["request_id"]["enum"],
+            [request_id],
+        )
+        self.assertEqual(
+            set(schema["required"]),
+            set(batch.V1945_RESPONSE_REQUIRED_KEYS),
+        )
+        self.assertFalse(
+            schema["properties"]["followme_physical_evidence"]["items"][
+                "additionalProperties"
+            ]
+        )
+        production_source = __import__("inspect").getsource(
+            batch.process_single_image
+        )
+        self.assertIn(
+            '"response_format": build_v1945_response_format(random_salt)',
+            production_source,
+        )
+
+    def test_strict_response_shape_fails_closed(self):
+        request_id = "0123456789abcdef0123456789abcdef"
+        payload = {
+            "narration": "我看到本輪結論：單機，型號 S27D300GAC，價格 3,090 元。",
+            "request_id": request_id,
+            "view_type": "單機",
+            "screen_status": "正常",
+            "quality_issue": "無",
+            "model": "S27D300GAC",
+            "price": "3090",
+            "category": "單機",
+            **evidence(1, True, "matched"),
+        }
+        self.assertEqual(
+            validate_v1945_response_shape(payload, request_id),
+            "",
+        )
+        missing = dict(payload)
+        missing.pop("narration")
+        self.assertEqual(
+            validate_v1945_response_shape(missing, request_id),
+            "structured_response_missing:narration",
+        )
+        extra = {**payload, "unexpected": True}
+        self.assertEqual(
+            validate_v1945_response_shape(extra, request_id),
+            "structured_response_extra:unexpected",
+        )
+        wrong_id = {**payload, "request_id": "f" * 32}
+        self.assertEqual(
+            validate_v1945_response_shape(wrong_id, request_id),
+            "request_id_mismatch",
+        )
+        bad_narration = {**payload, "narration": "這是一台螢幕。"}
+        self.assertEqual(
+            validate_v1945_response_shape(bad_narration, request_id),
+            "structured_narration_invalid",
+        )
+
+    def test_model_narration_prefix_is_repaired_before_shape_validation(self):
+        from samsung_ocr_batch_processor import normalize_model_narration_prefix
+
+        request_id = "0123456789abcdef0123456789abcdef"
+        payload = {
+            "narration": "遠景，無型號，無價格。判讀依據：三台完整螢幕。",
+            "request_id": request_id,
+            "view_type": "遠景",
+            "screen_status": "正常",
+            "quality_issue": "無",
+            "model": None,
+            "price": None,
+            "category": "遠景",
+            **evidence(3, False, "not_visible"),
+        }
+        repaired = normalize_model_narration_prefix(payload)
+        self.assertTrue(repaired["narration"].startswith("我看到本輪結論："))
+        self.assertEqual(validate_v1945_response_shape(repaired, request_id), "")
+
+    def test_stream_preview_extracts_partial_json_narration(self):
+        partial = (
+            '{"narration":"我看到本輪結論：單機，型號 S27D300GAC，'
+            '價格 3,090 元。判讀依據：'
+        )
+        self.assertEqual(
+            _stream_narration_preview(partial),
+            "我看到本輪結論：單機，型號 S27D300GAC，價格 3,090 元。判讀依據：",
+        )
+        self.assertEqual(
+            _stream_narration_preview(
+                "我看到本輪結論：遠景，無型號，無價格。"
+                '{"view_type":"遠景"}'
+            ),
+            "我看到本輪結論：遠景，無型號，無價格。",
+        )
+
     def test_request_id_uses_full_128_bit_space(self):
         values = {new_request_id() for _ in range(1000)}
         self.assertEqual(len(values), 1000)
@@ -1005,6 +1662,71 @@ class EvidenceContractTests(unittest.TestCase):
         )
         self.assertEqual(postprocessed["model"], "S27CG552EC")
         self.assertNotIn("model", blocked)
+
+    def test_unique_physical_label_family_letter_correction_is_not_a_structured_conflict(self):
+        postprocessed = {
+            "view_type": "\u55ae\u6a5f",
+            "category": "\u55ae\u6a5f",
+            "model": "F24T350FHC",
+            "price": "3990",
+            "unlisted_model_candidate": True,
+            "photo_label_model_correction_from": "S24T350FHC",
+            "photo_label_model_correction_to": "F24T350FHC",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {
+                "view_type": "\u55ae\u6a5f",
+                "category": "\u55ae\u6a5f",
+                "model": "S24T350FHC",
+                "price": "3990",
+            },
+        )
+        self.assertEqual(postprocessed["model"], "F24T350FHC")
+        self.assertNotIn("model", blocked)
+
+    def test_unique_embedded_catalog_sku_is_safe_structured_normalization(self):
+        raw_model = "SAMSUNG 24型IPS液晶顯示器 F24T350FHC"
+        valid_models = ["F24T350FHC", "C24F390FHE"]
+        recovered = unique_embedded_known_model(raw_model, valid_models)
+        self.assertEqual(recovered, "F24T350FHC")
+
+        postprocessed = {
+            "view_type": "單機",
+            "category": "單機",
+            "model": recovered,
+            "price": None,
+            "embedded_catalog_model_recovered": True,
+            "embedded_catalog_model_from": raw_model,
+            "embedded_catalog_model_to": recovered,
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {"view_type": "單機", "category": "單機", "model": raw_model},
+        )
+        self.assertEqual(postprocessed["model"], "F24T350FHC")
+        self.assertNotIn("model", blocked)
+
+        self.assertIsNone(
+            unique_embedded_known_model(
+                "F24T350FHC 與 C24F390FHE",
+                valid_models,
+            )
+        )
+
+    def test_unmarked_family_letter_change_remains_a_structured_conflict(self):
+        postprocessed = {
+            "view_type": "\u55ae\u6a5f",
+            "category": "\u55ae\u6a5f",
+            "model": "F24T350FHC",
+            "price": "3990",
+        }
+        blocked = batch.enforce_explicit_structured_authority(
+            postprocessed,
+            {"model": "S24T350FHC", "price": "3990"},
+        )
+        self.assertIsNone(postprocessed["model"])
+        self.assertIn("model", blocked)
 
     def test_prefix_completion_needs_two_independent_matching_passes(self):
         base = {
@@ -1123,6 +1845,15 @@ class EvidenceContractTests(unittest.TestCase):
             resolve_photo_label_model_candidate("S27F390FHE", record, narration),
             "C27F390FHE",
         )
+        self.assertEqual(
+            resolve_photo_label_model_candidate(
+                "S27R500FHC",
+                record,
+                "我看到本輪結論：單機，S27R500FHC，5,691 元。"
+                "主角正下方實體價牌清楚寫著 C27R500FHC 與 5,691 元，歸屬明確。",
+            ),
+            "C27R500FHC",
+        )
         self.assertIsNone(
             resolve_photo_label_model_candidate(
                 "S27F390FHE",
@@ -1135,6 +1866,32 @@ class EvidenceContractTests(unittest.TestCase):
                 "S27F390FHE",
                 {**record, "label_ownership": "ambiguous", "unique_main": False},
                 "價牌模糊，可能是 C27F390FHE，但無法確認。",
+            )
+        )
+
+    def test_decorative_family_prefix_preserves_one_owned_exact_sku(self):
+        record = {
+            "view_type": "單機",
+            "unique_main": True,
+            "label_ownership": "matched",
+        }
+        narration = (
+            "中央主角自己的實體側標清楚寫著 ViewFinity S9 S27C900PAC，"
+            "同一台螢幕正下方價牌標示 45,900 元，歸屬明確。"
+        )
+        self.assertEqual(
+            resolve_photo_label_model_candidate(
+                "ViewFinity S9 S27C900PAC",
+                record,
+                narration,
+            ),
+            "S27C900PAC",
+        )
+        self.assertIsNone(
+            resolve_photo_label_model_candidate(
+                "ViewFinity S9 S27C900PAC S32DG802SC",
+                record,
+                narration + "旁邊另一張牌寫 S32DG802SC。",
             )
         )
 
@@ -1162,6 +1919,89 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(final["verified"])
         self.assertFalse(final["unresolved"])
         self.assertTrue(third["unlisted_model_photo_consensus"])
+
+    def test_bound_same_card_unlisted_sku_can_close_on_first_pass(self):
+        narration = (
+            "我看到本輪結論：單機，型號 S24D362GAC，價格 3,490 元。"
+            "判讀依據：中央唯一主角自己的實體價牌同一張清楚標示 "
+            "S24D362GAC 與 3,490 元，價牌歸屬明確。"
+        )
+        row = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S24D362GAC",
+            "price": "3490",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "official_model_unverified": True,
+            "independent_pass": True,
+            "request_binding_enforced": True,
+            "request_id_verified": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "input_image_sha256": "a" * 64,
+            "runtime_health": {"healthy": True, "reasons": []},
+            "screen_status": "正常",
+            "quality_issue": "無",
+            **evidence(1, True, "matched"),
+        }
+        historical = dict(row)
+        historical["period"] = "202208"
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertFalse(decision["unresolved"])
+        self.assertTrue(row["unlisted_model_first_pass_evidence_lock"])
+        self.assertTrue(row["unlisted_model_photo_consensus"])
+
+        historical_decision = immediate_retry_decision(historical, 1, [], 3)
+        self.assertTrue(historical_decision["verified"])
+        self.assertFalse(historical_decision["retry"])
+        self.assertTrue(historical["unlisted_model_first_pass_evidence_lock"])
+
+    def test_unlisted_first_pass_lock_rejects_unbound_or_mismatched_card(self):
+        narration = (
+            "我看到本輪結論：單機，型號 S24D362GAC，價格 3,490 元。"
+            "主角側標寫 S24D362GAC；另一台螢幕的價牌寫 "
+            "S27D300GAC 與 3,490 元。"
+        )
+        base = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S24D362GAC",
+            "price": "3490",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "independent_pass": True,
+            "request_binding_enforced": True,
+            "request_id_verified": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "input_image_sha256": "b" * 64,
+            "runtime_health": {"healthy": True, "reasons": []},
+            "screen_status": "正常",
+            "quality_issue": "無",
+            **evidence(1, True, "matched"),
+        }
+        mismatch = dict(base)
+        mismatch_decision = immediate_retry_decision(mismatch, 1, [], 3)
+        self.assertTrue(mismatch_decision["retry"])
+        self.assertFalse(mismatch["unlisted_model_first_pass_evidence_lock"])
+
+        unbound = dict(base)
+        unbound["thinking"] = unbound["narration"] = (
+            "我看到本輪結論：單機，型號 S24D362GAC，價格 3,490 元。"
+            "中央唯一主角自己的實體價牌同一張清楚標示 "
+            "S24D362GAC 與 3,490 元。"
+        )
+        unbound["request_id_verified"] = False
+        unbound_decision = immediate_retry_decision(unbound, 1, [], 3)
+        self.assertTrue(unbound_decision["retry"])
+        self.assertFalse(unbound["unlisted_model_first_pass_evidence_lock"])
 
     def test_pipeline_marker_recovers_unlisted_model_erased_after_validation(self):
         narration = (
@@ -1196,6 +2036,722 @@ class EvidenceContractTests(unittest.TestCase):
         )
         self.assertEqual(record["model"], "S24D362GAC")
         self.assertTrue(record["official_model_unverified"])
+
+    def test_catalog_only_suppression_does_not_erase_historical_photo_label(self):
+        narration = (
+            "中央唯一主角正下方的實體價牌清楚標示 "
+            "C24F390FHE 與 3,990 元，價牌歸屬明確。"
+        )
+        record = {
+            "period": "202201",
+            "view_type": "單機",
+            "category": "單機",
+            "model": None,
+            "price": "3990",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "model_validation_failed": True,
+            "field_suppression_reasons": [
+                "model:suppressed_after_structured_parse"
+            ],
+            "raw_objects": [
+                json.dumps(
+                    {"model": "C24F390FHE", "price": "3990"},
+                    ensure_ascii=False,
+                )
+            ],
+        }
+        self.assertEqual(
+            recover_pipeline_unlisted_model_candidate(record),
+            "C24F390FHE",
+        )
+        self.assertFalse(record["model_validation_failed"])
+        self.assertTrue(record["catalog_only_model_erasure_recovered"])
+
+    def test_first_letter_catalog_alternative_blocks_unsafe_first_pass_lock(self):
+        self.assertEqual(
+            unique_known_first_letter_alternative(
+                "S24T350FHC", ["F24T350FHC", "S27D300GAC"]
+            ),
+            "F24T350FHC",
+        )
+        narration = (
+            "我看到本輪結論：單機，型號 S24T350FHC，價格 3,990 元。"
+            "中央唯一主角正下方的實體價牌同一張清楚標示 "
+            "S24T350FHC 與 3,990 元。"
+        )
+        row = {
+            "period": "202201",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S24T350FHC",
+            "price": "3990",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "catalog_confusable_first_letter_candidate": True,
+            "catalog_confusable_first_letter_alternative": "F24T350FHC",
+            "independent_pass": True,
+            "request_binding_enforced": True,
+            "request_id_verified": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "input_image_sha256": "c" * 64,
+            "runtime_health": {"healthy": True, "reasons": []},
+            "screen_status": "正常",
+            "quality_issue": "無",
+            **evidence(1, True, "matched"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["retry"])
+        self.assertFalse(row["unlisted_model_first_pass_evidence_lock"])
+
+    def test_historical_same_card_raw_evidence_recovers_real_three_trace_cases(self):
+        image_hash = "d" * 64
+
+        def one_pass(attempt, model, narration, ownership="matched", failed=False):
+            return {
+                "period": "202201",
+                "ocr_attempt": attempt,
+                "view_type": "單機",
+                "category": "單機",
+                "model": model,
+                "price": None,
+                "thinking": narration,
+                "narration": narration,
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True, "reasons": []},
+                "model_validation_failed": failed,
+                "price_conflict_detected": False,
+                "brand_evidence_conflict": False,
+                "normalized_evidence": evidence(1, True, ownership),
+                **evidence(1, True, ownership),
+            }
+
+        exact_passes = [
+            one_pass(
+                1,
+                None,
+                "中央主螢幕正下方的實體價牌上清楚寫著 C24F390FHE 與 4,290。",
+                failed=True,
+            ),
+            one_pass(
+                2,
+                None,
+                "螢幕下方的黃色價牌上可讀取 C24F390FHE，價格為 4,290。",
+                "not_applicable",
+                True,
+            ),
+            one_pass(
+                3,
+                None,
+                "同一台主角下方價牌上標示 C24F390FHE 與售價 4,290元。",
+                "not_applicable",
+                True,
+            ),
+        ]
+        exact = _historical_same_card_raw_recovery(exact_passes)
+        self.assertEqual(exact["model"], "C24F390FHE")
+        self.assertEqual(exact["price"], "4290")
+        self.assertEqual(exact["mode"], "two_pass_exact_same_card_pair")
+
+        tail_passes = [
+            one_pass(
+                1,
+                None,
+                "我看到本輪結論：單機，型號 S24T350FHC，價格 3,990 元。"
+                "中央主螢幕下方有實體黃色價牌，價牌上印有完整 S24T350FHC。",
+                failed=True,
+            ),
+            one_pass(
+                2,
+                None,
+                "螢幕下方有黃色價牌，價牌上寫著 P24T350FHC 與會員特價 3,990元。",
+                "not_applicable",
+                True,
+            ),
+            one_pass(
+                3,
+                "F24T350FHC",
+                "螢幕下方有黃色價牌，價牌上可讀型號 F24T350FHC，價格為 3,990元。",
+                "not_applicable",
+                False,
+            ),
+        ]
+        recovered = _historical_same_card_raw_recovery(tail_passes)
+        self.assertEqual(recovered["model"], "F24T350FHC")
+        self.assertEqual(recovered["price"], "3990")
+        self.assertEqual(
+            recovered["mode"],
+            "three_pass_first_letter_tail_with_one_validated_model",
+        )
+
+        current = dict(tail_passes[-1])
+        history = [dict(tail_passes[0]), dict(tail_passes[1])]
+        decision = immediate_retry_decision(current, 3, history, 3)
+        final = finalize_three_pass_outcome(current, history, decision, 3)
+        self.assertTrue(final["verified"])
+        self.assertFalse(final["unresolved"])
+        self.assertEqual(current["model"], "F24T350FHC")
+        self.assertEqual(current["price"], "3990")
+        self.assertTrue(current["historical_same_card_raw_recovery"])
+
+    def test_history_snapshot_preserves_wrapped_raw_model_and_price(self):
+        raw_value = {
+            "model": "C24F390FHE",
+            "price": "3990",
+            "narration": "主角正下方實體價牌標示 C24F390FHE 與 3,990。",
+        }
+        snapshot = BatchOrchestrator._history_snapshot(
+            {
+                "period": "202201",
+                "file_name": "sample.jpg",
+                "source_path": r"D:\photos\2022-商化照片\202201\sample.jpg",
+                "ocr_attempt": 1,
+                "model": None,
+                "price": None,
+                "raw_objects": [
+                    {
+                        "raw": json.dumps(raw_value, ensure_ascii=False),
+                        "value": raw_value,
+                    }
+                ],
+            },
+            [],
+        )
+        self.assertEqual(snapshot["raw_structured_model"], "C24F390FHE")
+        self.assertEqual(snapshot["raw_structured_price"], "3990")
+        self.assertEqual(snapshot["period"], "202201")
+        self.assertEqual(snapshot["ocr_attempt"], 1)
+        self.assertIn('"value"', snapshot["raw_objects"][0])
+
+    def test_history_snapshot_preserves_original_narration_for_live_same_card_recovery(self):
+        image_hash = "f" * 64
+        synthetic_summary = "我看到本輪結論：單機，無型號，無價格。"
+
+        def one_pass(attempt, narrated_model, raw_model):
+            narration = (
+                "中央唯一完整螢幕正下方同一張實體價格牌，清楚標示型號 "
+                f"{narrated_model} 與售價 3,990 元，空間歸屬明確。"
+            )
+            raw_value = {
+                "view_type": "單機",
+                "model": raw_model,
+                "price": None,
+                "narration": narration,
+            }
+            return {
+                "period": "202109",
+                "file_name": "M-台中市-南屯區-TK3C-台中嶺東-959.jpg",
+                "source_path": r"D:\photos\2021-商化照片\202109\sample.jpg",
+                "ocr_attempt": attempt,
+                "view_type": "單機",
+                "category": "單機",
+                "model": None,
+                "price": None,
+                "thinking": synthetic_summary,
+                "narration": narration,
+                "raw_structured_model": raw_model,
+                "raw_structured_price": None,
+                "raw_objects": [{"value": raw_value}],
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True, "reasons": []},
+                "model_validation_failed": True,
+                "price_conflict_detected": False,
+                "brand_evidence_conflict": False,
+                "normalized_evidence": evidence(1, True, "matched"),
+                **evidence(1, True, "matched"),
+            }
+
+        first = one_pass(1, "S24T350FHC", "S24T350FHC")
+        second = one_pass(
+            2,
+            "F24T350FHC",
+            "SAMSUNG 24型IPS液晶顯示器 F24T350FHC",
+        )
+        current = one_pass(
+            3,
+            "F24T350FHC",
+            "SAMSUNG 24型IPS液晶顯示器 F24T350FHC",
+        )
+        second_live = one_pass(
+            2,
+            "F24T350FHC",
+            "SAMSUNG 24型IPS液晶顯示器 F24T350FHC",
+        )
+        first_exact = one_pass(1, "F24T350FHC", "F24T350FHC")
+        second_decision = immediate_retry_decision(
+            second_live,
+            2,
+            [
+                BatchOrchestrator._history_snapshot(
+                    first_exact,
+                    ["model_validation_failed"],
+                )
+            ],
+            3,
+        )
+        self.assertTrue(second_decision["verified"])
+        self.assertFalse(second_decision["retry"])
+        self.assertEqual(second_live["model"], "F24T350FHC")
+        self.assertEqual(second_live["price"], "3990")
+
+        history = [
+            BatchOrchestrator._history_snapshot(first, ["model_validation_failed"]),
+            BatchOrchestrator._history_snapshot(second, ["model_validation_failed"]),
+        ]
+
+        self.assertIn("F24T350FHC", history[1]["narration"])
+        self.assertEqual(history[1]["thinking"], synthetic_summary)
+        decision = immediate_retry_decision(current, 3, history, 3)
+        final = finalize_three_pass_outcome(current, history, decision, 3)
+        self.assertTrue(final["verified"])
+        self.assertFalse(final["unresolved"])
+        self.assertEqual(current["model"], "F24T350FHC")
+        self.assertEqual(current["price"], "3990")
+        self.assertTrue(current["historical_same_card_raw_recovery"])
+
+    def test_history_snapshot_same_card_recovery_rejects_multiple_cards(self):
+        image_hash = "a" * 64
+        narration = (
+            "畫面有多張價格牌：一張標示 F24T350FHC 與 3,990 元，"
+            "另一張標示 C24F390FHE 與 4,290 元，無法唯一歸屬。"
+        )
+        passes = []
+        for attempt in (1, 2, 3):
+            row = {
+                "period": "202109",
+                "ocr_attempt": attempt,
+                "view_type": "單機",
+                "category": "單機",
+                "model": None,
+                "price": None,
+                "thinking": "我看到本輪結論：單機，無型號，無價格。",
+                "narration": narration,
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {"healthy": True},
+                "normalized_evidence": evidence(1, True, "ambiguous"),
+                **evidence(1, True, "ambiguous"),
+            }
+            passes.append(BatchOrchestrator._history_snapshot(row, []))
+        self.assertIsNone(_historical_same_card_raw_recovery(passes))
+
+    def test_same_card_unique_promo_price_beats_reference_price(self):
+        image_hash = "b" * 64
+
+        def passes_for(narration):
+            rows = []
+            for attempt in (1, 2):
+                row = {
+                    "period": "202109",
+                    "ocr_attempt": attempt,
+                    "view_type": "單機",
+                    "category": "單機",
+                    "model": None,
+                    "price": None,
+                    "thinking": "我看到本輪結論：單機，無型號，無價格。",
+                    "narration": narration,
+                    "input_image_sha256": image_hash,
+                    "request_binding_enforced": True,
+                    "request_id_verified": True,
+                    "independent_pass": True,
+                    "prior_answer_exposed": False,
+                    "prompt_contamination": False,
+                    "runtime_health": {"healthy": True},
+                    "normalized_evidence": evidence(1, True, "matched"),
+                    **evidence(1, True, "matched"),
+                }
+                rows.append(BatchOrchestrator._history_snapshot(row, []))
+            return rows
+
+        recovered = _historical_same_card_raw_recovery(
+            passes_for(
+                "唯一主角正下方同一張實體價牌標示型號 C24F390FHE，"
+                "市價 4,990 元與會員特價 3,990 元，歸屬明確。"
+            )
+        )
+        self.assertEqual(recovered["model"], "C24F390FHE")
+        self.assertEqual(recovered["price"], "3990")
+
+        ambiguous = _historical_same_card_raw_recovery(
+            passes_for(
+                "唯一主角正下方同一張實體價牌標示型號 C24F390FHE，"
+                "會員特價 3,990 元與促銷價 4,290 元，兩者角色衝突。"
+            )
+        )
+        self.assertIsNone(ambiguous)
+
+    def test_same_card_fields_survive_unrelated_local_followme_conflict(self):
+        image_hash = "e" * 64
+        narrations = (
+            "唯一主角正下方同一張實體價牌標示型號 C24F390FHE，"
+            "市價 4,990 元與會員特價 3,990 元，歸屬明確。",
+            "螢幕下方同一張實體價格牌可讀為 C24F390FHE，"
+            "會員特價 3,990 元，歸屬明確。",
+            "螢幕下方同一張實體價牌標示 C24F390FHE 與售價 4,990 元。",
+        )
+        passes = []
+        for attempt, narration in enumerate(narrations, start=1):
+            runtime = {"healthy": True, "reasons": []}
+            if attempt == 2:
+                runtime = {
+                    "healthy": False,
+                    "reasons": ["structured_narration_followme_conflict"],
+                }
+            passes.append(
+                {
+                    "period": "202109",
+                    "ocr_attempt": attempt,
+                    "view_type": "單機",
+                    "category": "單機",
+                    "model": None,
+                    "price": None,
+                    "thinking": narration,
+                    "narration": narration,
+                    "input_image_sha256": image_hash,
+                    "request_binding_enforced": True,
+                    "request_id_verified": True,
+                    "independent_pass": True,
+                    "prior_answer_exposed": False,
+                    "prompt_contamination": False,
+                    "runtime_health": runtime,
+                    "normalized_evidence": evidence(1, True, "matched"),
+                    **evidence(1, True, "matched"),
+                }
+            )
+
+        recovered = _historical_same_card_raw_recovery(passes)
+        self.assertEqual(recovered["model"], "C24F390FHE")
+        self.assertEqual(recovered["price"], "3990")
+        self.assertEqual(recovered["mode"], "two_pass_exact_same_card_pair")
+
+        passes[1]["runtime_health"] = {
+            "healthy": False,
+            "reasons": ["cross_photo_duplicate_core_suspected"],
+        }
+        self.assertIsNone(_historical_same_card_raw_recovery(passes))
+
+    def test_three_pass_same_card_recovery_precedes_current_integrity_exit(self):
+        """A local stand conflict cannot erase two literal same-card reads.
+
+        This reproduces 桃園中平-1242: every request is independently bound to
+        the same pixels and says there is one commercial subject; attempts 2
+        and 3 both transcribe C24F390FHE / 4,290 from its physical card.  The
+        first and third calls nevertheless contain an unrelated stand/FollowMe
+        narration conflict.  Finalization must keep the card fields instead of
+        returning ``three_pass_current_integrity_invalid``.
+        """
+        image_hash = "9" * 64
+
+        def one_pass(attempt, model, narration, *, price, ownership, healthy):
+            raw_value = {
+                "narration": narration,
+                "view_type": "單機",
+                "category": "單機",
+                "model": model,
+                "price": price,
+                "complete_screen_count": 3,
+                "unique_main": True,
+                "label_ownership": ownership,
+                "followme_physical_evidence": [],
+            }
+            runtime = {"healthy": True, "reasons": []}
+            if not healthy:
+                runtime = {
+                    "healthy": False,
+                    "allow_processing": False,
+                    "allow_upload": False,
+                    "reasons": ["structured_narration_followme_conflict"],
+                }
+            return {
+                "period": "202109",
+                "ocr_attempt": attempt,
+                "view_type": "單機",
+                "category": "單機",
+                "model": model,
+                "price": price,
+                "thinking": narration,
+                "narration": narration,
+                "raw_model_output": json.dumps(raw_value, ensure_ascii=False),
+                "raw_objects": [json.dumps(raw_value, ensure_ascii=False)],
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": runtime,
+                "model_validation_failed": False,
+                "price_conflict_detected": False,
+                "brand_evidence_conflict": False,
+                "screen_status": "發亮",
+                "quality_issue": "",
+                "normalized_evidence": evidence(3, True, ownership),
+                **evidence(3, True, ownership),
+            }
+
+        first = one_pass(
+            1,
+            "S24F390FHE",
+            "中央唯一主角下方同一張實體價牌標示 S24F390FHE 與 4,290元。",
+            price="4290",
+            ownership="matched",
+            healthy=False,
+        )
+        second = one_pass(
+            2,
+            "C24F390FHE",
+            "中央螢幕下方同一張實體價牌標示 C24F390FHE，特價 4,290元，歸屬明確。",
+            price=None,
+            ownership="not_applicable",
+            healthy=True,
+        )
+        current = one_pass(
+            3,
+            "C24F390FHE",
+            "中央螢幕下方同一張實體價牌標示 C24F390FHE，價格為 4,290元，歸屬明確。",
+            price="4290",
+            ownership="matched",
+            healthy=False,
+        )
+        current["thinking"] = current["narration"] = (
+            "AI 判讀文字已由健康閘收回；這張照片必須重新獨立判讀。"
+        )
+        history = [
+            BatchOrchestrator._history_snapshot(first, []),
+            BatchOrchestrator._history_snapshot(second, []),
+        ]
+        outcome = {
+            "attempt": 3,
+            "retry": False,
+            "unresolved": True,
+            "verified": False,
+            "reasons": ["structured_narration_followme_conflict"],
+        }
+        final = finalize_three_pass_outcome(current, history, outcome, 3)
+
+        self.assertTrue(final["verified"])
+        self.assertFalse(final["unresolved"])
+        self.assertEqual(final["adjudication_rule"], "three_pass_same_card_raw_field_consensus")
+        self.assertEqual(current["model"], "C24F390FHE")
+        self.assertEqual(current["price"], "4290")
+        self.assertTrue(current["historical_same_card_raw_recovery"])
+
+    def test_same_pass_owned_card_reconciles_wrong_machine_ownership(self):
+        narration = (
+            "中央唯一主角正下方同一張實體價牌清楚標示 C27T550FDC 與會員特價 6,990元；"
+            "左右鄰機都只局部露出並未完整入鏡，沒有其他完整螢幕。"
+        )
+        row = {
+            "period": "202109",
+            "ocr_attempt": 1,
+            "view_type": "單機",
+            "category": "單機",
+            "model": "C27T550FDC",
+            "price": None,
+            "thinking": narration,
+            "narration": narration,
+            "input_image_sha256": "7" * 64,
+            "request_binding_enforced": True,
+            "request_id_verified": True,
+            "independent_pass": True,
+            "prior_answer_exposed": False,
+            "prompt_contamination": False,
+            "runtime_health": {"healthy": True, "reasons": []},
+            "screen_status": "正常",
+            "quality_issue": "無",
+            "model_validation_failed": False,
+            "price_conflict_detected": False,
+            "brand_evidence_conflict": False,
+            "normalized_evidence": evidence(3, True, "not_applicable"),
+            **evidence(3, True, "not_applicable"),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
+        self.assertEqual(row["model"], "C27T550FDC")
+        self.assertEqual(row["price"], "6990")
+        self.assertEqual(row["complete_screen_count"], 1)
+        self.assertEqual(row["label_ownership"], "matched")
+        self.assertTrue(row["same_pass_narrated_owned_card_reconciled"])
+
+    def test_same_card_prefix_variants_and_ui_format_issue_select_one_validated_sku(self):
+        image_hash = "8" * 64
+
+        def one_pass(attempt, model, narrated_model, *, runtime_reasons=None, **extra):
+            narration = (
+                "中央唯一主角正下方同一張實體價牌清楚標示型號 "
+                f"{narrated_model} 與會員特價 3,990元，左右鄰機均未完整入鏡。"
+            )
+            runtime_reasons = list(runtime_reasons or [])
+            return {
+                "period": "202109",
+                "ocr_attempt": attempt,
+                "view_type": "單機",
+                "category": "單機",
+                "model": model,
+                "price": "3990",
+                "thinking": narration,
+                "narration": narration,
+                "input_image_sha256": image_hash,
+                "request_binding_enforced": True,
+                "request_id_verified": True,
+                "independent_pass": True,
+                "prior_answer_exposed": False,
+                "prompt_contamination": False,
+                "runtime_health": {
+                    "healthy": not runtime_reasons,
+                    "reasons": runtime_reasons,
+                },
+                "model_validation_failed": False,
+                "price_conflict_detected": False,
+                "brand_evidence_conflict": False,
+                "normalized_evidence": evidence(1, True, "matched"),
+                **evidence(1, True, "matched"),
+                **extra,
+            }
+
+        passes = [
+            one_pass(
+                1,
+                "S24T350FH",
+                "S24T350FH",
+                runtime_reasons=["ui_narration_contains_raw_structure"],
+                official_model_unverified=True,
+            ),
+            one_pass(
+                2,
+                "F24T350FHC",
+                "F24T350FH",
+                model_prefix_completed=True,
+                model_prefix_completion_from="F24T350FH",
+            ),
+            one_pass(
+                3,
+                None,
+                "P24T350FHC",
+                runtime_reasons=["structured_narration_followme_conflict"],
+                model_validation_failed=True,
+                official_model_unverified=True,
+            ),
+        ]
+        recovered = _historical_same_card_raw_recovery(passes)
+        self.assertEqual(recovered["model"], "F24T350FHC")
+        self.assertEqual(recovered["price"], "3990")
+        self.assertEqual(
+            recovered["mode"],
+            "three_pass_first_letter_tail_with_one_validated_model",
+        )
+
+    def test_same_card_short_and_full_printed_codes_collapse_to_full_sku(self):
+        image_hash = "6" * 64
+        rows = []
+        narrations = (
+            "中央唯一主角正下方同一張實體價牌先印 C24F390F，完整欄再印 C24F390FHE，會員特價 3,990元。",
+            "中央主螢幕下方同一張實體價牌標示 C24F390FHE 與會員特價 3,990元。",
+        )
+        for attempt, narration in enumerate(narrations, start=1):
+            rows.append(
+                {
+                    "period": "202109",
+                    "ocr_attempt": attempt,
+                    "view_type": "單機",
+                    "category": "單機",
+                    "model": None,
+                    "price": None,
+                    "thinking": narration,
+                    "narration": narration,
+                    "input_image_sha256": image_hash,
+                    "request_binding_enforced": True,
+                    "request_id_verified": True,
+                    "independent_pass": True,
+                    "prior_answer_exposed": False,
+                    "prompt_contamination": False,
+                    "runtime_health": {"healthy": True, "reasons": []},
+                    "model_validation_failed": True,
+                    "price_conflict_detected": False,
+                    "brand_evidence_conflict": False,
+                    "normalized_evidence": evidence(1, True, "matched"),
+                    **evidence(1, True, "matched"),
+                }
+            )
+        recovered = _historical_same_card_raw_recovery(rows)
+        self.assertEqual(recovered["model"], "C24F390FHE")
+        self.assertEqual(recovered["price"], "3990")
+
+    def test_historical_same_card_recovery_rejects_current_year_or_two_cards(self):
+        narration = (
+            "中央主角價牌寫 C24F390FHE 與 3,990元；"
+            "另一張價牌寫 S27D300GAC 與 4,290元。"
+        )
+        passes = []
+        for attempt in (1, 2, 3):
+            passes.append(
+                {
+                    "period": "202601",
+                    "view_type": "單機",
+                    "category": "單機",
+                    "model": None,
+                    "price": None,
+                    "thinking": narration,
+                    "input_image_sha256": "e" * 64,
+                    "request_binding_enforced": True,
+                    "request_id_verified": True,
+                    "independent_pass": True,
+                    "prior_answer_exposed": False,
+                    "prompt_contamination": False,
+                    "runtime_health": {"healthy": True},
+                    "normalized_evidence": evidence(1, True, "ambiguous"),
+                    **evidence(1, True, "ambiguous"),
+                }
+            )
+        self.assertIsNone(_historical_same_card_raw_recovery(passes))
+
+    def test_blocked_or_suppressed_model_cannot_be_recovered(self):
+        narration = (
+            "中央唯一主角的價牌清楚標示 S32M8BUCXW 與 14,990 元，"
+            "但結構權威已撤銷這個型號。"
+        )
+        base = {
+            "period": "202601",
+            "view_type": "單機",
+            "category": "單機",
+            "model": "S32M8BUCXW",
+            "price": "14990",
+            "thinking": narration,
+            "narration": narration,
+            "unlisted_model_candidate": True,
+            "unique_main": True,
+            "label_ownership": "matched",
+            "raw_objects": [json.dumps({"model": "S32M8BUCXW", "price": "14990"})],
+        }
+        markers = (
+            {"structured_authority_blocked_fields": ["model"]},
+            {"field_suppression_reasons": ["model:narrated_product_family_conflict"]},
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                record = {**base, **marker}
+                self.assertIsNone(recover_pipeline_unlisted_model_candidate(record))
+                self.assertIsNone(record["model"])
 
     def test_pipeline_marker_recovery_rejects_distant_or_ambiguous_models(self):
         narration = (
@@ -1511,6 +3067,23 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(batch.structured_narration_price_conflict("12900", "$12,900"))
         self.assertFalse(batch.structured_narration_price_conflict(None, "$12,900"))
 
+    def test_narration_denied_price_is_detected_without_background_false_positive(self):
+        self.assertTrue(
+            batch.narration_denies_readable_price(
+                "未見完整 S 開頭型號與可讀價格牌，故型號只保留家族。"
+            )
+        )
+        self.assertTrue(batch.narration_denies_readable_price("主角價格牌看不清。"))
+        self.assertFalse(
+            batch.narration_denies_readable_price(
+                "同一價牌只有售價 13,290 元，沒有其他價格。"
+            )
+        )
+        self.assertFalse(
+            batch.narration_denies_readable_price(
+                "主角價牌清楚寫 13,290 元，其他背景螢幕未見價格牌。"
+            )
+        )
     def test_reference_price_cannot_masquerade_as_store_sale_price(self):
         self.assertTrue(
             batch.narration_marks_reference_only_price(
@@ -1545,7 +3118,7 @@ class EvidenceContractTests(unittest.TestCase):
         prompt = Path(__file__).resolve().parents[1].joinpath("samsung_ocr_prompt.txt").read_text(encoding="utf-8")
         self.assertIn("若價牌只有「建議售價」一個明確商品金額", prompt)
 
-    def test_current_year_price_delta_gets_one_stateless_role_confirmation(self):
+    def test_current_year_price_delta_badge_does_not_force_second_pass(self):
         row = {
             "period": "202601",
             "view_type": "單機",
@@ -1567,17 +3140,12 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", []),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertIn(
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn(
             "2026 價差照片需第二輪無記憶核對價牌角色",
             first["reasons"],
         )
-
-        repeated = dict(row)
-        repeated["ocr_attempt"] = 2
-        second = immediate_retry_decision(repeated, 2, [dict(row)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
 
     def test_cross_pass_price_delta_disagreement_consumes_third_call(self):
         first = {
@@ -2150,7 +3718,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(decision["unresolved"])
         self.assertEqual(row["view_type"], "單機")
         self.assertTrue(row["followme_family_confirmed"])
-        self.assertIsNone(row["model"])
+        self.assertEqual(row["model"], "FollowMe 型號未細分")
         self.assertIsNone(row["price"])
 
     def test_234_pixel_authority_counts_cropped_monitor_as_zero(self):
@@ -2395,7 +3963,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertIn("最終它牌結果與原始 Samsung SKU 衝突", decision["reasons"])
         self.assertEqual(decision["evidence_guard_revision"], EVIDENCE_GUARD_REVISION)
 
-    def test_large_official_price_difference_keeps_badge_and_gets_one_confirmation(self):
+    def test_large_official_price_difference_keeps_badge_without_forced_retry(self):
         row = {
             "file_name": "M-202605-price-diff.jpg", "view_type": "單機", "category": "單機",
             "model": "S27D392GAC", "price": "4290", "quality_issue": "",
@@ -2404,44 +3972,32 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched"),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertFalse(first["verified"])
-        self.assertIn("2026 價差照片需第二輪無記憶核對價牌角色", first["reasons"])
-        repeated = dict(row)
-        repeated.update(
-            independent_pass=True,
-            request_id_verified=True,
-            prior_answer_exposed=False,
-            prompt_contamination=False,
-            runtime_health={"healthy": True},
-        )
-        second = immediate_retry_decision(dict(repeated), 2, [dict(repeated)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn("2026 價差照片需第二輪無記憶核對價牌角色", first["reasons"])
         self.assertEqual(row["price_status"], "high")
         self.assertEqual(row["price_diff_percent"], 36.7)
 
-    def test_complete_current_year_followme_requires_one_stateless_confirmation(self):
+    def test_complete_current_year_followme_uses_one_pass_fast_path(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
             {"cue": "round_base", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_price_tray", "same_subject": True, "strength": "strong"},
+            {"cue": "attached_followme_product_card", "same_subject": True, "strength": "direct"},
         ]
         row = {
             "file_name": "M-202605-followme.jpg", "view_type": "單機", "category": "單機",
             "model": 'FollowMe M7 32"', "price": "12900", "quality_issue": "",
-            "thinking": "同一台實機有白色垂直支架與圓形底座，規格與價格屬於唯一主角。",
+            "thinking": (
+                "唯一主角同一台實機有白色垂直支架、完整圓形底座、附著價牌托盤，"
+                "附著產品卡清楚寫 FollowMe M7 32 吋與 12,900 元。"
+            ),
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertFalse(first["verified"])
-        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
-
-        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
-        self.assertFalse(second["retry"])
-        self.assertTrue(second["verified"])
-        self.assertEqual(second["reasons"], [])
-
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
     def test_current_year_followme_identity_disagreement_never_becomes_majority_success(self):
         physical = [
             {"cue": "white_vertical_stand", "same_subject": True, "strength": "strong"},
@@ -2482,14 +4038,10 @@ class EvidenceContractTests(unittest.TestCase):
             **evidence(1, True, "matched", physical),
         }
         first = immediate_retry_decision(dict(row), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertFalse(first["verified"])
-        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
         self.assertNotIn("FollowMe 缺少同一實機的物理支架證據", first["reasons"])
-
-        second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
-        self.assertTrue(second["verified"])
-        self.assertEqual(second["reasons"], [])
 
     def test_structured_evidence_allows_friendly_followme_normalization(self):
         narration_without_physical_keywords = "主角規格牌可讀。"
@@ -2554,13 +4106,9 @@ class EvidenceContractTests(unittest.TestCase):
             "followme_physical_evidence": physical,
         })
         first = immediate_retry_decision(dict(valid), 1, [], 3)
-        self.assertTrue(first["retry"])
-        self.assertFalse(first["verified"])
-        self.assertIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
-
-        second = immediate_retry_decision(dict(valid), 2, [dict(valid)], 3)
-        self.assertTrue(second["verified"])
-        self.assertEqual(second["reasons"], [])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertNotIn("2026 FollowMe 身分與價牌需第二輪無記憶獨立確認", first["reasons"])
 
     def test_distant_structured_evidence_still_requires_supporting_narration(self):
         row = {
@@ -2600,7 +4148,7 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(decision["unresolved"])
         self.assertIn("evidence_thinking_conflict", decision["reasons"])
 
-    def test_current_year_distant_requires_three_consistent_passes(self):
+    def test_current_year_clean_distant_uses_one_pass_fast_path(self):
         row = {
             "file_name": "M-202605-distant.jpg", "view_type": "遠景", "category": "遠景",
             "model": None, "price": None, "quality_issue": "",
@@ -2610,8 +4158,10 @@ class EvidenceContractTests(unittest.TestCase):
         first = immediate_retry_decision(dict(row), 1, [], 3)
         second = immediate_retry_decision(dict(row), 2, [dict(row)], 3)
         third = immediate_retry_decision(dict(row), 3, [dict(row), dict(row)], 3)
-        self.assertTrue(first["retry"])
-        self.assertTrue(second["retry"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
         self.assertFalse(third["retry"])
         self.assertFalse(third["unresolved"])
         self.assertTrue(third["verified"])
@@ -2631,8 +4181,10 @@ class EvidenceContractTests(unittest.TestCase):
         first = immediate_retry_decision(first_row, 1, [], 3)
         second = immediate_retry_decision(second_row, 2, [first_row], 3)
         third = immediate_retry_decision(third_row, 3, [first_row, second_row], 3)
-        self.assertTrue(first["retry"])
-        self.assertTrue(second["retry"])
+        self.assertFalse(first["retry"])
+        self.assertTrue(first["verified"])
+        self.assertFalse(second["retry"])
+        self.assertTrue(second["verified"])
         self.assertFalse(third["retry"])
         self.assertFalse(third["unresolved"])
         self.assertTrue(third["verified"])
@@ -2673,6 +4225,24 @@ class EvidenceContractTests(unittest.TestCase):
         third = distant_row(8, "not_applicable", weak)
         decision = immediate_retry_decision(third, 3, [first, second], 3)
         self.assertTrue(decision["verified"])
+
+    def test_clean_wide_display_narration_does_not_force_ritual_retries(self):
+        row = {
+            "period": "202602",
+            "view_type": "遠景",
+            "category": "遠景",
+            "model": None,
+            "price": None,
+            "quality_issue": "無",
+            "thinking": (
+                "全圖有三台以上完整螢幕，沒有同主體 FollowMe 實體。"
+                "背景螢幕與價牌均屬展示，故判為遠景。"
+            ),
+            **evidence(3, False, "not_visible", []),
+        }
+        decision = immediate_retry_decision(row, 1, [], 3)
+        self.assertTrue(decision["verified"])
+        self.assertFalse(decision["retry"])
         self.assertFalse(decision["unresolved"])
 
     def test_third_pass_core_disagreement_is_unresolved(self):
